@@ -317,3 +317,4 @@ validation → generate output → simulate load).
 - The bundled FBDI parser is conservative — it never invents fields. If
   a column's required-flag column doesn't exist, the field is left as
   optional and you can correct it manually via the field-edit modal.
+"# trinamix-conversion-workbench" 
