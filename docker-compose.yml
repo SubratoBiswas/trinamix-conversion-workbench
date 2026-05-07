@@ -1,0 +1,42 @@
+services:
+  backend:
+    build: ./backend
+    container_name: trinamix-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////app/data/workbench.db
+      - JWT_SECRET=${JWT_SECRET:-trinamix-dev-secret-change-me}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@trinamix.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_NAME=${ADMIN_NAME:-Trinamix Admin}
+      - AI_PROVIDER=${AI_PROVIDER:-rule_based}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - FRONTEND_ORIGIN=http://localhost
+    volumes:
+      - backend_data:/app/data
+      - backend_uploads:/app/uploads
+      - backend_outputs:/app/outputs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: trinamix-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+  backend_uploads:
+  backend_outputs:
