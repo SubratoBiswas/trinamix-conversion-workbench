@@ -9,8 +9,8 @@ import {
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
 } from "lucide-react";
-import { ConversionsApi, DependencyApi, ProjectsApi } from "@/api";
-import type { AutoPopulateResult, LoadOrderResult } from "@/types";
+import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, ProjectsApi } from "@/api";
+import type { AutoPopulateResult, Dataset, FBDITemplate, LoadOrderResult } from "@/types";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -391,19 +391,34 @@ const AddConversionModal: React.FC<{
 }> = ({ projectId, onClose, onDone }) => {
   const [name, setName] = React.useState("");
   const [targetObject, setTargetObject] = React.useState("");
+  const [datasetId, setDatasetId] = React.useState("");
+  const [templateId, setTemplateId] = React.useState("");
+  const [datasets, setDatasets] = React.useState<Dataset[]>([]);
+  const [templates, setTemplates] = React.useState<FBDITemplate[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    DatasetsApi.list().then(setDatasets).catch(() => {});
+    FbdiApi.list().then(setTemplates).catch(() => {});
+  }, []);
 
   const submit = async () => {
     if (!name.trim()) { setErr("Name is required"); return; }
     setBusy(true);
     setErr(null);
     try {
-      await ConversionsApi.create({
+      const conv = await ConversionsApi.create({
         project_id: projectId,
         name: name.trim(),
         target_object: targetObject.trim() || undefined,
       } as any);
+      if ((datasetId || templateId) && conv.id) {
+        await ConversionsApi.update(conv.id, {
+          ...(datasetId ? { dataset_id: datasetId } : {}),
+          ...(templateId ? { template_id: templateId } : {}),
+        } as any);
+      }
       onDone();
     } catch (e: any) {
       setErr(e?.response?.data?.detail || "Failed to create conversion");
@@ -412,27 +427,24 @@ const AddConversionModal: React.FC<{
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-ink">Add Conversion Object</h2>
-            <p className="mt-0.5 text-xs text-ink-muted">
-              Create a new conversion object in this engagement.
-            </p>
+            <p className="mt-0.5 text-xs text-ink-muted">Create a new conversion object in this engagement.</p>
           </div>
           <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-ink mb-1">Name <span className="text-danger">*</span></label>
             <input
               autoFocus
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="e.g. Supplier Master"
+              placeholder="e.g. Purchase Order"
               className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-
               onKeyDown={e => e.key === "Enter" && submit()}
             />
           </div>
@@ -445,6 +457,32 @@ const AddConversionModal: React.FC<{
             >
               <option value="">-- select or leave blank --</option>
               {OBJECT_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Source Dataset</label>
+            <select
+              value={datasetId}
+              onChange={e => setDatasetId(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+            >
+              <option value="">-- select or upload later --</option>
+              {datasets.map(d => (
+                <option key={d.id} value={d.id}>{d.name} ({d.row_count ?? 0} rows)</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Target FBDI Template</label>
+            <select
+              value={templateId}
+              onChange={e => setTemplateId(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+            >
+              <option value="">-- select or bind later --</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name}{t.business_object ? " - " + t.business_object : ""}</option>
+              ))}
             </select>
           </div>
           {err && <p className="text-xs text-danger">{err}</p>}
@@ -481,54 +519,4 @@ const AutoPopulateModal: React.FC<{
   const toggle = (m: string) =>
     setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
 
-  const submit = async () => {
-    if (!selected.length) return;
-    setBusy(true);
-    try {
-      const r = await ProjectsApi.autoPopulate(projectId, selected);
-      onDone(r);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
-            <p className="mt-0.5 text-xs text-ink-muted">
-              Select Oracle Cloud modules to create conversion objects automatically.
-            </p>
-          </div>
-          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
-        </div>
-        <div className="flex flex-wrap gap-2 mb-5">
-          {AVAILABLE_MODULES.map(m => (
-            <button
-              key={m}
-              onClick={() => toggle(m)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                selected.includes(m)
-                  ? "border-brand bg-brand-subtle text-brand-dark"
-                  : "border-line bg-canvas text-ink-muted hover:border-brand"
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button
-            onClick={submit}
-            disabled={!selected.length || busy}
-            className="btn-primary disabled:opacity-50"
-          >
-            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+  const submit = async () => 
