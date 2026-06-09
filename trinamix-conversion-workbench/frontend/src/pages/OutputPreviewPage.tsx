@@ -16,25 +16,44 @@ export const OutputPreviewPage: React.FC = () => {
   const pid = id!;
   const [project, setProject] = useState<Conversion | null>(null);
   const [data, setData] = useState<OutputPreview | null>(null);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [tab, setTab] = useState("data");
   const [generating, setGenerating] = useState(false);
 
   const refresh = async () => {
-    setData(null);
-    OutputApi.preview(pid, 50).then(setData).catch(() => setData(null));
+    setDataLoaded(false);
+    try {
+      const d = await OutputApi.preview(pid, 50);
+      setData(d);
+    } catch {
+      setData(null);
+    } finally {
+      setDataLoaded(true);
+    }
   };
-
-  useEffect(() => {
-    if (!pid) return;
-    ConversionsApi.get(pid).then(setProject);
-    refresh();
-  }, [pid]);
 
   const generate = async () => {
     setGenerating(true);
     try { await OutputApi.generate(pid, "csv"); await refresh(); }
     finally { setGenerating(false); }
   };
+
+  useEffect(() => {
+    if (!pid) return;
+    ConversionsApi.get(pid).then(setProject);
+    // Load preview; auto-generate if no output yet
+    OutputApi.preview(pid, 50)
+      .then(d => { setData(d); setDataLoaded(true); })
+      .catch(async () => {
+        // No output yet — auto-generate then reload
+        try {
+          await OutputApi.generate(pid, "csv");
+          const d = await OutputApi.preview(pid, 50);
+          setData(d);
+        } catch { setData(null); }
+        finally { setDataLoaded(true); }
+      });
+  }, [pid]);
 
   if (!project) return <PageLoader />;
 
@@ -65,7 +84,7 @@ export const OutputPreviewPage: React.FC = () => {
             { value: "lineage", label: "Lineage", count: data ? Object.keys(data.lineage).length : 0 },
           ]}
         />
-        {data === null ? <PageLoader /> :
+        {!dataLoaded ? <PageLoader /> :
           tab === "data" ? (
             data.columns.length === 0 ? (
               <CardBody><EmptyState

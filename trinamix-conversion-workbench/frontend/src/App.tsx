@@ -123,11 +123,11 @@ const OutputPreviewLanding: React.FC = () => {
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.filter(c => c.dataset_id && c.template_id).map((c) => (
-          <a key={c.id} href={`/conversions/${c.id}/output`} className="card flex flex-col gap-2 p-4 hover:border-brand">
+          <Link key={c.id} to={`/conversions/${c.id}/output`} className="card flex flex-col gap-2 p-4 hover:border-brand">
             <div className="text-sm font-semibold">{c.name}</div>
             <div className="text-xs text-ink-muted">{c.dataset_name} → {c.template_name}</div>
             <div className="text-[11px] text-ink-muted">{c.status}</div>
-          </a>
+          </Link>
         ))}
       </div>
     </>
