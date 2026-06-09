@@ -42,6 +42,7 @@ export const ProjectOverviewPage: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showModuleModal, setShowModuleModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
 
@@ -114,7 +115,7 @@ export const ProjectOverviewPage: React.FC = () => {
             <Button variant="secondary" onClick={() => setShowModuleModal(true)}>
               <Wand2 className="h-4 w-4" /> Auto-populate
             </Button>
-            <Button variant="primary">
+            <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
             </Button>
           </div>
@@ -233,6 +234,14 @@ export const ProjectOverviewPage: React.FC = () => {
         <div className="fixed bottom-6 right-6 z-50 rounded-md bg-ink px-4 py-2 text-xs text-white shadow-soft">
           {toast}
         </div>
+      )}
+
+      {showAddModal && (
+        <AddConversionModal
+          projectId={pid}
+          onClose={() => setShowAddModal(false)}
+          onDone={() => { flash("Conversion created"); refresh(); setShowAddModal(false); }}
+        />
       )}
 
       {showModuleModal && (
@@ -367,27 +376,37 @@ const ProjectDependencyGraph: React.FC<{
   );
 };
 
-// ─────── Auto-populate Modal ────────────────────────────────────────────────
+// ─────── Add Conversion Modal ───────────────────────────────────────────────
 
-const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
+const OBJECT_TYPES = [
+  "Supplier", "Item Master", "Customer", "Purchase Order", "Sales Order",
+  "Open AP Invoice", "Open AR Invoice", "GL Journal", "Asset", "Employee",
+  "Bank Account", "Cost Center", "Chart of Accounts", "BOM", "Work Order",
+];
 
-const AutoPopulateModal: React.FC<{
+const AddConversionModal: React.FC<{
   projectId: string;
   onClose: () => void;
-  onDone: (r: AutoPopulateResult) => void;
+  onDone: () => void;
 }> = ({ projectId, onClose, onDone }) => {
-  const [selected, setSelected] = React.useState<string[]>([]);
+  const [name, setName] = React.useState("");
+  const [targetObject, setTargetObject] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-
-  const toggle = (m: string) =>
-    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  const [err, setErr] = React.useState<string | null>(null);
 
   const submit = async () => {
-    if (!selected.length) return;
+    if (!name.trim()) { setErr("Name is required"); return; }
     setBusy(true);
+    setErr(null);
     try {
-      const r = await ProjectsApi.autoPopulate(projectId, selected);
-      onDone(r);
+      await ConversionsApi.create({
+        project_id: projectId,
+        name: name.trim(),
+        target_object: targetObject.trim() || undefined,
+      } as any);
+      onDone();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Failed to create conversion");
     } finally { setBusy(false); }
   };
 
@@ -396,40 +415,20 @@ const AutoPopulateModal: React.FC<{
       <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
+            <h2 className="text-base font-semibold text-ink">Add Conversion Object</h2>
             <p className="mt-0.5 text-xs text-ink-muted">
-              Select Oracle Cloud modules — conversion objects and load order will be created automatically.
+              Create a new conversion object in this engagement.
             </p>
           </div>
           <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">✕</button>
         </div>
-        <div className="flex flex-wrap gap-2 mb-5">
-          {AVAILABLE_MODULES.map(m => (
-            <button
-              key={m}
-              onClick={() => toggle(m)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                selected.includes(m)
-                  ? "border-brand bg-brand-subtle text-brand-dark"
-                  : "border-line bg-canvas text-ink-muted hover:border-brand"
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button
-            onClick={submit}
-            disabled={!selected.length || busy}
-            className="btn-primary disabled:opacity-50"
-          >
-            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            {busy ? "Populating…" : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Name <span className="text-danger">*</span></label>
+            <input
+              autoFocus
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Supplier Master"
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand foc
