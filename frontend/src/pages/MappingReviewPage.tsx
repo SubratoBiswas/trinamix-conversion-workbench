@@ -288,7 +288,7 @@ export const MappingReviewPage: React.FC = () => {
         <RuleAuthorModal
           open={ruleAuthorOpen}
           onClose={() => setRuleAuthorOpen(false)}
-          conversionId={pid}
+          conversionId={pid!}
           fields={targetFields}
           sourceColumns={dataset.columns}
           defaultTargetFieldId={ruleAuthorMapping?.target_field_id ?? null}
@@ -339,7 +339,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
 }) => {
   // Refs to source/target cards keyed by name/id so we can read their DOM positions
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const targetRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const targetRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Positions to draw lines (re-measured after layout changes)

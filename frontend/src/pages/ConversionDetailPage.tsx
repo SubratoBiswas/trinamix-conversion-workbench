@@ -379,7 +379,7 @@ const EnvironmentStrip: React.FC<{
   const runByEnvId = new Map<string, EnvironmentRun>();
   for (const r of runs) {
     const existing = runByEnvId.get(r.environment_id);
-    if (!existing || r.started_at > (existing.started_at ?? '')) runByEnvId.set(r.environment_id, r);
+    if (!existing || (r.started_at ?? '') > (existing.started_at ?? '')) runByEnvId.set(r.environment_id, r);
   }
 
   // For DEV, derive status from the conversion itself.

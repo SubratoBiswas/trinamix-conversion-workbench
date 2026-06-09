@@ -782,7 +782,7 @@ interface RuleAuthorModalProps {
   conversionId: string;
   fields: FBDIField[];
   sourceColumns: DatasetDetail["columns"];
-  defaultTargetFieldId?: number | null;
+  defaultTargetFieldId?: string | null;
   defaultSourceColumn?: string | null;
   onSaved: () => void;
 }
