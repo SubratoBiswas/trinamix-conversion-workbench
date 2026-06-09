@@ -73,13 +73,13 @@ export const MappingReviewPage: React.FC = () => {
       return;
     }
     const [ds, fields, ms] = await Promise.all([
-      DatasetsApi.get(proj.dataset_id),
-      FbdiApi.fields(proj.template_id),
-      MappingApi.list(pid),
+      DatasetsApi.get(proj.dataset_id).catch(() => null),
+      FbdiApi.fields(proj.template_id).catch(() => [] as FBDIField[]),
+      MappingApi.list(pid).catch(() => [] as MappingSuggestion[]),
     ]);
     setDataset(ds);
-    setTargetFields(fields);
-    setMappings(ms);
+    setTargetFields(fields ?? []);
+    setMappings(ms ?? []);
   };
   useEffect(() => { loadAll(); }, [pid]);
 
