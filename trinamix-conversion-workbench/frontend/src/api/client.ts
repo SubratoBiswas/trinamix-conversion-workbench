@@ -16,8 +16,14 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err?.response?.status === 401) {
-      // Clear auth state via Zustand — React Router's ProtectedRoute will redirect
-      // to /login with state.from set, so the user lands back here after re-login.
+      // Log which URL caused the 401 so we can debug
+      const failedUrl = err?.config?.url ?? "unknown";
+      const tok = localStorage.getItem("trinamix.token");
+      localStorage.setItem(
+        "trinamix.last401",
+        JSON.stringify({ url: failedUrl, hadToken: !!tok, ts: Date.now() })
+      );
+      console.error("[auth] 401 on", failedUrl, "| had token:", !!tok);
       useAuth.getState().clear();
     }
     return Promise.reject(err);
