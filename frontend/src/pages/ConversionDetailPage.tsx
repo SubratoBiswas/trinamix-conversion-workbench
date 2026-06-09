@@ -606,6 +606,7 @@ const TemplatePickerModal: React.FC<{
                 key={t.id}
                 onClick={() => onSelect(t.id)}
                 className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
+                  t.id === currentId
                     ? "border-brand bg-brand-subtle text-brand-dark"
                     : "border-line hover:border-brand hover:bg-canvas"
                 }`}

@@ -517,6 +517,8 @@ const AutoPopulateModal: React.FC<{
   const [busy, setBusy] = React.useState(false);
 
   const toggle = (m: string) =>
+    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+
   const submit = async () => {
     if (!selected.length) return;
     setBusy(true);
