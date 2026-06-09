@@ -444,3 +444,111 @@ def apply_learned_to_conversion(
     if auto_count:
         db.commit()
     return auto_count
+
+
+# ─── Cross-file rule propagation ─────────────────────────────────────────────
+
+def propagate_rules_to_downstream(
+    db: Session,
+    source_conversion: "Conversion",
+    approved_mapping: "MappingSuggestion",
+) -> list[dict]:
+    """When a rule is approved on a master conversion's key field, propagate it
+    to every downstream conversion in the same project that has an FK column
+    with the same canonical name.
+
+    Returns a list of {conversion_id, conversion_name, target_field, rule_type}
+    describing what was propagated so the caller can surface a notification.
+    """
+    from app.models.conversion import Conversion
+    from app.models.fbdi import FBDIField
+    from app.models.transformation import TransformationRule
+
+    rule = approved_mapping.suggested_transformation
+    if not rule or not isinstance(rule, dict):
+        return []
+    rule_type = rule.get("rule_type")
+    rule_config = rule.get("config", {})
+    if not rule_type:
+        return []
+
+    # Determine master object and which fields are its key fields
+    tpl = source_conversion.template
+    if not tpl:
+        return []
+    master_obj = tpl.business_object or source_conversion.target_object
+    if not master_obj:
+        return []
+
+    key_names = REFERENCE_KEY_FIELDS.get(master_obj)
+    if not key_names:
+        return []
+
+    # Find which target field this mapping points to
+    source_field_name: str | None = None
+    for f in tpl.fields:
+        if f.id == approved_mapping.target_field_id:
+            source_field_name = f.field_name
+            break
+    if source_field_name not in key_names:
+        return []  # Only propagate from canonical key fields
+
+    # All conversions in the same project (excluding the master itself)
+    sibling_conversions = (
+        db.query(Conversion)
+        .filter(
+            Conversion.project_id == source_conversion.project_id,
+            Conversion.id != source_conversion.id,
+            Conversion.template_id.isnot(None),
+        )
+        .all()
+    )
+
+    propagated: list[dict] = []
+    now = datetime.utcnow()
+
+    for conv in sibling_conversions:
+        if not conv.template:
+            continue
+        # Find FK fields in this conversion's template that match any key name
+        for f in conv.template.fields:
+            if f.field_name not in key_names:
+                continue
+            # Check if this exact rule already exists
+            exists = (
+                db.query(TransformationRule)
+                .filter(
+                    TransformationRule.conversion_id == conv.id,
+                    TransformationRule.target_field_id == f.id,
+                    TransformationRule.rule_type == rule_type,
+                )
+                .first()
+            )
+            if exists:
+                # Refresh config in case it changed
+                exists.rule_config = rule_config
+                exists.updated_at = now
+            else:
+                db.add(TransformationRule(
+                    conversion_id=conv.id,
+                    target_field_id=f.id,
+                    source_column=approved_mapping.source_column,
+                    rule_type=rule_type,
+                    rule_config=rule_config,
+                    description=(
+                        f"Auto-propagated from {master_obj} master "
+                        f"(source: {source_conversion.name})"
+                    ),
+                    sequence=1,
+                    created_by="propagation-engine",
+                ))
+            propagated.append({
+                "conversion_id":   conv.id,
+                "conversion_name": conv.name,
+                "target_field":    f.field_name,
+                "rule_type":       rule_type,
+            })
+
+    if propagated:
+        db.commit()
+    return propagated

@@ -61,3 +61,7 @@ class DashboardKpis(BaseModel):
     project_status_breakdown: list[dict[str, Any]]
     conversion_status_breakdown: list[dict[str, Any]]
     load_status_breakdown: list[dict[str, Any]]
+
+
+class AutoPopulateRequest(BaseModel):
+    modules: list[str]

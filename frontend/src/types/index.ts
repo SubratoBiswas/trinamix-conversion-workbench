@@ -371,3 +371,52 @@ export interface LearningStats {
   analyst_minutes_saved: number;
   by_category: { category: string; count: number }[];
 }
+
+// ─── New types for added features ────────────────────────────────────────────
+
+export interface TemplateSuggestion {
+  template_id: number;
+  template_name: string;
+  business_object: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface AutoPopulateResult {
+  project_id: number;
+  created_count: number;
+  conversions: { id: number; name: string; target_object: string; planned_load_order: number }[];
+}
+
+export interface LoadOrderEntry {
+  conversion_id: number;
+  name: string;
+  target_object: string;
+  load_order: number;
+  prerequisites: string[];
+}
+
+export interface LoadOrderResult {
+  project_id: number;
+  load_order: LoadOrderEntry[];
+}
+
+export interface PropagationEntry {
+  conversion_id: number;
+  conversion_name: string;
+  target_field: string;
+  rule_type: string;
+}
+
+export interface PropagationResult {
+  mapping_id: number;
+  propagated: PropagationEntry[];
+  count: number;
+}
+
+export interface PropagationCandidates {
+  source_conversion: number;
+  master_object: string;
+  key_fields: string[];
+  candidates: { conversion_id: number; conversion_name: string; target_object: string; fk_fields: string[] }[];
+}

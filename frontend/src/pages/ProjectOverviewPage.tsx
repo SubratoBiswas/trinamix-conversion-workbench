@@ -7,9 +7,10 @@ import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
 } from "lucide-react";
 import { ConversionsApi, DependencyApi, ProjectsApi } from "@/api";
+import type { AutoPopulateResult, LoadOrderResult } from "@/types";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -38,12 +39,19 @@ export const ProjectOverviewPage: React.FC = () => {
   const [project, setProject] = useState<Project | null>(null);
   const [conversions, setConversions] = useState<Conversion[] | null>(null);
   const [deps, setDeps] = useState<Dependency[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [showModuleModal, setShowModuleModal] = useState(false);
 
-  useEffect(() => {
+  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
+
+  const refresh = () => {
     ProjectsApi.get(pid).then(setProject);
     ProjectsApi.conversions(pid).then(setConversions);
     DependencyApi.list().then(setDeps);
-  }, [pid]);
+  };
+
+  useEffect(() => { refresh(); }, [pid]);
 
   if (!project || !conversions) return <PageLoader />;
 
@@ -89,6 +97,23 @@ export const ProjectOverviewPage: React.FC = () => {
             <Link to={`/projects/${pid}/cutover`} className="btn-ghost">
               <Activity className="h-4 w-4" /> Migration Monitor
             </Link>
+            <Button
+              variant="secondary"
+              loading={busy === "load_order"}
+              onClick={async () => {
+                setBusy("load_order");
+                try {
+                  const r = await ProjectsApi.deriveLoadOrder(pid);
+                  flash(`Load order derived for ${r.load_order.length} object(s)`);
+                  refresh();
+                } finally { setBusy(null); }
+              }}
+            >
+              <GitBranch className="h-4 w-4" /> Derive Load Order
+            </Button>
+            <Button variant="secondary" onClick={() => setShowModuleModal(true)}>
+              <Wand2 className="h-4 w-4" /> Auto-populate
+            </Button>
             <Button variant="primary">
               <Plus className="h-4 w-4" /> Add Conversion
             </Button>
@@ -203,6 +228,19 @@ export const ProjectOverviewPage: React.FC = () => {
             <p className="whitespace-pre-wrap text-sm text-ink">{project.description}</p>
           </CardBody>
         </Card>
+      )}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 rounded-md bg-ink px-4 py-2 text-xs text-white shadow-soft">
+          {toast}
+        </div>
+      )}
+
+      {showModuleModal && (
+        <AutoPopulateModal
+          projectId={pid}
+          onClose={() => setShowModuleModal(false)}
+          onDone={(r) => { flash(`Created ${r.created_count} conversion(s)`); refresh(); setShowModuleModal(false); }}
+        />
       )}
     </>
   );
@@ -326,5 +364,72 @@ const ProjectDependencyGraph: React.FC<{
       <Background color="#E2E8F0" gap={18} />
       <Controls className="!shadow-card" showInteractive={false} />
     </ReactFlow>
+  );
+};
+
+// ─────── Auto-populate Modal ────────────────────────────────────────────────
+
+const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
+
+const AutoPopulateModal: React.FC<{
+  projectId: number;
+  onClose: () => void;
+  onDone: (r: AutoPopulateResult) => void;
+}> = ({ projectId, onClose, onDone }) => {
+  const [selected, setSelected] = React.useState<string[]>([]);
+  const [busy, setBusy] = React.useState(false);
+
+  const toggle = (m: string) =>
+    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+
+  const submit = async () => {
+    if (!selected.length) return;
+    setBusy(true);
+    try {
+      const r = await ProjectsApi.autoPopulate(projectId, selected);
+      onDone(r);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              Select Oracle Cloud modules — conversion objects and load order will be created automatically.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">✕</button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-5">
+          {AVAILABLE_MODULES.map(m => (
+            <button
+              key={m}
+              onClick={() => toggle(m)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                selected.includes(m)
+                  ? "border-brand bg-brand-subtle text-brand-dark"
+                  : "border-line bg-canvas text-ink-muted hover:border-brand"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={!selected.length || busy}
+            className="btn-primary disabled:opacity-50"
+          >
+            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            {busy ? "Populating…" : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };

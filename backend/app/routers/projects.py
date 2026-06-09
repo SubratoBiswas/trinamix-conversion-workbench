@@ -111,3 +111,47 @@ def list_conversions_for_project(
         co.project_name = p.name
         out.append(co)
     return out
+
+
+# ─── Module auto-population ───────────────────────────────────────────────────
+
+from app.schemas.misc import AutoPopulateRequest  # added below
+
+
+@router.post("/{project_id}/auto-populate-conversions")
+def auto_populate_conversions(
+    project_id: int,
+    payload: "AutoPopulateRequest",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Auto-create Conversion placeholders for the given Oracle Cloud modules."""
+    from app.services.project_service import auto_populate_conversions as _do
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(404, "Project not found")
+    created = _do(db, p, payload.modules, created_by=user.email)
+    return {
+        "project_id": project_id,
+        "created_count": len(created),
+        "conversions": [
+            {"id": c.id, "name": c.name, "target_object": c.target_object,
+             "planned_load_order": c.planned_load_order}
+            for c in created
+        ],
+    }
+
+
+@router.post("/{project_id}/derive-load-order")
+def derive_load_order(
+    project_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Compute + persist the recommended load sequence for all conversions."""
+    from app.services.project_service import derive_load_order as _do
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(404, "Project not found")
+    result = _do(db, p)
+    return {"project_id": project_id, "load_order": result}

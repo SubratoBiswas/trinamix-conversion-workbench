@@ -59,3 +59,31 @@ def get_profile(dataset_id: int, db: Session = Depends(get_db), _: User = Depend
     if not ds:
         raise HTTPException(404, "Dataset not found")
     return ds
+
+
+@router.get("/{dataset_id}/suggest-template")
+def suggest_template_for_dataset(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Return up to 3 FBDI template candidates for the given dataset
+    ranked by auto-detection confidence."""
+    from app.models.dataset import DatasetColumnProfile
+    from app.models.fbdi import FBDITemplate
+    from app.services.dataset_service import detect_dataset_type
+
+    ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+
+    col_profiles = (
+        db.query(DatasetColumnProfile)
+        .filter(DatasetColumnProfile.dataset_id == dataset_id)
+        .all()
+    )
+    column_names = [p.column_name for p in col_profiles]
+    templates = db.query(FBDITemplate).all()
+
+    suggestions = detect_dataset_type(ds.file_name, column_names, templates)
+    return {"dataset_id": dataset_id, "suggestions": suggestions}

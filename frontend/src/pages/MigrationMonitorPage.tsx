@@ -6,12 +6,13 @@ import {
   Plus, Upload,
 } from "lucide-react";
 import { CutoverApi, ProjectsApi } from "@/api";
+import { PromoteToEnvironmentModal } from "@/components/cutover/PromoteToEnvironmentModal";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
 import { cn, formatDate } from "@/lib/utils";
 import type {
-  CutoverDashboard, CutoverEnvironmentColumn, CutoverStage, Project,
+  Conversion, CutoverDashboard, CutoverEnvironmentColumn, CutoverStage, Project,
 } from "@/types";
 
 const STATUS_TONE: Record<string, { dotClass: string; pillTone: "success" | "warning" | "danger" | "neutral" | "brand" | "info"; icon: React.ElementType }> = {
@@ -50,11 +51,14 @@ export const MigrationMonitorPage: React.FC = () => {
 
   const [project, setProject] = useState<Project | null>(null);
   const [board, setBoard] = useState<CutoverDashboard | null>(null);
+  const [promoteConversion, setPromoteConversion] = useState<Conversion | null>(null);
+  const [conversions, setConversions] = useState<Conversion[]>([]);
 
   const refresh = () => {
     if (!pid) return;
     ProjectsApi.get(pid).then(setProject);
     CutoverApi.dashboard(pid).then(setBoard);
+    ProjectsApi.conversions(pid).then(setConversions).catch(() => {});
   };
 
   useEffect(() => { refresh(); }, [pid]);
@@ -141,7 +145,14 @@ export const MigrationMonitorPage: React.FC = () => {
       </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         {board.environments.map((env) => (
-          <EnvironmentColumn key={env.id} env={env} />
+          <EnvironmentColumn
+            key={env.id}
+            env={env}
+            onPromote={(conversionId) => {
+              const conv = conversions.find((c) => c.id === conversionId);
+              if (conv) setPromoteConversion(conv);
+            }}
+          />
         ))}
       </div>
 
@@ -169,8 +180,12 @@ export const MigrationMonitorPage: React.FC = () => {
           title="Pipeline Runs"
           subtitle={`${board.pipeline_runs.length} run${board.pipeline_runs.length === 1 ? "" : "s"} logged`}
           actions={
-            <Button variant="primary" className="!h-8 !px-3 !text-xs">
-              <Plus className="h-3 w-3" /> New Run
+            <Button
+              variant="primary"
+              className="!h-8 !px-3 !text-xs"
+              onClick={() => conversions.length > 0 && setPromoteConversion(conversions[0])}
+            >
+              <Plus className="h-3 w-3" /> Promote to Env
             </Button>
           }
         />
@@ -222,16 +237,31 @@ export const MigrationMonitorPage: React.FC = () => {
           </table>
         )}
       </Card>
+
+      {/* Promote to environment modal */}
+      {promoteConversion && project && (
+        <PromoteToEnvironmentModal
+          open={!!promoteConversion}
+          onClose={() => setPromoteConversion(null)}
+          conversion={promoteConversion}
+          project={project}
+          onPromoted={() => { setPromoteConversion(null); refresh(); }}
+        />
+      )}
     </>
   );
 };
 
 // ─────── Environment column ───────
 
-const EnvironmentColumn: React.FC<{ env: CutoverEnvironmentColumn }> = ({ env }) => {
+const EnvironmentColumn: React.FC<{
+  env: CutoverEnvironmentColumn;
+  onPromote: (conversionId: number) => void;
+}> = ({ env, onPromote }) => {
   const total = env.stages.length;
   const accent = ENV_ACCENT[env.name] || "border-line";
   const accentText = ENV_ACCENT_TEXT[env.name] || "text-ink";
+  const isDevEnv = env.name === "DEV";
 
   return (
     <div className={cn(
@@ -267,7 +297,12 @@ const EnvironmentColumn: React.FC<{ env: CutoverEnvironmentColumn }> = ({ env })
         ) : (
           <div className="space-y-1.5">
             {env.stages.map((s) => (
-              <StageRow key={s.conversion_id} stage={s} />
+              <StageRow
+                key={s.conversion_id}
+                stage={s}
+                showPromote={!isDevEnv && s.status === "pending"}
+                onPromote={() => onPromote(s.conversion_id)}
+              />
             ))}
           </div>
         )}
@@ -276,24 +311,37 @@ const EnvironmentColumn: React.FC<{ env: CutoverEnvironmentColumn }> = ({ env })
   );
 };
 
-const StageRow: React.FC<{ stage: CutoverStage }> = ({ stage }) => {
+const StageRow: React.FC<{
+  stage: CutoverStage;
+  showPromote?: boolean;
+  onPromote?: () => void;
+}> = ({ stage, showPromote, onPromote }) => {
   const tone = STATUS_TONE[stage.status] || STATUS_TONE.pending;
-  const Icon = tone.icon;
   return (
-    <Link
-      to={`/conversions/${stage.conversion_id}`}
-      className="group flex items-center justify-between gap-2 rounded-md border border-line/60 bg-canvas/40 px-2 py-1.5 transition hover:border-brand hover:bg-brand-subtle/30"
-    >
-      <div className="flex min-w-0 items-center gap-1.5">
+    <div className="group flex items-center gap-1 rounded-md border border-line/60 bg-canvas/40 transition hover:border-brand hover:bg-brand-subtle/30">
+      <Link
+        to={`/conversions/${stage.conversion_id}`}
+        className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5"
+      >
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dotClass)} />
         <span className="truncate text-[12px] font-medium text-ink group-hover:text-brand-dark">
           {stage.conversion_name}
         </span>
-      </div>
-      <Pill tone={tone.pillTone} className="shrink-0 !text-[9.5px]">
-        {stage.status}
-      </Pill>
-    </Link>
+      </Link>
+      {showPromote ? (
+        <button
+          onClick={(e) => { e.preventDefault(); onPromote?.(); }}
+          className="mr-1.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-brand-dark hover:bg-brand hover:text-white transition"
+          title="Promote to this environment"
+        >
+          Promote →
+        </button>
+      ) : (
+        <Pill tone={tone.pillTone} className="mr-1.5 shrink-0 !text-[9.5px]">
+          {stage.status}
+        </Pill>
+      )}
+    </div>
   );
 };
 

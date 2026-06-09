@@ -62,6 +62,8 @@ export const ConversionDetailPage: React.FC = () => {
         QualityApi.validation(cid).then((vl) => setIssues([...cl, ...vl]))
       ).catch(() => {});
       LoadApi.runs(cid).then(setLoadRuns).catch(() => setLoadRuns([]));
+      // Load generated outputs list
+      OutputApi.list(cid).then(setOutputs).catch(() => setOutputs([]));
     }
   };
   useEffect(() => { loadAll(); }, [cid]);

@@ -3,7 +3,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Search, Database, FileSpreadsheet, Sparkles,
   Save, Play, Plus, GraduationCap, Trash2, Workflow,
-  ChevronDown, ChevronRight, ListChecks, BarChart3,
+  ChevronDown, ChevronRight, ListChecks, BarChart3, Lightbulb,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, FbdiApi } from "@/api";
 import {
@@ -19,6 +19,7 @@ import type {
   DatasetPreview,
   FBDIField,
   FBDITemplate,
+  TemplateSuggestion,
 } from "@/types";
 
 interface AppliedStep {
@@ -39,6 +40,7 @@ export const DatasetPreparationPage: React.FC = () => {
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
+  const [templateSuggestions, setTemplateSuggestions] = useState<TemplateSuggestion[]>([]);
   const [projects, setProjects] = useState<Conversion[]>([]);
   const [templates, setTemplates] = useState<FBDITemplate[]>([]);
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
@@ -57,6 +59,9 @@ export const DatasetPreparationPage: React.FC = () => {
     if (!dsId) return;
     DatasetsApi.get(dsId).then(setDataset);
     DatasetsApi.preview(dsId, 200).then(setPreview);
+    DatasetsApi.suggestTemplate(dsId)
+      .then(r => setTemplateSuggestions(r.suggestions))
+      .catch(() => {});
     ConversionsApi.list().then(setProjects);
     FbdiApi.list().then(setTemplates);
   }, [dsId]);
@@ -148,6 +153,42 @@ export const DatasetPreparationPage: React.FC = () => {
           <Save className="h-3.5 w-3.5" /> Save
         </button>
       </header>
+
+      {/* Template Suggestions Banner */}
+      {templateSuggestions.length > 0 && !boundProject && (
+        <div className="mx-4 mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Lightbulb className="h-4 w-4 text-amber-600" />
+            <span className="font-semibold text-amber-800 text-sm">Suggested FBDI Templates</span>
+          </div>
+          <p className="text-xs text-amber-700 mb-2">
+            Based on your file name and columns, these templates are the closest match:
+          </p>
+          <div className="flex gap-2 flex-wrap">
+            {templateSuggestions.map((s) => (
+              <div
+                key={s.template_id}
+                className="flex items-center gap-2 bg-white border border-amber-200 rounded px-3 py-1.5 text-xs"
+              >
+                <span className="font-medium text-gray-800">{s.template_name}</span>
+                <span className="text-gray-400">·</span>
+                <span className="text-gray-500">{s.business_object}</span>
+                <span
+                  className={`font-bold px-1.5 py-0.5 rounded-full ${
+                    s.confidence >= 0.7
+                      ? "bg-green-100 text-green-700"
+                      : s.confidence >= 0.4
+                      ? "bg-yellow-100 text-yellow-700"
+                      : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  {Math.round(s.confidence * 100)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Body — 3-column layout */}
       <div className="flex flex-1 overflow-hidden">

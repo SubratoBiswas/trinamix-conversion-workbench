@@ -40,8 +40,8 @@ export const OutputPreviewPage: React.FC = () => {
 
   return (
     <>
-      <Link to={`/projects/${pid}`} className="mb-3 inline-flex items-center gap-1 text-xs text-ink-muted hover:text-ink">
-        <ArrowLeft className="h-3 w-3" /> Back to Project
+      <Link to={`/conversions/${pid}`} className="mb-3 inline-flex items-center gap-1 text-xs text-ink-muted hover:text-ink">
+        <ArrowLeft className="h-3 w-3" /> Back to Conversion
       </Link>
       <PageTitle
         title="Output Preview"

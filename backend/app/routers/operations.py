@@ -62,6 +62,21 @@ def output_preview(
     return get_output_preview(db, c, limit=limit)
 
 
+@output_router.get("/{conversion_id}/outputs", response_model=list[ConvertedOutputOut])
+def list_outputs(
+    conversion_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """List all generated output artifacts for a conversion, newest first."""
+    return (
+        db.query(ConvertedOutput)
+        .filter(ConvertedOutput.conversion_id == conversion_id)
+        .order_by(ConvertedOutput.generated_at.desc())
+        .all()
+    )
+
+
 @output_router.get("/{conversion_id}/download-output")
 def download_output(
     conversion_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)

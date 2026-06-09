@@ -109,6 +109,9 @@ def approve_mapping(
     conv = db.query(Conversion).filter(Conversion.id == m.conversion_id).first()
     if m.source_column:
         record_learning_from_mapping(db, m, conv, captured_by=user.email)
+        # Auto-propagate FK rules to downstream conversions in the same project
+        from app.services.learning_service import propagate_rules_to_downstream
+        propagate_rules_to_downstream(db, conv, m)
     return enrich_mapping_with_samples(db, conv, [m])[0]
 
 
@@ -239,3 +242,78 @@ def delete_rule(
     db.delete(r)
     db.commit()
     return {"deleted": rule_id}
+
+
+@router.post("/mappings/{mapping_id}/propagate")
+def propagate_mapping_rule(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Explicitly propagate an approved mapping's transformation rule to all
+    downstream conversions in the same project that share the FK column.
+
+    Called automatically on approve; also callable on-demand from the UI."""
+    from app.services.learning_service import propagate_rules_to_downstream
+    m = db.query(MappingSuggestion).filter(MappingSuggestion.id == mapping_id).first()
+    if not m:
+        raise HTTPException(404, "Mapping not found")
+    conv = db.query(Conversion).filter(Conversion.id == m.conversion_id).first()
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    propagated = propagate_rules_to_downstream(db, conv, m)
+    return {"mapping_id": mapping_id, "propagated": propagated, "count": len(propagated)}
+
+
+@router.get("/conversions/{conversion_id}/propagation-candidates")
+def propagation_candidates(
+    conversion_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """List downstream conversions that would receive propagated rules from this
+    conversion's approved master-key mappings."""
+    from app.services.learning_service import REFERENCE_KEY_FIELDS
+    from app.models.fbdi import FBDIField
+
+    conv = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+
+    tpl = conv.template
+    if not tpl:
+        return {"source_conversion": conversion_id, "candidates": []}
+
+    master_obj = tpl.business_object or conv.target_object
+    key_names = REFERENCE_KEY_FIELDS.get(master_obj or "", [])
+    if not key_names:
+        return {"source_conversion": conversion_id, "candidates": []}
+
+    siblings = (
+        db.query(Conversion)
+        .filter(
+            Conversion.project_id == conv.project_id,
+            Conversion.id != conversion_id,
+            Conversion.template_id.isnot(None),
+        )
+        .all()
+    )
+
+    candidates = []
+    for sib in siblings:
+        if not sib.template:
+            continue
+        matching = [f.field_name for f in sib.template.fields if f.field_name in key_names]
+        if matching:
+            candidates.append({
+                "conversion_id":   sib.id,
+                "conversion_name": sib.name,
+                "target_object":   sib.target_object,
+                "fk_fields":       matching,
+            })
+    return {
+        "source_conversion": conversion_id,
+        "master_object":     master_obj,
+        "key_fields":        key_names,
+        "candidates":        candidates,
+    }

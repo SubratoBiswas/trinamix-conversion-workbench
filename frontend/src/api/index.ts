@@ -1,5 +1,6 @@
 import { api } from "./client";
 import type {
+  AutoPopulateResult,
   Conversion,
   ConversionProject,            // alias kept for legacy callers
   ConvertedOutput,
@@ -17,11 +18,15 @@ import type {
   LearnedMapping,
   LearningStats,
   LoadError,
+  LoadOrderResult,
   LoadRun,
   LoadSummary,
   MappingSuggestion,
   OutputPreview,
   Project,
+  PropagationCandidates,
+  PropagationResult,
+  TemplateSuggestion,
   TransformationRule,
   User,
   ValidationIssue,
@@ -39,6 +44,8 @@ export const DatasetsApi = {
   get: (id: number) => api.get<DatasetDetail>(`/datasets/${id}`).then(r => r.data),
   preview: (id: number, limit = 50) =>
     api.get<DatasetPreview>(`/datasets/${id}/preview`, { params: { limit } }).then(r => r.data),
+  suggestTemplate: (id: number) =>
+    api.get<{ dataset_id: number; suggestions: TemplateSuggestion[] }>(`/datasets/${id}/suggest-template`).then(r => r.data),
   upload: (file: File, name?: string, description?: string) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -74,6 +81,10 @@ export const ProjectsApi = {
   remove: (id: number) => api.delete(`/projects/${id}`).then(r => r.data),
   conversions: (id: number) =>
     api.get<Conversion[]>(`/projects/${id}/conversions`).then(r => r.data),
+  autoPopulate: (id: number, modules: string[]) =>
+    api.post<AutoPopulateResult>(`/projects/${id}/auto-populate-conversions`, { modules }).then(r => r.data),
+  deriveLoadOrder: (id: number) =>
+    api.post<LoadOrderResult>(`/projects/${id}/derive-load-order`).then(r => r.data),
 };
 
 // ─── Conversion-object-level (Conversions) ───
@@ -91,6 +102,10 @@ export const ConversionsApi = {
 };
 
 export const MappingApi = {
+  propagate: (mappingId: number) =>
+    api.post<PropagationResult>(`/mappings/${mappingId}/propagate`).then(r => r.data),
+  propagationCandidates: (conversionId: number) =>
+    api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
   suggest: (conversionId: number) =>
     api.post<MappingSuggestion[]>(`/conversions/${conversionId}/suggest-mapping`).then(r => r.data),
   list: (conversionId: number) =>
@@ -136,6 +151,8 @@ export const QualityApi = {
 export const OutputApi = {
   generate: (conversionId: number, fmt: "csv" | "xlsx" = "csv") =>
     api.post<ConvertedOutput>(`/conversions/${conversionId}/generate-output`, null, { params: { fmt } }).then(r => r.data),
+  list: (conversionId: number) =>
+    api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: number, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
   downloadUrl: (conversionId: number) => `/api/conversions/${conversionId}/download-output`,
