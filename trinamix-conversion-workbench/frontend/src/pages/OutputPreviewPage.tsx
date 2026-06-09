@@ -86,7 +86,7 @@ export const OutputPreviewPage: React.FC = () => {
         />
         {!dataLoaded ? <PageLoader /> :
           tab === "data" ? (
-            data.columns.length === 0 ? (
+            !data || data.columns.length === 0 ? (
               <CardBody><EmptyState
                 title="No converted output yet"
                 description="Approve at least one mapping then click Re-generate."
@@ -113,6 +113,11 @@ export const OutputPreviewPage: React.FC = () => {
                 </table>
               </div>
             )
+          ) : !data ? (
+            <CardBody><EmptyState
+              title="No output data"
+              description="Generate output first from the Data tab."
+            /></CardBody>
           ) : (
             <table className="table-shell">
               <thead>
