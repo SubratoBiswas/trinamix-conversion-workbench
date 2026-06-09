@@ -517,6 +517,54 @@ const AutoPopulateModal: React.FC<{
   const [busy, setBusy] = React.useState(false);
 
   const toggle = (m: string) =>
-    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  const submit = async () => {
+    if (!selected.length) return;
+    setBusy(true);
+    try {
+      const r = await ProjectsApi.autoPopulate(projectId, selected);
+      onDone(r);
+    } finally { setBusy(false); }
+  };
 
-  const submit = async () => 
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              Select Oracle Cloud modules to create conversion objects automatically.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-5">
+          {AVAILABLE_MODULES.map(m => (
+            <button
+              key={m}
+              onClick={() => toggle(m)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                selected.includes(m)
+                  ? "border-brand bg-brand-subtle text-brand-dark"
+                  : "border-line bg-canvas text-ink-muted hover:border-brand"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={!selected.length || busy}
+            className="btn-primary disabled:opacity-50"
+          >
+            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

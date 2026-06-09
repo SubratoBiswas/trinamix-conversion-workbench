@@ -606,5 +606,22 @@ const TemplatePickerModal: React.FC<{
                 key={t.id}
                 onClick={() => onSelect(t.id)}
                 className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
-                  t.id === currentId
-                    ? "border-brand bg-brand-su
+                    ? "border-brand bg-brand-subtle text-brand-dark"
+                    : "border-line hover:border-brand hover:bg-canvas"
+                }`}
+              >
+                <div className="font-medium text-ink">{t.name}</div>
+                {t.business_object && (
+                  <div className="text-xs text-ink-muted">{t.business_object}</div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-4 flex justify-end">
+          <button onClick={onClose} className="btn-ghost">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+};
