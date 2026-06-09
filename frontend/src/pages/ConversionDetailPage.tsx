@@ -573,4 +573,38 @@ const TemplatePickerModal: React.FC<{
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
-        <div className="mb-4 flex 
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink">Select FBDI Template</h2>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
+        </div>
+        {loading ? (
+          <div className="py-8 text-center text-sm text-ink-muted">Loading templates...</div>
+        ) : templates.length === 0 ? (
+          <div className="py-8 text-center text-sm text-ink-muted">No FBDI templates found.</div>
+        ) : (
+          <div className="max-h-80 overflow-y-auto space-y-1">
+            {templates.map(t => (
+              <button
+                key={t.id}
+                onClick={() => onSelect(t.id)}
+                className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
+                  t.id === currentId
+                    ? "border-brand bg-brand-subtle"
+                    : "border-line hover:border-brand hover:bg-canvas"
+                }`}
+              >
+                <div className="font-medium text-ink">{t.name}</div>
+                {t.business_object && (
+                  <div className="mt-0.5 text-xs text-ink-muted">{t.business_object}</div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-4 flex justify-end">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+};
