@@ -5,8 +5,8 @@ from pydantic import BaseModel
 
 
 class ValidationIssueOut(BaseModel):
-    id: int
-    conversion_id: int
+    id: str
+    conversion_id: str
     category: str
     row_number: int | None = None
     field_name: str | None = None
@@ -24,8 +24,8 @@ class ValidationIssueOut(BaseModel):
 
 
 class ConvertedOutputOut(BaseModel):
-    id: int
-    conversion_id: int
+    id: str
+    conversion_id: str
     output_file_name: str
     row_count: int
     column_count: int
@@ -44,7 +44,8 @@ class OutputPreviewOut(BaseModel):
 
 
 class LoadErrorOut(BaseModel):
-    id: int
+    id: str
+    load_run_id: str
     row_number: int | None = None
     object_name: str | None = None
     error_category: str | None = None
@@ -59,8 +60,8 @@ class LoadErrorOut(BaseModel):
 
 
 class LoadRunOut(BaseModel):
-    id: int
-    conversion_id: int
+    id: str
+    conversion_id: str
     run_type: str
     status: str
     total_records: int

@@ -1,16 +1,15 @@
-"""Schemas for environments + environment runs (cutover dashboard)."""
+"""Environment + cutover dashboard schemas."""
 from datetime import datetime
-from typing import Any
-
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
 
 class EnvironmentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
-    project_id: int
+    id: str
+    project_id: str
     name: str
-    description: str | None = None
+    description: Optional[str] = None
     sort_order: int
     color: str
     sox_controlled: int
@@ -19,50 +18,43 @@ class EnvironmentOut(BaseModel):
 
 class EnvironmentRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
-    environment_id: int
-    conversion_id: int
-    dataset_id: int | None = None
+    id: str
+    environment_id: str
+    conversion_id: str
+    dataset_id: Optional[str] = None
     status: str
-    stage: str | None = None
-    record_count: int | None = None
-    passed_count: int | None = None
-    failed_count: int | None = None
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    notes: str | None = None
-    # Convenience joins
-    environment_name: str | None = None
-    conversion_name: str | None = None
-    dataset_name: str | None = None
+    stage: Optional[str] = None
+    record_count: Optional[int] = None
+    passed_count: Optional[int] = None
+    failed_count: Optional[int] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    notes: Optional[str] = None
+    environment_name: Optional[str] = None
+    conversion_name: Optional[str] = None
+    dataset_name: Optional[str] = None
 
 
 class EnvironmentRunCreate(BaseModel):
-    """Used when promoting a conversion into a new environment.
-
-    Either `dataset_id` (re-using an existing uploaded dataset) or `clone_from_run_id`
-    (continue with the previous env's dataset) — exactly one is expected.
-    """
-    environment_id: int
-    conversion_id: int
-    dataset_id: int | None = None
-    notes: str | None = None
+    environment_id: str
+    conversion_id: str
+    dataset_id: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class EnvironmentRunUpdate(BaseModel):
-    status: str | None = None
-    stage: str | None = None
-    notes: str | None = None
-    dataset_id: int | None = None
+    status: Optional[str] = None
+    stage: Optional[str] = None
+    notes: Optional[str] = None
+    dataset_id: Optional[str] = None
 
 
 class CutoverDashboard(BaseModel):
-    """Aggregate view returned by /api/projects/{id}/cutover."""
-    project_id: int
+    project_id: str
     project_name: str
-    days_to_go_live: int | None = None
-    cutover_window_start: datetime | None = None
-    cutover_window_end: datetime | None = None
+    days_to_go_live: Optional[int] = None
+    cutover_window_start: Optional[datetime] = None
+    cutover_window_end: Optional[datetime] = None
     sox_controlled: bool
     environments: list[dict[str, Any]]
     pipeline_runs: list[dict[str, Any]]

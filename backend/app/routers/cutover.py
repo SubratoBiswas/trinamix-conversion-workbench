@@ -1,19 +1,11 @@
-"""Environments + cutover dashboard endpoints.
+"""Environments + cutover dashboard endpoints."""
+from datetime import date, datetime
 
-A Project (engagement) has a fixed environment ladder (DEV/QA/UAT/PROD). Each
-Conversion can be promoted from one environment to the next by uploading a new
-dataset for that environment while reusing the saved dataflow + mappings.
-"""
-from datetime import date, datetime, time as dtime, timezone
-
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.models.conversion import Conversion
-from app.models.environment import (
-    DEFAULT_ENVIRONMENTS, Environment, EnvironmentRun,
-)
+from app.models.environment import DEFAULT_ENVIRONMENTS, Environment, EnvironmentRun
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.environment import (
@@ -25,58 +17,63 @@ from app.services.auth_service import get_current_user
 router = APIRouter(prefix="/api", tags=["cutover"])
 
 
-# ─── Environments ────────────────────────────────────────────────────────
+# ─── Environments ─────────────────────────────────────────────────────────────
 
 @router.get("/projects/{project_id}/environments", response_model=list[EnvironmentOut])
-def list_environments(
-    project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+async def list_environments(
+    project_id: str,
+    _: User = Depends(get_current_user),
 ):
-    return (
-        db.query(Environment)
-        .filter(Environment.project_id == project_id)
-        .order_by(Environment.sort_order)
-        .all()
-    )
+    envs = await Environment.find(
+        Environment.project_id == PydanticObjectId(project_id)
+    ).sort(+Environment.sort_order).to_list()
+    return [{**e.model_dump(), "id": str(e.id), "project_id": str(e.project_id)} for e in envs]
 
 
 @router.post("/projects/{project_id}/environments/seed", response_model=list[EnvironmentOut])
-def seed_default_environments(
-    project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+async def seed_default_environments(
+    project_id: str,
+    _: User = Depends(get_current_user),
 ):
-    """Idempotently create the standard DEV/QA/UAT/PROD ladder for a project."""
-    proj = db.query(Project).filter(Project.id == project_id).first()
+    proj = await Project.get(PydanticObjectId(project_id))
     if not proj:
         raise HTTPException(404, "Project not found")
-    existing = {e.name for e in db.query(Environment).filter(
-        Environment.project_id == project_id
-    ).all()}
+    pid = PydanticObjectId(project_id)
+    existing = {
+        e.name for e in await Environment.find(Environment.project_id == pid).to_list()
+    }
     for env in DEFAULT_ENVIRONMENTS:
         if env["name"] in existing:
             continue
-        db.add(Environment(
-            project_id=project_id,
+        await Environment(
+            project_id=pid,
             name=env["name"],
             description=env["description"],
             sort_order=env["order"],
             color=env["color"],
             sox_controlled=1 if env["name"] == "PROD" else 0,
-        ))
-    db.commit()
-    return (
-        db.query(Environment)
-        .filter(Environment.project_id == project_id)
-        .order_by(Environment.sort_order)
-        .all()
-    )
+        ).insert()
+    envs = await Environment.find(
+        Environment.project_id == pid
+    ).sort(+Environment.sort_order).to_list()
+    return [{**e.model_dump(), "id": str(e.id), "project_id": str(e.project_id)} for e in envs]
 
 
-# ─── Environment runs (per conversion × environment) ─────────────────────
+# ─── Environment runs ─────────────────────────────────────────────────────────
 
-def _hydrate_run(db: Session, run: EnvironmentRun) -> EnvironmentRunOut:
-    out = EnvironmentRunOut.model_validate(run)
-    out.environment_name = run.environment.name if run.environment else None
-    out.conversion_name = run.conversion.name if run.conversion else None
-    out.dataset_name = run.dataset.name if run.dataset else None
+async def _hydrate_run(run: EnvironmentRun) -> dict:
+    out = run.model_dump()
+    out["id"] = str(run.id)
+    out["environment_id"] = str(run.environment_id)
+    out["conversion_id"] = str(run.conversion_id)
+    out["dataset_id"] = str(run.dataset_id) if run.dataset_id else None
+    env = await Environment.get(run.environment_id)
+    conv = await Conversion.get(run.conversion_id)
+    from app.models.dataset import Dataset
+    ds = await Dataset.get(run.dataset_id) if run.dataset_id else None
+    out["environment_name"] = env.name if env else None
+    out["conversion_name"] = conv.name if conv else None
+    out["dataset_name"] = ds.name if ds else None
     return out
 
 
@@ -84,117 +81,96 @@ def _hydrate_run(db: Session, run: EnvironmentRun) -> EnvironmentRunOut:
     "/conversions/{conversion_id}/environment-runs",
     response_model=list[EnvironmentRunOut],
 )
-def list_runs_for_conversion(
-    conversion_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+async def list_runs_for_conversion(
+    conversion_id: str,
+    _: User = Depends(get_current_user),
 ):
-    runs = (
-        db.query(EnvironmentRun)
-        .filter(EnvironmentRun.conversion_id == conversion_id)
-        .order_by(EnvironmentRun.id)
-        .all()
-    )
-    return [_hydrate_run(db, r) for r in runs]
+    runs = await EnvironmentRun.find(
+        EnvironmentRun.conversion_id == PydanticObjectId(conversion_id)
+    ).sort(+EnvironmentRun.id).to_list()
+    return [await _hydrate_run(r) for r in runs]
 
 
 @router.post("/environment-runs", response_model=EnvironmentRunOut)
-def create_environment_run(
+async def create_environment_run(
     payload: EnvironmentRunCreate,
-    db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Promote a conversion into a new environment. The dataflow + mappings
-    are reused; only `dataset_id` (the source upload for this environment) is
-    different."""
-    env = db.query(Environment).filter(Environment.id == payload.environment_id).first()
+    env = await Environment.get(PydanticObjectId(payload.environment_id))
     if not env:
         raise HTTPException(404, "Environment not found")
-    conv = db.query(Conversion).filter(Conversion.id == payload.conversion_id).first()
+    conv = await Conversion.get(PydanticObjectId(payload.conversion_id))
     if not conv:
         raise HTTPException(404, "Conversion not found")
-    if conv.project_id != env.project_id:
+    if str(conv.project_id) != str(env.project_id):
         raise HTTPException(400, "Environment does not belong to the conversion's project")
 
     run = EnvironmentRun(
-        environment_id=payload.environment_id,
-        conversion_id=payload.conversion_id,
-        dataset_id=payload.dataset_id,
+        environment_id=env.id,
+        conversion_id=conv.id,
+        dataset_id=PydanticObjectId(payload.dataset_id) if payload.dataset_id else None,
         status="pending",
         notes=payload.notes,
     )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    return _hydrate_run(db, run)
+    await run.insert()
+    return await _hydrate_run(run)
 
 
 @router.patch("/environment-runs/{run_id}", response_model=EnvironmentRunOut)
-def update_environment_run(
-    run_id: int,
+async def update_environment_run(
+    run_id: str,
     payload: EnvironmentRunUpdate,
-    db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    run = db.query(EnvironmentRun).filter(EnvironmentRun.id == run_id).first()
+    run = await EnvironmentRun.get(PydanticObjectId(run_id))
     if not run:
         raise HTTPException(404, "Run not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(run, k, v)
+    updates = payload.model_dump(exclude_unset=True)
     if payload.status == "running" and not run.started_at:
-        run.started_at = datetime.utcnow()
+        updates["started_at"] = datetime.utcnow()
     if payload.status in ("complete", "failed") and not run.completed_at:
-        run.completed_at = datetime.utcnow()
-    db.commit()
-    db.refresh(run)
-    return _hydrate_run(db, run)
+        updates["completed_at"] = datetime.utcnow()
+    await run.set(updates)
+    return await _hydrate_run(run)
 
 
-# ─── Cutover dashboard (project-level aggregate) ─────────────────────────
+# ─── Cutover dashboard ────────────────────────────────────────────────────────
 
 @router.get("/projects/{project_id}/cutover", response_model=CutoverDashboard)
-def cutover_dashboard(
-    project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+async def cutover_dashboard(
+    project_id: str,
+    _: User = Depends(get_current_user),
 ):
-    """Return the aggregate cutover view for a Project — environment columns
-    each carrying their pipeline-stage statuses, plus a recent pipeline-runs
-    log."""
-    proj = db.query(Project).filter(Project.id == project_id).first()
+    pid = PydanticObjectId(project_id)
+    proj = await Project.get(pid)
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    # Days to go-live
     days_to_go_live: int | None = None
     if proj.go_live_date:
         days_to_go_live = (proj.go_live_date - date.today()).days
 
-    envs = (
-        db.query(Environment)
-        .filter(Environment.project_id == project_id)
-        .order_by(Environment.sort_order)
-        .all()
-    )
+    envs = await Environment.find(
+        Environment.project_id == pid
+    ).sort(+Environment.sort_order).to_list()
 
-    conversions = (
-        db.query(Conversion)
-        .filter(Conversion.project_id == project_id)
-        .order_by(Conversion.planned_load_order)
-        .all()
-    )
+    conversions = await Conversion.find(
+        Conversion.project_id == pid
+    ).sort(+Conversion.planned_load_order).to_list()
 
-    # Build per-environment stage list. Each conversion is one stage.
+    conv_ids = [c.id for c in conversions]
+
+    # Build per-environment stage list
     env_columns: list[dict] = []
     for env in envs:
-        runs = {
-            r.conversion_id: r
-            for r in db.query(EnvironmentRun)
-            .filter(EnvironmentRun.environment_id == env.id)
-            .all()
-        }
+        runs_list = await EnvironmentRun.find(
+            EnvironmentRun.environment_id == env.id
+        ).to_list()
+        runs = {r.conversion_id: r for r in runs_list}
         stages = []
         for c in conversions:
             run = runs.get(c.id)
             if env.name == "DEV":
-                # DEV mirrors the conversion's own status — that's where most
-                # of the work happens before promotion.
                 stage_status = (
                     "complete" if c.status in ("loaded", "validated", "output_generated")
                     else "running" if c.status in ("draft", "mapping_suggested", "awaiting_approval")
@@ -203,22 +179,21 @@ def cutover_dashboard(
             else:
                 stage_status = run.status if run else "pending"
             stages.append({
-                "conversion_id": c.id,
+                "conversion_id": str(c.id),
                 "conversion_name": c.name,
                 "target_object": c.target_object,
                 "status": stage_status,
-                "run_id": run.id if run else None,
-                "dataset_id": (run.dataset_id if run else c.dataset_id),
+                "run_id": str(run.id) if run else None,
+                "dataset_id": str(run.dataset_id) if run and run.dataset_id else (str(c.dataset_id) if c.dataset_id else None),
                 "started_at": run.started_at.isoformat() if run and run.started_at else None,
                 "completed_at": run.completed_at.isoformat() if run and run.completed_at else None,
             })
         env_columns.append({
-            "id": env.id,
+            "id": str(env.id),
             "name": env.name,
             "color": env.color,
             "sox_controlled": bool(env.sox_controlled),
             "stages": stages,
-            # Roll-up status for the column header
             "complete_count": sum(1 for s in stages if s["status"] == "complete"),
             "running_count": sum(1 for s in stages if s["status"] == "running"),
             "failed_count": sum(1 for s in stages if s["status"] == "failed"),
@@ -226,28 +201,26 @@ def cutover_dashboard(
         })
 
     # Recent pipeline runs
-    recent_runs = (
-        db.query(EnvironmentRun)
-        .filter(EnvironmentRun.conversion_id.in_([c.id for c in conversions]))
-        .order_by(EnvironmentRun.id.desc())
-        .limit(20)
-        .all()
-    )
-    pipeline_runs = [
-        {
-            "run_id": r.id,
-            "entity": r.conversion.name if r.conversion else "—",
+    recent_runs = await EnvironmentRun.find(
+        EnvironmentRun.conversion_id.in_(conv_ids)
+    ).sort(-EnvironmentRun.id).limit(20).to_list()
+
+    pipeline_runs = []
+    for r in recent_runs:
+        conv = await Conversion.get(r.conversion_id)
+        env = await Environment.get(r.environment_id)
+        pipeline_runs.append({
+            "run_id": str(r.id),
+            "entity": conv.name if conv else "—",
             "stage": r.stage or r.status,
             "status": r.status,
             "records": r.record_count,
             "started": r.started_at.isoformat() if r.started_at else None,
-            "environment": r.environment.name if r.environment else None,
-        }
-        for r in recent_runs
-    ]
+            "environment": env.name if env else None,
+        })
 
     return CutoverDashboard(
-        project_id=proj.id,
+        project_id=str(proj.id),
         project_name=proj.name,
         days_to_go_live=days_to_go_live,
         cutover_window_start=proj.production_cutover_start,

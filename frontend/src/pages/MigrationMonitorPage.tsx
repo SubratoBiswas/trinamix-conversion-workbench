@@ -47,7 +47,7 @@ const ENV_ACCENT_TEXT: Record<string, string> = {
  */
 export const MigrationMonitorPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const pid = Number(id);
+  const pid = id!;
 
   const [project, setProject] = useState<Project | null>(null);
   const [board, setBoard] = useState<CutoverDashboard | null>(null);

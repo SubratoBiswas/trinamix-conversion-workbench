@@ -82,6 +82,13 @@ export const DatasetsPage: React.FC = () => {
                   </div>
                   <Pill tone="success">{d.status}</Pill>
                 </div>
+                {d.detected_object_type && (
+                  <div className="mt-2 flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                    <Sparkles className="h-3 w-3" />
+                    {d.detected_object_type}
+                    {d.detection_confidence ? <span className="ml-1 text-amber-500">{Math.round(d.detection_confidence * 100)}%</span> : null}
+                  </div>
+                )}
                 <div className="mt-3 line-clamp-2 text-sm font-semibold text-ink">{d.name}</div>
                 <div className="mt-1 line-clamp-1 font-mono text-[11px] text-ink-muted">{d.file_name}</div>
                 <div className="mt-3 flex items-center gap-3 text-[11px] text-ink-muted">
@@ -105,7 +112,7 @@ export const DatasetsPage: React.FC = () => {
             <table className="table-shell">
               <thead>
                 <tr>
-                  <th>Name</th><th>File</th><th>Type</th>
+                  <th>Name</th><th>Detected Object</th><th>File</th><th>Type</th>
                   <th className="text-right">Rows</th><th className="text-right">Cols</th>
                   <th>Status</th><th>Uploaded</th><th></th>
                 </tr>
@@ -114,6 +121,10 @@ export const DatasetsPage: React.FC = () => {
                 {filtered.map((d) => (
                   <tr key={d.id} onClick={() => nav(`/datasets/${d.id}/prepare`)} className="cursor-pointer">
                     <td className="font-medium text-ink">{d.name}</td>
+                    <td>{d.detected_object_type
+                      ? <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"><Sparkles className="h-3 w-3" />{d.detected_object_type} <span className="text-amber-400">{Math.round((d.detection_confidence ?? 0) * 100)}%</span></span>
+                      : <span className="text-ink-muted text-[11px]">—</span>}
+                    </td>
                     <td className="font-mono text-[11px] text-ink-muted">{d.file_name}</td>
                     <td><Pill tone="neutral">{d.file_type.toUpperCase()}</Pill></td>
                     <td className="text-right tabular-nums">{d.row_count.toLocaleString()}</td>

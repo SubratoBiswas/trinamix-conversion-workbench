@@ -1,50 +1,53 @@
-"""Project (engagement) schemas."""
+"""Project schemas."""
 from datetime import date, datetime
-
+from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 
 class ProjectCreate(BaseModel):
     name: str
-    description: str | None = None
-    client: str | None = None
-    target_environment: str | None = None
-    go_live_date: date | None = None
-    owner: str | None = None
-    status: str | None = "planning"
+    description: Optional[str] = None
+    client: Optional[str] = None
+    target_environment: Optional[str] = None
+    go_live_date: Optional[date] = None
+    owner: Optional[str] = None
+    status: Optional[str] = "planning"
 
 
 class ProjectUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    client: str | None = None
-    target_environment: str | None = None
-    go_live_date: date | None = None
-    owner: str | None = None
-    status: str | None = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    client: Optional[str] = None
+    target_environment: Optional[str] = None
+    go_live_date: Optional[date] = None
+    owner: Optional[str] = None
+    status: Optional[str] = None
+    migration_lead: Optional[str] = None
+    data_owner: Optional[str] = None
+    sox_controlled: Optional[int] = None
+    production_cutover_start: Optional[datetime] = None
+    production_cutover_end: Optional[datetime] = None
 
 
 class ProjectOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    id: int
+    id: str
     name: str
-    description: str | None = None
-    client: str | None = None
-    target_environment: str | None = None
-    go_live_date: date | None = None
-    owner: str | None = None
+    description: Optional[str] = None
+    client: Optional[str] = None
+    target_environment: Optional[str] = None
+    go_live_date: Optional[date] = None
+    owner: Optional[str] = None
     status: str
-    production_cutover_start: datetime | None = None
-    production_cutover_end: datetime | None = None
-    migration_lead: str | None = None
-    data_owner: str | None = None
-    sox_controlled: int | None = 1
+    production_cutover_start: Optional[datetime] = None
+    production_cutover_end: Optional[datetime] = None
+    migration_lead: Optional[str] = None
+    data_owner: Optional[str] = None
+    sox_controlled: Optional[int] = 1
     created_at: datetime
     updated_at: datetime
-
-    # Roll-ups
-    conversion_count: int | None = 0
-    in_progress_count: int | None = 0
-    loaded_count: int | None = 0
-    failed_count: int | None = 0
+    conversion_count: Optional[int] = 0
+    in_progress_count: Optional[int] = 0
+    loaded_count: Optional[int] = 0
+    failed_count: Optional[int] = 0

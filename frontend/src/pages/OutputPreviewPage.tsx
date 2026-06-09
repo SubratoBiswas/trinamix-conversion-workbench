@@ -13,7 +13,7 @@ import type {
 
 export const OutputPreviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const pid = Number(id);
+  const pid = id!;
   const [project, setProject] = useState<Conversion | null>(null);
   const [data, setData] = useState<OutputPreview | null>(null);
   const [tab, setTab] = useState("data");

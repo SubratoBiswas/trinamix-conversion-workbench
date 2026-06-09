@@ -4,8 +4,6 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from sqlalchemy.orm import Session
-
 from app.models.conversion import Conversion
 from app.models.dataset import Dataset
 from app.models.fbdi import FBDITemplate
@@ -14,33 +12,30 @@ from app.models.project import Project
 from app.models.workflow import Workflow
 
 
-def get_kpis(db: Session) -> dict[str, Any]:
-    total_datasets = db.query(Dataset).count()
-    total_templates = db.query(FBDITemplate).count()
-    total_projects = db.query(Project).count()
-    total_conversions = db.query(Conversion).count()
-    total_workflows = db.query(Workflow).count()
-    total_load_runs = db.query(LoadRun).count()
+async def get_kpis() -> dict[str, Any]:
+    total_datasets = await Dataset.count()
+    total_templates = await FBDITemplate.count()
+    total_projects = await Project.count()
+    total_conversions = await Conversion.count()
+    total_workflows = await Workflow.count()
+    total_load_runs = await LoadRun.count()
 
-    runs = db.query(LoadRun).all()
+    runs = await LoadRun.find_all().to_list()
     total_records = sum(r.total_records for r in runs) or 0
     total_passed = sum(r.passed_count for r in runs) or 0
     total_failed = sum(r.failed_count for r in runs) or 0
     pass_rate = round((total_passed / total_records * 100), 1) if total_records else 0.0
     fail_rate = round((total_failed / total_records * 100), 1) if total_records else 0.0
 
-    recent_projects = (
-        db.query(Project).order_by(Project.updated_at.desc()).limit(5).all()
-    )
-    recent_conversions = (
-        db.query(Conversion).order_by(Conversion.updated_at.desc()).limit(5).all()
-    )
-    recent_load_runs = (
-        db.query(LoadRun).order_by(LoadRun.started_at.desc()).limit(5).all()
-    )
+    recent_projects = await Project.find_all().sort(-Project.updated_at).limit(5).to_list()
+    recent_conversions = await Conversion.find_all().sort(-Conversion.updated_at).limit(5).to_list()
+    recent_load_runs = await LoadRun.find_all().sort(-LoadRun.started_at).limit(5).to_list()
 
-    proj_status = Counter(p.status for p in db.query(Project).all())
-    conv_status = Counter(c.status for c in db.query(Conversion).all())
+    all_projects = await Project.find_all().to_list()
+    all_conversions = await Conversion.find_all().to_list()
+
+    proj_status = Counter(p.status for p in all_projects)
+    conv_status = Counter(c.status for c in all_conversions)
     load_status = Counter(r.status for r in runs)
 
     return {
@@ -54,7 +49,7 @@ def get_kpis(db: Session) -> dict[str, Any]:
         "fail_rate": fail_rate,
         "recent_projects": [
             {
-                "id": p.id,
+                "id": str(p.id),
                 "name": p.name,
                 "client": p.client,
                 "status": p.status,
@@ -64,21 +59,21 @@ def get_kpis(db: Session) -> dict[str, Any]:
         ],
         "recent_conversions": [
             {
-                "id": c.id,
+                "id": str(c.id),
                 "name": c.name,
-                "project_id": c.project_id,
+                "project_id": str(c.project_id),
                 "status": c.status,
                 "target_object": c.target_object,
                 "updated_at": c.updated_at.isoformat() if c.updated_at else None,
-                "dataset_id": c.dataset_id,
-                "template_id": c.template_id,
+                "dataset_id": str(c.dataset_id) if c.dataset_id else None,
+                "template_id": str(c.template_id) if c.template_id else None,
             }
             for c in recent_conversions
         ],
         "recent_load_runs": [
             {
-                "id": r.id,
-                "conversion_id": r.conversion_id,
+                "id": str(r.id),
+                "conversion_id": str(r.conversion_id),
                 "status": r.status,
                 "total_records": r.total_records,
                 "passed_count": r.passed_count,

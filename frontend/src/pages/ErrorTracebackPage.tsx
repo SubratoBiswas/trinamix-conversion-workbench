@@ -42,7 +42,7 @@ export const ErrorTracebackPage: React.FC = () => {
   const projParam = params.get("conversion");
 
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<number | null>(projParam ? Number(projParam) : null);
+  const [pid, setPid] = useState<string | null>(projParam ?? null);
   const [project, setProject] = useState<Conversion | null>(null);
   const [deps, setDeps] = useState<Dependency[]>([]);
   const [summary, setSummary] = useState<LoadSummary | null>(null);
@@ -92,7 +92,7 @@ export const ErrorTracebackPage: React.FC = () => {
         subtitle="Post-load failures traced back through the dependency graph to upstream master objects"
         right={
           <select className="input !w-auto !min-w-[280px]" value={pid ?? ""}
-            onChange={(e) => { const v = Number(e.target.value); setPid(v); setParams({ conversion: String(v) }); }}>
+            onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}>
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         }

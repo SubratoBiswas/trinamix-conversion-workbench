@@ -34,7 +34,7 @@ const STATUS_TONE = (s: string) => {
  */
 export const ProjectOverviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const pid = Number(id);
+  const pid = id!;
 
   const [project, setProject] = useState<Project | null>(null);
   const [conversions, setConversions] = useState<Conversion[] | null>(null);

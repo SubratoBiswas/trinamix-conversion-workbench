@@ -1,14 +1,12 @@
-"""Conversions router — CRUD for individual conversion objects.
-
-A Conversion is one source-file → one FBDI-target unit of work, scoped to a
-parent Project (engagement). All downstream operations (mapping, validation,
-output, load) hang off a Conversion.
-"""
+"""Conversions router."""
+from datetime import datetime
+from typing import Optional
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.models.conversion import Conversion
+from app.models.dataset import Dataset
+from app.models.fbdi import FBDITemplate
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.conversion import ConversionCreate, ConversionOut, ConversionUpdate
@@ -17,109 +15,86 @@ from app.services.auth_service import get_current_user
 router = APIRouter(prefix="/api/conversions", tags=["conversions"])
 
 
-def _hydrate(db: Session, c: Conversion) -> ConversionOut:
-    out = ConversionOut.model_validate(c)
-    out.dataset_name = c.dataset.name if c.dataset else None
-    out.template_name = c.template.name if c.template else None
-    out.project_name = c.project.name if c.project else None
-    return out
-
-
-def _resolve_status(c: Conversion) -> str:
-    """Default a conversion's status from its bindings if not set."""
-    if c.status:
-        return c.status
-    if c.dataset_id and c.template_id:
-        return "draft"
-    return "planning"
+async def _hydrate(c: Conversion) -> ConversionOut:
+    data = {**c.model_dump(), "id": str(c.id), "project_id": str(c.project_id)}
+    if c.dataset_id:
+        data["dataset_id"] = str(c.dataset_id)
+        ds = await Dataset.get(c.dataset_id)
+        data["dataset_name"] = ds.name if ds else None
+    if c.template_id:
+        data["template_id"] = str(c.template_id)
+        tmpl = await FBDITemplate.get(c.template_id)
+        data["template_name"] = tmpl.name if tmpl else None
+    proj = await Project.get(c.project_id)
+    data["project_name"] = proj.name if proj else None
+    return ConversionOut(**data)
 
 
 @router.get("", response_model=list[ConversionOut])
-def list_conversions(
-    project_id: int | None = Query(None),
-    status: str | None = Query(None),
-    db: Session = Depends(get_db),
+async def list_conversions(
+    project_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     _: User = Depends(get_current_user),
 ):
-    q = db.query(Conversion)
-    if project_id is not None:
-        q = q.filter(Conversion.project_id == project_id)
+    query = {}
+    if project_id:
+        query["project_id"] = PydanticObjectId(project_id)
     if status:
-        q = q.filter(Conversion.status == status)
-    return [
-        _hydrate(db, c)
-        for c in q.order_by(Conversion.planned_load_order, Conversion.id).all()
-    ]
+        query["status"] = status
+    convs = await Conversion.find(query).sort(+Conversion.planned_load_order).to_list()
+    return [await _hydrate(c) for c in convs]
 
 
 @router.get("/{conversion_id}", response_model=ConversionOut)
-def get_conversion(
-    conversion_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    c = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+async def get_conversion(conversion_id: str, _: User = Depends(get_current_user)):
+    c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
-    return _hydrate(db, c)
+    return await _hydrate(c)
 
 
 @router.post("", response_model=ConversionOut)
-def create_conversion(
-    payload: ConversionCreate,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    proj = db.query(Project).filter(Project.id == payload.project_id).first()
+async def create_conversion(payload: ConversionCreate, user: User = Depends(get_current_user)):
+    proj = await Project.get(PydanticObjectId(payload.project_id))
     if not proj:
         raise HTTPException(400, f"Project {payload.project_id} does not exist")
-
-    c = Conversion(
-        **payload.model_dump(exclude_unset=True, exclude={"status"}),
-        created_by=user.email,
-    )
-    if payload.status:
-        c.status = payload.status
-    elif c.dataset_id and c.template_id:
-        c.status = "draft"
-    else:
-        c.status = "planning"
-
-    db.add(c)
-    db.commit()
-    db.refresh(c)
-    return _hydrate(db, c)
+    data = payload.model_dump(exclude_unset=True)
+    data["project_id"] = PydanticObjectId(payload.project_id)
+    if data.get("dataset_id"):
+        data["dataset_id"] = PydanticObjectId(data["dataset_id"])
+    if data.get("template_id"):
+        data["template_id"] = PydanticObjectId(data["template_id"])
+    data["created_by"] = user.email
+    data["created_at"] = datetime.utcnow()
+    data["updated_at"] = datetime.utcnow()
+    if not data.get("status"):
+        data["status"] = "draft" if data.get("dataset_id") and data.get("template_id") else "planning"
+    c = Conversion(**data)
+    await c.insert()
+    return await _hydrate(c)
 
 
 @router.patch("/{conversion_id}", response_model=ConversionOut)
-def update_conversion(
-    conversion_id: int,
-    payload: ConversionUpdate,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+async def update_conversion(
+    conversion_id: str, payload: ConversionUpdate, _: User = Depends(get_current_user)
 ):
-    c = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+    c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(c, k, v)
-    # If now fully bound and still in planning, advance to draft
-    if c.status == "planning" and c.dataset_id and c.template_id:
-        c.status = "draft"
-    db.commit()
-    db.refresh(c)
-    return _hydrate(db, c)
+    update_data = payload.model_dump(exclude_unset=True)
+    if "dataset_id" in update_data and update_data["dataset_id"]:
+        update_data["dataset_id"] = PydanticObjectId(update_data["dataset_id"])
+    if "template_id" in update_data and update_data["template_id"]:
+        update_data["template_id"] = PydanticObjectId(update_data["template_id"])
+    update_data["updated_at"] = datetime.utcnow()
+    await c.set(update_data)
+    return await _hydrate(c)
 
 
 @router.delete("/{conversion_id}")
-def delete_conversion(
-    conversion_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    c = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+async def delete_conversion(conversion_id: str, _: User = Depends(get_current_user)):
+    c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
-    db.delete(c)
-    db.commit()
+    await c.delete()
     return {"deleted": conversion_id}

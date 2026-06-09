@@ -1,95 +1,77 @@
 """FBDI template endpoints."""
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate
 from app.models.user import User
-from app.schemas.fbdi import (
-    FBDIFieldOut, FBDIFieldUpdate, FBDISheetOut, FBDITemplateDetailOut, FBDITemplateOut,
-)
+from app.schemas.fbdi import FBDIFieldOut, FBDIFieldUpdate, FBDISheetOut, FBDITemplateDetailOut, FBDITemplateOut
 from app.services.auth_service import get_current_user
 from app.services.fbdi_service import create_template_from_upload
 
 router = APIRouter(prefix="/api/fbdi", tags=["fbdi"])
 
 
+def _fld_out(f: FBDIField) -> dict:
+    d = f.model_dump()
+    d["id"] = str(f.id)
+    d["template_id"] = str(f.template_id)
+    d["sheet_id"] = str(f.sheet_id)
+    return d
+
+
+async def _detail_payload(tpl: FBDITemplate) -> dict:
+    sheets = await FBDISheet.find(FBDISheet.template_id == tpl.id).sort(+FBDISheet.sequence).to_list()
+    fields = await FBDIField.find(FBDIField.template_id == tpl.id).sort(+FBDIField.sequence).to_list()
+    d = tpl.model_dump()
+    d["id"] = str(tpl.id)
+    d["sheets"] = [{"id": str(s.id), "template_id": str(s.template_id), **{k: v for k, v in s.model_dump().items() if k not in ("id","template_id")}} for s in sheets]
+    d["fields"] = [_fld_out(f) for f in fields]
+    return d
+
+
 @router.post("/upload", response_model=FBDITemplateDetailOut)
-def upload_template(
+async def upload_template(
     file: UploadFile = File(...),
     name: str | None = Form(None),
     module: str | None = Form(None),
     business_object: str | None = Form(None),
-    db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
     try:
-        tpl = create_template_from_upload(db, file, name, module, business_object)
+        tpl = await create_template_from_upload(file, name, module, business_object)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return _detail_payload(tpl, db)
+    return await _detail_payload(tpl)
 
 
 @router.get("/templates", response_model=list[FBDITemplateOut])
-def list_templates(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    return db.query(FBDITemplate).order_by(FBDITemplate.uploaded_at.desc()).all()
+async def list_templates(_: User = Depends(get_current_user)):
+    templates = await FBDITemplate.find_all().sort(-FBDITemplate.uploaded_at).to_list()
+    return [{"id": str(t.id), **{k: v for k, v in t.model_dump().items() if k != "id"}} for t in templates]
 
 
 @router.get("/templates/{template_id}", response_model=FBDITemplateDetailOut)
-def get_template(template_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    tpl = db.query(FBDITemplate).filter(FBDITemplate.id == template_id).first()
+async def get_template(template_id: str, _: User = Depends(get_current_user)):
+    tpl = await FBDITemplate.get(PydanticObjectId(template_id))
     if not tpl:
         raise HTTPException(404, "Template not found")
-    return _detail_payload(tpl, db)
+    return await _detail_payload(tpl)
 
 
 @router.get("/templates/{template_id}/fields", response_model=list[FBDIFieldOut])
-def list_template_fields(
-    template_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
-):
-    return (
-        db.query(FBDIField)
-        .filter(FBDIField.template_id == template_id)
-        .order_by(FBDIField.sequence)
-        .all()
-    )
+async def list_template_fields(template_id: str, _: User = Depends(get_current_user)):
+    fields = await FBDIField.find(
+        FBDIField.template_id == PydanticObjectId(template_id)
+    ).sort(+FBDIField.sequence).to_list()
+    return [_fld_out(f) for f in fields]
 
 
 @router.put("/fields/{field_id}", response_model=FBDIFieldOut)
-def update_field(
-    field_id: int,
-    payload: FBDIFieldUpdate,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+async def update_field(
+    field_id: str, payload: FBDIFieldUpdate, _: User = Depends(get_current_user)
 ):
-    field = db.query(FBDIField).filter(FBDIField.id == field_id).first()
-    if not field:
+    f = await FBDIField.get(PydanticObjectId(field_id))
+    if not f:
         raise HTTPException(404, "Field not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(field, k, v)
-    db.commit()
-    db.refresh(field)
-    return field
-
-
-def _detail_payload(tpl: FBDITemplate, db: Session) -> dict:
-    sheets = (
-        db.query(FBDISheet)
-        .filter(FBDISheet.template_id == tpl.id)
-        .order_by(FBDISheet.sequence)
-        .all()
-    )
-    field_count = db.query(FBDIField).filter(FBDIField.template_id == tpl.id).count()
-    return {
-        "id": tpl.id,
-        "name": tpl.name,
-        "module": tpl.module,
-        "business_object": tpl.business_object,
-        "version": tpl.version,
-        "file_name": tpl.file_name,
-        "status": tpl.status,
-        "description": tpl.description,
-        "uploaded_at": tpl.uploaded_at,
-        "sheets": [FBDISheetOut.model_validate(s) for s in sheets],
-        "field_count": field_count,
-    }
+    await f.set(payload.model_dump(exclude_unset=True))
+    return _fld_out(f)

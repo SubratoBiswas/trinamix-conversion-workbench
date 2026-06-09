@@ -1,10 +1,9 @@
 """Learning library endpoints — registry of human-approved mappings/rules."""
 from collections import Counter
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from beanie import PydanticObjectId
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.database import get_db
 from app.models.learned import LearnedMapping
 from app.models.user import User
 from app.schemas.learned import LearnedMappingCreate, LearnedMappingOut, LearningStats
@@ -13,7 +12,6 @@ from app.services.auth_service import get_current_user
 router = APIRouter(prefix="/api/learned-mappings", tags=["learning"])
 
 
-# Default category seeds shown in the empty-state grid (mirrors CHRM AI's pattern)
 DEFAULT_CATEGORIES = [
     "Column Mapping Alias",
     "SKU / Item Format Alias",
@@ -29,53 +27,45 @@ DEFAULT_CATEGORIES = [
 
 
 @router.post("", response_model=LearnedMappingOut)
-def create_learned(
+async def create_learned(
     payload: LearnedMappingCreate,
-    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     item = LearnedMapping(**payload.model_dump(), captured_by=user.email)
-    db.add(item)
-    db.commit()
-    db.refresh(item)
-    return item
+    await item.insert()
+    return {**item.model_dump(), "id": str(item.id)}
 
 
 @router.get("", response_model=list[LearnedMappingOut])
-def list_learned(
+async def list_learned(
     kind: str | None = None,
     category: str | None = None,
-    db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    q = db.query(LearnedMapping)
+    filters = []
     if kind:
-        q = q.filter(LearnedMapping.kind == kind)
+        filters.append(LearnedMapping.kind == kind)
     if category:
-        q = q.filter(LearnedMapping.category == category)
-    return q.order_by(LearnedMapping.captured_at.desc()).all()
+        filters.append(LearnedMapping.category == category)
+    query = LearnedMapping.find(*filters)
+    items = await query.sort(-LearnedMapping.captured_at).to_list()
+    return [{**item.model_dump(), "id": str(item.id)} for item in items]
 
 
 @router.get("/stats", response_model=LearningStats)
-def learning_stats(
-    db: Session = Depends(get_db), _: User = Depends(get_current_user)
-):
-    items = db.query(LearnedMapping).all()
+async def learning_stats(_: User = Depends(get_current_user)):
+    items = await LearnedMapping.find_all().to_list()
     total = len(items)
     avg_boost = round(
         sum(i.confidence_boost or 0 for i in items) / total, 3
     ) if total else 0.0
     records_fixed = sum(int(i.records_auto_fixed or 0) for i in items)
-
-    # Heuristic — assume each captured rule saves ~4 minutes of analyst time
     minutes_saved = total * 4
 
     by_cat = Counter(i.category for i in items)
-    # Always include the seed categories so the UI shows the empty buckets too
     cat_rows = []
     for c in DEFAULT_CATEGORIES:
         cat_rows.append({"category": c, "count": by_cat.get(c, 0)})
-    # Plus any extras captured from approvals not in the default set
     for c in by_cat:
         if c not in DEFAULT_CATEGORIES:
             cat_rows.append({"category": c, "count": by_cat[c]})
@@ -90,12 +80,12 @@ def learning_stats(
 
 
 @router.delete("/{learned_id}")
-def delete_learned(
-    learned_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+async def delete_learned(
+    learned_id: str,
+    _: User = Depends(get_current_user),
 ):
-    item = db.query(LearnedMapping).filter(LearnedMapping.id == learned_id).first()
+    item = await LearnedMapping.get(PydanticObjectId(learned_id))
     if not item:
         raise HTTPException(404, "Not found")
-    db.delete(item)
-    db.commit()
+    await item.delete()
     return {"deleted": learned_id}

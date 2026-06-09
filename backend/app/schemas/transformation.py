@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 
 class TransformationRuleCreate(BaseModel):
-    target_field_id: int | None = None
+    target_field_id: str | None = None
     source_column: str | None = None
     rule_type: str
     rule_config: dict[str, Any] = {}
@@ -13,9 +13,9 @@ class TransformationRuleCreate(BaseModel):
 
 
 class TransformationRuleOut(BaseModel):
-    id: int
-    conversion_id: int
-    target_field_id: int | None = None
+    id: str
+    conversion_id: str
+    target_field_id: str | None = None
     source_column: str | None = None
     rule_type: str
     rule_config: dict[str, Any]
@@ -35,8 +35,8 @@ class CrosswalkCreate(BaseModel):
 
 
 class CrosswalkOut(BaseModel):
-    id: int
-    conversion_id: int
+    id: str
+    conversion_id: str
     name: str
     field_name: str
     source_value: str

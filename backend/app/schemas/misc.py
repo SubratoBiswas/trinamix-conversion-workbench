@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 class WorkflowCreate(BaseModel):
     name: str
     description: str | None = None
-    conversion_id: int | None = None
+    conversion_id: str | None = None
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
 
@@ -16,7 +16,7 @@ class WorkflowCreate(BaseModel):
 class WorkflowUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    conversion_id: int | None = None
+    conversion_id: str | None = None
     nodes: list[dict[str, Any]] | None = None
     edges: list[dict[str, Any]] | None = None
     status: str | None = None
@@ -24,10 +24,10 @@ class WorkflowUpdate(BaseModel):
 
 class WorkflowOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+    id: str
     name: str
     description: str | None = None
-    conversion_id: int | None = None
+    conversion_id: str | None = None
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     status: str
@@ -39,7 +39,7 @@ class WorkflowOut(BaseModel):
 
 class DependencyOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+    id: str
     source_object: str
     target_object: str
     relationship_type: str

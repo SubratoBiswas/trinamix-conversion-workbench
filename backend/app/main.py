@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.config import settings
+from app.database import init_db
 from app.routers import auth as auth_router
 from app.routers import conversions as conversions_router
 from app.routers import cutover as cutover_router
@@ -20,9 +21,9 @@ from app.routers import quality as quality_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Auto-seed on startup so the demo is always ready
+    await init_db()
     from app.seed import run_seed
-    run_seed()
+    await run_seed()
     yield
 
 
@@ -32,7 +33,6 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
-
 
 app.add_middleware(
     CORSMiddleware,

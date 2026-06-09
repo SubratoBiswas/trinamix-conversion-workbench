@@ -24,7 +24,7 @@ export const LoadDashboardPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const projParam = params.get("conversion");
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<number | null>(projParam ? Number(projParam) : null);
+  const [pid, setPid] = useState<string | null>(projParam ?? null);
   const [runs, setRuns] = useState<LoadRun[]>([]);
   const [summary, setSummary] = useState<LoadSummary | null>(null);
   const [errors, setErrors] = useState<LoadError[]>([]);
@@ -81,7 +81,7 @@ export const LoadDashboardPage: React.FC = () => {
           <div className="flex items-center gap-3">
             <label className="label !mb-0">Project</label>
             <select className="input !w-auto min-w-[280px]" value={pid ?? ""}
-              onChange={(e) => { const v = Number(e.target.value); setPid(v); setParams({ conversion: String(v) }); }}>
+              onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
             <Button variant="secondary" onClick={refresh}><RefreshCw className="h-3.5 w-3.5" /></Button>

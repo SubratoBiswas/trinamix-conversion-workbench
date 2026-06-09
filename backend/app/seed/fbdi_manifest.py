@@ -8,8 +8,6 @@ to ship 162 actual Excel files.
 """
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
-
 from app.models.fbdi import FBDITemplate
 
 
@@ -185,17 +183,18 @@ PHASE_BY_TIER = {
 }
 
 
-def seed_fbdi_manifest(db: Session) -> int:
+async def seed_fbdi_manifest() -> int:
     """Seed the manifest stubs. Returns number of rows added.
 
     Templates already present (e.g. the parsed Item template) are skipped.
     """
-    existing_names = {t.name for t in db.query(FBDITemplate.name).all()}
+    existing = await FBDITemplate.find_all().to_list()
+    existing_names = {t.name for t in existing}
     added = 0
     for name, module, tier, biz, req, desc in MANIFEST:
         if name in existing_names:
             continue
-        db.add(FBDITemplate(
+        await FBDITemplate(
             name=name,
             module=module,
             tier=tier,
@@ -203,8 +202,7 @@ def seed_fbdi_manifest(db: Session) -> int:
             business_object=biz,
             required_field_count=req,
             description=desc,
-            status="manual",   # not parsed from a real .xlsm
-        ))
+            status="manual",
+        ).insert()
         added += 1
-    db.commit()
     return added

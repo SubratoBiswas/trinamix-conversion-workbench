@@ -35,7 +35,7 @@ const COLUMN_WIDTH = 220;
 
 export const DatasetPreparationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const dsId = Number(id);
+  const dsId = id!;
   const nav = useNavigate();
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
@@ -131,7 +131,15 @@ export const DatasetPreparationPage: React.FC = () => {
         </Link>
         <Database className="h-4 w-4 text-slate-400" />
         <div className="flex-1">
-          <div className="text-sm font-semibold">{dataset.name}</div>
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold">{dataset.name}</div>
+            {dataset.detected_object_type && (
+              <span className="inline-flex items-center gap-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-medium text-amber-200">
+                <Sparkles className="h-3 w-3" />
+                {dataset.detected_object_type} · {Math.round((dataset.detection_confidence ?? 0) * 100)}%
+              </span>
+            )}
+          </div>
           <div className="text-[11px] text-slate-400">
             {dataset.row_count.toLocaleString()} rows · {dataset.column_count} columns · {dataset.file_type.toUpperCase()}
           </div>

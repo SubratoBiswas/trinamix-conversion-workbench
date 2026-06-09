@@ -1,29 +1,26 @@
-"""Validation and cleansing issues raised on a project."""
+"""Validation and cleansing issue models."""
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
-from sqlalchemy.orm import relationship
-from app.database import Base
+from typing import Optional
+from beanie import Document, PydanticObjectId
+from pydantic import Field
 
+SEVERITIES = ("info","warning","error","critical")
+ISSUE_CATEGORIES = ("cleansing","validation")
 
-SEVERITIES = ("info", "warning", "error", "critical")
-ISSUE_CATEGORIES = ("cleansing", "validation")
+class ValidationIssue(Document):
+    conversion_id: PydanticObjectId
+    category: str = "validation"
+    row_number: Optional[int] = None
+    field_name: Optional[str] = None
+    issue_type: str
+    severity: str = "warning"
+    message: str
+    suggested_fix: Optional[str] = None
+    auto_fixable: bool = False
+    impacted_count: int = 1
+    status: str = "open"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
-
-class ValidationIssue(Base):
-    __tablename__ = "validation_issues"
-
-    id = Column(Integer, primary_key=True, index=True)
-    conversion_id = Column(Integer, ForeignKey("conversions.id", ondelete="CASCADE"), nullable=False)
-    category = Column(String(50), default="validation")  # cleansing | validation
-    row_number = Column(Integer, nullable=True)
-    field_name = Column(String(255), nullable=True)
-    issue_type = Column(String(100), nullable=False)
-    severity = Column(String(20), default="warning")
-    message = Column(Text, nullable=False)
-    suggested_fix = Column(Text, nullable=True)
-    auto_fixable = Column(Boolean, default=False)
-    impacted_count = Column(Integer, default=1)
-    status = Column(String(50), default="open")  # open | resolved | ignored
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    conversion = relationship("Conversion", back_populates="validation_issues")
+    class Settings:
+        name = "validation_issues"
+        indexes = ["conversion_id"]

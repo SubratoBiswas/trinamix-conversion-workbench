@@ -1,9 +1,9 @@
 // Shared types — keep aligned with backend Pydantic schemas.
 
-export interface User { id: number; name: string; email: string; role: string; }
+export interface User { id: string; name: string; email: string; role: string; }
 
 export interface Dataset {
-  id: number;
+  id: string;
   name: string;
   description?: string | null;
   file_name: string;
@@ -11,11 +11,14 @@ export interface Dataset {
   row_count: number;
   column_count: number;
   status: string;
+  detected_object_type?: string | null;
+  detection_confidence?: number;
+  detection_suggestions?: any[];
   uploaded_at: string;
 }
 
 export interface DatasetColumnProfile {
-  id: number;
+  id: string;
   column_name: string;
   position: number;
   inferred_type: string | null;
@@ -39,17 +42,17 @@ export interface DatasetPreview {
 }
 
 export interface FBDISheet {
-  id: number;
-  template_id: number;
+  id: string;
+  template_id: string;
   sheet_name: string;
   sequence: number;
   field_count: number;
 }
 
 export interface FBDIField {
-  id: number;
-  template_id: number;
-  sheet_id: number;
+  id: string;
+  template_id: string;
+  sheet_id: string;
   field_name: string;
   display_name: string | null;
   description: string | null;
@@ -65,7 +68,7 @@ export interface FBDIField {
 }
 
 export interface FBDITemplate {
-  id: number;
+  id: string;
   name: string;
   module: string | null;
   tier: string;            // T0 | T1 | T2 | T3
@@ -87,7 +90,7 @@ export interface FBDITemplateDetail extends FBDITemplate {
 // Engagement-level project (e.g. "Trinamix → Oracle SCM Cloud Phase 1").
 // Contains many Conversion objects.
 export interface Project {
-  id: number;
+  id: string;
   name: string;
   description?: string | null;
   client?: string | null;
@@ -110,8 +113,8 @@ export interface Project {
 }
 
 export interface Environment {
-  id: number;
-  project_id: number;
+  id: string;
+  project_id: string;
   name: string;
   description?: string | null;
   sort_order: number;
@@ -121,10 +124,10 @@ export interface Environment {
 }
 
 export interface EnvironmentRun {
-  id: number;
-  environment_id: number;
-  conversion_id: number;
-  dataset_id?: number | null;
+  id: string;
+  environment_id: string;
+  conversion_id: string;
+  dataset_id?: string | null;
   status: string;
   stage?: string | null;
   record_count?: number | null;
@@ -139,18 +142,18 @@ export interface EnvironmentRun {
 }
 
 export interface CutoverStage {
-  conversion_id: number;
+  conversion_id: string;
   conversion_name: string;
   target_object?: string | null;
   status: string;
-  run_id?: number | null;
-  dataset_id?: number | null;
+  run_id?: string | null;
+  dataset_id?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
 }
 
 export interface CutoverEnvironmentColumn {
-  id: number;
+  id: string;
   name: string;
   color: string;
   sox_controlled: boolean;
@@ -162,7 +165,7 @@ export interface CutoverEnvironmentColumn {
 }
 
 export interface CutoverDashboard {
-  project_id: number;
+  project_id: string;
   project_name: string;
   days_to_go_live?: number | null;
   cutover_window_start?: string | null;
@@ -170,7 +173,7 @@ export interface CutoverDashboard {
   sox_controlled: boolean;
   environments: CutoverEnvironmentColumn[];
   pipeline_runs: {
-    run_id: number;
+    run_id: string;
     entity: string;
     stage?: string | null;
     status: string;
@@ -182,13 +185,13 @@ export interface CutoverDashboard {
 
 // One conversion object inside an engagement (e.g. "Item Master Conversion").
 export interface Conversion {
-  id: number;
-  project_id: number;
+  id: string;
+  project_id: string;
   name: string;
   description?: string | null;
   target_object?: string | null;
-  dataset_id?: number | null;
-  template_id?: number | null;
+  dataset_id?: string | null;
+  template_id?: string | null;
   planned_load_order: number;
   status: string;
   created_by: string;
@@ -204,9 +207,9 @@ export interface Conversion {
 export type ConversionProject = Conversion;
 
 export interface MappingSuggestion {
-  id: number;
-  conversion_id: number;
-  target_field_id: number;
+  id: string;
+  conversion_id: string;
+  target_field_id: string;
   target_field_name: string | null;
   target_required: boolean;
   target_data_type: string | null;
@@ -226,9 +229,9 @@ export interface MappingSuggestion {
 }
 
 export interface TransformationRule {
-  id: number;
-  conversion_id: number;
-  target_field_id: number | null;
+  id: string;
+  conversion_id: string;
+  target_field_id: string | null;
   source_column: string | null;
   rule_type: string;
   rule_config: Record<string, any>;
@@ -238,8 +241,8 @@ export interface TransformationRule {
 }
 
 export interface ValidationIssue {
-  id: number;
-  conversion_id: number;
+  id: string;
+  conversion_id: string;
   category: "cleansing" | "validation";
   row_number: number | null;
   field_name: string | null;
@@ -254,8 +257,8 @@ export interface ValidationIssue {
 }
 
 export interface ConvertedOutput {
-  id: number;
-  conversion_id: number;
+  id: string;
+  conversion_id: string;
   output_file_name: string;
   row_count: number;
   column_count: number;
@@ -271,8 +274,8 @@ export interface OutputPreview {
 }
 
 export interface LoadRun {
-  id: number;
-  conversion_id: number;
+  id: string;
+  conversion_id: string;
   run_type: string;
   status: string;
   total_records: number;
@@ -285,7 +288,7 @@ export interface LoadRun {
 }
 
 export interface LoadError {
-  id: number;
+  id: string;
   row_number: number | null;
   object_name: string | null;
   error_category: string | null;
@@ -308,10 +311,10 @@ export interface LoadSummary {
 }
 
 export interface Workflow {
-  id: number;
+  id: string;
   name: string;
   description: string | null;
-  conversion_id: number | null;
+  conversion_id: string | null;
   nodes: any[];
   edges: any[];
   status: string;
@@ -322,7 +325,7 @@ export interface Workflow {
 }
 
 export interface Dependency {
-  id: number;
+  id: string;
   source_object: string;
   target_object: string;
   relationship_type: string;
@@ -347,7 +350,7 @@ export interface DashboardKpis {
 }
 
 export interface LearnedMapping {
-  id: number;
+  id: string;
   kind: string;
   category: string;
   original_value: string;
@@ -356,7 +359,7 @@ export interface LearnedMapping {
   target_field?: string | null;
   rule_type?: string | null;
   rule_config?: any;
-  project_id?: number | null;
+  project_id?: string | null;
   captured_from?: string | null;
   captured_by?: string | null;
   captured_at: string;
@@ -375,7 +378,7 @@ export interface LearningStats {
 // ─── New types for added features ────────────────────────────────────────────
 
 export interface TemplateSuggestion {
-  template_id: number;
+  template_id: string;
   template_name: string;
   business_object: string;
   confidence: number;
@@ -383,13 +386,13 @@ export interface TemplateSuggestion {
 }
 
 export interface AutoPopulateResult {
-  project_id: number;
+  project_id: string;
   created_count: number;
-  conversions: { id: number; name: string; target_object: string; planned_load_order: number }[];
+  conversions: { id: string; name: string; target_object: string; planned_load_order: number }[];
 }
 
 export interface LoadOrderEntry {
-  conversion_id: number;
+  conversion_id: string;
   name: string;
   target_object: string;
   load_order: number;
@@ -397,26 +400,26 @@ export interface LoadOrderEntry {
 }
 
 export interface LoadOrderResult {
-  project_id: number;
+  project_id: string;
   load_order: LoadOrderEntry[];
 }
 
 export interface PropagationEntry {
-  conversion_id: number;
+  conversion_id: string;
   conversion_name: string;
   target_field: string;
   rule_type: string;
 }
 
 export interface PropagationResult {
-  mapping_id: number;
+  mapping_id: string;
   propagated: PropagationEntry[];
   count: number;
 }
 
 export interface PropagationCandidates {
-  source_conversion: number;
+  source_conversion: string;
   master_object: string;
   key_fields: string[];
-  candidates: { conversion_id: number; conversion_name: string; target_object: string; fk_fields: string[] }[];
+  candidates: { conversion_id: string; conversion_name: string; target_object: string; fk_fields: string[] }[];
 }

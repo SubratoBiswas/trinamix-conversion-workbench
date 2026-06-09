@@ -1,6 +1,5 @@
 """Application configuration loaded from environment variables / .env file."""
 from functools import lru_cache
-from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,8 +8,9 @@ class Settings(BaseSettings):
         env_file=[".env", "../.env"], env_file_encoding="utf-8", extra="ignore"
     )
 
-    # Database
-    DATABASE_URL: str = "sqlite:///./conversion_workbench.db"
+    # Database - MongoDB Atlas connection string
+    MONGODB_URI: str = "mongodb://localhost:27017/conversion_workbench"
+    MONGODB_DB: str = "conversion_workbench"
 
     # File storage
     UPLOAD_DIR: str = "./uploads"
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     ADMIN_NAME: str = "Trinamix Admin"
 
     # AI provider
-    AI_PROVIDER: str = "none"  # none | anthropic | openai
+    AI_PROVIDER: str = "none"
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
     OPENAI_API_KEY: str = ""
@@ -37,13 +37,15 @@ class Settings(BaseSettings):
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
     @property
-    def upload_path(self) -> Path:
+    def upload_path(self):
+        from pathlib import Path
         p = Path(self.UPLOAD_DIR).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
-    def output_path(self) -> Path:
+    def output_path(self):
+        from pathlib import Path
         p = Path(self.OUTPUT_DIR).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p

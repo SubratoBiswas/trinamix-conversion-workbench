@@ -34,7 +34,7 @@ export const WorkflowBuilderPage: React.FC = () => (
 
 const Inner: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const wid = Number(id);
+  const wid = id!;
   const nav = useNavigate();
 
   // ── Workflow + supporting catalogues ──

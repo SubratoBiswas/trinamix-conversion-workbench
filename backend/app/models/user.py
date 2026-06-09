@@ -1,15 +1,17 @@
 """User account model."""
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime
-from app.database import Base
+from typing import Optional
+from beanie import Document
+from pydantic import Field
 
 
-class User(Base):
-    __tablename__ = "users"
+class User(Document):
+    name: str
+    email: str
+    role: str = "admin"
+    password_hash: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(150), nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    role = Column(String(50), nullable=False, default="admin")
-    password_hash = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    class Settings:
+        name = "users"
+        indexes = ["email"]

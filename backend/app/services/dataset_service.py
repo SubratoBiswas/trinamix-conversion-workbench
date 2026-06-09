@@ -1,15 +1,17 @@
 """Dataset upload + profiling service."""
 from __future__ import annotations
 
+import re as _re
 import shutil
 from pathlib import Path
 from typing import Any
 
+from beanie import PydanticObjectId
 from fastapi import UploadFile
-from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.dataset import Dataset, DatasetColumnProfile
+from app.models.fbdi import FBDITemplate
 from app.parsers import parse_tabular, profile_dataframe
 
 
@@ -33,9 +35,9 @@ def save_upload(upload: UploadFile, subdir: str = "datasets") -> tuple[Path, str
     return target, target.name
 
 
-def create_dataset_from_upload(
-    db: Session, upload: UploadFile, name: str | None, description: str | None
-) -> Dataset:
+async def create_dataset_from_upload(
+    upload: UploadFile, name: str | None, description: str | None
+) -> tuple[Dataset, list[DatasetColumnProfile]]:
     ext = Path(upload.filename or "").suffix.lower()
     if ext not in ALLOWED_DATASET_EXTS:
         raise ValueError(f"Unsupported file extension: {ext}")
@@ -43,6 +45,12 @@ def create_dataset_from_upload(
 
     df = parse_tabular(file_path, file_type=ext.lstrip("."))
     profiles = profile_dataframe(df)
+
+    # ── Auto-detect object type from filename + column headers ──────────────
+    column_names = [p["column_name"] for p in profiles]
+    templates = await FBDITemplate.find_all().to_list()
+    suggestions = detect_dataset_type(stored_name, column_names, templates)
+    top = suggestions[0] if suggestions else None
 
     ds = Dataset(
         name=name or Path(upload.filename or stored_name).stem,
@@ -53,14 +61,19 @@ def create_dataset_from_upload(
         row_count=int(len(df)),
         column_count=int(len(df.columns)),
         status="profiled",
+        detected_object_type=top["business_object"] if top else None,
+        detection_confidence=top["confidence"] if top else 0.0,
+        detection_suggestions=suggestions,
     )
-    db.add(ds)
-    db.flush()
+    await ds.insert()
+
+    col_docs = []
     for prof in profiles:
-        db.add(DatasetColumnProfile(dataset_id=ds.id, **prof))
-    db.commit()
-    db.refresh(ds)
-    return ds
+        col = DatasetColumnProfile(dataset_id=ds.id, **prof)
+        await col.insert()
+        col_docs.append(col)
+
+    return ds, col_docs
 
 
 def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
@@ -75,13 +88,11 @@ def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
 
 # ─── Dataset-type auto-detection ─────────────────────────────────────────────
 
-# Keyword hints keyed by business-object name.
-# Each entry: (filename_keywords, column_keywords)
 _OBJECT_HINTS: dict[str, tuple[list[str], list[str]]] = {
     "Item": (
-        ["item", "sku", "product", "material", "catalog", "part"],
-        ["item_num", "item_number", "sku", "part_number", "inventory_item",
-         "item_desc", "uom", "unit_of_measure", "item_class", "item_type"],
+        ["item", "sku", "product", "material", "article"],
+        ["item_num", "item_number", "uom", "item_description",
+         "item_class", "primary_uom", "lifecycle_phase", "inventory_item"],
     ),
     "Customer": (
         ["customer", "cust", "client", "buyer", "account"],
@@ -123,7 +134,6 @@ _OBJECT_HINTS: dict[str, tuple[list[str], list[str]]] = {
     ),
 }
 
-import re as _re
 _NORMALIZE = _re.compile(r"[^a-z0-9]+")
 
 
@@ -136,31 +146,18 @@ def _kw_score(tokens: list[str], keywords: list[str]) -> float:
     return hits / len(keywords) if keywords else 0.0
 
 
-def detect_dataset_type(
-    filename: str,
-    column_names: list[str],
-    templates: list,          # list of FBDITemplate ORM objects
-) -> list[dict]:
-    """Infer the most likely FBDI business object for a dataset.
-
-    Returns up to 3 candidates sorted by descending confidence as
-    [{template_id, template_name, business_object, confidence, reason}].
-    The caller converts to JSON for the API response.
-    """
+def detect_dataset_type(filename: str, column_names: list[str], templates: list) -> list[dict]:
     fname_tokens = [_norm(t) for t in _re.split(r"[\W_]+", filename) if t]
-    col_tokens   = [_norm(c) for c in column_names]
-
-    # Index templates by business_object for quick lookup
+    col_tokens = [_norm(c) for c in column_names]
     by_obj: dict[str, object] = {}
     for tpl in templates:
         obj = (tpl.business_object or tpl.name or "").strip()
         if obj and obj not in by_obj:
             by_obj[obj] = tpl
-
     results: list[dict] = []
     for obj, (fname_kws, col_kws) in _OBJECT_HINTS.items():
         fname_s = _kw_score(fname_tokens, fname_kws)
-        col_s   = _kw_score(col_tokens,   col_kws)
+        col_s = _kw_score(col_tokens, col_kws)
         confidence = round(min(1.0, fname_s * 0.45 + col_s * 0.55), 3)
         if confidence < 0.10:
             continue
@@ -173,12 +170,11 @@ def detect_dataset_type(
         if col_s >= 0.2:
             reasons.append(f"{int(col_s * 100)}% column-name keyword match")
         results.append({
-            "template_id":      tpl.id,
-            "template_name":    tpl.name,
-            "business_object":  obj,
-            "confidence":       confidence,
-            "reason":           "; ".join(reasons) if reasons else f"weak signal for {obj}",
+            "template_id": str(tpl.id),
+            "template_name": tpl.name,
+            "business_object": obj,
+            "confidence": confidence,
+            "reason": "; ".join(reasons) if reasons else f"weak signal for {obj}",
         })
-
     results.sort(key=lambda x: -x["confidence"])
     return results[:3]

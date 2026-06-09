@@ -1,13 +1,12 @@
-"""Conversion object dependency graph metadata."""
-from sqlalchemy import Column, Integer, String, Text
-from app.database import Base
+"""Conversion dependency graph."""
+from typing import Optional
+from beanie import Document
 
+class Dependency(Document):
+    source_object: str
+    target_object: str
+    relationship_type: str = "prerequisite"
+    description: Optional[str] = None
 
-class Dependency(Base):
-    __tablename__ = "dependencies"
-
-    id = Column(Integer, primary_key=True, index=True)
-    source_object = Column(String(100), nullable=False)
-    target_object = Column(String(100), nullable=False)
-    relationship_type = Column(String(50), default="prerequisite")  # prerequisite | reference
-    description = Column(Text, nullable=True)
+    class Settings:
+        name = "dependencies"

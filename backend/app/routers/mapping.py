@@ -1,14 +1,12 @@
-"""Mapping suggestion endpoints — scoped to a Conversion (object)."""
+"""Mapping suggestion endpoints."""
 from datetime import datetime
-from typing import Any
-
+from typing import Any, Optional
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-
 from pydantic import BaseModel
 
-from app.database import get_db
 from app.models.conversion import Conversion
+from app.models.dataset import Dataset
 from app.models.mapping import MappingSuggestion
 from app.models.transformation import Crosswalk, TransformationRule
 from app.models.user import User
@@ -16,304 +14,193 @@ from app.parsers import parse_tabular
 from app.schemas.mapping import MappingOut, MappingUpdate
 from app.schemas.transformation import TransformationRuleCreate, TransformationRuleOut
 from app.services.auth_service import get_current_user
-from app.services.learning_service import (
-    record_learning_from_mapping,
-    record_learning_from_rule,
-)
+from app.services.learning_service import record_learning_from_mapping, record_learning_from_rule
 from app.services.mapping_service import enrich_mapping_with_samples, run_mapping_suggestions
 from app.transformations.engine import apply_pipeline
 
 router = APIRouter(prefix="/api", tags=["mapping"])
 
 
-def _require_conversion(db: Session, conversion_id: int) -> Conversion:
-    c = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+async def _require_conversion(conversion_id: str) -> Conversion:
+    c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
     if not c.dataset_id or not c.template_id:
-        raise HTTPException(
-            400,
-            "Conversion is not fully bound — set both a source dataset and a target FBDI template first.",
-        )
+        raise HTTPException(400, "Conversion needs both dataset and template bound first.")
     return c
 
 
-@router.post(
-    "/conversions/{conversion_id}/suggest-mapping", response_model=list[MappingOut]
-)
-def suggest_mapping(
-    conversion_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    conv = _require_conversion(db, conversion_id)
-    saved = run_mapping_suggestions(db, conv)
-    return enrich_mapping_with_samples(db, conv, saved)
+@router.post("/conversions/{conversion_id}/suggest-mapping", response_model=list[MappingOut])
+async def suggest_mapping(conversion_id: str, _: User = Depends(get_current_user)):
+    conv = await _require_conversion(conversion_id)
+    saved = await run_mapping_suggestions(conv)
+    return await enrich_mapping_with_samples(conv, saved)
 
 
-@router.get(
-    "/conversions/{conversion_id}/mappings", response_model=list[MappingOut]
-)
-def list_mappings(
-    conversion_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    conv = _require_conversion(db, conversion_id)
-    items = (
-        db.query(MappingSuggestion)
-        .filter(MappingSuggestion.conversion_id == conversion_id)
-        .all()
-    )
-    return enrich_mapping_with_samples(db, conv, items)
+@router.get("/conversions/{conversion_id}/mappings", response_model=list[MappingOut])
+async def list_mappings(conversion_id: str, _: User = Depends(get_current_user)):
+    conv = await _require_conversion(conversion_id)
+    items = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == PydanticObjectId(conversion_id)
+    ).to_list()
+    return await enrich_mapping_with_samples(conv, items)
 
 
 @router.put("/mappings/{mapping_id}", response_model=MappingOut)
-def update_mapping(
-    mapping_id: int,
-    payload: MappingUpdate,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+async def update_mapping(
+    mapping_id: str, payload: MappingUpdate, user: User = Depends(get_current_user)
 ):
-    m = db.query(MappingSuggestion).filter(MappingSuggestion.id == mapping_id).first()
+    m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
     data = payload.model_dump(exclude_unset=True)
-    if "status" in data and data["status"] == "approved":
-        m.approved_by = user.email
-        m.approved_at = datetime.utcnow()
-    for k, v in data.items():
-        setattr(m, k, v)
-    db.commit()
-    db.refresh(m)
-    conv = db.query(Conversion).filter(Conversion.id == m.conversion_id).first()
+    if data.get("status") == "approved":
+        data["approved_by"] = user.email
+        data["approved_at"] = datetime.utcnow()
+    await m.set(data)
+    conv = await Conversion.get(m.conversion_id)
     if m.status in ("approved", "overridden") and m.source_column:
-        record_learning_from_mapping(db, m, conv, captured_by=user.email)
-    return enrich_mapping_with_samples(db, conv, [m])[0]
+        await record_learning_from_mapping(m, conv, captured_by=user.email)
+    return (await enrich_mapping_with_samples(conv, [m]))[0]
 
 
 @router.put("/mappings/{mapping_id}/approve", response_model=MappingOut)
-def approve_mapping(
-    mapping_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    m = db.query(MappingSuggestion).filter(MappingSuggestion.id == mapping_id).first()
+async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user)):
+    m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
-    m.status = "approved"
-    m.approved_by = user.email
-    m.approved_at = datetime.utcnow()
-    db.commit()
-    db.refresh(m)
-    conv = db.query(Conversion).filter(Conversion.id == m.conversion_id).first()
+    await m.set({"status": "approved", "approved_by": user.email, "approved_at": datetime.utcnow()})
+    conv = await Conversion.get(m.conversion_id)
     if m.source_column:
-        record_learning_from_mapping(db, m, conv, captured_by=user.email)
-        # Auto-propagate FK rules to downstream conversions in the same project
+        await record_learning_from_mapping(m, conv, captured_by=user.email)
         from app.services.learning_service import propagate_rules_to_downstream
-        propagate_rules_to_downstream(db, conv, m)
-    return enrich_mapping_with_samples(db, conv, [m])[0]
+        await propagate_rules_to_downstream(conv, m)
+    return (await enrich_mapping_with_samples(conv, [m]))[0]
 
 
-@router.post(
-    "/conversions/{conversion_id}/rules", response_model=TransformationRuleOut
-)
-def add_rule(
-    conversion_id: int,
-    payload: TransformationRuleCreate,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+@router.post("/conversions/{conversion_id}/rules", response_model=TransformationRuleOut)
+async def add_rule(
+    conversion_id: str, payload: TransformationRuleCreate, user: User = Depends(get_current_user)
 ):
-    conv = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
     if not conv:
         raise HTTPException(404, "Conversion not found")
-    seq = (
-        db.query(TransformationRule)
-        .filter(TransformationRule.conversion_id == conversion_id)
-        .count()
-    )
-    r = TransformationRule(
-        conversion_id=conversion_id, sequence=seq, **payload.model_dump()
-    )
-    db.add(r)
-    db.commit()
-    db.refresh(r)
-    # A manually-authored rule is just as authoritative as one approved on a
-    # mapping — surface it in the Rule Library so future cycles can reuse it.
-    record_learning_from_rule(db, r, conv, captured_by=user.email)
-    return r
+    seq = await TransformationRule.find(
+        TransformationRule.conversion_id == PydanticObjectId(conversion_id)
+    ).count()
+    data = payload.model_dump()
+    if data.get("target_field_id"):
+        data["target_field_id"] = PydanticObjectId(data["target_field_id"])
+    r = TransformationRule(conversion_id=conv.id, sequence=seq, **data)
+    await r.insert()
+    await record_learning_from_rule(r, conv, captured_by=user.email)
+    return {"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id","conversion_id")}}
 
 
 class PreviewRule(BaseModel):
     rule_type: str
     config: dict[str, Any] = {}
 
-
 class PreviewRequest(BaseModel):
     rules: list[PreviewRule]
-    source_column: str | None = None
+    source_column: Optional[str] = None
     sample_size: int = 5
-
 
 class PreviewSample(BaseModel):
     source: Any
     output: Any
-    error: str | None = None
-
+    error: Optional[str] = None
 
 class PreviewResponse(BaseModel):
     samples: list[PreviewSample]
 
 
-@router.post(
-    "/conversions/{conversion_id}/rules/preview", response_model=PreviewResponse
-)
-def preview_rules(
-    conversion_id: int,
-    payload: PreviewRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+@router.post("/conversions/{conversion_id}/rules/preview", response_model=PreviewResponse)
+async def preview_rules(
+    conversion_id: str, payload: PreviewRequest, user: User = Depends(get_current_user)
 ):
-    """Dry-run a rule pipeline against the conversion's dataset and return
-    source/output pairs for the first N rows. Powers the Studio live preview.
-    """
-    conv = db.query(Conversion).filter(Conversion.id == conversion_id).first()
-    if not conv or not conv.dataset:
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv or not conv.dataset_id:
         raise HTTPException(404, "Conversion or dataset not found")
-
-    df = parse_tabular(conv.dataset.file_path, file_type=conv.dataset.file_type)
-
+    ds = await Dataset.get(conv.dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    df = parse_tabular(ds.file_path, file_type=ds.file_type)
+    cws = await Crosswalk.find(
+        Crosswalk.conversion_id == PydanticObjectId(conversion_id)
+    ).to_list()
     crosswalks: dict[str, dict[str, str]] = {}
-    for cw in (
-        db.query(Crosswalk).filter(Crosswalk.conversion_id == conversion_id).all()
-    ):
+    for cw in cws:
         crosswalks.setdefault(cw.name, {})[cw.source_value] = cw.target_value
-
     rules = [{"rule_type": r.rule_type, "config": r.config} for r in payload.rules]
-
     out: list[PreviewSample] = []
     n = max(1, min(int(payload.sample_size), 20))
     for idx, row in df.head(n).iterrows():
         row_dict = {k: ("" if v is None else v) for k, v in row.to_dict().items()}
-        src_value = (
-            row_dict.get(payload.source_column)
-            if payload.source_column
-            else None
-        )
-        ctx = {
-            "row_index": int(idx) + 1,
-            "current_user": user.email,
-            "now": datetime.utcnow(),
-            "crosswalks": crosswalks,
-        }
+        src_value = row_dict.get(payload.source_column) if payload.source_column else None
+        ctx = {"row_index": int(idx)+1, "current_user": user.email, "now": datetime.utcnow(), "crosswalks": crosswalks}
         try:
             transformed = apply_pipeline(rules, src_value, row=row_dict, ctx=ctx)
             out.append(PreviewSample(source=src_value, output=transformed))
-        except Exception as exc:  # surface engine errors to the UI
-            out.append(
-                PreviewSample(source=src_value, output=None, error=str(exc))
-            )
+        except Exception as exc:
+            out.append(PreviewSample(source=src_value, output=None, error=str(exc)))
     return PreviewResponse(samples=out)
 
 
-@router.get(
-    "/conversions/{conversion_id}/rules", response_model=list[TransformationRuleOut]
-)
-def list_rules(
-    conversion_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    return (
-        db.query(TransformationRule)
-        .filter(TransformationRule.conversion_id == conversion_id)
-        .order_by(TransformationRule.sequence)
-        .all()
-    )
+@router.get("/conversions/{conversion_id}/rules", response_model=list[TransformationRuleOut])
+async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
+    rules = await TransformationRule.find(
+        TransformationRule.conversion_id == PydanticObjectId(conversion_id)
+    ).sort(+TransformationRule.sequence).to_list()
+    return [{"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id","conversion_id")}} for r in rules]
 
 
 @router.delete("/rules/{rule_id}")
-def delete_rule(
-    rule_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
-):
-    r = db.query(TransformationRule).filter(TransformationRule.id == rule_id).first()
+async def delete_rule(rule_id: str, _: User = Depends(get_current_user)):
+    r = await TransformationRule.get(PydanticObjectId(rule_id))
     if not r:
         raise HTTPException(404, "Rule not found")
-    db.delete(r)
-    db.commit()
+    await r.delete()
     return {"deleted": rule_id}
 
 
 @router.post("/mappings/{mapping_id}/propagate")
-def propagate_mapping_rule(
-    mapping_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Explicitly propagate an approved mapping's transformation rule to all
-    downstream conversions in the same project that share the FK column.
-
-    Called automatically on approve; also callable on-demand from the UI."""
+async def propagate_mapping_rule(mapping_id: str, user: User = Depends(get_current_user)):
     from app.services.learning_service import propagate_rules_to_downstream
-    m = db.query(MappingSuggestion).filter(MappingSuggestion.id == mapping_id).first()
+    m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
-    conv = db.query(Conversion).filter(Conversion.id == m.conversion_id).first()
+    conv = await Conversion.get(m.conversion_id)
     if not conv:
         raise HTTPException(404, "Conversion not found")
-    propagated = propagate_rules_to_downstream(db, conv, m)
+    propagated = await propagate_rules_to_downstream(conv, m)
     return {"mapping_id": mapping_id, "propagated": propagated, "count": len(propagated)}
 
 
 @router.get("/conversions/{conversion_id}/propagation-candidates")
-def propagation_candidates(
-    conversion_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    """List downstream conversions that would receive propagated rules from this
-    conversion's approved master-key mappings."""
+async def propagation_candidates(conversion_id: str, _: User = Depends(get_current_user)):
     from app.services.learning_service import REFERENCE_KEY_FIELDS
-    from app.models.fbdi import FBDIField
-
-    conv = db.query(Conversion).filter(Conversion.id == conversion_id).first()
+    from app.models.fbdi import FBDIField, FBDITemplate
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
     if not conv:
         raise HTTPException(404, "Conversion not found")
-
-    tpl = conv.template
-    if not tpl:
-        return {"source_conversion": conversion_id, "candidates": []}
-
-    master_obj = tpl.business_object or conv.target_object
+    tpl = await FBDITemplate.get(conv.template_id) if conv.template_id else None
+    master_obj = (tpl.business_object if tpl else None) or conv.target_object
     key_names = REFERENCE_KEY_FIELDS.get(master_obj or "", [])
     if not key_names:
         return {"source_conversion": conversion_id, "candidates": []}
-
-    siblings = (
-        db.query(Conversion)
-        .filter(
-            Conversion.project_id == conv.project_id,
-            Conversion.id != conversion_id,
-            Conversion.template_id.isnot(None),
-        )
-        .all()
-    )
-
+    siblings = await Conversion.find(
+        Conversion.project_id == conv.project_id,
+        Conversion.id != conv.id,
+    ).to_list()
     candidates = []
     for sib in siblings:
-        if not sib.template:
+        if not sib.template_id:
             continue
-        matching = [f.field_name for f in sib.template.fields if f.field_name in key_names]
+        sib_fields = await FBDIField.find(FBDIField.template_id == sib.template_id).to_list()
+        matching = [f.field_name for f in sib_fields if f.field_name in key_names]
         if matching:
-            candidates.append({
-                "conversion_id":   sib.id,
-                "conversion_name": sib.name,
-                "target_object":   sib.target_object,
-                "fk_fields":       matching,
-            })
-    return {
-        "source_conversion": conversion_id,
-        "master_object":     master_obj,
-        "key_fields":        key_names,
-        "candidates":        candidates,
-    }
+            candidates.append({"conversion_id": str(sib.id), "conversion_name": sib.name,
+                                "target_object": sib.target_object, "fk_fields": matching})
+    return {"source_conversion": conversion_id, "master_object": master_obj,
+            "key_fields": key_names, "candidates": candidates}

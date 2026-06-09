@@ -5,9 +5,9 @@ from pydantic import BaseModel
 
 
 class FBDIFieldOut(BaseModel):
-    id: int
-    template_id: int
-    sheet_id: int
+    id: str
+    template_id: str
+    sheet_id: str
     field_name: str
     display_name: str | None = None
     description: str | None = None
@@ -39,8 +39,8 @@ class FBDIFieldUpdate(BaseModel):
 
 
 class FBDISheetOut(BaseModel):
-    id: int
-    template_id: int
+    id: str
+    template_id: str
     sheet_name: str
     sequence: int
     field_count: int
@@ -50,7 +50,7 @@ class FBDISheetOut(BaseModel):
 
 
 class FBDITemplateOut(BaseModel):
-    id: int
+    id: str
     name: str
     module: str | None = None
     tier: str = "T1"

@@ -7,10 +7,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from sqlalchemy.orm import Session
-
 from app.config import settings
-from app.database import SessionLocal, init_db
+from app.database import init_db
 from app.models.conversion import Conversion
 from app.models.dataset import Dataset, DatasetColumnProfile
 from app.models.dependency import Dependency
@@ -24,7 +22,6 @@ from app.services.auth_service import hash_password
 SEED_DIR = Path(__file__).parent / "sample_files"
 
 
-# Edges based on real Oracle conversion order: master data must precede transactions
 SEEDED_DEPENDENCIES = [
     ("UOM", "Item", "prerequisite", "Items reference UOM codes — UOM must exist first"),
     ("Inventory Org", "Item", "prerequisite", "Items belong to organisations"),
@@ -40,8 +37,8 @@ SEEDED_DEPENDENCIES = [
 ]
 
 
-def _seed_admin(db: Session) -> User:
-    user = db.query(User).filter(User.email == settings.ADMIN_EMAIL).first()
+async def _seed_admin() -> User:
+    user = await User.find_one(User.email == settings.ADMIN_EMAIL)
     if user:
         return user
     user = User(
@@ -50,28 +47,30 @@ def _seed_admin(db: Session) -> User:
         role="admin",
         password_hash=hash_password(settings.ADMIN_PASSWORD),
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    await user.insert()
     return user
 
 
-def _seed_dependencies(db: Session) -> None:
-    if db.query(Dependency).count() > 0:
+async def _seed_dependencies() -> None:
+    count = await Dependency.count()
+    if count > 0:
         return
     for src, tgt, rtype, desc in SEEDED_DEPENDENCIES:
-        db.add(Dependency(source_object=src, target_object=tgt, relationship_type=rtype, description=desc))
-    db.commit()
+        await Dependency(
+            source_object=src,
+            target_object=tgt,
+            relationship_type=rtype,
+            description=desc,
+        ).insert()
 
 
-def _seed_one_dataset(
-    db: Session, csv_filename: str, name: str, description: str
+async def _seed_one_dataset(
+    csv_filename: str, name: str, description: str
 ) -> Dataset | None:
-    """Seed a single CSV file as a Dataset (idempotent on `name`)."""
     src_csv = SEED_DIR / csv_filename
     if not src_csv.exists():
         return None
-    existing = db.query(Dataset).filter(Dataset.name == name).first()
+    existing = await Dataset.find_one(Dataset.name == name)
     if existing:
         return existing
 
@@ -94,19 +93,14 @@ def _seed_one_dataset(
         column_count=len(df.columns),
         status="profiled",
     )
-    db.add(ds)
-    db.flush()
+    await ds.insert()
     for prof in profiles:
-        db.add(DatasetColumnProfile(dataset_id=ds.id, **prof))
-    db.commit()
-    db.refresh(ds)
+        await DatasetColumnProfile(dataset_id=ds.id, **prof).insert()
     return ds
 
 
-def _seed_datasets(db: Session) -> tuple[Dataset | None, Dataset | None]:
-    """Seed both the Item Master and Sales Order legacy extracts."""
-    item_ds = _seed_one_dataset(
-        db,
+async def _seed_datasets() -> tuple[Dataset | None, Dataset | None]:
+    item_ds = await _seed_one_dataset(
         csv_filename="legacy_item_master.csv",
         name="Legacy Item Master Extract",
         description=(
@@ -115,8 +109,7 @@ def _seed_datasets(db: Session) -> tuple[Dataset | None, Dataset | None]:
             "duplicate keys — exercises every transformation flavour."
         ),
     )
-    so_ds = _seed_one_dataset(
-        db,
+    so_ds = await _seed_one_dataset(
         csv_filename="legacy_sales_orders.csv",
         name="Legacy Sales Order Extract",
         description=(
@@ -125,10 +118,7 @@ def _seed_datasets(db: Session) -> tuple[Dataset | None, Dataset | None]:
             "upstream Item conversion — surfaces the dependency cascade visibly."
         ),
     )
-    # Backwards-compat: also seed the original tiny extract if it exists,
-    # so older saved projects that referenced it still resolve.
-    _seed_one_dataset(
-        db,
+    await _seed_one_dataset(
         csv_filename="legacy_item_extract.csv",
         name="Legacy Item Extract (Demo)",
         description="Original 8-column quick-start sample.",
@@ -136,11 +126,11 @@ def _seed_datasets(db: Session) -> tuple[Dataset | None, Dataset | None]:
     return item_ds, so_ds
 
 
-def _seed_fbdi_template(db: Session) -> FBDITemplate | None:
+async def _seed_fbdi_template() -> FBDITemplate | None:
     src = SEED_DIR / "ScpItemImportTemplate.xlsm"
     if not src.exists():
         return None
-    existing = db.query(FBDITemplate).filter(FBDITemplate.name == "Item Master (SCM Items)").first()
+    existing = await FBDITemplate.find_one(FBDITemplate.name == "Item Master (SCM Items)")
     if existing:
         return existing
 
@@ -164,10 +154,9 @@ def _seed_fbdi_template(db: Session) -> FBDITemplate | None:
         description="Oracle Fusion SCM — Item Import Template (seeded demo).",
         required_field_count=2,
     )
-    db.add(tpl)
-    db.flush()
+    await tpl.insert()
 
-    sheet_id_by_name: dict[str, int] = {}
+    sheet_id_by_name: dict[str, object] = {}
     for s in parsed["sheets"]:
         sheet = FBDISheet(
             template_id=tpl.id,
@@ -175,26 +164,20 @@ def _seed_fbdi_template(db: Session) -> FBDITemplate | None:
             sequence=s["sequence"],
             field_count=s["field_count"],
         )
-        db.add(sheet)
-        db.flush()
+        await sheet.insert()
         sheet_id_by_name[s["sheet_name"]] = sheet.id
 
     for f in parsed["fields"]:
+        f = dict(f)
         sheet_id = sheet_id_by_name.get(f.pop("sheet_name", ""))
         if sheet_id is None:
             continue
-        db.add(FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f))
-    db.commit()
-    db.refresh(tpl)
+        await FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f).insert()
     return tpl
 
 
-def _seed_sales_order_template(db: Session) -> FBDITemplate | None:
-    """Seed a Sales Order FBDI template stub with hand-crafted fields so the
-    Sales Order conversion has a real (if simplified) target to map against."""
-    existing = db.query(FBDITemplate).filter(
-        FBDITemplate.name == "Sales Order Headers (OM)"
-    ).first()
+async def _seed_sales_order_template() -> FBDITemplate | None:
+    existing = await FBDITemplate.find_one(FBDITemplate.name == "Sales Order Headers (OM)")
     if existing:
         return existing
 
@@ -212,38 +195,33 @@ def _seed_sales_order_template(db: Session) -> FBDITemplate | None:
         ),
         required_field_count=4,
     )
-    db.add(tpl)
-    db.flush()
+    await tpl.insert()
 
     sheet = FBDISheet(template_id=tpl.id, sheet_name="OrderHeaders", sequence=1, field_count=18)
-    db.add(sheet)
-    db.flush()
+    await sheet.insert()
 
-    # Hand-crafted Sales Order target fields — short list but covers the
-    # mapping types the user will demo.
     fields = [
-        # (field_name, description, data_type, max_length, required, sequence, sample)
-        ("OrderNumber",     "Source order number",          "Character", 50,  True,  1, "SO-200001"),
-        ("OrderType",       "Order transaction type",        "Character", 30,  True,  2, "STANDARD"),
-        ("OrderDate",       "Order header date",             "Date",      None,True,  3, "2024-07-01"),
-        ("OrderStatus",     "Order header status",           "Character", 30,  False, 4, "BOOKED"),
-        ("CustomerNumber",  "Sold-to customer party number", "Character", 50,  True,  5, "1001"),
-        ("CustomerName",    "Sold-to customer party name",   "Character", 250, False, 6, "Northwind Industries"),
-        ("InventoryItemNumber","Item number being ordered",  "Character", 100, True,  7, "AS54888"),
-        ("LineNumber",      "Order line number",             "Number",    None,True,  8, "1"),
-        ("OrderedQuantity", "Quantity ordered",              "Number",    None,True,  9, "10"),
-        ("UnitOfMeasureCode","Order line UOM",               "Character", 10,  True,  10,"Ea"),
-        ("UnitSellingPrice","Selling price per unit",        "Number",    None,True,  11,"125.00"),
-        ("CurrencyCode",    "Order currency code",           "Character", 3,   True,  12,"USD"),
-        ("RequestShipDate", "Customer requested ship date",  "Date",      None,False, 13,"2024-08-01"),
-        ("PromisedShipDate","Promised ship date",            "Date",      None,False, 14,"2024-08-05"),
-        ("ShipFromOrgCode", "Source inventory organisation", "Character", 18,  True,  15,"M1"),
-        ("PaymentTerms",    "Customer payment terms",        "Character", 30,  False, 16,"Net 30"),
-        ("FreightTerms",    "Freight terms code",            "Character", 30,  False, 17,"FOB Origin"),
-        ("SourceSystem",    "Originating source system",     "Character", 30,  False, 18,"NETSUITE"),
+        ("OrderNumber",          "Source order number",             "Character", 50,  True,  1,  "SO-200001"),
+        ("OrderType",            "Order transaction type",           "Character", 30,  True,  2,  "STANDARD"),
+        ("OrderDate",            "Order header date",                "Date",      None, True,  3,  "2024-07-01"),
+        ("OrderStatus",          "Order header status",              "Character", 30,  False, 4,  "BOOKED"),
+        ("CustomerNumber",       "Sold-to customer party number",    "Character", 50,  True,  5,  "1001"),
+        ("CustomerName",         "Sold-to customer party name",      "Character", 250, False, 6,  "Northwind Industries"),
+        ("InventoryItemNumber",  "Item number being ordered",        "Character", 100, True,  7,  "AS54888"),
+        ("LineNumber",           "Order line number",                "Number",    None, True,  8,  "1"),
+        ("OrderedQuantity",      "Quantity ordered",                 "Number",    None, True,  9,  "10"),
+        ("UnitOfMeasureCode",    "Order line UOM",                   "Character", 10,  True,  10, "Ea"),
+        ("UnitSellingPrice",     "Selling price per unit",           "Number",    None, True,  11, "125.00"),
+        ("CurrencyCode",         "Order currency code",              "Character", 3,   True,  12, "USD"),
+        ("RequestShipDate",      "Customer requested ship date",     "Date",      None, False, 13, "2024-08-01"),
+        ("PromisedShipDate",     "Promised ship date",               "Date",      None, False, 14, "2024-08-05"),
+        ("ShipFromOrgCode",      "Source inventory organisation",    "Character", 18,  True,  15, "M1"),
+        ("PaymentTerms",         "Customer payment terms",           "Character", 30,  False, 16, "Net 30"),
+        ("FreightTerms",         "Freight terms code",               "Character", 30,  False, 17, "FOB Origin"),
+        ("SourceSystem",         "Originating source system",        "Character", 30,  False, 18, "NETSUITE"),
     ]
     for f in fields:
-        db.add(FBDIField(
+        await FBDIField(
             template_id=tpl.id,
             sheet_id=sheet.id,
             field_name=f[0],
@@ -253,43 +231,35 @@ def _seed_sales_order_template(db: Session) -> FBDITemplate | None:
             required=int(f[4]),
             sequence=f[5],
             sample_value=f[6],
-        ))
-    db.commit()
-    db.refresh(tpl)
+        ).insert()
     return tpl
 
 
-def _seed_environments(db: Session, project) -> None:
-    """Create the standard DEV/QA/UAT/PROD environment ladder for a project."""
-    from app.models.environment import Environment, DEFAULT_ENVIRONMENTS
-    if db.query(Environment).filter(Environment.project_id == project.id).count() > 0:
+async def _seed_environments(project: Project) -> None:
+    from app.models.environment import DEFAULT_ENVIRONMENTS, Environment
+    count = await Environment.find(Environment.project_id == project.id).count()
+    if count > 0:
         return
     for env in DEFAULT_ENVIRONMENTS:
-        db.add(Environment(
+        await Environment(
             project_id=project.id,
             name=env["name"],
             description=env["description"],
             sort_order=env["order"],
             color=env["color"],
             sox_controlled=1 if env["name"] == "PROD" else 0,
-        ))
-    db.commit()
+        ).insert()
 
 
-def _seed_demo_engagement(
-    db: Session,
+async def _seed_demo_engagement(
     item_ds: Dataset | None,
     so_ds: Dataset | None,
     item_tpl: FBDITemplate | None,
     so_tpl: FBDITemplate | None,
 ) -> None:
-    """Seed the demo engagement with two fully-bound conversions (Item Master
-    and Sales Orders) plus planned placeholders for the rest."""
     from datetime import date, datetime, time as dtime
 
-    if db.query(Project).filter(
-        Project.name == "Trinamix → Oracle SCM Cloud Phase 1"
-    ).first():
+    if await Project.find_one(Project.name == "Trinamix → Oracle SCM Cloud Phase 1"):
         return
 
     proj = Project(
@@ -311,14 +281,12 @@ def _seed_demo_engagement(
         data_owner="data_owner@trinamix.com",
         sox_controlled=1,
     )
-    db.add(proj)
-    db.flush()
+    await proj.insert()
 
-    _seed_environments(db, proj)
+    await _seed_environments(proj)
 
-    # Conversion #1 — Item Master, fully bound to real seeded data.
     if item_ds is not None and item_tpl is not None:
-        db.add(Conversion(
+        await Conversion(
             project_id=proj.id,
             name="Item Master Conversion",
             description=(
@@ -333,13 +301,10 @@ def _seed_demo_engagement(
             planned_load_order=30,
             status="draft",
             created_by=settings.ADMIN_EMAIL,
-        ))
+        ).insert()
 
-    # Conversion #2 — Sales Order, fully bound. Will fail-cascade some rows
-    # because legacy_sales_orders.csv references item numbers from the Item
-    # extract — when those upstream items fail, dependent SO rows fail too.
     if so_ds is not None and so_tpl is not None:
-        db.add(Conversion(
+        await Conversion(
             project_id=proj.id,
             name="Sales Order Backlog",
             description=(
@@ -353,48 +318,46 @@ def _seed_demo_engagement(
             planned_load_order=80,
             status="draft",
             created_by=settings.ADMIN_EMAIL,
-        ))
+        ).insert()
 
-    # Other conversions — planned placeholders.
     PLANNED = [
-        ("UOM Master",                  "UOM",             10, "loaded"),
-        ("Inventory Organization",      "Inventory Org",   15, "loaded"),
-        ("Item Class Setup",            "Item Class",      20, "loaded"),
-        ("Customer Master",             "Customer",        40, "planning"),
-        ("Supplier Master",             "Supplier",        50, "planning"),
-        ("BOM Conversion",              "BOM",             60, "planning"),
-        ("On-Hand Balance Load",        "On-Hand Balance", 70, "planning"),
-        ("Open Purchase Orders",        "Purchase Order",  90, "planning"),
+        ("UOM Master",             "UOM",             10, "loaded"),
+        ("Inventory Organization", "Inventory Org",   15, "loaded"),
+        ("Item Class Setup",       "Item Class",      20, "loaded"),
+        ("Customer Master",        "Customer",        40, "planning"),
+        ("Supplier Master",        "Supplier",        50, "planning"),
+        ("BOM Conversion",         "BOM",             60, "planning"),
+        ("On-Hand Balance Load",   "On-Hand Balance", 70, "planning"),
+        ("Open Purchase Orders",   "Purchase Order",  90, "planning"),
     ]
     for name, obj, order, status in PLANNED:
-        db.add(Conversion(
+        await Conversion(
             project_id=proj.id,
             name=name,
             target_object=obj,
             planned_load_order=order,
             status=status,
             created_by=settings.ADMIN_EMAIL,
-        ))
-    db.commit()
+        ).insert()
 
 
-def run_seed() -> None:
-    init_db()
-    db = SessionLocal()
-    try:
-        _seed_admin(db)
-        _seed_dependencies(db)
-        item_ds, so_ds = _seed_datasets(db)
-        item_tpl = _seed_fbdi_template(db)
-        so_tpl = _seed_sales_order_template(db)
-        # Comprehensive 100+ template manifest
-        from app.seed.fbdi_manifest import seed_fbdi_manifest
-        seed_fbdi_manifest(db)
-        _seed_demo_engagement(db, item_ds, so_ds, item_tpl, so_tpl)
-    finally:
-        db.close()
+async def run_seed() -> None:
+    await _seed_admin()
+    await _seed_dependencies()
+    item_ds, so_ds = await _seed_datasets()
+    item_tpl = await _seed_fbdi_template()
+    so_tpl = await _seed_sales_order_template()
+    from app.seed.fbdi_manifest import seed_fbdi_manifest
+    await seed_fbdi_manifest()
+    await _seed_demo_engagement(item_ds, so_ds, item_tpl, so_tpl)
 
 
 if __name__ == "__main__":
-    run_seed()
-    print("Seed complete.")
+    import asyncio
+
+    async def _main():
+        await init_db()
+        await run_seed()
+        print("Seed complete.")
+
+    asyncio.run(_main())

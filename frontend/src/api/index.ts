@@ -57,9 +57,9 @@ export const DatasetsApi = {
 
 export const FbdiApi = {
   list: () => api.get<FBDITemplate[]>("/fbdi/templates").then(r => r.data),
-  get: (id: number) => api.get<FBDITemplateDetail>(`/fbdi/templates/${id}`).then(r => r.data),
-  fields: (id: number) => api.get<FBDIField[]>(`/fbdi/templates/${id}/fields`).then(r => r.data),
-  updateField: (id: number, body: Partial<FBDIField>) =>
+  get: (id: string) => api.get<FBDITemplateDetail>(`/fbdi/templates/${id}`).then(r => r.data),
+  fields: (id: string) => api.get<FBDIField[]>(`/fbdi/templates/${id}/fields`).then(r => r.data),
+  updateField: (id: string, body: Partial<FBDIField>) =>
     api.put<FBDIField>(`/fbdi/fields/${id}`, body).then(r => r.data),
   upload: (file: File, opts: { name?: string; module?: string; business_object?: string } = {}) => {
     const fd = new FormData();
@@ -74,16 +74,16 @@ export const FbdiApi = {
 // ─── Engagement-level (Projects) ───
 export const ProjectsApi = {
   list: () => api.get<Project[]>("/projects").then(r => r.data),
-  get: (id: number) => api.get<Project>(`/projects/${id}`).then(r => r.data),
+  get: (id: string) => api.get<Project>(`/projects/${id}`).then(r => r.data),
   create: (body: Partial<Project>) => api.post<Project>("/projects", body).then(r => r.data),
-  update: (id: number, body: Partial<Project>) =>
+  update: (id: string, body: Partial<Project>) =>
     api.patch<Project>(`/projects/${id}`, body).then(r => r.data),
-  remove: (id: number) => api.delete(`/projects/${id}`).then(r => r.data),
-  conversions: (id: number) =>
+  remove: (id: string) => api.delete(`/projects/${id}`).then(r => r.data),
+  conversions: (id: string) =>
     api.get<Conversion[]>(`/projects/${id}/conversions`).then(r => r.data),
-  autoPopulate: (id: number, modules: string[]) =>
+  autoPopulate: (id: string, modules: string[]) =>
     api.post<AutoPopulateResult>(`/projects/${id}/auto-populate-conversions`, { modules }).then(r => r.data),
-  deriveLoadOrder: (id: number) =>
+  deriveLoadOrder: (id: string) =>
     api.post<LoadOrderResult>(`/projects/${id}/derive-load-order`).then(r => r.data),
 };
 
@@ -91,20 +91,20 @@ export const ProjectsApi = {
 // Every operation that used to live under /api/projects/{id}/* now lives under
 // /api/conversions/{id}/*.
 export const ConversionsApi = {
-  list: (params?: { project_id?: number; status?: string }) =>
+  list: (params?: { project_id?: string; status?: string }) =>
     api.get<Conversion[]>("/conversions", { params }).then(r => r.data),
-  get: (id: number) => api.get<Conversion>(`/conversions/${id}`).then(r => r.data),
+  get: (id: string) => api.get<Conversion>(`/conversions/${id}`).then(r => r.data),
   create: (body: Partial<Conversion>) =>
     api.post<Conversion>("/conversions", body).then(r => r.data),
-  update: (id: number, body: Partial<Conversion>) =>
+  update: (id: string, body: Partial<Conversion>) =>
     api.patch<Conversion>(`/conversions/${id}`, body).then(r => r.data),
-  remove: (id: number) => api.delete(`/conversions/${id}`).then(r => r.data),
+  remove: (id: string) => api.delete(`/conversions/${id}`).then(r => r.data),
 };
 
 export const MappingApi = {
-  propagate: (mappingId: number) =>
+  propagate: (mappingId: string) =>
     api.post<PropagationResult>(`/mappings/${mappingId}/propagate`).then(r => r.data),
-  propagationCandidates: (conversionId: number) =>
+  propagationCandidates: (conversionId: string) =>
     api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
   suggest: (conversionId: number) =>
     api.post<MappingSuggestion[]>(`/conversions/${conversionId}/suggest-mapping`).then(r => r.data),
@@ -155,34 +155,34 @@ export const OutputApi = {
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: number, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
-  downloadUrl: (conversionId: number) => `/api/conversions/${conversionId}/download-output`,
+  downloadUrl: (conversionId: string) => `/api/conversions/${conversionId}/download-output`,
 };
 
 export const LoadApi = {
-  simulate: (conversionId: number) =>
+  simulate: (conversionId: string) =>
     api.post<LoadRun>(`/conversions/${conversionId}/simulate-load`).then(r => r.data),
-  runs: (conversionId: number) =>
+  runs: (conversionId: string) =>
     api.get<LoadRun[]>(`/conversions/${conversionId}/load-runs`).then(r => r.data),
-  errors: (runId: number) => api.get<LoadError[]>(`/load-runs/${runId}/errors`).then(r => r.data),
+  errors: (runId: string) => api.get<LoadError[]>(`/load-runs/${runId}/errors`).then(r => r.data),
   /** Errors from this conversion's most recent load run — convenience for the
    * Error Traceback drawer (no need to fetch run id separately). */
-  latestErrors: (conversionId: number) =>
+  latestErrors: (conversionId: string) =>
     api.get<LoadError[]>(`/conversions/${conversionId}/load-errors`).then(r => r.data),
-  summary: (conversionId: number) =>
+  summary: (conversionId: string) =>
     api.get<LoadSummary>(`/conversions/${conversionId}/load-summary`).then(r => r.data),
 };
 
 export const WorkflowApi = {
   list: () => api.get<Workflow[]>("/workflows").then(r => r.data),
-  get: (id: number) => api.get<Workflow>(`/workflows/${id}`).then(r => r.data),
+  get: (id: string) => api.get<Workflow>(`/workflows/${id}`).then(r => r.data),
   create: (body: any) => api.post<Workflow>("/workflows", body).then(r => r.data),
-  update: (id: number, body: any) => api.put<Workflow>(`/workflows/${id}`, body).then(r => r.data),
-  run: (id: number) => api.post<Workflow>(`/workflows/${id}/run`).then(r => r.data),
+  update: (id: string, body: any) => api.put<Workflow>(`/workflows/${id}`, body).then(r => r.data),
+  run: (id: string) => api.post<Workflow>(`/workflows/${id}/run`).then(r => r.data),
 };
 
 export const DependencyApi = {
   list: () => api.get<Dependency[]>("/dependencies").then(r => r.data),
-  impact: (conversionId: number) =>
+  impact: (conversionId: string) =>
     api.get<{ object: string; dependencies: any[]; impacts: any[] }>(`/dependencies/impact/${conversionId}`).then(r => r.data),
 };
 
@@ -214,18 +214,18 @@ export const CutoverApi = {
 
   /** Promote a conversion into a new environment with a fresh dataset upload. */
   promote: (body: {
-    environment_id: number;
-    conversion_id: number;
-    dataset_id?: number | null;
+    environment_id: string;
+    conversion_id: string;
+    dataset_id?: string | null;
     notes?: string;
   }) =>
     api.post<EnvironmentRun>("/environment-runs", body).then(r => r.data),
 
   /** Update an environment run (status changes, notes, swap dataset). */
-  updateRun: (runId: number, body: Partial<EnvironmentRun>) =>
+  updateRun: (runId: string, body: Partial<EnvironmentRun>) =>
     api.patch<EnvironmentRun>(`/environment-runs/${runId}`, body).then(r => r.data),
 
   /** The aggregate cutover dashboard (used by the Migration Monitor page). */
-  dashboard: (projectId: number) =>
+  dashboard: (projectId: string) =>
     api.get<CutoverDashboard>(`/projects/${projectId}/cutover`).then(r => r.data),
 };

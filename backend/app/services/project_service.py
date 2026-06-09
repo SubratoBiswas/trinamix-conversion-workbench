@@ -4,8 +4,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
-
 from app.models.conversion import Conversion
 from app.models.dependency import Dependency
 from app.models.fbdi import FBDITemplate
@@ -13,8 +11,6 @@ from app.models.project import Project
 
 
 # ─── Module → (business_object, tier, planned_load_order) ────────────────────
-# This table maps Oracle Cloud module codes to their canonical conversion objects
-# and recommended load sequence. Lower numbers load first.
 MODULE_OBJECT_MAP: dict[str, list[dict[str, Any]]] = {
     "SCM": [
         {"business_object": "UOM",            "name": "UOM Master",             "tier": "T0", "order": 10},
@@ -50,7 +46,6 @@ MODULE_OBJECT_MAP: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
-# Multi-module shortcut aliases
 MODULE_ALIASES: dict[str, list[str]] = {
     "SCM + OM":        ["SCM", "OM"],
     "SCM + OM + PO":   ["SCM", "OM", "PO"],
@@ -58,22 +53,20 @@ MODULE_ALIASES: dict[str, list[str]] = {
 }
 
 
-def auto_populate_conversions(
-    db: Session,
+async def auto_populate_conversions(
     project: Project,
     modules: list[str],
     created_by: str,
 ) -> list[Conversion]:
-    """Create Conversion placeholders for every object implied by `modules`.
+    """Create Conversion placeholders for every object implied by modules.
 
     Idempotent: skips any target_object already present in the project.
-    Returns the list of newly-created Conversion rows.
+    Returns the list of newly-created Conversion documents.
     """
-    existing_objects = {
-        c.target_object
-        for c in db.query(Conversion).filter(Conversion.project_id == project.id).all()
-        if c.target_object
-    }
+    existing_convs = await Conversion.find(
+        Conversion.project_id == project.id
+    ).to_list()
+    existing_objects = {c.target_object for c in existing_convs if c.target_object}
 
     # Expand aliases
     expanded: list[str] = []
@@ -92,7 +85,7 @@ def auto_populate_conversions(
             module_list.append(m)
 
     # Index templates by business_object
-    templates = db.query(FBDITemplate).all()
+    templates = await FBDITemplate.find_all().to_list()
     tpl_by_obj: dict[str, FBDITemplate] = {}
     for tpl in templates:
         obj = tpl.business_object or ""
@@ -117,44 +110,29 @@ def auto_populate_conversions(
                 status="planning",
                 created_by=created_by,
             )
-            db.add(conv)
+            await conv.insert()
             created.append(conv)
-
-    if created:
-        db.commit()
-        for c in created:
-            db.refresh(c)
 
     return created
 
 
-# ─── Load-order auto-derivation ───────────────────────────────────────────────
+async def derive_load_order(project: Project) -> list[dict[str, Any]]:
+    """Compute recommended planned_load_order for every Conversion in the project.
 
-def derive_load_order(db: Session, project: Project) -> list[dict[str, Any]]:
-    """Compute recommended `planned_load_order` for every Conversion in the project.
-
-    Strategy:
-    1. Use the global Dependency table (prerequisite edges between business objects).
-    2. Run a topological sort (Kahn's algorithm) over the conversions present.
-    3. Assign sequence numbers and persist them.
-
-    Returns the ordered list with {conversion_id, name, target_object, load_order}.
+    Uses topological sort (Kahn's algorithm) over the Dependency table.
+    Returns ordered list with {conversion_id, name, target_object, load_order}.
     """
-    conversions = (
-        db.query(Conversion)
-        .filter(Conversion.project_id == project.id)
-        .all()
-    )
+    conversions = await Conversion.find(
+        Conversion.project_id == project.id
+    ).to_list()
     if not conversions:
         return []
 
-    # Build adjacency from global dependency table filtered to objects in project
     objects_in_project = {c.target_object for c in conversions if c.target_object}
-    deps = db.query(Dependency).filter(
+    deps = await Dependency.find(
         Dependency.relationship_type == "prerequisite"
-    ).all()
+    ).to_list()
 
-    # in-edges: {object → set of prerequisites}
     prereqs: dict[str, set[str]] = {obj: set() for obj in objects_in_project}
     for d in deps:
         src = d.source_object
@@ -162,16 +140,14 @@ def derive_load_order(db: Session, project: Project) -> list[dict[str, Any]]:
         if src in objects_in_project and tgt in objects_in_project:
             prereqs[tgt].add(src)
 
-    # Also infer FK-based prerequisites from FBDI field names
-    # e.g. InventoryItemNumber on Sales Order → Item prerequisite
+    # Infer FK-based prerequisites from FBDI field names
     from app.services.learning_service import REFERENCE_KEY_FIELDS
-    conv_by_obj: dict[str, Conversion] = {
-        c.target_object: c for c in conversions if c.target_object
-    }
     for c in conversions:
-        if not c.template:
+        if not c.template_id:
             continue
-        field_names = {f.field_name for f in c.template.fields}
+        from app.models.fbdi import FBDIField
+        fields = await FBDIField.find(FBDIField.template_id == c.template_id).to_list()
+        field_names = {f.field_name for f in fields}
         for master_obj, key_fields in REFERENCE_KEY_FIELDS.items():
             if c.target_object == master_obj:
                 continue
@@ -185,7 +161,6 @@ def derive_load_order(db: Session, project: Project) -> list[dict[str, Any]]:
     while remaining:
         ready = sorted(obj for obj, ps in remaining.items() if not ps)
         if not ready:
-            # Cycle or unresolvable — append remaining in name order
             order.extend(sorted(remaining.keys()))
             break
         for obj in ready:
@@ -194,7 +169,10 @@ def derive_load_order(db: Session, project: Project) -> list[dict[str, Any]]:
             for ps in remaining.values():
                 ps.discard(obj)
 
-    # Assign load_order and persist
+    conv_by_obj: dict[str, Conversion] = {
+        c.target_object: c for c in conversions if c.target_object
+    }
+
     step = 10
     result: list[dict[str, Any]] = []
     now = datetime.utcnow()
@@ -203,14 +181,12 @@ def derive_load_order(db: Session, project: Project) -> list[dict[str, Any]]:
         if not conv:
             continue
         new_order = (i + 1) * step
-        conv.planned_load_order = new_order
-        conv.updated_at = now
+        await conv.set({"planned_load_order": new_order, "updated_at": now})
         result.append({
-            "conversion_id":  conv.id,
-            "name":           conv.name,
-            "target_object":  obj,
-            "load_order":     new_order,
-            "prerequisites":  sorted(prereqs.get(obj, set())),
+            "conversion_id": str(conv.id),
+            "name": conv.name,
+            "target_object": obj,
+            "load_order": new_order,
+            "prerequisites": sorted(prereqs.get(obj, set())),
         })
-    db.commit()
     return result

@@ -26,7 +26,7 @@ class LearnedMappingCreate(LearnedMappingBase):
 
 class LearnedMappingOut(LearnedMappingBase):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+    id: str
     captured_by: Optional[str] = None
     captured_at: datetime
 

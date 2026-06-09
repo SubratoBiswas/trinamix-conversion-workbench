@@ -8,10 +8,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_db
 from app.models.user import User
 
 
@@ -36,9 +34,8 @@ def create_access_token(data: dict[str, Any]) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def get_current_user(
+async def get_current_user(
     token: str | None = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
 ) -> User:
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing authentication token")
@@ -47,7 +44,7 @@ def get_current_user(
         sub = payload.get("sub")
         if not sub:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token payload")
-        user = db.query(User).filter(User.email == sub).first()
+        user = await User.find_one(User.email == sub)
         if not user:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
         return user

@@ -1,31 +1,27 @@
-"""AI / rule-based mapping suggestions for a project."""
+"""Mapping suggestion model."""
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, JSON
-from sqlalchemy.orm import relationship
-from app.database import Base
+from typing import Any, Optional
+from beanie import Document, PydanticObjectId
+from pydantic import Field
 
+MAPPING_STATUSES = ("suggested","approved","rejected","overridden","not_applicable")
 
-MAPPING_STATUSES = ("suggested", "approved", "rejected", "overridden", "not_applicable")
+class MappingSuggestion(Document):
+    conversion_id: PydanticObjectId
+    target_field_id: PydanticObjectId
+    source_column: Optional[str] = None
+    confidence: float = 0.0
+    reason: Optional[str] = None
+    suggested_transformation: Optional[dict] = None
+    review_required: int = 1
+    status: str = "suggested"
+    default_value: Optional[str] = None
+    comment: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-
-class MappingSuggestion(Base):
-    __tablename__ = "mapping_suggestions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    conversion_id = Column(Integer, ForeignKey("conversions.id", ondelete="CASCADE"), nullable=False)
-    target_field_id = Column(Integer, ForeignKey("fbdi_fields.id"), nullable=False)
-    source_column = Column(String(255), nullable=True)
-    confidence = Column(Float, default=0.0)  # 0..1
-    reason = Column(Text)
-    suggested_transformation = Column(JSON, nullable=True)  # {rule_type, config}
-    review_required = Column(Integer, default=1)  # 0/1 flag
-    status = Column(String(50), default="suggested")
-    default_value = Column(String(500), nullable=True)
-    comment = Column(Text, nullable=True)
-    approved_by = Column(String(150), nullable=True)
-    approved_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    conversion = relationship("Conversion", back_populates="mappings")
-    target_field = relationship("FBDIField")
+    class Settings:
+        name = "mapping_suggestions"
+        indexes = ["conversion_id", "target_field_id"]

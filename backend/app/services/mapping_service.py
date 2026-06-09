@@ -1,10 +1,10 @@
-"""Mapping orchestration: build AI inputs, run provider, persist suggestions."""
+"""Mapping orchestration service (async/Beanie)."""
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
+from beanie import PydanticObjectId
 
 from app.ai import get_mapping_provider
 from app.ai.base import SourceColumn, TargetField
@@ -13,16 +13,12 @@ from app.models.fbdi import FBDIField, FBDITemplate
 from app.models.mapping import MappingSuggestion
 from app.models.conversion import Conversion
 from app.parsers import parse_tabular
-from app.services.learning_service import apply_learned_to_conversion
 
 
-def _source_columns_for(db: Session, dataset: Dataset) -> list[SourceColumn]:
-    profs = (
-        db.query(DatasetColumnProfile)
-        .filter(DatasetColumnProfile.dataset_id == dataset.id)
-        .order_by(DatasetColumnProfile.position)
-        .all()
-    )
+async def _source_columns_for(dataset: Dataset) -> list[SourceColumn]:
+    profs = await DatasetColumnProfile.find(
+        DatasetColumnProfile.dataset_id == dataset.id
+    ).sort(+DatasetColumnProfile.position).to_list()
     return [
         SourceColumn(
             name=p.column_name,
@@ -36,16 +32,13 @@ def _source_columns_for(db: Session, dataset: Dataset) -> list[SourceColumn]:
     ]
 
 
-def _target_fields_for(db: Session, template: FBDITemplate) -> list[TargetField]:
-    fields = (
-        db.query(FBDIField)
-        .filter(FBDIField.template_id == template.id)
-        .order_by(FBDIField.sequence)
-        .all()
-    )
+async def _target_fields_for(template: FBDITemplate) -> list[TargetField]:
+    fields = await FBDIField.find(
+        FBDIField.template_id == template.id
+    ).sort(+FBDIField.sequence).to_list()
     return [
         TargetField(
-            id=f.id,
+            id=str(f.id),
             field_name=f.field_name,
             description=f.description,
             data_type=f.data_type,
@@ -56,96 +49,77 @@ def _target_fields_for(db: Session, template: FBDITemplate) -> list[TargetField]
     ]
 
 
-def run_mapping_suggestions(db: Session, conversion: Conversion) -> list[MappingSuggestion]:
-    """(Re-)generate mapping suggestions for a project. Existing suggestions
-    in 'suggested' status are replaced; approved/rejected/overridden ones are
-    preserved (mapping engineer's manual decisions stay sticky)."""
-    sources = _source_columns_for(db, conversion.dataset)
-    targets = _target_fields_for(db, conversion.template)
+async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
+    dataset = await Dataset.get(conversion.dataset_id)
+    template = await FBDITemplate.get(conversion.template_id)
+    sources = await _source_columns_for(dataset)
+    targets = await _target_fields_for(template)
     provider = get_mapping_provider()
     ai_results = provider.suggest_mappings(sources, targets)
 
-    # Index existing mappings keyed by target field id
     existing = {
         m.target_field_id: m
-        for m in db.query(MappingSuggestion)
-        .filter(MappingSuggestion.conversion_id == conversion.id)
-        .all()
+        for m in await MappingSuggestion.find(
+            MappingSuggestion.conversion_id == conversion.id
+        ).to_list()
     }
 
     saved: list[MappingSuggestion] = []
     for s in ai_results:
-        m = existing.get(s.target_field_id)
+        tfid = PydanticObjectId(str(s.target_field_id))
+        m = existing.get(tfid)
         if m and m.status in ("approved", "rejected", "overridden", "not_applicable"):
             saved.append(m)
             continue
         if m:
-            m.source_column = s.source_column
-            m.confidence = s.confidence
-            m.reason = s.reason
-            m.suggested_transformation = s.suggested_transformation
-            m.review_required = 1 if s.review_required else 0
-            m.status = "suggested"
-            m.updated_at = datetime.utcnow()
+            await m.set({
+                "source_column": s.source_column, "confidence": s.confidence,
+                "reason": s.reason, "suggested_transformation": s.suggested_transformation,
+                "review_required": 1 if s.review_required else 0,
+                "status": "suggested", "updated_at": datetime.utcnow(),
+            })
         else:
             m = MappingSuggestion(
-                conversion_id=conversion.id,
-                target_field_id=s.target_field_id,
-                source_column=s.source_column,
-                confidence=s.confidence,
-                reason=s.reason,
-                suggested_transformation=s.suggested_transformation,
-                review_required=1 if s.review_required else 0,
-                status="suggested",
+                conversion_id=conversion.id, target_field_id=tfid,
+                source_column=s.source_column, confidence=s.confidence,
+                reason=s.reason, suggested_transformation=s.suggested_transformation,
+                review_required=1 if s.review_required else 0, status="suggested",
             )
-            db.add(m)
+            await m.insert()
         saved.append(m)
 
-    conversion.status = "mapping_suggested"
-    conversion.updated_at = datetime.utcnow()
-    db.commit()
-
-    # Replay any human-approved patterns from the learning library — same
-    # business object on a new file should auto-correct without re-asking.
-    apply_learned_to_conversion(db, conversion, saved)
+    await conversion.set({"status": "mapping_suggested", "updated_at": datetime.utcnow()})
+    from app.services.learning_service import apply_learned_to_conversion
+    await apply_learned_to_conversion(conversion, saved)
     return saved
 
 
-def enrich_mapping_with_samples(
-    db: Session, conversion: Conversion, mappings: list[MappingSuggestion]
+async def enrich_mapping_with_samples(
+    conversion: Conversion, mappings: list[MappingSuggestion]
 ) -> list[dict[str, Any]]:
-    """Attach sample source values + target field metadata for the review UI."""
-    df = parse_tabular(conversion.dataset.file_path, file_type=conversion.dataset.file_type)
-    fields_by_id = {f.id: f for f in conversion.template.fields}
+    dataset = await Dataset.get(conversion.dataset_id)
+    template = await FBDITemplate.get(conversion.template_id)
+    df = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+    fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
+    fields_by_id = {f.id: f for f in fields}
     out: list[dict[str, Any]] = []
     for m in mappings:
         tgt = fields_by_id.get(m.target_field_id)
         sample_src: list[Any] = []
         if m.source_column and m.source_column in df.columns:
-            sample_src = [
-                str(v) for v in df[m.source_column].astype(str).head(5).tolist()
-            ]
-        out.append(
-            {
-                "id": m.id,
-                "conversion_id": m.conversion_id,
-                "target_field_id": m.target_field_id,
-                "target_field_name": tgt.field_name if tgt else None,
-                "target_required": bool(tgt.required) if tgt else False,
-                "target_data_type": tgt.data_type if tgt else None,
-                "target_max_length": tgt.max_length if tgt else None,
-                "source_column": m.source_column,
-                "confidence": m.confidence,
-                "reason": m.reason,
-                "suggested_transformation": m.suggested_transformation,
-                "review_required": m.review_required,
-                "status": m.status,
-                "default_value": m.default_value,
-                "comment": m.comment,
-                "approved_by": m.approved_by,
-                "approved_at": m.approved_at,
-                "sample_source_values": sample_src,
-                "sample_converted_values": [],  # filled later if rules attached
-            }
-        )
+            sample_src = [str(v) for v in df[m.source_column].astype(str).head(5).tolist()]
+        out.append({
+            "id": str(m.id), "conversion_id": str(m.conversion_id),
+            "target_field_id": str(m.target_field_id),
+            "target_field_name": tgt.field_name if tgt else None,
+            "target_required": bool(tgt.required) if tgt else False,
+            "target_data_type": tgt.data_type if tgt else None,
+            "target_max_length": tgt.max_length if tgt else None,
+            "source_column": m.source_column, "confidence": m.confidence,
+            "reason": m.reason, "suggested_transformation": m.suggested_transformation,
+            "review_required": m.review_required, "status": m.status,
+            "default_value": m.default_value, "comment": m.comment,
+            "approved_by": m.approved_by, "approved_at": m.approved_at,
+            "sample_source_values": sample_src, "sample_converted_values": [],
+        })
     return out

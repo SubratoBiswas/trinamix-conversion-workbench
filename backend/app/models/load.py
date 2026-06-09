@@ -1,57 +1,39 @@
-"""Load orchestration: simulated/actual loads and their errors."""
+"""Load orchestration models."""
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
-from sqlalchemy.orm import relationship
-from app.database import Base
+from typing import Optional
+from beanie import Document, PydanticObjectId
+from pydantic import Field
 
+LOAD_RUN_TYPES = ("simulate","fusion")
+LOAD_STATUSES = ("running","completed","failed")
 
-LOAD_RUN_TYPES = ("simulate", "fusion")
-LOAD_STATUSES = ("running", "completed", "failed")
-ERROR_CATEGORIES = (
-    "Missing Required Field",
-    "Invalid Format",
-    "Invalid Lookup",
-    "Missing Dependency",
-    "Duplicate Record",
-    "Transformation Error",
-    "Data Quality Warning",
-)
+class LoadRun(Document):
+    conversion_id: PydanticObjectId
+    run_type: str = "simulate"
+    status: str = "running"
+    total_records: int = 0
+    passed_count: int = 0
+    failed_count: int = 0
+    warning_count: int = 0
+    error_count: int = 0
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
 
+    class Settings:
+        name = "load_runs"
+        indexes = ["conversion_id"]
 
-class LoadRun(Base):
-    __tablename__ = "load_runs"
+class LoadError(Document):
+    load_run_id: PydanticObjectId
+    row_number: Optional[int] = None
+    object_name: Optional[str] = None
+    error_category: Optional[str] = None
+    error_message: Optional[str] = None
+    root_cause: Optional[str] = None
+    related_dependency: Optional[str] = None
+    reference_value: Optional[str] = None
+    suggested_fix: Optional[str] = None
 
-    id = Column(Integer, primary_key=True, index=True)
-    conversion_id = Column(Integer, ForeignKey("conversions.id", ondelete="CASCADE"), nullable=False)
-    run_type = Column(String(50), default="simulate")
-    status = Column(String(50), default="running")
-    total_records = Column(Integer, default=0)
-    passed_count = Column(Integer, default=0)
-    failed_count = Column(Integer, default=0)
-    warning_count = Column(Integer, default=0)
-    error_count = Column(Integer, default=0)
-    started_at = Column(DateTime, default=datetime.utcnow)
-    completed_at = Column(DateTime, nullable=True)
-
-    conversion = relationship("Conversion", back_populates="load_runs")
-    errors = relationship("LoadError", back_populates="load_run", cascade="all, delete-orphan")
-
-
-class LoadError(Base):
-    __tablename__ = "load_errors"
-
-    id = Column(Integer, primary_key=True, index=True)
-    load_run_id = Column(Integer, ForeignKey("load_runs.id", ondelete="CASCADE"), nullable=False)
-    row_number = Column(Integer, nullable=True)
-    object_name = Column(String(100))
-    error_category = Column(String(100))
-    error_message = Column(Text)
-    root_cause = Column(Text, nullable=True)
-    related_dependency = Column(String(255), nullable=True)
-    # The actual key value that failed to resolve (e.g. "ITM-DELETED").
-    # Lets the Error Traceback drawer render the connection path explicitly
-    # without parsing it back out of error_message.
-    reference_value = Column(String(255), nullable=True)
-    suggested_fix = Column(Text, nullable=True)
-
-    load_run = relationship("LoadRun", back_populates="errors")
+    class Settings:
+        name = "load_errors"
+        indexes = ["load_run_id"]
