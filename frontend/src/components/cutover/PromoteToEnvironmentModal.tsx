@@ -32,12 +32,12 @@ export const PromoteToEnvironmentModal: React.FC<Props> = ({
 }) => {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [runs, setRuns] = useState<EnvironmentRun[]>([]);
-  const [targetEnvId, setTargetEnvId] = useState<number | null>(null);
+  const [targetEnvId, setTargetEnvId] = useState<string | null>(null);
 
   // Source choice: upload new file vs reuse a previous environment's dataset
   const [mode, setMode] = useState<"upload" | "reuse">("upload");
   const [file, setFile] = useState<File | null>(null);
-  const [reuseDatasetId, setReuseDatasetId] = useState<number | null>(null);
+  const [reuseDatasetId, setReuseDatasetId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
 
   const [busy, setBusy] = useState(false);
@@ -68,7 +68,7 @@ export const PromoteToEnvironmentModal: React.FC<Props> = ({
     if (!targetEnvId) return;
     setBusy(true); setError(null);
     try {
-      let datasetId: number | null | undefined = null;
+      let datasetId: string | null | undefined = null;
 
       if (mode === "upload") {
         if (!file) {

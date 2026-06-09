@@ -49,7 +49,7 @@ export const PropertiesPanel: React.FC<Props> = ({
     const targetId = node.data?.nodeType === "dataset" ? node.data?.datasetId : upstreamDatasetId;
     if (!targetId) { setPreview(null); return; }
     setPreviewing(true);
-    DatasetsApi.preview(Number(targetId), 30)
+    DatasetsApi.preview(String(targetId), 30)
       .then(setPreview)
       .finally(() => setPreviewing(false));
   }, [tab, node, upstreamDatasetId]);
@@ -57,7 +57,7 @@ export const PropertiesPanel: React.FC<Props> = ({
   // For FBDI Target nodes, fetch the field list to summarise required count
   useEffect(() => {
     if (node?.data?.nodeType === "fbdi_template" && node.data?.templateId) {
-      FbdiApi.fields(Number(node.data.templateId)).then(setFbdiFields);
+      FbdiApi.fields(String(node.data.templateId)).then(setFbdiFields);
     } else {
       setFbdiFields([]);
     }

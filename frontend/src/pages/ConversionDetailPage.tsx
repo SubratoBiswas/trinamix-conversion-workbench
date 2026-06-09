@@ -376,10 +376,10 @@ const EnvironmentStrip: React.FC<{
   const sorted = [...environments].sort((a, b) => a.sort_order - b.sort_order);
 
   // Map env_id → most-recent run for display.
-  const runByEnvId = new Map<number, EnvironmentRun>();
+  const runByEnvId = new Map<string, EnvironmentRun>();
   for (const r of runs) {
     const existing = runByEnvId.get(r.environment_id);
-    if (!existing || r.id > existing.id) runByEnvId.set(r.environment_id, r);
+    if (!existing || r.started_at > (existing.started_at ?? '')) runByEnvId.set(r.environment_id, r);
   }
 
   // For DEV, derive status from the conversion itself.

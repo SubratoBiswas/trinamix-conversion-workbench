@@ -779,7 +779,7 @@ const RULE_GROUPS: { label: string; types: string[] }[] = [
 interface RuleAuthorModalProps {
   open: boolean;
   onClose: () => void;
-  conversionId: number;
+  conversionId: string;
   fields: FBDIField[];
   sourceColumns: DatasetDetail["columns"];
   defaultTargetFieldId?: number | null;
@@ -798,7 +798,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   onSaved,
 }) => {
   const [type, setType] = useState<string>("VALUE_MAP");
-  const [targetFieldId, setTargetFieldId] = useState<number | null>(
+  const [targetFieldId, setTargetFieldId] = useState<string | null>(
     defaultTargetFieldId ?? null
   );
   const [sourceColumn, setSourceColumn] = useState<string>(
@@ -970,7 +970,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
                 className="input"
                 value={targetFieldId ?? ""}
                 onChange={(e) =>
-                  setTargetFieldId(e.target.value ? Number(e.target.value) : null)
+                  setTargetFieldId(e.target.value || null)
                 }
               >
                 <option value="">— pick a target field —</option>

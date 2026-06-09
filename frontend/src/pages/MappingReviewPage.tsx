@@ -343,7 +343,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Positions to draw lines (re-measured after layout changes)
-  const [lines, setLines] = useState<{ id: number; x1: number; y1: number; x2: number; y2: number; mapping: MappingSuggestion }[]>([]);
+  const [lines, setLines] = useState<{ id: string; x1: number; y1: number; x2: number; y2: number; mapping: MappingSuggestion }[]>([]);
 
   const recalc = () => {
     if (!canvasRef.current) return;
