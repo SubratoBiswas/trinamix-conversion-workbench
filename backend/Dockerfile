@@ -16,7 +16,6 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY app ./app
-COPY tests ./tests
 
 # Persistent dirs (mounted as volumes in compose)
 RUN mkdir -p /app/uploads /app/outputs
