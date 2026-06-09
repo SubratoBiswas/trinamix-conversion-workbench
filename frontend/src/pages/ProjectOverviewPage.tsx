@@ -372,7 +372,7 @@ const ProjectDependencyGraph: React.FC<{
 const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
 
 const AutoPopulateModal: React.FC<{
-  projectId: number;
+  projectId: string;
   onClose: () => void;
   onDone: (r: AutoPopulateResult) => void;
 }> = ({ projectId, onClose, onDone }) => {

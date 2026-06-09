@@ -41,11 +41,11 @@ export const AuthApi = {
 
 export const DatasetsApi = {
   list: () => api.get<Dataset[]>("/datasets").then(r => r.data),
-  get: (id: number) => api.get<DatasetDetail>(`/datasets/${id}`).then(r => r.data),
-  preview: (id: number, limit = 50) =>
+  get: (id: string) => api.get<DatasetDetail>(`/datasets/${id}`).then(r => r.data),
+  preview: (id: string, limit = 50) =>
     api.get<DatasetPreview>(`/datasets/${id}/preview`, { params: { limit } }).then(r => r.data),
-  suggestTemplate: (id: number) =>
-    api.get<{ dataset_id: number; suggestions: TemplateSuggestion[] }>(`/datasets/${id}/suggest-template`).then(r => r.data),
+  suggestTemplate: (id: string) =>
+    api.get<{ dataset_id: string; suggestions: TemplateSuggestion[] }>(`/datasets/${id}/suggest-template`).then(r => r.data),
   upload: (file: File, name?: string, description?: string) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -106,24 +106,24 @@ export const MappingApi = {
     api.post<PropagationResult>(`/mappings/${mappingId}/propagate`).then(r => r.data),
   propagationCandidates: (conversionId: string) =>
     api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
-  suggest: (conversionId: number) =>
+  suggest: (conversionId: string) =>
     api.post<MappingSuggestion[]>(`/conversions/${conversionId}/suggest-mapping`).then(r => r.data),
-  list: (conversionId: number) =>
+  list: (conversionId: string) =>
     api.get<MappingSuggestion[]>(`/conversions/${conversionId}/mappings`).then(r => r.data),
-  update: (mappingId: number, body: Partial<MappingSuggestion>) =>
+  update: (mappingId: string, body: Partial<MappingSuggestion>) =>
     api.put<MappingSuggestion>(`/mappings/${mappingId}`, body).then(r => r.data),
-  approve: (mappingId: number) =>
+  approve: (mappingId: string) =>
     api.put<MappingSuggestion>(`/mappings/${mappingId}/approve`).then(r => r.data),
-  rules: (conversionId: number) =>
+  rules: (conversionId: string) =>
     api.get<TransformationRule[]>(`/conversions/${conversionId}/rules`).then(r => r.data),
-  addRule: (conversionId: number, body: {
-    target_field_id?: number; source_column?: string; rule_type: string;
+  addRule: (conversionId: string, body: {
+    target_field_id?: string; source_column?: string; rule_type: string;
     rule_config: any; description?: string;
   }) =>
     api.post<TransformationRule>(`/conversions/${conversionId}/rules`, body).then(r => r.data),
-  deleteRule: (ruleId: number) => api.delete(`/rules/${ruleId}`).then(r => r.data),
+  deleteRule: (ruleId: string) => api.delete(`/rules/${ruleId}`).then(r => r.data),
   previewRules: (
-    conversionId: number,
+    conversionId: string,
     body: {
       rules: { rule_type: string; config: any }[];
       source_column?: string;
@@ -138,22 +138,22 @@ export const MappingApi = {
 };
 
 export const QualityApi = {
-  runCleansing: (conversionId: number) =>
+  runCleansing: (conversionId: string) =>
     api.post<ValidationIssue[]>(`/conversions/${conversionId}/profile-cleansing`).then(r => r.data),
-  cleansing: (conversionId: number) =>
+  cleansing: (conversionId: string) =>
     api.get<ValidationIssue[]>(`/conversions/${conversionId}/cleansing-issues`).then(r => r.data),
-  runValidation: (conversionId: number) =>
+  runValidation: (conversionId: string) =>
     api.post<ValidationIssue[]>(`/conversions/${conversionId}/validate`).then(r => r.data),
-  validation: (conversionId: number) =>
+  validation: (conversionId: string) =>
     api.get<ValidationIssue[]>(`/conversions/${conversionId}/validation-issues`).then(r => r.data),
 };
 
 export const OutputApi = {
-  generate: (conversionId: number, fmt: "csv" | "xlsx" = "csv") =>
+  generate: (conversionId: string, fmt: "csv" | "xlsx" = "csv") =>
     api.post<ConvertedOutput>(`/conversions/${conversionId}/generate-output`, null, { params: { fmt } }).then(r => r.data),
-  list: (conversionId: number) =>
+  list: (conversionId: string) =>
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
-  preview: (conversionId: number, limit = 50) =>
+  preview: (conversionId: string, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
   downloadUrl: (conversionId: string) => `/api/conversions/${conversionId}/download-output`,
 };
@@ -196,20 +196,20 @@ export const LearningApi = {
   stats: () => api.get<LearningStats>("/learned-mappings/stats").then(r => r.data),
   capture: (body: Partial<LearnedMapping>) =>
     api.post<LearnedMapping>("/learned-mappings", body).then(r => r.data),
-  delete: (id: number) => api.delete(`/learned-mappings/${id}`).then(r => r.data),
+  delete: (id: string) => api.delete(`/learned-mappings/${id}`).then(r => r.data),
 };
 
 export const CutoverApi = {
   /** List environments configured for a project. */
-  environments: (projectId: number) =>
+  environments: (projectId: string) =>
     api.get<Environment[]>(`/projects/${projectId}/environments`).then(r => r.data),
 
   /** Idempotently seed the standard DEV/QA/UAT/PROD ladder. */
-  seedDefaults: (projectId: number) =>
+  seedDefaults: (projectId: string) =>
     api.post<Environment[]>(`/projects/${projectId}/environments/seed`).then(r => r.data),
 
   /** All environment runs for a conversion (DEV → QA → UAT → PROD progression). */
-  runsForConversion: (conversionId: number) =>
+  runsForConversion: (conversionId: string) =>
     api.get<EnvironmentRun[]>(`/conversions/${conversionId}/environment-runs`).then(r => r.data),
 
   /** Promote a conversion into a new environment with a fresh dataset upload. */

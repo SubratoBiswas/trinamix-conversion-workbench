@@ -198,7 +198,7 @@ const Inner: React.FC = () => {
     } finally { setRunning(false); }
   };
 
-  const updateProject = async (newPid: number | null) => {
+  const updateProject = async (newPid: string | null) => {
     const updated = await WorkflowApi.update(wid, { conversion_id: newPid });
     setWf(updated);
 
@@ -236,7 +236,7 @@ const Inner: React.FC = () => {
       visited.add(cur);
       const node = nodes.find((n) => n.id === cur);
       if (node?.data?.nodeType === "dataset" && node.data?.datasetId) {
-        return Number(node.data.datasetId);
+        return node.data.datasetId;
       }
       for (const src of incoming.get(cur) || []) q.push(src);
     }
@@ -268,7 +268,7 @@ const Inner: React.FC = () => {
             <span>Project:</span>
             <select
               value={wf.conversion_id ?? ""}
-              onChange={(e) => updateProject(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => updateProject(e.target.value || null)}
               className="rounded border border-line bg-white px-1.5 py-0.5 text-[11px] text-ink hover:border-brand"
             >
               <option value="">— none —</option>
@@ -387,12 +387,12 @@ function computeDetail(
   switch (t) {
     case "dataset": {
       if (!data.datasetId) return "no dataset";
-      const ds = catalog?.datasets.find((d) => d.id === Number(data.datasetId));
+      const ds = catalog?.datasets.find((d) => d.id === data.datasetId);
       return ds ? ds.name : `Dataset #${data.datasetId}`;
     }
     case "fbdi_template": {
       if (!data.templateId) return "no template";
-      const tpl = catalog?.templates.find((x) => x.id === Number(data.templateId));
+      const tpl = catalog?.templates.find((x) => x.id === data.templateId);
       return tpl ? tpl.name : `Template #${data.templateId}`;
     }
     case "transform":      return data.column ? `${data.ruleType} on ${data.column}` : data.ruleType;

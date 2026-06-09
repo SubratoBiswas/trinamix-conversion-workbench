@@ -26,7 +26,7 @@ export const MappingReviewPage: React.FC = () => {
   const projParam = params.get("conversion");
 
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<number | null>(projParam ? Number(projParam) : null);
+  const [pid, setPid] = useState<string | null>(projParam ?? null);
 
   const [project, setProject] = useState<Conversion | null>(null);
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
@@ -36,13 +36,13 @@ export const MappingReviewPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [search, setSearch] = useState("");
-  const [selectedMappingId, setSelectedMappingId] = useState<number | null>(null);
+  const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showRecs, setShowRecs] = useState(true);
 
   // Track which source columns have been highlighted in the canvas
   const [hoveredSource, setHoveredSource] = useState<string | null>(null);
-  const [hoveredTarget, setHoveredTarget] = useState<number | null>(null);
+  const [hoveredTarget, setHoveredTarget] = useState<string | null>(null);
 
   // Custom-rule authoring state — opens the universal RuleAuthor modal
   // pre-bound to the inspected mapping.
@@ -181,7 +181,7 @@ export const MappingReviewPage: React.FC = () => {
           <select
             className="input !h-8 !w-auto !text-xs"
             value={pid ?? ""}
-            onChange={(e) => { const v = Number(e.target.value); setPid(v); setParams({ conversion: String(v) }); }}
+            onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}
           >
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
@@ -322,13 +322,13 @@ interface CanvasProps {
   sourceColumns: DatasetDetail["columns"];
   targetFields: FBDIField[];
   mappings: MappingSuggestion[];
-  visibleTargetIds: Set<number>;
-  selectedMappingId: number | null;
-  setSelectedMappingId: (id: number | null) => void;
+  visibleTargetIds: Set<string>;
+  selectedMappingId: string | null;
+  setSelectedMappingId: (id: string | null) => void;
   hoveredSource: string | null;
   setHoveredSource: (s: string | null) => void;
-  hoveredTarget: number | null;
-  setHoveredTarget: (t: number | null) => void;
+  hoveredTarget: string | null;
+  setHoveredTarget: (t: string | null) => void;
   loading?: boolean;
 }
 

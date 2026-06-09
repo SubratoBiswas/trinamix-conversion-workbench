@@ -256,7 +256,7 @@ export const MigrationMonitorPage: React.FC = () => {
 
 const EnvironmentColumn: React.FC<{
   env: CutoverEnvironmentColumn;
-  onPromote: (conversionId: number) => void;
+  onPromote: (conversionId: string) => void;
 }> = ({ env, onPromote }) => {
   const total = env.stages.length;
   const accent = ENV_ACCENT[env.name] || "border-line";

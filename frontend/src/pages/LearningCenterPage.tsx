@@ -113,7 +113,7 @@ export const LearningCenterPage: React.FC = () => {
 
 const ReferenceStandards: React.FC<{
   items: LearnedMapping[];
-  onForget: (id: number) => void | Promise<void>;
+  onForget: (id: string) => void | Promise<void>;
 }> = ({ items, onForget }) => (
   <Card className="mt-5">
     <CardHeader
