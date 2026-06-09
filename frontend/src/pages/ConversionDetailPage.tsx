@@ -43,6 +43,8 @@ export const ConversionDetailPage: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
+  const [pickDataset, setPickDataset] = useState(false);
+  const [pickTemplate, setPickTemplate] = useState(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
@@ -147,6 +149,9 @@ export const ConversionDetailPage: React.FC = () => {
                   <div className="text-sm italic text-ink-subtle">Awaiting source file</div>
                 )}
               </div>
+              <button onClick={() => setPickDataset(true)} className="ml-2 shrink-0 rounded border border-line bg-white px-2 py-1 text-xs text-ink-muted hover:border-brand hover:text-brand">
+                {dataset ? "Change" : "Select"}
+              </button>
             </div>
             <div className="flex items-center gap-3 rounded-md border border-line bg-canvas px-3 py-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
@@ -165,6 +170,9 @@ export const ConversionDetailPage: React.FC = () => {
                   <div className="text-sm italic text-ink-subtle">No FBDI selected</div>
                 )}
               </div>
+              <button onClick={() => setPickTemplate(true)} className="ml-2 shrink-0 rounded border border-line bg-white px-2 py-1 text-xs text-ink-muted hover:border-brand hover:text-brand">
+                {template ? "Change" : "Select"}
+              </button>
             </div>
           </div>
         </CardBody>
@@ -361,6 +369,34 @@ export const ConversionDetailPage: React.FC = () => {
           }}
         />
       )}
+
+      {/* Dataset picker */}
+      {pickDataset && (
+        <DatasetPickerModal
+          currentId={conv.dataset_id ?? null}
+          onClose={() => setPickDataset(false)}
+          onSelect={async (id) => {
+            await ConversionsApi.update(cid, { dataset_id: id } as any);
+            setPickDataset(false);
+            flash("Source dataset linked");
+            loadAll();
+          }}
+        />
+      )}
+
+      {/* Template picker */}
+      {pickTemplate && (
+        <TemplatePickerModal
+          currentId={conv.template_id ?? null}
+          onClose={() => setPickTemplate(false)}
+          onSelect={async (id) => {
+            await ConversionsApi.update(cid, { template_id: id } as any);
+            setPickTemplate(false);
+            flash("FBDI template linked");
+            loadAll();
+          }}
+        />
+      )}
     </>
   );
 };
@@ -463,3 +499,78 @@ const Stat: React.FC<{ items: { label: string; value: number; tone: string }[] }
     ))}
   </div>
 );
+
+// --------- Dataset Picker Modal ---------------------------------------------
+
+const DatasetPickerModal: React.FC<{
+  currentId: string | null;
+  onClose: () => void;
+  onSelect: (id: string) => void;
+}> = ({ currentId, onClose, onSelect }) => {
+  const [datasets, setDatasets] = React.useState<Dataset[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    DatasetsApi.list().then(setDatasets).finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink">Select Source Dataset</h2>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
+        </div>
+        {loading ? (
+          <div className="py-8 text-center text-sm text-ink-muted">Loading datasets...</div>
+        ) : datasets.length === 0 ? (
+          <div className="py-8 text-center text-sm text-ink-muted">No datasets uploaded yet. Go to All Datasets to upload a file.</div>
+        ) : (
+          <div className="max-h-80 overflow-y-auto space-y-1">
+            {datasets.map(d => (
+              <button
+                key={d.id}
+                onClick={() => onSelect(d.id)}
+                className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
+                  d.id === currentId
+                    ? "border-brand bg-brand-subtle"
+                    : "border-line hover:border-brand hover:bg-canvas"
+                }`}
+              >
+                <div className="font-medium text-ink">{d.name}</div>
+                <div className="mt-0.5 text-[10.5px] text-ink-muted">
+                  {d.row_count?.toLocaleString() ?? 0} rows &times; {d.column_count ?? 0} cols
+                  {d.detected_object_type && (
+                    <span className="ml-2 text-amber-600">detected: {d.detected_object_type}</span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-4 flex justify-end">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --------- Template Picker Modal --------------------------------------------
+
+const TemplatePickerModal: React.FC<{
+  currentId: string | null;
+  onClose: () => void;
+  onSelect: (id: string) => void;
+}> = ({ currentId, onClose, onSelect }) => {
+  const [templates, setTemplates] = React.useState<FBDITemplate[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    FbdiApi.list().then(setTemplates).finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex 
