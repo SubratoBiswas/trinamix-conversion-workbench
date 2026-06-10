@@ -70,15 +70,17 @@ async def _seed_one_dataset(
     src_csv = SEED_DIR / csv_filename
     if not src_csv.exists():
         return None
-    existing = await Dataset.find_one(Dataset.name == name)
-    if existing:
-        return existing
 
+    # Always ensure the file exists on disk (ephemeral FS is wiped on redeploy)
     dest_dir = settings.upload_path / "datasets"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / src_csv.name
     if not dest.exists():
         shutil.copy2(src_csv, dest)
+
+    existing = await Dataset.find_one(Dataset.name == name)
+    if existing:
+        return existing
 
     df = parse_tabular(dest, file_type="csv")
     profiles = profile_dataframe(df)
@@ -130,15 +132,17 @@ async def _seed_fbdi_template() -> FBDITemplate | None:
     src = SEED_DIR / "ScpItemImportTemplate.xlsm"
     if not src.exists():
         return None
-    existing = await FBDITemplate.find_one(FBDITemplate.name == "Item Master (SCM Items)")
-    if existing:
-        return existing
 
+    # Always ensure the file exists on disk (ephemeral FS is wiped on redeploy)
     dest_dir = settings.upload_path / "fbdi"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / src.name
     if not dest.exists():
         shutil.copy2(src, dest)
+
+    existing = await FBDITemplate.find_one(FBDITemplate.name == "Item Master (SCM Items)")
+    if existing:
+        return existing
 
     parsed = parse_fbdi_template(dest)
     tpl = FBDITemplate(

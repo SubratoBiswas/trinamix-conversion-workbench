@@ -160,6 +160,36 @@ export const MappingReviewPage: React.FC = () => {
     loadAll();
   };
 
+  // Apply a recommendation as a TransformationRule on the matching mapping
+  const applyRecommendation = async (rec: Recommendation, learn: boolean) => {
+    if (!pid || !rec.ruleType) { flash("No rule type for this recommendation"); return; }
+    // Find the mapping whose source column matches the recommendation's column
+    const mapping = mappings.find((m) => m.source_column === rec.column);
+    if (!mapping?.target_field_id) {
+      flash("No mapping found for column — run AI mapping first");
+      return;
+    }
+    try {
+      await MappingApi.addRule(pid, {
+        rule_type: rec.ruleType,
+        config: rec.ruleConfig ?? {},
+        target_field_id: mapping.target_field_id,
+      });
+      flash(learn ? "Rule added & saved to library" : "Rule added to mapping");
+      if (learn) {
+        // Also approve the mapping so it gets recorded in the learning engine
+        await MappingApi.update(mapping.id, { status: "approved" });
+      }
+      loadAll();
+    } catch {
+      flash("Failed to add rule");
+    }
+  };
+
+  const dismissRecommendation = (_rec: Recommendation) => {
+    // Client-side dismiss — just close the card (no backend needed)
+  };
+
   if (!pid || !project || !dataset) return <PageLoader />;
 
   return (
@@ -271,8 +301,8 @@ export const MappingReviewPage: React.FC = () => {
         {showRecs && (
           <RecommendationsPanel
             recommendations={recommendations}
-            onApply={() => flash("Applied")}
-            onDismiss={() => {}}
+            onApply={(rec, learn) => applyRecommendation(rec, learn)}
+            onDismiss={dismissRecommendation}
             className="w-[340px]"
           />
         )}
