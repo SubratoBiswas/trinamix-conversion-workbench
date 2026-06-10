@@ -125,6 +125,14 @@ async def _seed_datasets() -> tuple[Dataset | None, Dataset | None]:
         name="Legacy Item Extract (Demo)",
         description="Original 8-column quick-start sample.",
     )
+    await _seed_one_dataset(
+        csv_filename="legacy_po_extract.csv",
+        name="SAP PO Extract for Demo",
+        description=(
+            "9-row SAP Purchase Order extract: 42 columns covering PO headers, "
+            "lines, vendors, and accounting segments — used for PurchaseOrderImport mapping demo."
+        ),
+    )
     return item_ds, so_ds
 
 

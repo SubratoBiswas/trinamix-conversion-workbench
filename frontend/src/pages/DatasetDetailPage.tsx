@@ -18,7 +18,7 @@ export const DatasetDetailPage: React.FC = () => {
   useEffect(() => {
     if (!id) return;
     DatasetsApi.get(id!).then(setData);
-    DatasetsApi.preview(id!, 30).then(setPreview);
+    DatasetsApi.preview(id!, 30).then(setPreview).catch(() => setPreview({ columns: [], rows: [], total_rows: 0 }));
   }, [id]);
 
   if (!data) return <PageLoader />;

@@ -58,7 +58,7 @@ export const DatasetPreparationPage: React.FC = () => {
   useEffect(() => {
     if (!dsId) return;
     DatasetsApi.get(dsId).then(setDataset);
-    DatasetsApi.preview(dsId, 200).then(setPreview);
+    DatasetsApi.preview(dsId, 200).then(setPreview).catch(() => setPreview({ columns: [], rows: [], total_rows: 0 }));
     DatasetsApi.suggestTemplate(dsId)
       .then(r => setTemplateSuggestions(r.suggestions))
       .catch(() => {});

@@ -77,6 +77,10 @@ async def create_dataset_from_upload(
 
 
 def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
+    import os
+    if not os.path.exists(ds.file_path):
+        # File wiped on redeploy — return empty preview so UI doesn't hang
+        return {"columns": [], "rows": [], "total_rows": 0, "missing_file": True}
     df = parse_tabular(ds.file_path, file_type=ds.file_type)
     head = df.head(limit)
     return {
