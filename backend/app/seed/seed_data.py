@@ -80,6 +80,9 @@ async def _seed_one_dataset(
 
     existing = await Dataset.find_one(Dataset.name == name)
     if existing:
+        # Always point to the seeded file — original upload path is wiped on redeploy
+        if existing.file_path != str(dest):
+            await existing.set({Dataset.file_path: str(dest), Dataset.file_name: dest.name})
         return existing
 
     df = parse_tabular(dest, file_type="csv")
