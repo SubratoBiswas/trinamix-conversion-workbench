@@ -4,7 +4,7 @@ import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
   GraduationCap, Edit2, ArrowLeftRight, AlertTriangle, ChevronDown,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, MappingApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, LearningApi, MappingApi } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import {
   Button, Card, CardBody, EmptyState, PageLoader, PageTitle, Pill, Spinner,
@@ -48,6 +48,11 @@ export const MappingReviewPage: React.FC = () => {
   // pre-bound to the inspected mapping.
   const [ruleAuthorOpen, setRuleAuthorOpen] = useState(false);
   const [ruleAuthorMapping, setRuleAuthorMapping] = useState<MappingSuggestion | null>(null);
+
+  // Track recommendation state for visual feedback
+  const [recAppliedIds, setRecAppliedIds] = useState<Set<string>>(new Set());
+  const [recLearnedIds, setRecLearnedIds] = useState<Set<string>>(new Set());
+  const [recDismissedIds, setRecDismissedIds] = useState<Set<string>>(new Set());
 
   // Load projects on mount
   useEffect(() => {
@@ -135,8 +140,10 @@ export const MappingReviewPage: React.FC = () => {
   // ── Recommendations (column-level cleansing tied to this project) ──
   const recommendations = useMemo<Recommendation[]>(() => {
     if (!dataset) return [];
-    return buildRecommendations({ dataset, targetFields });
-  }, [dataset, targetFields]);
+    return buildRecommendations({ dataset, targetFields }).filter(
+      (r) => !recDismissedIds.has(r.id)
+    );
+  }, [dataset, targetFields, recDismissedIds]);
 
   const selectedMapping = mappings.find((m) => m.id === selectedMappingId) || null;
 
@@ -162,32 +169,60 @@ export const MappingReviewPage: React.FC = () => {
 
   // Apply a recommendation as a TransformationRule on the matching mapping
   const applyRecommendation = async (rec: Recommendation, learn: boolean) => {
-    if (!pid || !rec.ruleType) { flash("No rule type for this recommendation"); return; }
-    // Find the mapping whose source column matches the recommendation's column
-    const mapping = mappings.find((m) => m.source_column === rec.column);
-    if (!mapping?.target_field_id) {
-      flash("No mapping found for column — run AI mapping first");
+    // Mark applied immediately for visual feedback
+    setRecAppliedIds((s) => new Set(s).add(rec.id));
+    if (learn) setRecLearnedIds((s) => new Set(s).add(rec.id));
+
+    if (!pid || !rec.ruleType) {
+      // No backend rule to add (e.g. fill_missing without ruleType) — still capture to library if learn
+      if (learn) {
+        try {
+          await LearningApi.capture({
+            kind: "rule",
+            category: rec.ruleType || rec.kind,
+            original_value: rec.column,
+            resolved_value: rec.title,
+          });
+          flash(`Rule saved to library: ${rec.title}`);
+        } catch { flash("Applied — rule could not be saved to library"); }
+      } else {
+        flash(`Applied: ${rec.title}`);
+      }
       return;
     }
+
+    // Find the mapping whose source column matches the recommendation's column
+    const mapping = mappings.find((m) => m.source_column === rec.column);
     try {
-      await MappingApi.addRule(pid, {
-        rule_type: rec.ruleType,
-        rule_config: rec.ruleConfig ?? {},
-        target_field_id: mapping.target_field_id,
-      });
-      flash(learn ? "Rule added & saved to library" : "Rule added to mapping");
+      if (mapping?.target_field_id) {
+        await MappingApi.addRule(pid, {
+          rule_type: rec.ruleType,
+          rule_config: rec.ruleConfig ?? {},
+          target_field_id: mapping.target_field_id,
+        });
+        if (learn) {
+          await MappingApi.update(mapping.id, { status: "approved" });
+        }
+      }
       if (learn) {
-        // Also approve the mapping so it gets recorded in the learning engine
-        await MappingApi.update(mapping.id, { status: "approved" });
+        await LearningApi.capture({
+          kind: "rule",
+          category: rec.ruleType,
+          original_value: rec.column,
+          resolved_value: rec.title,
+        });
+        flash(`Rule saved to library: ${rec.title}`);
+      } else {
+        flash(`Applied: ${rec.title}`);
       }
       loadAll();
     } catch {
-      flash("Failed to add rule");
+      flash("Failed to apply rule");
     }
   };
 
-  const dismissRecommendation = (_rec: Recommendation) => {
-    // Client-side dismiss — just close the card (no backend needed)
+  const dismissRecommendation = (rec: Recommendation) => {
+    setRecDismissedIds((s) => new Set(s).add(rec.id));
   };
 
   if (!pid || !project || !dataset) return <PageLoader />;
@@ -301,7 +336,9 @@ export const MappingReviewPage: React.FC = () => {
         {showRecs && (
           <RecommendationsPanel
             recommendations={recommendations}
-            onApply={(rec, learn) => applyRecommendation(rec, learn)}
+            appliedIds={recAppliedIds}
+            learnedIds={recLearnedIds}
+            onApply={applyRecommendation}
             onDismiss={dismissRecommendation}
             className="w-[340px]"
           />

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Database, FileSpreadsheet, Sparkles, ShieldCheck,
@@ -45,7 +45,6 @@ export const ConversionDetailPage: React.FC = () => {
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [pickDataset, setPickDataset] = useState(false);
   const [pickTemplate, setPickTemplate] = useState(false);
-  const autoMappedRef = useRef(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
@@ -70,23 +69,6 @@ export const ConversionDetailPage: React.FC = () => {
     }
   };
   useEffect(() => { loadAll(); }, [cid]);
-
-  // Auto-trigger AI mapping when fully bound and no mappings exist yet
-  useEffect(() => {
-    if (
-      !autoMappedRef.current &&
-      conv?.dataset_id &&
-      conv?.template_id &&
-      mappings.length === 0 &&
-      !busy
-    ) {
-      autoMappedRef.current = true;
-      runOp("ai_map",
-        async () => { await MappingApi.suggest(cid); nav(`/mappings?conversion=${cid}`); },
-        "AI mapping complete — opening Mapping Review"
-      );
-    }
-  }, [conv?.dataset_id, conv?.template_id, mappings.length]);
 
   if (!conv) return <PageLoader />;
 
