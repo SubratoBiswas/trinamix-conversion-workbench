@@ -258,9 +258,9 @@ export const ConversionDetailPage: React.FC = () => {
               >
                 <Play className="h-4 w-4" /> Simulate Load
               </Button>
-              <a href={OutputApi.downloadUrl(cid)} className="btn-ghost">
+              <Button variant="ghost" onClick={() => OutputApi.download(cid, `output_${cid}.csv`)}>
                 <Download className="h-4 w-4" /> Download Output
-              </a>
+              </Button>
             </div>
           )}
         </CardBody>

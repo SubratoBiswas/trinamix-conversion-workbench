@@ -155,7 +155,19 @@ export const OutputApi = {
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: string, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
-  downloadUrl: (conversionId: string) => `/api/conversions/${conversionId}/download-output`,
+  download: async (conversionId: string, filename = "output.csv") => {
+    const response = await api.get(`/conversions/${conversionId}/download-output`, {
+      responseType: "blob",
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
 };
 
 export const LoadApi = {

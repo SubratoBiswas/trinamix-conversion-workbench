@@ -69,9 +69,9 @@ export const OutputPreviewPage: React.FC = () => {
           <Button variant="secondary" onClick={generate} loading={generating}>
             <FileOutput className="h-4 w-4" /> Re-generate
           </Button>
-          <a href={OutputApi.downloadUrl(pid)} target="_blank" rel="noreferrer" className="btn-primary">
+          <Button variant="primary" onClick={() => OutputApi.download(pid, `output_${pid}.csv`)}>
             <Download className="h-4 w-4" /> Download CSV
-          </a>
+          </Button>
         </>}
       />
 
@@ -89,7 +89,7 @@ export const OutputPreviewPage: React.FC = () => {
             !data || data.columns.length === 0 ? (
               <CardBody><EmptyState
                 title="No converted output yet"
-                description="Approve at least one mapping then click Re-generate."
+                description="AI mapping runs automatically — click Re-generate in a moment, or visit Mapping Review to check suggestions."
               /></CardBody>
             ) : (
               <div className="overflow-x-auto">
