@@ -452,4 +452,15 @@ export const DatasetPreparationPage: React.FC = () => {
           onApply={apply}
           onDismiss={dismiss}
           onAddRule={(r) => {
-            if (boundProje
+            if (boundProject) {
+              nav(`/transformations?project=${boundProject.id}`);
+            } else {
+              nav("/projects/new", { state: { datasetId: dsId } });
+            }
+          }}
+          className="w-[360px]"
+        />
+      </div>
+    </div>
+  );
+};
