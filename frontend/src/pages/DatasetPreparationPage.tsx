@@ -5,7 +5,7 @@ import {
   Save, Play, Plus, GraduationCap, Trash2, Workflow,
   ChevronDown, ChevronRight, ListChecks, BarChart3, Lightbulb,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, LearningApi } from "@/api";
 import {
   Button, PageLoader, Pill, Spinner,
 } from "@/components/ui/Primitives";
@@ -50,6 +50,8 @@ export const DatasetPreparationPage: React.FC = () => {
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
   const [learnedIds, setLearnedIds] = useState<Set<string>>(new Set());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [flash, setFlash] = useState<string | null>(null);
+  const showFlash = (msg: string) => { setFlash(msg); setTimeout(() => setFlash(null), 3000); };
   const [columnFilter, setColumnFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [stepView, setStepView] = useState<"columns" | "steps">("columns");
@@ -98,7 +100,7 @@ export const DatasetPreparationPage: React.FC = () => {
     (preview?.rows || []).map((r) => r[col]).filter((v) => v != null && v !== "");
 
   // Recommendation handlers
-  const apply = (rec: Recommendation, learn: boolean) => {
+  const apply = async (rec: Recommendation, learn: boolean) => {
     const step: AppliedStep = {
       id: rec.id,
       title: rec.title,
@@ -109,11 +111,53 @@ export const DatasetPreparationPage: React.FC = () => {
     };
     setSteps((s) => [step, ...s]);
     setAppliedIds((s) => new Set(s).add(rec.id));
-    if (learn) setLearnedIds((s) => new Set(s).add(rec.id));
+    if (learn) {
+      setLearnedIds((s) => new Set(s).add(rec.id));
+      // Save immediately to Rule Library
+      try {
+        await LearningApi.capture({
+          kind: "rule",
+          category: rec.ruleType || "Custom Rule",
+          original_value: rec.column,
+          resolved_value: rec.title,
+          target_object: dataset.detected_object_type ?? undefined,
+        });
+        showFlash(`Rule saved to library: ${rec.title}`);
+      } catch {
+        showFlash("Step applied — rule could not be saved to library");
+      }
+    }
   };
 
   const dismiss = (rec: Recommendation) => {
     setDismissedIds((s) => new Set(s).add(rec.id));
+  };
+
+  const [saving, setSaving] = useState(false);
+  const saveSteps = async () => {
+    if (steps.length === 0) { showFlash("No steps to save — apply recommendations first"); return; }
+    setSaving(true);
+    try {
+      const learnedSteps = steps.filter(s => s.learned && s.ruleType);
+      if (learnedSteps.length > 0) {
+        for (const s of learnedSteps) {
+          await LearningApi.capture({
+            kind: "rule",
+            category: s.ruleType!,
+            original_value: s.column,
+            resolved_value: s.title,
+            target_object: dataset.detected_object_type ?? undefined,
+          });
+        }
+        showFlash(`${learnedSteps.length} rule(s) saved to Rule Library`);
+      } else {
+        showFlash(`${steps.length} step(s) logged — use 'Apply & Learn' to save rules permanently`);
+      }
+    } catch {
+      showFlash("Failed to save rules");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const removeStep = (id: string) => {
@@ -157,10 +201,21 @@ export const DatasetPreparationPage: React.FC = () => {
             <Workflow className="h-3.5 w-3.5" /> Add to Dataflow
           </button>
         )}
-        <button className="flex items-center gap-1.5 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand-dark">
-          <Save className="h-3.5 w-3.5" /> Save
+        <button
+          onClick={saveSteps}
+          disabled={saving}
+          className="flex items-center gap-1.5 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand-dark disabled:opacity-50"
+        >
+          <Save className="h-3.5 w-3.5" /> {saving ? "Saving…" : "Save"}
         </button>
       </header>
+
+      {/* Flash toast */}
+      {flash && (
+        <div className="mx-4 mt-2 rounded-md bg-brand px-4 py-2 text-sm text-white shadow-md">
+          {flash}
+        </div>
+      )}
 
       {/* Template Suggestions Banner */}
       {templateSuggestions.length > 0 && !boundProject && (
