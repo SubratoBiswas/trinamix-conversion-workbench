@@ -55,6 +55,7 @@ export const DatasetPreparationPage: React.FC = () => {
   const [columnFilter, setColumnFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [stepView, setStepView] = useState<"columns" | "steps">("columns");
+  const [saving, setSaving] = useState(false);
 
   // Load dataset + preview + auxiliary data
   useEffect(() => {
@@ -133,7 +134,6 @@ export const DatasetPreparationPage: React.FC = () => {
     setDismissedIds((s) => new Set(s).add(rec.id));
   };
 
-  const [saving, setSaving] = useState(false);
   const saveSteps = async () => {
     if (steps.length === 0) { showFlash("No steps to save — apply recommendations first"); return; }
     setSaving(true);
