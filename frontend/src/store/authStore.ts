@@ -9,9 +9,16 @@ interface AuthState {
   hydrate: () => void;
 }
 
+// Eagerly read from localStorage so ProtectedRoute never sees a false null on reload
+const _storedToken = localStorage.getItem("trinamix.token");
+const _storedUser = (() => {
+  try { const r = localStorage.getItem("trinamix.user"); return r ? JSON.parse(r) : null; }
+  catch { return null; }
+})();
+
 export const useAuth = create<AuthState>((set) => ({
-  user: null,
-  token: null,
+  user: _storedUser,
+  token: _storedToken,
   setAuth: (token, user) => {
     localStorage.setItem("trinamix.token", token);
     localStorage.setItem("trinamix.user", JSON.stringify(user));
