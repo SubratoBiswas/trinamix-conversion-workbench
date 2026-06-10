@@ -91,8 +91,20 @@ async def list_conversions_for_project(
     from app.models.fbdi import FBDITemplate
     out = []
     for c in convs:
-        co = ConversionOut(**{**c.model_dump(), "id": str(c.id),
-                               "project_id": str(c.project_id)})
+        co = ConversionOut(
+            id=str(c.id),
+            project_id=str(c.project_id),
+            name=c.name,
+            description=c.description,
+            target_object=c.target_object,
+            dataset_id=str(c.dataset_id) if c.dataset_id else None,
+            template_id=str(c.template_id) if c.template_id else None,
+            planned_load_order=c.planned_load_order,
+            status=c.status,
+            created_by=c.created_by,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
         if c.dataset_id:
             ds = await Dataset.get(c.dataset_id)
             co.dataset_name = ds.name if ds else None
