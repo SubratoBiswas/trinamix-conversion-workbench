@@ -172,7 +172,7 @@ export const MappingReviewPage: React.FC = () => {
     try {
       await MappingApi.addRule(pid, {
         rule_type: rec.ruleType,
-        config: rec.ruleConfig ?? {},
+        rule_config: rec.ruleConfig ?? {},
         target_field_id: mapping.target_field_id,
       });
       flash(learn ? "Rule added & saved to library" : "Rule added to mapping");
