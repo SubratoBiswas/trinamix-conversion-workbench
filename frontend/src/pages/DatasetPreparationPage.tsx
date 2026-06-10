@@ -145,7 +145,7 @@ export const DatasetPreparationPage: React.FC = () => {
           </div>
         </div>
         {boundProject ? (
-          <Link to={`/projects/${boundProject.id}`} className="flex items-center gap-2 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand">
+          <Link to={`/projects/${boundProject.project_id}`} className="flex items-center gap-2 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand">
             <FileSpreadsheet className="h-3.5 w-3.5" />
             <span>Project: {boundProject.name}</span>
           </Link>
