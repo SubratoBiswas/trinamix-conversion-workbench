@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Search, Database, FileSpreadsheet, Sparkles,
@@ -51,7 +51,12 @@ export const DatasetPreparationPage: React.FC = () => {
   const [learnedIds, setLearnedIds] = useState<Set<string>>(new Set());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [flash, setFlash] = useState<string | null>(null);
-  const showFlash = (msg: string) => { setFlash(msg); setTimeout(() => setFlash(null), 3000); };
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showFlash = useCallback((msg: string) => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlash(msg);
+    flashTimer.current = setTimeout(() => setFlash(null), 3000);
+  }, []);
   const [columnFilter, setColumnFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [stepView, setStepView] = useState<"columns" | "steps">("columns");
@@ -89,19 +94,9 @@ export const DatasetPreparationPage: React.FC = () => {
     return all.filter((r) => !dismissedIds.has(r.id));
   }, [dataset, preview, targetFields, dismissedIds]);
 
-  if (!dataset) return <PageLoader />;
+  // ── All useCallback hooks must be declared BEFORE any conditional return ──
 
-  // Build filtered column list for the left panel
-  const columns = dataset.columns
-    .filter((c) => !search || c.column_name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => a.position - b.position);
-
-  // Pull values per column from the preview for distribution rendering
-  const valuesByColumn = (col: string) =>
-    (preview?.rows || []).map((r) => r[col]).filter((v) => v != null && v !== "");
-
-  // Recommendation handlers
-  const apply = async (rec: Recommendation, learn: boolean) => {
+  const apply = useCallback(async (rec: Recommendation, learn: boolean) => {
     const step: AppliedStep = {
       id: rec.id,
       title: rec.title,
@@ -114,27 +109,25 @@ export const DatasetPreparationPage: React.FC = () => {
     setAppliedIds((s) => new Set(s).add(rec.id));
     if (learn) {
       setLearnedIds((s) => new Set(s).add(rec.id));
-      // Save immediately to Rule Library
       try {
         await LearningApi.capture({
           kind: "rule",
           category: rec.ruleType || "Custom Rule",
           original_value: rec.column,
           resolved_value: rec.title,
-          target_object: dataset.detected_object_type ?? undefined,
         });
         showFlash(`Rule saved to library: ${rec.title}`);
       } catch {
         showFlash("Step applied — rule could not be saved to library");
       }
     }
-  };
+  }, [showFlash]);
 
-  const dismiss = (rec: Recommendation) => {
+  const dismiss = useCallback((rec: Recommendation) => {
     setDismissedIds((s) => new Set(s).add(rec.id));
-  };
+  }, []);
 
-  const saveSteps = async () => {
+  const saveSteps = useCallback(async () => {
     if (steps.length === 0) { showFlash("No steps to save — apply recommendations first"); return; }
     setSaving(true);
     try {
@@ -146,7 +139,6 @@ export const DatasetPreparationPage: React.FC = () => {
             category: s.ruleType!,
             original_value: s.column,
             resolved_value: s.title,
-            target_object: dataset.detected_object_type ?? undefined,
           });
         }
         showFlash(`${learnedSteps.length} rule(s) saved to Rule Library`);
@@ -158,13 +150,25 @@ export const DatasetPreparationPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  };
+  }, [steps, showFlash]);
 
-  const removeStep = (id: string) => {
+  const removeStep = useCallback((id: string) => {
     setSteps((s) => s.filter((x) => x.id !== id));
     setAppliedIds((s) => { const n = new Set(s); n.delete(id); return n; });
     setLearnedIds((s) => { const n = new Set(s); n.delete(id); return n; });
-  };
+  }, []);
+
+  // ── Conditional early return — no more hooks below this line ──
+  if (!dataset) return <PageLoader />;
+
+  // Build filtered column list for the left panel
+  const columns = (dataset.columns ?? [])
+    .filter((c) => !search || c.column_name.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => a.position - b.position);
+
+  // Pull values per column from the preview for distribution rendering
+  const valuesByColumn = (col: string) =>
+    (preview?.rows || []).map((r) => r[col]).filter((v) => v != null && v !== "");
 
   return (
     <div className="-m-6 flex h-[calc(100vh-3.5rem)] flex-col bg-canvas">
@@ -448,15 +452,4 @@ export const DatasetPreparationPage: React.FC = () => {
           onApply={apply}
           onDismiss={dismiss}
           onAddRule={(r) => {
-            if (boundProject) {
-              nav(`/transformations?project=${boundProject.id}`);
-            } else {
-              nav("/projects/new", { state: { datasetId: dsId } });
-            }
-          }}
-          className="w-[360px]"
-        />
-      </div>
-    </div>
-  );
-};
+            if (boundProje
