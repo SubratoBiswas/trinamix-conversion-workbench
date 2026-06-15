@@ -19,12 +19,16 @@ async def init_db() -> None:
     from app.models.project import Project
     from app.models.conversion import Conversion
     from app.models.dataset import Dataset, DatasetColumnProfile
-    from app.models.fbdi import FbdiTemplate, FbdiTargetObject
-    from app.models.mapping import MappingRecord
-    from app.models.learned import LearnedPattern
-    from app.models.quality import QualityCheck
+    from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField
+    from app.models.mapping import MappingSuggestion
+    from app.models.learned import LearnedMapping
+    from app.models.transformation import TransformationRule, Crosswalk
+    from app.models.output import ConvertedOutput
     from app.models.workflow import Workflow
     from app.models.load import LoadRun, LoadError
+    from app.models.validation import ValidationIssue
+    from app.models.dependency import Dependency
+    from app.models.environment import Environment, EnvironmentRun
     from app.models.v10 import (
         SourceConnection, DiscoveryRun, DiscoveredObject,
         AuditEvent, CoaStructure, CoaSegment, CoaValueCrosswalk,
@@ -36,10 +40,15 @@ async def init_db() -> None:
     await init_beanie(
         database=client[settings.MONGODB_DB],
         document_models=[
-            User, Project, Conversion, Dataset, DatasetColumnProfile,
-            FbdiTemplate, FbdiTargetObject,
-            MappingRecord, LearnedPattern, QualityCheck,
-            Workflow, LoadRun, LoadError,
+            User, Project, Conversion,
+            Dataset, DatasetColumnProfile,
+            FBDITemplate, FBDISheet, FBDIField,
+            MappingSuggestion, LearnedMapping,
+            TransformationRule, Crosswalk,
+            ConvertedOutput, Workflow,
+            LoadRun, LoadError,
+            ValidationIssue, Dependency,
+            Environment, EnvironmentRun,
             # v10
             SourceConnection, DiscoveryRun, DiscoveredObject,
             AuditEvent, CoaStructure, CoaSegment, CoaValueCrosswalk,
