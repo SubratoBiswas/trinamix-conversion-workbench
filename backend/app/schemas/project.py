@@ -51,4 +51,5 @@ class ProjectOut(BaseModel):
     go_live_date: Optional[date] = None
     owner: Optional[str] = None
     status: str
-    production_cutover_s
+    production_cutover_start: Optional[datetime] = None
+    production_cutover_end: Optional[datetime] = None

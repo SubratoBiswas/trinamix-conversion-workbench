@@ -24,4 +24,8 @@ class MappingSuggestion(Document):
 
     # v10: dual-approval for SOX-controlled projects
     requires_dual_approval: int = 0
-    second_approver_ema
+    second_approver_email: Optional[str] = None
+    second_approved_at: Optional[datetime] = None
+
+    class Settings:
+        name = "mapping_suggestions"

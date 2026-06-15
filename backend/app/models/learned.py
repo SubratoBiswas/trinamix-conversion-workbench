@@ -22,4 +22,7 @@ class LearnedMapping(Document):
 
     # v10: cross-project knowledge base tracking
     times_reused: int = 0
-    originated_in_
+    originated_in_project_id: Optional[str] = None
+
+    class Settings:
+        name = "learned_mappings"
