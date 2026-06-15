@@ -33,7 +33,9 @@ class DatasetColumnProfile(Document):
     min_value: Optional[str] = None
     max_value: Optional[str] = None
     pattern_summary: Optional[str] = None
+    # v10: PII detection
+    contains_pii: Optional[bool] = None
+    pii_category: Optional[str] = None
 
     class Settings:
         name = "dataset_column_profiles"
-        indexes = ["dataset_id"]

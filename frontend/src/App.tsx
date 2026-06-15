@@ -79,7 +79,7 @@ const App: React.FC = () => {
         <Route path="conversions/:id"        element={<ConversionDetailPage />} />
         <Route path="conversions/:id/output" element={<OutputPreviewPage />} />
 
-        {/* Conversion workspaces (operate on a conversion via ?conversion= query param) */}
+        {/* Conversion workspaces */}
         <Route path="mappings"               element={<MappingReviewPage />} />
         <Route path="transformations"        element={<TransformationStudioPage />} />
         <Route path="recommendations"        element={<RecommendationsHubPage />} />
@@ -162,3 +162,25 @@ const CutoverLanding: React.FC = () => {
         } else {
           setEmpty(true);
         }
+      }).catch(() => setEmpty(true))
+    );
+  }, [nav]);
+
+  if (empty) {
+    return (
+      <div className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-ink-muted">
+        <div className="text-base font-semibold text-ink">No projects yet</div>
+        <div>Create a project and promote it to an environment to see the Migration Monitor.</div>
+        <a href="/projects" className="text-brand-dark hover:underline">Go to Projects →</a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-64 items-center justify-center text-sm text-ink-muted">
+      Loading migration monitor…
+    </div>
+  );
+};
+
+export default App;
