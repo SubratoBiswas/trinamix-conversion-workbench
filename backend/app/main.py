@@ -1,4 +1,4 @@
-﻿"""Trinamix Conversion Workbench — FastAPI entry point."""
+"""Trinamix Conversion Workbench — FastAPI entry point."""
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
