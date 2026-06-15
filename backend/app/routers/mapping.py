@@ -98,22 +98,25 @@ async def add_rule(
     r = TransformationRule(conversion_id=conv.id, sequence=seq, **data)
     await r.insert()
     await record_learning_from_rule(r, conv, captured_by=user.email)
-    return {"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id","conversion_id")}}
+    return {"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id", "conversion_id")}}
 
 
 class PreviewRule(BaseModel):
     rule_type: str
     config: dict[str, Any] = {}
 
+
 class PreviewRequest(BaseModel):
     rules: list[PreviewRule]
     source_column: Optional[str] = None
     sample_size: int = 5
 
+
 class PreviewSample(BaseModel):
     source: Any
     output: Any
     error: Optional[str] = None
+
 
 class PreviewResponse(BaseModel):
     samples: list[PreviewSample]
@@ -142,7 +145,7 @@ async def preview_rules(
     for idx, row in df.head(n).iterrows():
         row_dict = {k: ("" if v is None else v) for k, v in row.to_dict().items()}
         src_value = row_dict.get(payload.source_column) if payload.source_column else None
-        ctx = {"row_index": int(idx)+1, "current_user": user.email, "now": datetime.utcnow(), "crosswalks": crosswalks}
+        ctx = {"row_index": int(idx) + 1, "current_user": user.email, "now": datetime.utcnow(), "crosswalks": crosswalks}
         try:
             transformed = apply_pipeline(rules, src_value, row=row_dict, ctx=ctx)
             out.append(PreviewSample(source=src_value, output=transformed))
@@ -156,7 +159,7 @@ async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
     rules = await TransformationRule.find(
         TransformationRule.conversion_id == PydanticObjectId(conversion_id)
     ).sort("sequence").to_list()
-    return [{"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id","conversion_id")}} for r in rules]
+    return [{"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id", "conversion_id")}} for r in rules]
 
 
 @router.delete("/rules/{rule_id}")
@@ -204,6 +207,20 @@ async def propagation_candidates(conversion_id: str, _: User = Depends(get_curre
         sib_fields = await FBDIField.find(FBDIField.template_id == sib.template_id).to_list()
         matching = [f.field_name for f in sib_fields if f.field_name in key_names]
         if matching:
-            candidates.append({"conversion_id": str(sib.id), "conversion_name": sib.name,
-                                "target_object": sib.target_object, "fk_fields": matching})
-    return {"source_conversion": co
+            candidates.append({
+                "conversion_id": str(sib.id),
+                "conversion_name": sib.name,
+                "target_object": sib.target_object,
+                "fk_fields": matching,
+            })
+    return {
+        "source_conversion": conversion_id,
+        "master_object": master_obj,
+        "key_fields": key_names,
+        "candidates": candidates,
+    }
+
+
+@router.get("/conversions/{conversion_id}/inherited-standards")
+async def inherited_standards(conversion_id: str, _: User = Depends(get_current_user)):
+    return []
