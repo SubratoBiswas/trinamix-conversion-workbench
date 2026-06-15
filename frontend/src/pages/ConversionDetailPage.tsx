@@ -40,7 +40,7 @@ function isCOAConversion(targetObject?: string | null): boolean {
  */
 export const ConversionDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const cid = Number(id);
+  const cid = id;
   const nav = useNavigate();
 
   const [conv, setConv] = useState<Conversion | null>(null);

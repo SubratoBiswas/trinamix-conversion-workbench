@@ -34,7 +34,7 @@ export const WorkflowBuilderPage: React.FC = () => (
 
 const Inner: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const wid = Number(id);
+  const wid = id;
   const nav = useNavigate();
 
   // ── Workflow + supporting catalogues ──
@@ -236,7 +236,7 @@ const Inner: React.FC = () => {
       visited.add(cur);
       const node = nodes.find((n) => n.id === cur);
       if (node?.data?.nodeType === "dataset" && node.data?.datasetId) {
-        return Number(node.data.datasetId);
+        return node.data.datasetId;
       }
       for (const src of incoming.get(cur) || []) q.push(src);
     }
@@ -387,12 +387,12 @@ function computeDetail(
   switch (t) {
     case "dataset": {
       if (!data.datasetId) return "no dataset";
-      const ds = catalog?.datasets.find((d) => d.id === Number(data.datasetId));
+      const ds = catalog?.datasets.find((d) => d.id === data.datasetId);
       return ds ? ds.name : `Dataset #${data.datasetId}`;
     }
     case "fbdi_template": {
       if (!data.templateId) return "no template";
-      const tpl = catalog?.templates.find((x) => x.id === Number(data.templateId));
+      const tpl = catalog?.templates.find((x) => x.id === data.templateId);
       return tpl ? tpl.name : `Template #${data.templateId}`;
     }
     case "transform":      return data.column ? `${data.ruleType} on ${data.column}` : data.ruleType;

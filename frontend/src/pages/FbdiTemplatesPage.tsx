@@ -281,8 +281,8 @@ export const FbdiTemplateDetailPage: React.FC = () => {
 
   const loadAll = () => {
     if (!id) return;
-    FbdiApi.get(Number(id)).then(setTpl);
-    FbdiApi.fields(Number(id)).then(setFields);
+    FbdiApi.get(id).then(setTpl);
+    FbdiApi.fields(id).then(setFields);
   };
   useEffect(() => { loadAll(); }, [id]);
 

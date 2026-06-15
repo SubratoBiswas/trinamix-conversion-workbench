@@ -43,10 +43,10 @@ export const ErrorTracebackPage: React.FC = () => {
   const [engagements, setEngagements] = useState<Project[]>([]);
   const [conversions, setConversions] = useState<Conversion[]>([]);
   const [projectId, setProjectId] = useState<number | null>(
-    params.get("project") ? Number(params.get("project")) : null,
+    params.get("project") ?? null,
   );
   const [pid, setPid] = useState<number | null>(
-    params.get("conversion") ? Number(params.get("conversion")) : null,
+    params.get("conversion") ?? null,
   );
   const [project, setProject] = useState<Conversion | null>(null);
   const [deps, setDeps] = useState<Dependency[]>([]);
@@ -117,7 +117,7 @@ export const ErrorTracebackPage: React.FC = () => {
             <select
               className="input !w-auto min-w-[220px]"
               value={projectId ?? ""}
-              onChange={(e) => setProjectId(Number(e.target.value))}
+              onChange={(e) => setProjectId(e.target.value || null)}
               title="Engagement"
             >
               {engagements.map((p) => (

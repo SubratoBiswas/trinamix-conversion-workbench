@@ -34,7 +34,7 @@ const COLUMN_WIDTH = 220;
 
 export const DatasetPreparationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const dsId = Number(id);
+  const dsId = id;
   const nav = useNavigate();
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);

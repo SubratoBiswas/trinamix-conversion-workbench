@@ -23,7 +23,7 @@ const IssueDashboard: React.FC<PageProps> = ({ category }) => {
   const [params, setParams] = useSearchParams();
   const projParam = params.get("conversion");
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<number | null>(projParam ? Number(projParam) : null);
+  const [pid, setPid] = useState<number | null>(projParam ?? null);
   const [items, setItems] = useState<ValidationIssue[] | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -82,7 +82,7 @@ const IssueDashboard: React.FC<PageProps> = ({ category }) => {
           <div className="flex items-center gap-3">
             <label className="label !mb-0">Project</label>
             <select className="input !w-auto min-w-[280px]" value={pid ?? ""}
-              onChange={(e) => { const v = Number(e.target.value); setPid(v); setParams({ conversion: String(v) }); }}>
+              onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
             <Button variant="secondary" onClick={load}><RefreshCw className="h-3.5 w-3.5" /></Button>

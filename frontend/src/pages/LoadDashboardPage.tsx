@@ -30,10 +30,10 @@ export const LoadDashboardPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [conversions, setConversions] = useState<Conversion[]>([]);
   const [projectId, setProjectId] = useState<number | null>(
-    params.get("project") ? Number(params.get("project")) : null,
+    params.get("project") ?? null,
   );
   const [pid, setPid] = useState<number | null>(
-    params.get("conversion") ? Number(params.get("conversion")) : null,
+    params.get("conversion") ?? null,
   );
   const [runs, setRuns] = useState<LoadRun[]>([]);
   const [summary, setSummary] = useState<LoadSummary | null>(null);
@@ -111,7 +111,7 @@ export const LoadDashboardPage: React.FC = () => {
             <select
               className="input !w-auto min-w-[260px]"
               value={projectId ?? ""}
-              onChange={(e) => setProjectId(Number(e.target.value))}
+              onChange={(e) => setProjectId(e.target.value || null)}
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>

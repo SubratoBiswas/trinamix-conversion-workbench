@@ -63,7 +63,7 @@ export const LearningCenterPage: React.FC = () => {
             <select
               className="input !h-9 !text-sm min-w-[220px]"
               value={projectId ?? ""}
-              onChange={(e) => setProjectId(e.target.value === "" ? null : Number(e.target.value))}
+              onChange={(e) => setProjectId(e.target.value || null)}
               title="Filter by engagement"
             >
               <option value="">All engagements</option>

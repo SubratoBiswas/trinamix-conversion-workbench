@@ -83,7 +83,7 @@ export const WorkflowsPage: React.FC = () => {
           <div><label className="label">Name</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Item Master Dataflow" /></div>
           <div>
             <label className="label">Bind to project (optional)</label>
-            <select className="input" value={pid ?? ""} onChange={(e) => setPid(e.target.value ? Number(e.target.value) : null)}>
+            <select className="input" value={pid ?? ""} onChange={(e) => setPid(e.target.value || null)}>
               <option value="">— none —</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>

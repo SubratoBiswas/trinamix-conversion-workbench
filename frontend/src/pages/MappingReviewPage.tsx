@@ -42,7 +42,7 @@ export const MappingReviewPage: React.FC = () => {
   const projParam = params.get("conversion");
 
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<number | null>(projParam ? Number(projParam) : null);
+  const [pid, setPid] = useState<number | null>(projParam ?? null);
 
   const [project, setProject] = useState<Conversion | null>(null);
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
@@ -212,7 +212,7 @@ export const MappingReviewPage: React.FC = () => {
           <select
             className="input !h-8 !w-auto !text-xs"
             value={pid ?? ""}
-            onChange={(e) => { const v = Number(e.target.value); setPid(v); setParams({ conversion: String(v) }); }}
+            onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}
           >
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
