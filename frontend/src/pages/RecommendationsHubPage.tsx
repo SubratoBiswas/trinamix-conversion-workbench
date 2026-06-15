@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Sparkles, Wand2 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, MappingApi, LearningApi } from "@/api";
 import {
   Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -30,6 +30,39 @@ export const RecommendationsHubPage: React.FC = () => {
   const [items, setItems] = useState<ProjectRecs[] | null>(null);
   const [authoring, setAuthoring] = useState<ProjectRecs | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [applied, setApplied] = useState<Set<string>>(new Set());
+  const [learned, setLearned] = useState<Set<string>>(new Set());
+
+  const handleApply = async (entry: ProjectRecs, rec: import("@/lib/recommendations").Recommendation, learn: boolean) => {
+    try {
+      await MappingApi.addRule(entry.project.id, {
+        source_column: rec.column,
+        rule_type: rec.ruleType || rec.kind,
+        config: rec.config || {},
+        description: rec.title,
+      });
+      setApplied(prev => new Set(prev).add(rec.id));
+      if (learn) {
+        try {
+          await LearningApi.capture({
+            source_erp: entry.project.source_system || "unknown",
+            source_column: rec.column,
+            target_field_name: rec.targetField || rec.column,
+            rule_type: rec.ruleType || rec.kind,
+            rule_config: rec.config || {},
+            confidence: rec.confidence,
+            note: rec.reason || "",
+          });
+          setLearned(prev => new Set(prev).add(rec.id));
+        } catch { /* learn failure is non-fatal */ }
+      }
+      setToast(learn ? "Rule applied & learned" : "Rule applied");
+      setTimeout(() => setToast(null), 2400);
+    } catch {
+      setToast("Failed to apply rule");
+      setTimeout(() => setToast(null), 2400);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -103,7 +136,14 @@ export const RecommendationsHubPage: React.FC = () => {
                 <CardBody>
                   <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
                     {recs.slice(0, 6).map((r) => (
-                      <RecommendationCard key={r.id} rec={r} />
+                      <RecommendationCard
+                        key={r.id}
+                        rec={r}
+                        applied={applied.has(r.id)}
+                        learned={learned.has(r.id)}
+                        onApply={(rec, learn) => handleApply(entry, rec, learn)}
+                        onDismiss={() => setApplied(prev => new Set(prev).add(r.id))}
+                      />
                     ))}
                   </div>
                   {recs.length > 6 && (

@@ -76,8 +76,8 @@ export const MigrationMonitorPage: React.FC = () => {
   // Look up a Conversion object for a given stage row — needed because the
   // dashboard payload only carries summary fields and the modal needs the
   // full Conversion shape.
-  const conversionFor = (cid: number): Conversion | null =>
-    conversions.find((c) => c.id === cid) || null;
+  const conversionFor = (cid: string): Conversion | null =>
+    conversions.find((c) => String(c.id) === String(cid)) || null;
 
   if (!project || !board) return <PageLoader />;
 

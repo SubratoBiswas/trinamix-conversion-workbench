@@ -116,7 +116,7 @@ const App: React.FC = () => {
 const OutputPreviewLanding: React.FC = () => {
   const [projects, setProjects] = React.useState<any[]>([]);
   const [conversions, setConversions] = React.useState<any[]>([]);
-  const [projectId, setProjectId] = React.useState<number | null>(null);
+  const [projectId, setProjectId] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const loc = useLocation();
   const nav = useNavigate();
@@ -126,7 +126,7 @@ const OutputPreviewLanding: React.FC = () => {
       setProjects(rows);
       const qsId = new URLSearchParams(loc.search).get("project");
       const fallback = rows[0]?.id ?? null;
-      setProjectId(qsId ? Number(qsId) : fallback);
+      setProjectId(qsId ?? fallback);
     }));
   }, []);
 
@@ -141,7 +141,7 @@ const OutputPreviewLanding: React.FC = () => {
     );
   }, [projectId]);
 
-  const onChangeProject = (id: number) => {
+  const onChangeProject = (id: string) => {
     setProjectId(id);
     nav(`/output?project=${id}`, { replace: true });
   };
@@ -165,7 +165,7 @@ const OutputPreviewLanding: React.FC = () => {
           <select
             className="input !h-9 !text-sm min-w-[260px]"
             value={projectId ?? ""}
-            onChange={(e) => onChangeProject(Number(e.target.value))}
+            onChange={(e) => onChangeProject(e.target.value)}
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>

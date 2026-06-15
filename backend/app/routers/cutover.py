@@ -154,6 +154,23 @@ async def cutover_dashboard(
         Environment.project_id == pid
     ).sort("sort_order").to_list()
 
+    # Auto-seed DEV/QA/UAT/PROD if this project has no environments yet
+    if not envs:
+        existing_names: set = set()
+        for env_def in DEFAULT_ENVIRONMENTS:
+            if env_def["name"] not in existing_names:
+                await Environment(
+                    project_id=pid,
+                    name=env_def["name"],
+                    description=env_def["description"],
+                    sort_order=env_def["order"],
+                    color=env_def["color"],
+                    sox_controlled=1 if env_def["name"] == "PROD" else 0,
+                ).insert()
+        envs = await Environment.find(
+            Environment.project_id == pid
+        ).sort("sort_order").to_list()
+
     conversions = await Conversion.find(
         Conversion.project_id == pid
     ).sort("planned_load_order").to_list()

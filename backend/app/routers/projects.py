@@ -16,23 +16,28 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 async def _hydrate(p: Project) -> ProjectOut:
+    from app.models.v10 import SourceConnection
     convs = await Conversion.find(Conversion.project_id == p.id).to_list()
     in_progress = sum(1 for c in convs if c.status in (
         "draft","mapping_suggested","awaiting_approval","validated","output_generated"))
     loaded = sum(1 for c in convs if c.status == "loaded")
     failed = sum(1 for c in convs if c.status == "failed")
+    # Count source connections for this project
+    sc_count = await SourceConnection.find(SourceConnection.project_id == p.id).count()
     data = p.model_dump()
     data["id"] = str(p.id)
     data["conversion_count"] = len(convs)
     data["in_progress_count"] = in_progress
     data["loaded_count"] = loaded
     data["failed_count"] = failed
+    data["source_connection_count"] = sc_count
+    data["has_active_source_connection"] = sc_count > 0
     return ProjectOut(**data)
 
 
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(_: User = Depends(get_current_user)):
-    projects = await Project.find_all().sort(-Project.id).to_list()
+    projects = await Project.find_all().sort("-_id").to_list()
     return [await _hydrate(p) for p in projects]
 
 
@@ -86,7 +91,7 @@ async def list_conversions_for_project(
         raise HTTPException(404, "Project not found")
     convs = await Conversion.find(
         Conversion.project_id == p.id
-    ).sort(+Conversion.planned_load_order).to_list()
+    ).sort("planned_load_order").to_list()
     from app.models.dataset import Dataset
     from app.models.fbdi import FBDITemplate
     out = []

@@ -29,10 +29,10 @@ export const LoadDashboardPage: React.FC = () => {
   // always scoped to the selected engagement.
   const [projects, setProjects] = useState<Project[]>([]);
   const [conversions, setConversions] = useState<Conversion[]>([]);
-  const [projectId, setProjectId] = useState<number | null>(
+  const [projectId, setProjectId] = useState<string | null>(
     params.get("project") ?? null,
   );
-  const [pid, setPid] = useState<number | null>(
+  const [pid, setPid] = useState<string | null>(
     params.get("conversion") ?? null,
   );
   const [runs, setRuns] = useState<LoadRun[]>([]);

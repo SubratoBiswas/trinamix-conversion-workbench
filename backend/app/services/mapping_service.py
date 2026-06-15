@@ -97,16 +97,22 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
 async def enrich_mapping_with_samples(
     conversion: Conversion, mappings: list[MappingSuggestion]
 ) -> list[dict[str, Any]]:
-    dataset = await Dataset.get(conversion.dataset_id)
-    template = await FBDITemplate.get(conversion.template_id)
-    df = parse_tabular(dataset.file_path, file_type=dataset.file_type)
-    fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
+    dataset = await Dataset.get(conversion.dataset_id) if conversion.dataset_id else None
+    template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+    try:
+        df = parse_tabular(dataset.file_path, file_type=dataset.file_type) if dataset else None
+    except Exception:
+        df = None
+    if template:
+        fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
+    else:
+        fields = []
     fields_by_id = {f.id: f for f in fields}
     out: list[dict[str, Any]] = []
     for m in mappings:
         tgt = fields_by_id.get(m.target_field_id)
         sample_src: list[Any] = []
-        if m.source_column and m.source_column in df.columns:
+        if df is not None and m.source_column and m.source_column in df.columns:
             sample_src = [str(v) for v in df[m.source_column].astype(str).head(5).tolist()]
         out.append({
             "id": str(m.id), "conversion_id": str(m.conversion_id),

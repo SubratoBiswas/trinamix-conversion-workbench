@@ -42,10 +42,10 @@ export const ErrorTracebackPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const [engagements, setEngagements] = useState<Project[]>([]);
   const [conversions, setConversions] = useState<Conversion[]>([]);
-  const [projectId, setProjectId] = useState<number | null>(
+  const [projectId, setProjectId] = useState<string | null>(
     params.get("project") ?? null,
   );
-  const [pid, setPid] = useState<number | null>(
+  const [pid, setPid] = useState<string | null>(
     params.get("conversion") ?? null,
   );
   const [project, setProject] = useState<Conversion | null>(null);
@@ -128,9 +128,9 @@ export const ErrorTracebackPage: React.FC = () => {
               className="input !w-auto min-w-[220px]"
               value={pid ?? ""}
               onChange={(e) => {
-                const v = Number(e.target.value);
+                const v = e.target.value;
                 setPid(v);
-                setParams({ project: String(projectId || ""), conversion: String(v) });
+                setParams({ project: String(projectId || ""), conversion: v });
               }}
               title="Conversion object"
             >
