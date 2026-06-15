@@ -9,7 +9,7 @@ _client: AsyncIOMotorClient | None = None
 def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(settings.MONGODB_URL)
+        _client = AsyncIOMotorClient(settings.MONGODB_URI)
     return _client
 
 
