@@ -1,8 +1,7 @@
 # Render deployment manifest — Trinamix Conversion Workbench
-# Docs: https://render.com/docs/render-yaml-spec
 
 services:
-  # ── Backend (FastAPI + Beanie + MongoDB Atlas) ───────────────────────────
+  # ── Backend (FastAPI + Beanie + MongoDB Atlas) ──────────────────────────
   - type: web
     name: trinamix-backend
     runtime: docker
@@ -10,7 +9,7 @@ services:
     plan: free
     envVars:
       - key: MONGODB_URI
-        sync: false          # set in Render dashboard (from Atlas)
+        sync: false          # set in Render dashboard from Atlas
       - key: MONGODB_DB
         value: conversion_workbench
       - key: SECRET_KEY
@@ -18,24 +17,15 @@ services:
       - key: ADMIN_EMAIL
         value: admin@trinamix.com
       - key: ADMIN_PASSWORD
-        sync: false          # set in Render dashboard
+        value: admin123
       - key: ADMIN_NAME
         value: Admin
-      - key: FRONTEND_ORIGIN
-        fromService:
-          type: web
-          name: trinamix-frontend
-          property: host
       - key: AI_PROVIDER
-        value: openai
-      - key: OPENAI_API_KEY
-        sync: false
-    disk:
-      name: trinamix-uploads
-      mountPath: /app/uploads
-      sizeGB: 1
+        value: none
+      - key: ANTHROPIC_API_KEY
+        sync: false          # optional — enables AI Copilot
 
-  # ── Frontend (React + Vite — static site) ────────────────────────────────
+  # ── Frontend (React + Vite — static site) ──────────────────────────────
   - type: web
     name: trinamix-frontend
     runtime: static
@@ -43,10 +33,7 @@ services:
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: trinamix-backend
-          property: host
+        value: https://trinamix-backend.onrender.com
     routes:
       - type: rewrite
         source: /*
