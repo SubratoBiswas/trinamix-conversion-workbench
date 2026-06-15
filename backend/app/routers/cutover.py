@@ -26,7 +26,7 @@ async def list_environments(
 ):
     envs = await Environment.find(
         Environment.project_id == PydanticObjectId(project_id)
-    ).sort(+Environment.sort_order).to_list()
+    ).sort("sort_order").to_list()
     return [{**e.model_dump(), "id": str(e.id), "project_id": str(e.project_id)} for e in envs]
 
 
@@ -55,7 +55,7 @@ async def seed_default_environments(
         ).insert()
     envs = await Environment.find(
         Environment.project_id == pid
-    ).sort(+Environment.sort_order).to_list()
+    ).sort("sort_order").to_list()
     return [{**e.model_dump(), "id": str(e.id), "project_id": str(e.project_id)} for e in envs]
 
 
@@ -152,11 +152,11 @@ async def cutover_dashboard(
 
     envs = await Environment.find(
         Environment.project_id == pid
-    ).sort(+Environment.sort_order).to_list()
+    ).sort("sort_order").to_list()
 
     conversions = await Conversion.find(
         Conversion.project_id == pid
-    ).sort(+Conversion.planned_load_order).to_list()
+    ).sort("planned_load_order").to_list()
 
     conv_ids = [c.id for c in conversions]
 
@@ -201,9 +201,7 @@ async def cutover_dashboard(
         })
 
     # Recent pipeline runs
-    recent_runs = await EnvironmentRun.find(
-        EnvironmentRun.conversion_id.in_(conv_ids)
-    ).sort(-EnvironmentRun.id).limit(20).to_list()
+    recent_runs = await EnvironmentRun.find({"conversion_id": {"$in": conv_ids}}).sort("-_id").limit(20).to_list()
 
     pipeline_runs = []
     for r in recent_runs:

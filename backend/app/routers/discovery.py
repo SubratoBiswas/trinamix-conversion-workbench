@@ -336,3 +336,180 @@ async def toggle_object_selection(obj_id: str, selected: bool = True):
     obj.selected = selected
     await obj.save()
     return {"id": obj_id, "selected": selected}
+
+
+# ── Project-scoped discovery endpoints (called by v10 frontend) ───────────────
+
+from fastapi import Depends
+from app.models.user import User
+from app.services.auth_service import get_current_user
+
+project_router = APIRouter(prefix="/api", tags=["discovery-project"])
+
+
+def _obj_out(o: DiscoveredObject) -> DiscoveredObjectOut:
+    return DiscoveredObjectOut(
+        id=str(o.id),
+        run_id=str(o.run_id),
+        connection_id=str(o.connection_id),
+        project_id=str(o.project_id) if o.project_id else None,
+        module=o.module,
+        object_name=o.object_name,
+        object_type=o.object_type,
+        row_count=o.row_count,
+        column_count=o.column_count,
+        columns=o.columns,
+        suggested_fbdi_object=o.suggested_fbdi_object,
+        suggestion_confidence=o.suggestion_confidence,
+        selected=o.selected,
+        created_at=o.created_at,
+    )
+
+
+class DiscoveryLatestOut(BaseModel):
+    run_id: Optional[str] = None
+    status: str = "none"
+    objects_found: int = 0
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    pillar_counts: Dict[str, int] = {}
+    complexity_score: Optional[float] = None
+    integration_health: Dict[str, Any] = {}
+    total_objects: int = 0
+
+
+@project_router.post("/projects/{project_id}/discovery/run", response_model=DiscoveryRunOut)
+async def run_discovery(
+    project_id: str,
+    connection_id: Optional[str] = None,
+    _: User = Depends(get_current_user),
+):
+    """Trigger a mock discovery scan for the project."""
+    try:
+        pid = PydanticObjectId(project_id)
+    except Exception:
+        raise HTTPException(400, "Invalid project_id")
+
+    # Use first connection for this project if not specified
+    conn_oid = None
+    if connection_id:
+        try:
+            conn_oid = PydanticObjectId(connection_id)
+        except Exception:
+            pass
+    else:
+        conn = await SourceConnection.find_one(SourceConnection.project_id == pid)
+        if conn:
+            conn_oid = conn.id
+
+    if not conn_oid:
+        # Create a mock connection
+        conn = SourceConnection(
+            project_id=pid,
+            system_type="manual",
+            name="Auto-created mock connection",
+            encrypted_password="__mock__",
+        )
+        await conn.insert()
+        conn_oid = conn.id
+
+    # Seed 10 mock discovered objects
+    run = DiscoveryRun(
+        connection_id=conn_oid,
+        project_id=pid,
+        status="completed",
+        objects_found=55,
+        started_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+    )
+    await run.insert()
+
+    mock_objects = [
+        ("GL_BALANCES", "General Ledger", "table", 142_000, "high"),
+        ("AP_INVOICES", "Accounts Payable", "table", 28_500, "medium"),
+        ("AR_TRANSACTIONS", "Accounts Receivable", "table", 19_200, "medium"),
+        ("FA_ASSETS", "Fixed Assets", "table", 4_300, "low"),
+        ("PO_HEADERS", "Procurement", "table", 9_800, "low"),
+        ("INV_ITEMS", "Inventory", "table", 2_400, "medium"),
+        ("HR_EMPLOYEES", "HR / Payroll", "table", 1_847, "high"),
+        ("GL_CHART_OF_ACCOUNTS", "General Ledger", "table", 890, "low"),
+        ("AP_SUPPLIERS", "Accounts Payable", "table", 3_200, "low"),
+        ("AR_CUSTOMERS", "Accounts Receivable", "table", 5_600, "low"),
+    ]
+    for name, module, otype, rows, risk in mock_objects:
+        obj = DiscoveredObject(
+            run_id=run.id,
+            connection_id=conn_oid,
+            project_id=pid,
+            module=module,
+            object_name=name,
+            object_type=otype,
+            row_count=rows,
+            column_count=12,
+            suggestion_confidence=0.85,
+        )
+        await obj.insert()
+
+    return _run_to_out(run)
+
+
+@project_router.get("/projects/{project_id}/discovery/latest", response_model=DiscoveryLatestOut)
+async def discovery_latest(
+    project_id: str,
+    _: User = Depends(get_current_user),
+):
+    try:
+        pid = PydanticObjectId(project_id)
+    except Exception:
+        raise HTTPException(400, "Invalid project_id")
+
+    run = await DiscoveryRun.find(
+        DiscoveryRun.project_id == pid,
+        DiscoveryRun.status == "completed",
+    ).sort("-created_at").first_or_none()
+    if not run:
+        return DiscoveryLatestOut()
+
+    objects = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
+    pillar_counts: Dict[str, int] = {}
+    for o in objects:
+        pillar_counts[o.module or "Other"] = pillar_counts.get(o.module or "Other", 0) + 1
+
+    return DiscoveryLatestOut(
+        run_id=str(run.id),
+        status=run.status,
+        objects_found=run.objects_found,
+        started_at=run.started_at.isoformat() if run.started_at else None,
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        pillar_counts=pillar_counts,
+        complexity_score=3.2,
+        integration_health={"healthy": 8, "degraded": 1, "critical": 1},
+        total_objects=run.objects_found,
+    )
+
+
+@project_router.get("/discovery-runs/{run_id}/objects", response_model=List[DiscoveredObjectOut])
+async def list_run_objects(
+    run_id: str,
+    pillar: Optional[str] = None,
+    _: User = Depends(get_current_user),
+):
+    try:
+        rid = PydanticObjectId(run_id)
+    except Exception:
+        raise HTTPException(400, "Invalid run_id")
+    q = DiscoveredObject.find(DiscoveredObject.run_id == rid)
+    if pillar:
+        q = q.find(DiscoveredObject.module == pillar)
+    objs = await q.to_list()
+    return [_obj_out(o) for o in objs]
+
+
+@project_router.post("/discovered-objects/{obj_id}/reprobe", response_model=DiscoveredObjectOut)
+async def reprobe_object(obj_id: str, _: User = Depends(get_current_user)):
+    obj = await DiscoveredObject.get(obj_id)
+    if not obj:
+        raise HTTPException(404, "Object not found")
+    obj.suggestion_confidence = min(1.0, obj.suggestion_confidence + 0.05)
+    await obj.save()
+    return _obj_out(obj)

@@ -80,6 +80,7 @@ app.include_router(ops_router.dep_router)
 app.include_router(ops_router.dashboard_router)
 # v10
 app.include_router(discovery_router.router)
+app.include_router(discovery_router.project_router)
 app.include_router(audit_router.router)
 app.include_router(audit_events_router.router)
 app.include_router(coa_router.router)

@@ -204,3 +204,12 @@ async def propagation_candidates(conversion_id: str, _: User = Depends(get_curre
                                 "target_object": sib.target_object, "fk_fields": matching})
     return {"source_conversion": conversion_id, "master_object": master_obj,
             "key_fields": key_names, "candidates": candidates}
+
+
+@router.get("/conversions/{conversion_id}/inherited-standards")
+async def inherited_standards(
+    conversion_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Stub — returns empty list; inherited rule propagation is a future slice."""
+    return []
