@@ -39,10 +39,14 @@ async def suggest_mapping(conversion_id: str, _: User = Depends(get_current_user
 
 @router.get("/conversions/{conversion_id}/mappings", response_model=list[MappingOut])
 async def list_mappings(conversion_id: str, _: User = Depends(get_current_user)):
-    conv = await _require_conversion(conversion_id)
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
     items = await MappingSuggestion.find(
         MappingSuggestion.conversion_id == PydanticObjectId(conversion_id)
     ).to_list()
+    if not items:
+        return []
     return await enrich_mapping_with_samples(conv, items)
 
 
@@ -202,14 +206,4 @@ async def propagation_candidates(conversion_id: str, _: User = Depends(get_curre
         if matching:
             candidates.append({"conversion_id": str(sib.id), "conversion_name": sib.name,
                                 "target_object": sib.target_object, "fk_fields": matching})
-    return {"source_conversion": conversion_id, "master_object": master_obj,
-            "key_fields": key_names, "candidates": candidates}
-
-
-@router.get("/conversions/{conversion_id}/inherited-standards")
-async def inherited_standards(
-    conversion_id: str,
-    _: User = Depends(get_current_user),
-):
-    """Stub — returns empty list; inherited rule propagation is a future slice."""
-    return []
+    return {"source_conversion": co
