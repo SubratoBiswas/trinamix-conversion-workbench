@@ -1,4 +1,4 @@
-"""Trinamix Conversion Workbench — FastAPI entry point."""
+﻿"""Trinamix Conversion Workbench — FastAPI entry point."""
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -66,4 +66,13 @@ app.include_router(cutover_router.router)
 app.include_router(mapping_router.router)
 app.include_router(quality_router.router)
 app.include_router(learned_router.router)
-app.include_router(ops_rout
+app.include_router(ops_router.output_router)
+app.include_router(ops_router.load_router)
+app.include_router(ops_router.workflow_router)
+app.include_router(ops_router.dep_router)
+app.include_router(ops_router.dashboard_router)
+# v10
+app.include_router(discovery_router.router)
+app.include_router(audit_router.router)
+app.include_router(coa_router.router)
+app.include_router(governance_router.router)
