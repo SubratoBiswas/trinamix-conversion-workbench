@@ -20,6 +20,6 @@ class LearnedMapping(Document):
     confidence_boost: float = 0.26
     records_auto_fixed: int = 0
 
-    class Settings:
-        name = "learned_mappings"
-        indexes = ["kind", "category"]
+    # v10: cross-project knowledge base tracking
+    times_reused: int = 0
+    originated_in_

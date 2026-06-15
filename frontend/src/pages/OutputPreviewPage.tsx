@@ -13,24 +13,22 @@ import type {
 
 export const OutputPreviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const pid = id!;
+  const pid = Number(id);
   const [project, setProject] = useState<Conversion | null>(null);
   const [data, setData] = useState<OutputPreview | null>(null);
-  const [dataLoaded, setDataLoaded] = useState(false);
   const [tab, setTab] = useState("data");
   const [generating, setGenerating] = useState(false);
 
   const refresh = async () => {
-    setDataLoaded(false);
-    try {
-      const d = await OutputApi.preview(pid, 50);
-      setData(d);
-    } catch {
-      setData(null);
-    } finally {
-      setDataLoaded(true);
-    }
+    setData(null);
+    OutputApi.preview(pid, 50).then(setData).catch(() => setData(null));
   };
+
+  useEffect(() => {
+    if (!pid) return;
+    ConversionsApi.get(pid).then(setProject);
+    refresh();
+  }, [pid]);
 
   const generate = async () => {
     setGenerating(true);
@@ -38,29 +36,12 @@ export const OutputPreviewPage: React.FC = () => {
     finally { setGenerating(false); }
   };
 
-  useEffect(() => {
-    if (!pid) return;
-    ConversionsApi.get(pid).then(setProject);
-    // Load preview; auto-generate if no output yet
-    OutputApi.preview(pid, 50)
-      .then(d => { setData(d); setDataLoaded(true); })
-      .catch(async () => {
-        // No output yet — auto-generate then reload
-        try {
-          await OutputApi.generate(pid, "csv");
-          const d = await OutputApi.preview(pid, 50);
-          setData(d);
-        } catch { setData(null); }
-        finally { setDataLoaded(true); }
-      });
-  }, [pid]);
-
   if (!project) return <PageLoader />;
 
   return (
     <>
-      <Link to={`/conversions/${pid}`} className="mb-3 inline-flex items-center gap-1 text-xs text-ink-muted hover:text-ink">
-        <ArrowLeft className="h-3 w-3" /> Back to Conversion
+      <Link to={`/projects/${pid}`} className="mb-3 inline-flex items-center gap-1 text-xs text-ink-muted hover:text-ink">
+        <ArrowLeft className="h-3 w-3" /> Back to Project
       </Link>
       <PageTitle
         title="Output Preview"
@@ -69,9 +50,9 @@ export const OutputPreviewPage: React.FC = () => {
           <Button variant="secondary" onClick={generate} loading={generating}>
             <FileOutput className="h-4 w-4" /> Re-generate
           </Button>
-          <Button variant="primary" onClick={() => OutputApi.download(pid, `output_${pid}.csv`)}>
+          <a href={OutputApi.downloadUrl(pid)} target="_blank" rel="noreferrer" className="btn-primary">
             <Download className="h-4 w-4" /> Download CSV
-          </Button>
+          </a>
         </>}
       />
 
@@ -84,12 +65,12 @@ export const OutputPreviewPage: React.FC = () => {
             { value: "lineage", label: "Lineage", count: data ? Object.keys(data.lineage).length : 0 },
           ]}
         />
-        {!dataLoaded ? <PageLoader /> :
+        {data === null ? <PageLoader /> :
           tab === "data" ? (
-            !data || data.columns.length === 0 ? (
+            data.columns.length === 0 ? (
               <CardBody><EmptyState
                 title="No converted output yet"
-                description="AI mapping runs automatically — click Re-generate in a moment, or visit Mapping Review to check suggestions."
+                description="Approve at least one mapping then click Re-generate."
               /></CardBody>
             ) : (
               <div className="overflow-x-auto">
@@ -113,11 +94,6 @@ export const OutputPreviewPage: React.FC = () => {
                 </table>
               </div>
             )
-          ) : !data ? (
-            <CardBody><EmptyState
-              title="No output data"
-              description="Generate output first from the Data tab."
-            /></CardBody>
           ) : (
             <table className="table-shell">
               <thead>

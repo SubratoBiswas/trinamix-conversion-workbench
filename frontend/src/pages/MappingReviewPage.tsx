@@ -2,9 +2,13 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { useSearchParams } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
-  GraduationCap, Edit2, ArrowLeftRight, AlertTriangle, ChevronDown,
+  GraduationCap, Edit2, ArrowLeftRight, AlertTriangle, ChevronDown, Lock,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, LearningApi, MappingApi } from "@/api";
+
+// P3 — tiny lock glyph for source-column PII badges in the canvas list.
+const PiiLockGlyph: React.FC = () => <Lock className="h-2 w-2" />;
+import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, MappingApi } from "@/api";
+import type { InheritedStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import {
   Button, Card, CardBody, EmptyState, PageLoader, PageTitle, Pill, Spinner,
@@ -19,40 +23,53 @@ import type {
   MappingSuggestion,
 } from "@/types";
 
-type FilterMode = "all" | "required" | "review" | "approved" | "unmapped";
+type FilterMode = "all" | "required" | "review" | "approved" | "unmapped" | "kb";
+
+// Source-system display labels mirroring the server-driven enum, so the
+// KB badge can read "🧠 from NetSuite KB" instead of "🧠 from netsuite KB".
+const KB_SOURCE_DISPLAY: Record<string, string> = {
+  netsuite: "NetSuite",
+  oracle_ebs: "Oracle EBS",
+  sap_ecc: "SAP ECC",
+  sap_s4: "SAP S/4",
+  workday: "Workday",
+  jde: "JDE",
+  custom: "Custom",
+};
 
 export const MappingReviewPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const projParam = params.get("conversion");
 
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<string | null>(projParam ?? null);
+  const [pid, setPid] = useState<number | null>(projParam ? Number(projParam) : null);
 
   const [project, setProject] = useState<Conversion | null>(null);
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
+  // Cascade visibility — when an upstream master has taught a rule
+  // (e.g. REMOVE_HYPHEN on Item.InventoryItemNumber), the matching FK
+  // columns on this conversion inherit that rule at output time. We
+  // surface them as a banner + per-row chips so the analyst can see
+  // the propagation without having to open Output Preview.
+  const [inherited, setInherited] = useState<InheritedStandard[]>([]);
 
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [search, setSearch] = useState("");
-  const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null);
+  const [selectedMappingId, setSelectedMappingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showRecs, setShowRecs] = useState(true);
 
   // Track which source columns have been highlighted in the canvas
   const [hoveredSource, setHoveredSource] = useState<string | null>(null);
-  const [hoveredTarget, setHoveredTarget] = useState<string | null>(null);
+  const [hoveredTarget, setHoveredTarget] = useState<number | null>(null);
 
   // Custom-rule authoring state — opens the universal RuleAuthor modal
   // pre-bound to the inspected mapping.
   const [ruleAuthorOpen, setRuleAuthorOpen] = useState(false);
   const [ruleAuthorMapping, setRuleAuthorMapping] = useState<MappingSuggestion | null>(null);
-
-  // Track recommendation state for visual feedback
-  const [recAppliedIds, setRecAppliedIds] = useState<Set<string>>(new Set());
-  const [recLearnedIds, setRecLearnedIds] = useState<Set<string>>(new Set());
-  const [recDismissedIds, setRecDismissedIds] = useState<Set<string>>(new Set());
 
   // Load projects on mount
   useEffect(() => {
@@ -77,14 +94,16 @@ export const MappingReviewPage: React.FC = () => {
       setTargetFields([]);
       return;
     }
-    const [ds, fields, ms] = await Promise.all([
-      DatasetsApi.get(proj.dataset_id).catch(() => null),
-      FbdiApi.fields(proj.template_id).catch(() => [] as FBDIField[]),
-      MappingApi.list(pid).catch(() => [] as MappingSuggestion[]),
+    const [ds, fields, ms, std] = await Promise.all([
+      DatasetsApi.get(proj.dataset_id),
+      FbdiApi.fields(proj.template_id),
+      MappingApi.list(pid),
+      InheritedStandardsApi.forConversion(pid).catch(() => [] as InheritedStandard[]),
     ]);
     setDataset(ds);
-    setTargetFields(fields ?? []);
-    setMappings(ms ?? []);
+    setTargetFields(fields);
+    setMappings(ms);
+    setInherited(std);
   };
   useEffect(() => { loadAll(); }, [pid]);
 
@@ -96,11 +115,16 @@ export const MappingReviewPage: React.FC = () => {
       const res = await MappingApi.suggest(pid);
       setMappings(res);
       const auto = res.filter((m) => m.approved_by === "learning-engine").length;
-      flash(
-        auto
-          ? `AI mapping run complete — ${auto} auto-applied from learning library`
-          : "AI mapping run complete"
-      );
+      const kb = res.filter((m) => !!m.kb_source && m.status === "suggested").length;
+      const ai = res.filter(
+        (m) => m.source_column && m.status === "suggested" && !m.kb_source,
+      ).length;
+      // Three-part breakdown so the analyst sees where each row came from.
+      const parts: string[] = [];
+      if (kb)   parts.push(`${kb} pre-filled from Knowledge Bank`);
+      if (auto) parts.push(`${auto} auto-applied (same project)`);
+      if (ai)   parts.push(`${ai} AI-suggested`);
+      flash(parts.length ? `AI mapping run — ${parts.join(", ")}` : "AI mapping run complete");
     } finally { setRunning(false); }
   };
 
@@ -117,6 +141,7 @@ export const MappingReviewPage: React.FC = () => {
         case "review":   return Boolean(m.review_required);
         case "approved": return m.status === "approved";
         case "unmapped": return !m.source_column && m.target_required;
+        case "kb":       return !!m.kb_source;
         default: return true;
       }
     });
@@ -134,16 +159,15 @@ export const MappingReviewPage: React.FC = () => {
       (m) => m.status === "approved" &&
         (m.approved_by === "learning-engine" || m.comment?.includes("[learned]"))
     ).length;
-    return { total, mapped, approved, reqMissing, learned };
+    const kb = mappings.filter((m) => !!m.kb_source).length;
+    return { total, mapped, approved, reqMissing, learned, kb };
   }, [mappings]);
 
   // ── Recommendations (column-level cleansing tied to this project) ──
   const recommendations = useMemo<Recommendation[]>(() => {
     if (!dataset) return [];
-    return buildRecommendations({ dataset, targetFields }).filter(
-      (r) => !recDismissedIds.has(r.id)
-    );
-  }, [dataset, targetFields, recDismissedIds]);
+    return buildRecommendations({ dataset, targetFields });
+  }, [dataset, targetFields]);
 
   const selectedMapping = mappings.find((m) => m.id === selectedMappingId) || null;
 
@@ -167,64 +191,6 @@ export const MappingReviewPage: React.FC = () => {
     loadAll();
   };
 
-  // Apply a recommendation as a TransformationRule on the matching mapping
-  const applyRecommendation = async (rec: Recommendation, learn: boolean) => {
-    // Mark applied immediately for visual feedback
-    setRecAppliedIds((s) => new Set(s).add(rec.id));
-    if (learn) setRecLearnedIds((s) => new Set(s).add(rec.id));
-
-    if (!pid || !rec.ruleType) {
-      // No backend rule to add (e.g. fill_missing without ruleType) — still capture to library if learn
-      if (learn) {
-        try {
-          await LearningApi.capture({
-            kind: "rule",
-            category: rec.ruleType || rec.kind,
-            original_value: rec.column,
-            resolved_value: rec.title,
-          });
-          flash(`Rule saved to library: ${rec.title}`);
-        } catch { flash("Applied — rule could not be saved to library"); }
-      } else {
-        flash(`Applied: ${rec.title}`);
-      }
-      return;
-    }
-
-    // Find the mapping whose source column matches the recommendation's column
-    const mapping = mappings.find((m) => m.source_column === rec.column);
-    try {
-      if (mapping?.target_field_id) {
-        await MappingApi.addRule(pid, {
-          rule_type: rec.ruleType,
-          rule_config: rec.ruleConfig ?? {},
-          target_field_id: mapping.target_field_id,
-        });
-        if (learn) {
-          await MappingApi.update(mapping.id, { status: "approved" });
-        }
-      }
-      if (learn) {
-        await LearningApi.capture({
-          kind: "rule",
-          category: rec.ruleType,
-          original_value: rec.column,
-          resolved_value: rec.title,
-        });
-        flash(`Rule saved to library: ${rec.title}`);
-      } else {
-        flash(`Applied: ${rec.title}`);
-      }
-      loadAll();
-    } catch {
-      flash("Failed to apply rule");
-    }
-  };
-
-  const dismissRecommendation = (rec: Recommendation) => {
-    setRecDismissedIds((s) => new Set(s).add(rec.id));
-  };
-
   if (!pid || !project || !dataset) return <PageLoader />;
 
   return (
@@ -246,7 +212,7 @@ export const MappingReviewPage: React.FC = () => {
           <select
             className="input !h-8 !w-auto !text-xs"
             value={pid ?? ""}
-            onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}
+            onChange={(e) => { const v = Number(e.target.value); setPid(v); setParams({ conversion: String(v) }); }}
           >
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
@@ -273,6 +239,7 @@ export const MappingReviewPage: React.FC = () => {
           <Stat label="Approved"       value={stats.approved}  tone="success" />
           <Stat label="Required gaps"  value={stats.reqMissing} tone="danger" />
           <Stat label="Learned"        value={stats.learned}   tone="brand" />
+          <Stat label="From KB"        value={stats.kb}        tone="brand" />
 
           <div className="flex-1" />
 
@@ -283,6 +250,7 @@ export const MappingReviewPage: React.FC = () => {
               { v: "review",   label: "Needs review" },
               { v: "approved", label: "Approved" },
               { v: "unmapped", label: "Required gaps" },
+              { v: "kb",       label: "From KB" },
             ] as const).map((f) => (
               <button
                 key={f.v}
@@ -301,6 +269,35 @@ export const MappingReviewPage: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {inherited.length > 0 && (
+        <div className="border-b border-line bg-gradient-to-r from-brand-subtle/40 to-white px-5 py-2.5 text-[12px]">
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-brand text-[10px] font-bold text-white">↶</span>
+            <div>
+              <div className="font-semibold text-ink">
+                {inherited.length} reference standard{inherited.length === 1 ? "" : "s"} inherited from upstream masters
+              </div>
+              <div className="mt-0.5 leading-snug text-ink-muted">
+                The following column{inherited.length === 1 ? " is" : "s are"} auto-prepending master-taught rules at output time —
+                no need to re-author. Override here to opt out per column.
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {inherited.map((s, i) => (
+                  <span
+                    key={`${s.target_field}-${s.master_object}-${s.rule_type}-${i}`}
+                    className="inline-flex items-center gap-1 rounded-md border border-brand/30 bg-white px-2 py-0.5 font-mono text-[10.5px] text-brand-dark"
+                    title={s.captured_from}
+                  >
+                    {s.target_field} · {s.rule_type}
+                    <span className="ml-1 text-[9px] uppercase text-ink-muted">from {s.master_object}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
@@ -336,10 +333,8 @@ export const MappingReviewPage: React.FC = () => {
         {showRecs && (
           <RecommendationsPanel
             recommendations={recommendations}
-            appliedIds={recAppliedIds}
-            learnedIds={recLearnedIds}
-            onApply={applyRecommendation}
-            onDismiss={dismissRecommendation}
+            onApply={() => flash("Applied")}
+            onDismiss={() => {}}
             className="w-[340px]"
           />
         )}
@@ -355,7 +350,7 @@ export const MappingReviewPage: React.FC = () => {
         <RuleAuthorModal
           open={ruleAuthorOpen}
           onClose={() => setRuleAuthorOpen(false)}
-          conversionId={pid!}
+          conversionId={pid}
           fields={targetFields}
           sourceColumns={dataset.columns}
           defaultTargetFieldId={ruleAuthorMapping?.target_field_id ?? null}
@@ -389,13 +384,13 @@ interface CanvasProps {
   sourceColumns: DatasetDetail["columns"];
   targetFields: FBDIField[];
   mappings: MappingSuggestion[];
-  visibleTargetIds: Set<string>;
-  selectedMappingId: string | null;
-  setSelectedMappingId: (id: string | null) => void;
+  visibleTargetIds: Set<number>;
+  selectedMappingId: number | null;
+  setSelectedMappingId: (id: number | null) => void;
   hoveredSource: string | null;
   setHoveredSource: (s: string | null) => void;
-  hoveredTarget: string | null;
-  setHoveredTarget: (t: string | null) => void;
+  hoveredTarget: number | null;
+  setHoveredTarget: (t: number | null) => void;
   loading?: boolean;
 }
 
@@ -406,11 +401,11 @@ const MappingCanvas: React.FC<CanvasProps> = ({
 }) => {
   // Refs to source/target cards keyed by name/id so we can read their DOM positions
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const targetRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const targetRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Positions to draw lines (re-measured after layout changes)
-  const [lines, setLines] = useState<{ id: string; x1: number; y1: number; x2: number; y2: number; mapping: MappingSuggestion }[]>([]);
+  const [lines, setLines] = useState<{ id: number; x1: number; y1: number; x2: number; y2: number; mapping: MappingSuggestion }[]>([]);
 
   const recalc = () => {
     if (!canvasRef.current) return;
@@ -548,7 +543,17 @@ const MappingCanvas: React.FC<CanvasProps> = ({
               >
                 <div className="flex items-center gap-1.5">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-semibold text-ink">{c.column_name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="truncate text-[12px] font-semibold text-ink">{c.column_name}</div>
+                      {c.contains_pii ? (
+                        <span
+                          className="inline-flex items-center gap-0.5 rounded-full bg-danger/10 px-1 py-0.5 text-[8.5px] font-semibold text-danger"
+                          title={`Sensitive · ${c.pii_category || "PII"} — must be pseudonymised before load`}
+                        >
+                          <PiiLockGlyph /> {c.pii_category || "PII"}
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="font-mono text-[10px] text-ink-muted">
                       {c.inferred_type}
                       {c.distinct_count > 0 && ` · ${c.distinct_count} distinct`}
@@ -609,6 +614,14 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                       <div className="truncate text-[12px] font-semibold text-ink">{f.field_name}</div>
                       {f.required && (
                         <span className="rounded bg-danger-subtle px-1 py-0.5 font-mono text-[9px] font-bold text-danger">REQ</span>
+                      )}
+                      {mapping?.kb_source && mapping.status === "suggested" && (
+                        <span
+                          className="inline-flex items-center gap-0.5 rounded bg-brand-subtle px-1 py-0.5 font-mono text-[9px] font-bold text-brand-dark"
+                          title={`Pre-filled from ${KB_SOURCE_DISPLAY[mapping.kb_source] || mapping.kb_source} Knowledge Bank · ${(mapping.kb_times_reused ?? 0)} prior reuse${(mapping.kb_times_reused ?? 0) === 1 ? "" : "s"}`}
+                        >
+                          🧠 KB
+                        </span>
                       )}
                     </div>
                     <div className="font-mono text-[10px] text-ink-muted">
@@ -675,7 +688,20 @@ const MappingInspector: React.FC<{
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Source</div>
             <div className="mt-1 rounded-md border border-line bg-canvas px-2.5 py-2">
-              <div className="font-mono text-[12px] text-ink">{mapping.source_column || "— (none)"}</div>
+              <div className="flex items-center gap-1.5">
+                <div className="font-mono text-[12px] text-ink">{mapping.source_column || "— (none)"}</div>
+                {(() => {
+                  const col = sourceColumns.find((c) => c.column_name === mapping.source_column);
+                  return col?.contains_pii ? (
+                    <span
+                      className="inline-flex items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[9.5px] font-semibold text-danger"
+                      title={`Sensitive · ${col.pii_category || "PII"} — must be pseudonymised before load`}
+                    >
+                      <Lock className="h-2.5 w-2.5" /> {col.pii_category || "PII"}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
             </div>
           </div>
           <div>
@@ -690,10 +716,31 @@ const MappingInspector: React.FC<{
           </div>
         </div>
 
+        {/* Knowledge Bank provenance — shown only when the row came from a
+            prior project on the same source ERP. */}
+        {mapping.kb_source && (
+          <div className="mt-4 rounded-md border border-brand/30 bg-brand-subtle/30 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+                🧠 From {KB_SOURCE_DISPLAY[mapping.kb_source] || mapping.kb_source} Knowledge Bank
+              </span>
+              <span className="font-mono text-[10.5px] text-brand-dark">
+                {(mapping.kb_times_reused ?? 0)} prior reuse{(mapping.kb_times_reused ?? 0) === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="mt-1 leading-snug text-ink">
+              This source → target pair was approved on a prior {KB_SOURCE_DISPLAY[mapping.kb_source] || mapping.kb_source} engagement. Confirm it
+              fits this customer before approving — the Knowledge Bank pre-fills, it doesn't auto-approve.
+            </div>
+          </div>
+        )}
+
         {/* Confidence */}
         <div className="mt-4">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">AI confidence</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+              {mapping.kb_source ? "Knowledge Bank confidence" : "AI confidence"}
+            </span>
             <span className="font-mono text-xs tabular-nums">{conf}%</span>
           </div>
           <div className="mt-1 h-2 overflow-hidden rounded-full bg-line">
@@ -769,6 +816,38 @@ const MappingInspector: React.FC<{
         </div>
       </div>
 
+      {/* P6 — dual-cert banner. Shown whenever the row carries
+          requires_dual_approval=1, both before AND after the first sign-off,
+          so reviewers know exactly which state they're in. */}
+      {!!mapping.requires_dual_approval && (
+        <div className="border-t border-line bg-warning-subtle/60 px-4 py-2 text-[11.5px]">
+          <div className="flex items-center gap-1.5 font-semibold text-warning">
+            <Lock className="h-3 w-3" /> Dual-cert required
+          </div>
+          <div className="mt-0.5 leading-snug text-ink-muted">
+            {mapping.status === "approved" ? (
+              <>
+                Both sign-offs captured · 1st by{" "}
+                <span className="font-mono text-ink">{mapping.approved_by || "—"}</span> · 2nd by{" "}
+                <span className="font-mono text-ink">{mapping.second_approver_email || "—"}</span>
+              </>
+            ) : mapping.approved_by ? (
+              <>
+                1st sign-off captured from{" "}
+                <span className="font-mono text-ink">{mapping.approved_by}</span>. A{" "}
+                <strong>different</strong> user must approve as 2nd sign-off
+                before this mapping flips to approved.
+              </>
+            ) : (
+              <>
+                This field is on the dual-cert list (PII / SOX / customer banking).
+                Two distinct approvers required.
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Action footer */}
       <div className="border-t border-line bg-canvas px-4 py-3">
         {mapping.status === "approved" ? (
@@ -782,6 +861,9 @@ const MappingInspector: React.FC<{
             ) : (
               <>
                 Approved by {mapping.approved_by || "—"}
+                {mapping.second_approver_email && (
+                  <> · 2nd by {mapping.second_approver_email}</>
+                )}
                 <span className="ml-1 inline-flex items-center gap-1 text-brand-dark">
                   <GraduationCap className="h-3 w-3" /> Learned
                 </span>
@@ -797,7 +879,10 @@ const MappingInspector: React.FC<{
               onClick={() => onApprove(mapping)}
               className="!h-8 !bg-brand-dark hover:!bg-brand"
             >
-              <GraduationCap className="h-3.5 w-3.5" /> Approve &amp; Learn
+              <GraduationCap className="h-3.5 w-3.5" />
+              {mapping.requires_dual_approval && mapping.approved_by
+                ? "Approve as 2nd cert"
+                : "Approve & Learn"}
             </Button>
           </div>
         )}

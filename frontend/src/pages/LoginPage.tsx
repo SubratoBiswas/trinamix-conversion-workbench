@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Sparkles } from "lucide-react";
 import { AuthApi } from "@/api";
 import { useAuth } from "@/store/authStore";
@@ -12,7 +12,6 @@ export const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const setAuth = useAuth((s) => s.setAuth);
   const nav = useNavigate();
-  const location = useLocation();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,8 +20,7 @@ export const LoginPage: React.FC = () => {
     try {
       const res = await AuthApi.login(email, password);
       setAuth(res.access_token, res.user);
-      const from = (location.state as any)?.from?.pathname || "/";
-      nav(from, { replace: true });
+      nav("/", { replace: true });
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Sign-in failed");
     } finally {

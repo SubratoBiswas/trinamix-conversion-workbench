@@ -19,8 +19,15 @@ from app.routers import projects as projects_router
 from app.routers import quality as quality_router
 from app.routers import discovery as discovery_router
 from app.routers import audit as audit_router
+from app.routers import audit_events as audit_events_router
 from app.routers import coa as coa_router
 from app.routers import governance as governance_router
+# v10 new routers
+from app.routers import source_systems as source_systems_router
+from app.routers import fusion_modules as fusion_modules_router
+from app.routers import source_connections as source_connections_router
+from app.routers import cutover_slice6 as cutover_slice6_router
+from app.routers import copilot as copilot_router
 
 
 @asynccontextmanager
@@ -74,5 +81,12 @@ app.include_router(ops_router.dashboard_router)
 # v10
 app.include_router(discovery_router.router)
 app.include_router(audit_router.router)
+app.include_router(audit_events_router.router)
 app.include_router(coa_router.router)
 app.include_router(governance_router.router)
+# v10 new
+app.include_router(source_systems_router.router)
+app.include_router(fusion_modules_router.router)
+app.include_router(source_connections_router.router)
+app.include_router(cutover_slice6_router.router)
+app.include_router(copilot_router.router)

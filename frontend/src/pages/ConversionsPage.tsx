@@ -20,7 +20,7 @@ const STATUS_TONE = (s: string) => {
 export const ConversionsPage: React.FC = () => {
   const [items, setItems] = useState<Conversion[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [filterProj, setFilterProj] = useState<string | "all">("all");
+  const [filterProj, setFilterProj] = useState<number | "all">("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
   useEffect(() => {
@@ -41,7 +41,7 @@ export const ConversionsPage: React.FC = () => {
 
   // Group conversions by project for display
   const grouped = useMemo(() => {
-    const out: Record<string, { project: Project | undefined; rows: Conversion[] }> = {};
+    const out: Record<number, { project: Project | undefined; rows: Conversion[] }> = {};
     for (const c of visible) {
       if (!out[c.project_id]) {
         out[c.project_id] = {
@@ -77,7 +77,7 @@ export const ConversionsPage: React.FC = () => {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-ink-muted">Filter:</span>
         <select className="input !h-8 !w-auto !text-xs"
-          value={filterProj} onChange={(e) => setFilterProj(e.target.value === "all" ? "all" : e.target.value)}>
+          value={filterProj} onChange={(e) => setFilterProj(e.target.value === "all" ? "all" : Number(e.target.value))}>
           <option value="all">All engagements</option>
           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>

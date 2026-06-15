@@ -12,6 +12,7 @@ import {
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
+import { COAEngine } from "@/components/coa/COAEngine";
 import { PromoteToEnvironmentModal } from "@/components/cutover/PromoteToEnvironmentModal";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import type {
@@ -19,13 +20,27 @@ import type {
   FBDITemplate, LoadRun, MappingSuggestion, Project, ValidationIssue,
 } from "@/types";
 
+// Match any conversion whose target object signals a Chart-of-Accounts /
+// GL Coding Combinations conversion. Case-insensitive substring match
+// so synonyms like "Coding Combinations" / "GL Account" / "COA" trigger
+// the specialised multi-segment composer.
+const _COA_TARGET_HINTS = [
+  "chart of accounts", "coa", "gl account", "coding combination",
+  "general ledger account", "natural account",
+];
+function isCOAConversion(targetObject?: string | null): boolean {
+  if (!targetObject) return false;
+  const t = targetObject.toLowerCase();
+  return _COA_TARGET_HINTS.some((h) => t.includes(h));
+}
+
 /**
  * Operations page for a single Conversion object. The user runs AI mapping,
  * cleansing, validation, output generation, and load simulation from here.
  */
 export const ConversionDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const cid = id!;
+  const cid = Number(id);
   const nav = useNavigate();
 
   const [conv, setConv] = useState<Conversion | null>(null);
@@ -43,8 +58,6 @@ export const ConversionDetailPage: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
-  const [pickDataset, setPickDataset] = useState(false);
-  const [pickTemplate, setPickTemplate] = useState(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
@@ -64,8 +77,6 @@ export const ConversionDetailPage: React.FC = () => {
         QualityApi.validation(cid).then((vl) => setIssues([...cl, ...vl]))
       ).catch(() => {});
       LoadApi.runs(cid).then(setLoadRuns).catch(() => setLoadRuns([]));
-      // Load generated outputs list
-      OutputApi.list(cid).then(setOutputs).catch(() => setOutputs([]));
     }
   };
   useEffect(() => { loadAll(); }, [cid]);
@@ -149,9 +160,6 @@ export const ConversionDetailPage: React.FC = () => {
                   <div className="text-sm italic text-ink-subtle">Awaiting source file</div>
                 )}
               </div>
-              <button onClick={() => setPickDataset(true)} className="ml-2 shrink-0 rounded border border-line bg-white px-2 py-1 text-xs text-ink-muted hover:border-brand hover:text-brand">
-                {dataset ? "Change" : "Select"}
-              </button>
             </div>
             <div className="flex items-center gap-3 rounded-md border border-line bg-canvas px-3 py-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
@@ -170,9 +178,6 @@ export const ConversionDetailPage: React.FC = () => {
                   <div className="text-sm italic text-ink-subtle">No FBDI selected</div>
                 )}
               </div>
-              <button onClick={() => setPickTemplate(true)} className="ml-2 shrink-0 rounded border border-line bg-white px-2 py-1 text-xs text-ink-muted hover:border-brand hover:text-brand">
-                {template ? "Change" : "Select"}
-              </button>
             </div>
           </div>
         </CardBody>
@@ -240,13 +245,24 @@ export const ConversionDetailPage: React.FC = () => {
               >
                 <Play className="h-4 w-4" /> Simulate Load
               </Button>
-              <Button variant="ghost" onClick={() => OutputApi.download(cid, `output_${cid}.csv`)}>
+              <a href={OutputApi.downloadUrl(cid)} className="btn-ghost">
                 <Download className="h-4 w-4" /> Download Output
-              </Button>
+              </a>
             </div>
           )}
         </CardBody>
       </Card>
+
+      {/* COA Engine — specialised multi-segment composer, only when the
+          conversion's target object signals it's a Chart-of-Accounts /
+          GL Coding Combinations conversion. Embedded inline rather than
+          spawning a separate route per the earlier UI guidance. */}
+      {isCOAConversion(conv.target_object) && (
+        <COAEngine
+          conversionId={cid}
+          dataset={dataset as any}
+        />
+      )}
 
       {/* Status grid */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -369,34 +385,6 @@ export const ConversionDetailPage: React.FC = () => {
           }}
         />
       )}
-
-      {/* Dataset picker */}
-      {pickDataset && (
-        <DatasetPickerModal
-          currentId={conv.dataset_id ?? null}
-          onClose={() => setPickDataset(false)}
-          onSelect={async (id) => {
-            await ConversionsApi.update(cid, { dataset_id: id } as any);
-            setPickDataset(false);
-            flash("Source dataset linked");
-            loadAll();
-          }}
-        />
-      )}
-
-      {/* Template picker */}
-      {pickTemplate && (
-        <TemplatePickerModal
-          currentId={conv.template_id ?? null}
-          onClose={() => setPickTemplate(false)}
-          onSelect={async (id) => {
-            await ConversionsApi.update(cid, { template_id: id } as any);
-            setPickTemplate(false);
-            flash("FBDI template linked");
-            loadAll();
-          }}
-        />
-      )}
     </>
   );
 };
@@ -412,10 +400,10 @@ const EnvironmentStrip: React.FC<{
   const sorted = [...environments].sort((a, b) => a.sort_order - b.sort_order);
 
   // Map env_id → most-recent run for display.
-  const runByEnvId = new Map<string, EnvironmentRun>();
+  const runByEnvId = new Map<number, EnvironmentRun>();
   for (const r of runs) {
     const existing = runByEnvId.get(r.environment_id);
-    if (!existing || (r.started_at ?? '') > (existing.started_at ?? '')) runByEnvId.set(r.environment_id, r);
+    if (!existing || r.id > existing.id) runByEnvId.set(r.environment_id, r);
   }
 
   // For DEV, derive status from the conversion itself.
@@ -499,112 +487,3 @@ const Stat: React.FC<{ items: { label: string; value: number; tone: string }[] }
     ))}
   </div>
 );
-
-// --------- Dataset Picker Modal ---------------------------------------------
-
-const DatasetPickerModal: React.FC<{
-  currentId: string | null;
-  onClose: () => void;
-  onSelect: (id: string) => void;
-}> = ({ currentId, onClose, onSelect }) => {
-  const [datasets, setDatasets] = React.useState<Dataset[]>([]);
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    DatasetsApi.list().then(setDatasets).finally(() => setLoading(false));
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-ink">Select Source Dataset</h2>
-          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
-        </div>
-        {loading ? (
-          <div className="py-8 text-center text-sm text-ink-muted">Loading datasets...</div>
-        ) : datasets.length === 0 ? (
-          <div className="py-8 text-center text-sm text-ink-muted">No datasets uploaded yet. Go to All Datasets to upload a file.</div>
-        ) : (
-          <div className="max-h-80 overflow-y-auto space-y-1">
-            {datasets.map(d => (
-              <button
-                key={d.id}
-                onClick={() => onSelect(d.id)}
-                className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
-                  d.id === currentId
-                    ? "border-brand bg-brand-subtle"
-                    : "border-line hover:border-brand hover:bg-canvas"
-                }`}
-              >
-                <div className="font-medium text-ink">{d.name}</div>
-                <div className="mt-0.5 text-[10.5px] text-ink-muted">
-                  {d.row_count?.toLocaleString() ?? 0} rows &times; {d.column_count ?? 0} cols
-                  {d.detected_object_type && (
-                    <span className="ml-2 text-amber-600">detected: {d.detected_object_type}</span>
-                  )}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="mt-4 flex justify-end">
-          <button onClick={onClose} className="btn-ghost">Cancel</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// --------- Template Picker Modal --------------------------------------------
-
-const TemplatePickerModal: React.FC<{
-  currentId: string | null;
-  onClose: () => void;
-  onSelect: (id: string) => void;
-}> = ({ currentId, onClose, onSelect }) => {
-  const [templates, setTemplates] = React.useState<FBDITemplate[]>([]);
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    FbdiApi.list().then(setTemplates).finally(() => setLoading(false));
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-ink">Select FBDI Template</h2>
-          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
-        </div>
-        {loading ? (
-          <div className="py-8 text-center text-sm text-ink-muted">Loading templates...</div>
-        ) : templates.length === 0 ? (
-          <div className="py-8 text-center text-sm text-ink-muted">No FBDI templates found.</div>
-        ) : (
-          <div className="max-h-80 overflow-y-auto space-y-1">
-            {templates.map(t => (
-              <button
-                key={t.id}
-                onClick={() => onSelect(t.id)}
-                className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
-                  t.id === currentId
-                    ? "border-brand bg-brand-subtle text-brand-dark"
-                    : "border-line hover:border-brand hover:bg-canvas"
-                }`}
-              >
-                <div className="font-medium text-ink">{t.name}</div>
-                {t.business_object && (
-                  <div className="text-xs text-ink-muted">{t.business_object}</div>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="mt-4 flex justify-end">
-          <button onClick={onClose} className="btn-ghost">Close</button>
-        </div>
-      </div>
-    </div>
-  );
-};

@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Sparkles, Wand2 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, LearningApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi } from "@/api";
 import {
   Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -30,40 +30,6 @@ export const RecommendationsHubPage: React.FC = () => {
   const [items, setItems] = useState<ProjectRecs[] | null>(null);
   const [authoring, setAuthoring] = useState<ProjectRecs | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
-  const [learnedIds, setLearnedIds] = useState<Set<string>>(new Set());
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const showToast = useCallback((msg: string) => {
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    setToast(msg);
-    toastTimer.current = setTimeout(() => setToast(null), 3000);
-  }, []);
-
-  const apply = useCallback(async (rec: Recommendation, learn: boolean) => {
-    setAppliedIds((s) => new Set(s).add(rec.id));
-    if (learn) {
-      setLearnedIds((s) => new Set(s).add(rec.id));
-      try {
-        await LearningApi.capture({
-          kind: "rule",
-          category: rec.ruleType || "Custom Rule",
-          original_value: rec.column,
-          resolved_value: rec.title,
-        });
-        showToast(`Rule saved to library: ${rec.title}`);
-      } catch {
-        showToast("Step applied — rule could not be saved to library");
-      }
-    } else {
-      showToast(`Applied: ${rec.title}`);
-    }
-  }, [showToast]);
-
-  const dismiss = useCallback((rec: Recommendation) => {
-    setDismissedIds((s) => new Set(s).add(rec.id));
-  }, []);
 
   useEffect(() => {
     (async () => {
@@ -136,15 +102,8 @@ export const RecommendationsHubPage: React.FC = () => {
                 />
                 <CardBody>
                   <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-                    {recs.filter((r) => !dismissedIds.has(r.id)).slice(0, 6).map((r) => (
-                      <RecommendationCard
-                        key={r.id}
-                        rec={r}
-                        applied={appliedIds.has(r.id)}
-                        learned={learnedIds.has(r.id)}
-                        onApply={apply}
-                        onDismiss={dismiss}
-                      />
+                    {recs.slice(0, 6).map((r) => (
+                      <RecommendationCard key={r.id} rec={r} />
                     ))}
                   </div>
                   {recs.length > 6 && (

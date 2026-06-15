@@ -1,6 +1,6 @@
 """Project schemas."""
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,6 +12,11 @@ class ProjectCreate(BaseModel):
     go_live_date: Optional[date] = None
     owner: Optional[str] = None
     status: Optional[str] = "planning"
+    # v10
+    source_system: Optional[str] = None
+    selected_modules: List[str] = []
+    phase: Optional[str] = "discovery"
+    source_connection_id: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -27,6 +32,12 @@ class ProjectUpdate(BaseModel):
     sox_controlled: Optional[int] = None
     production_cutover_start: Optional[datetime] = None
     production_cutover_end: Optional[datetime] = None
+    # v10
+    source_system: Optional[str] = None
+    selected_modules: Optional[List[str]] = None
+    phase: Optional[str] = None
+    dress_rehearsal_count: Optional[int] = None
+    source_connection_id: Optional[str] = None
 
 
 class ProjectOut(BaseModel):
@@ -40,14 +51,4 @@ class ProjectOut(BaseModel):
     go_live_date: Optional[date] = None
     owner: Optional[str] = None
     status: str
-    production_cutover_start: Optional[datetime] = None
-    production_cutover_end: Optional[datetime] = None
-    migration_lead: Optional[str] = None
-    data_owner: Optional[str] = None
-    sox_controlled: Optional[int] = 1
-    created_at: datetime
-    updated_at: datetime
-    conversion_count: Optional[int] = 0
-    in_progress_count: Optional[int] = 0
-    loaded_count: Optional[int] = 0
-    failed_count: Optional[int] = 0
+    production_cutover_s

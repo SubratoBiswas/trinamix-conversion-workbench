@@ -5,7 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
 } from "recharts";
-import { ConversionsApi, LoadApi } from "@/api";
+import { LoadApi, ProjectsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -15,6 +15,7 @@ import type {
   LoadError,
   LoadRun,
   LoadSummary,
+  Project,
 } from "@/types";
 
 // Distinct error-category palette — purposeful, used to encode meaning in charts
@@ -22,26 +23,50 @@ const CAT_COLORS = ["#EF4444", "#F59E0B", "#3B82F6", "#8B5CF6", "#10B981", "#EC4
 
 export const LoadDashboardPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
-  const projParam = params.get("conversion");
-  const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<string | null>(projParam ?? null);
+  // Project layer first — the URL carries both ``project`` and
+  // ``conversion`` so deep-links survive refresh. We never default
+  // ``conversion`` blindly to ``[0]`` across projects; the picker is
+  // always scoped to the selected engagement.
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [conversions, setConversions] = useState<Conversion[]>([]);
+  const [projectId, setProjectId] = useState<number | null>(
+    params.get("project") ? Number(params.get("project")) : null,
+  );
+  const [pid, setPid] = useState<number | null>(
+    params.get("conversion") ? Number(params.get("conversion")) : null,
+  );
   const [runs, setRuns] = useState<LoadRun[]>([]);
   const [summary, setSummary] = useState<LoadSummary | null>(null);
   const [errors, setErrors] = useState<LoadError[]>([]);
   const [running, setRunning] = useState(false);
 
+  // Load projects once; default the engagement if not URL-pinned.
   useEffect(() => {
-    ConversionsApi.list().then((ps) => {
-      setProjects(ps);
-      if (!pid && ps[0]) {
-        setPid(ps[0].id);
-        setParams({ conversion: String(ps[0].id) });
-      }
+    ProjectsApi.list().then((rows) => {
+      setProjects(rows);
+      if (!projectId && rows[0]) setProjectId(rows[0].id);
     });
   }, []);
 
+  // Load this project's conversions; default conversion if not pinned
+  // or if the pinned conversion belongs to a different project.
+  useEffect(() => {
+    if (!projectId) { setConversions([]); return; }
+    ProjectsApi.conversions(projectId).then((rows) => {
+      setConversions(rows);
+      const pinnedBelongsToProject = !!rows.find((c) => c.id === pid);
+      if (!pinnedBelongsToProject) {
+        const first = rows[0];
+        setPid(first ? first.id : null);
+        if (first) setParams({ project: String(projectId), conversion: String(first.id) });
+      } else {
+        setParams({ project: String(projectId), conversion: String(pid) });
+      }
+    });
+  }, [projectId]);
+
   const refresh = async () => {
-    if (!pid) return;
+    if (!pid) { setSummary(null); setRuns([]); setErrors([]); return; }
     setSummary(null); setRuns([]); setErrors([]);
     const [rs, sm] = await Promise.all([
       LoadApi.runs(pid),
@@ -53,12 +78,15 @@ export const LoadDashboardPage: React.FC = () => {
   };
   useEffect(() => { refresh(); }, [pid]);
 
-  const simulate = async () => {
+  const loadToFusion = async () => {
     if (!pid) return;
     setRunning(true);
     try { await LoadApi.simulate(pid); await refresh(); }
     finally { setRunning(false); }
   };
+
+  const project = projects.find((p) => p.id === projectId) || null;
+  const conversion = conversions.find((c) => c.id === pid) || null;
 
   const passFailData = useMemo(() => summary ? [
     { name: "Passed", value: summary.passed_count, color: "#10B981" },
@@ -69,32 +97,72 @@ export const LoadDashboardPage: React.FC = () => {
   return (
     <>
       <PageTitle
-        title="Load Runs"
-        subtitle="Simulate Fusion loads and inspect failures by category & root cause"
-        right={<Button onClick={simulate} loading={running} disabled={!pid}>
-          <Play className="h-4 w-4" /> Simulate Load
+        title="Load Management"
+        subtitle="Run Fusion loads per engagement and inspect failures by category & root cause"
+        right={<Button onClick={loadToFusion} loading={running} disabled={!pid}>
+          <Play className="h-4 w-4" /> Load to Fusion
         </Button>}
       />
 
       <Card className="mb-4">
         <CardBody className="!py-3">
-          <div className="flex items-center gap-3">
-            <label className="label !mb-0">Project</label>
-            <select className="input !w-auto min-w-[280px]" value={pid ?? ""}
-              onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="label !mb-0">Engagement</label>
+            <select
+              className="input !w-auto min-w-[260px]"
+              value={projectId ?? ""}
+              onChange={(e) => setProjectId(Number(e.target.value))}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}{p.client ? ` · ${p.client}` : ""}
+                </option>
+              ))}
             </select>
-            <Button variant="secondary" onClick={refresh}><RefreshCw className="h-3.5 w-3.5" /></Button>
+            <label className="label !mb-0 ml-2">Object</label>
+            <select
+              className="input !w-auto min-w-[260px]"
+              value={pid ?? ""}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setPid(v);
+                setParams({ project: String(projectId || ""), conversion: String(v) });
+              }}
+            >
+              {conversions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.target_object})
+                </option>
+              ))}
+            </select>
+            <Button variant="secondary" onClick={refresh} disabled={!pid}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+            {project && (
+              <span className="ml-auto text-[11px] text-ink-muted">
+                Source: <span className="font-mono text-ink">{project.source_system || "—"}</span>
+                {Array.isArray(project.selected_modules) && project.selected_modules.length > 0 && (
+                  <> · Scope: <span className="text-ink">{project.selected_modules.join(", ")}</span></>
+                )}
+              </span>
+            )}
           </div>
         </CardBody>
       </Card>
 
-      {!summary || summary.total_records === 0 ? (
+      {!conversion ? (
+        <Card>
+          <CardBody><EmptyState
+            title="Pick an engagement to begin"
+            description="Load Management runs in the context of one engagement at a time. Each engagement has its own conversion list."
+          /></CardBody>
+        </Card>
+      ) : (!summary || summary.total_records === 0) ? (
         <Card>
           <CardBody><EmptyState
             title="No load runs yet"
-            description="Click Simulate Load to run validation through the load engine and see pass/fail metrics."
-            action={<Button onClick={simulate} loading={running}><Play className="h-4 w-4" /> Simulate Load</Button>}
+            description="Click Load to Fusion to run validation through the load engine and see pass/fail metrics."
+            action={<Button onClick={loadToFusion} loading={running}><Play className="h-4 w-4" /> Load to Fusion</Button>}
           /></CardBody>
         </Card>
       ) : (

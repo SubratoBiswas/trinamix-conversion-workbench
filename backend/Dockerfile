@@ -7,7 +7,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# System deps for openpyxl/pandas/bcrypt builds
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libffi-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -17,9 +16,8 @@ RUN pip install -r requirements.txt
 
 COPY app ./app
 
-# Persistent upload/output dirs (mounted as a Render disk in production)
 RUN mkdir -p /app/uploads /app/outputs
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

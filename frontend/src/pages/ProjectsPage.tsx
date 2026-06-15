@@ -1,16 +1,30 @@
 import React, { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   Plus, Boxes, Calendar, Building2, ArrowRight, ArrowLeft,
-  CircleDot, CheckCircle2, AlertCircle, Clock,
+  CheckCircle2, AlertCircle, Clock, Database,
 } from "lucide-react";
 import { ProjectsApi } from "@/api";
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, PageLoader,
+  Card, CardBody, EmptyState, PageLoader,
   PageTitle, Pill,
 } from "@/components/ui/Primitives";
+import { SetupWizard } from "@/components/setup/SetupWizard";
 import { cn, formatDate } from "@/lib/utils";
 import type { Project } from "@/types";
+
+// Code → display label mapping for the source-system pill on each project
+// card. Kept in sync with backend/app/source_systems.py via the
+// /api/source-systems endpoint at runtime; this is the static fallback.
+const SOURCE_DISPLAY: Record<string, string> = {
+  netsuite: "NetSuite",
+  oracle_ebs: "Oracle EBS",
+  sap_ecc: "SAP ECC",
+  sap_s4: "SAP S/4 HANA",
+  workday: "Workday",
+  jde: "JD Edwards",
+  custom: "Custom",
+};
 
 const STATUS_TONE: Record<string, "success" | "warning" | "info" | "neutral" | "danger"> = {
   planning:       "info",
@@ -87,11 +101,17 @@ const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
             <div className="mt-1 truncate text-[15px] font-semibold text-ink group-hover:text-brand-dark">
               {project.name}
             </div>
-            {project.target_environment && (
-              <div className="mt-0.5 truncate text-[11px] text-ink-muted">
-                → {project.target_environment}
-              </div>
-            )}
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-muted">
+              {project.source_system && (
+                <span className="inline-flex items-center gap-1 text-brand-dark">
+                  <Database className="h-3 w-3" />
+                  {SOURCE_DISPLAY[project.source_system] || project.source_system}
+                </span>
+              )}
+              {project.target_environment && (
+                <span className="truncate">→ {project.target_environment}</span>
+              )}
+            </div>
           </div>
           <Pill tone={STATUS_TONE[project.status] || "neutral"}>{project.status.replace("_", " ")}</Pill>
         </div>
@@ -139,88 +159,23 @@ const Roll: React.FC<{ label: string; count: number; icon: React.ReactNode; tone
   </div>
 );
 
-// ─────── New Engagement page ───────
+// ─────── New Engagement page — Setup Wizard ───────
+//
+// Lives at the same /projects/new route the simple form occupied before;
+// the page wraps the four-step SetupWizard so the route count is unchanged
+// while the UX picks up Source System + Connection in the same flow.
 
-export const NewProjectPage: React.FC = () => {
-  const nav = useNavigate();
-  const [body, setBody] = useState<Partial<Project>>({
-    name: "", client: "", target_environment: "Oracle Fusion SCM Cloud",
-    description: "", status: "planning",
-  });
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    if (!body.name) return;
-    setBusy(true);
-    try {
-      const p = await ProjectsApi.create(body);
-      nav(`/projects/${p.id}`);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <>
-      <PageTitle
-        title="New Engagement"
-        subtitle="Create a new implementation engagement — you can add conversion objects after."
-        right={
-          <Link to="/projects" className="btn-ghost">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </Link>
-        }
-      />
-      <Card className="max-w-2xl">
-        <CardBody>
-          <div className="space-y-4">
-            <div>
-              <label className="label">Engagement name</label>
-              <input className="input" placeholder="e.g. Acme — Oracle SCM Cloud Phase 1"
-                value={body.name || ""} onChange={(e) => setBody({ ...body, name: e.target.value })} />
-            </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div>
-                <label className="label">Client</label>
-                <input className="input" placeholder="Acme Corp"
-                  value={body.client || ""} onChange={(e) => setBody({ ...body, client: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Target environment</label>
-                <input className="input" placeholder="Oracle Fusion SCM Cloud"
-                  value={body.target_environment || ""} onChange={(e) => setBody({ ...body, target_environment: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div>
-                <label className="label">Go-live date (optional)</label>
-                <input type="date" className="input"
-                  value={body.go_live_date || ""}
-                  onChange={(e) => setBody({ ...body, go_live_date: e.target.value || null })} />
-              </div>
-              <div>
-                <label className="label">Status</label>
-                <select className="input" value={body.status || "planning"}
-                  onChange={(e) => setBody({ ...body, status: e.target.value })}>
-                  <option value="planning">planning</option>
-                  <option value="in_progress">in progress</option>
-                  <option value="ready_for_uat">ready for UAT</option>
-                  <option value="complete">complete</option>
-                  <option value="on_hold">on hold</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="label">Description</label>
-              <textarea className="input min-h-[80px]" placeholder="Scope notes, modules in play, special considerations…"
-                value={body.description || ""} onChange={(e) => setBody({ ...body, description: e.target.value })} />
-            </div>
-            <div className="flex justify-end">
-              <Button onClick={submit} loading={busy} disabled={!body.name}>
-                Create Engagement
-              </Button>
-            </div>
-          </div>
-        </CardBody>
-      </Card>
-    </>
-  );
-};
+export const NewProjectPage: React.FC = () => (
+  <>
+    <PageTitle
+      title="New Engagement"
+      subtitle="Setup Wizard — engagement details, source system, source connection."
+      right={
+        <Link to="/projects" className="btn-ghost">
+          <ArrowLeft className="h-4 w-4" /> Back
+        </Link>
+      }
+    />
+    <SetupWizard />
+  </>
+);

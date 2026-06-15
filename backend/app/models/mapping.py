@@ -22,6 +22,6 @@ class MappingSuggestion(Document):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Settings:
-        name = "mapping_suggestions"
-        indexes = ["conversion_id", "target_field_id"]
+    # v10: dual-approval for SOX-controlled projects
+    requires_dual_approval: int = 0
+    second_approver_ema

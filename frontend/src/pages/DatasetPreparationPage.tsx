@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Search, Database, FileSpreadsheet, Sparkles,
   Save, Play, Plus, GraduationCap, Trash2, Workflow,
-  ChevronDown, ChevronRight, ListChecks, BarChart3, Lightbulb,
+  ChevronDown, ChevronRight, ListChecks, BarChart3,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, LearningApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi } from "@/api";
 import {
   Button, PageLoader, Pill, Spinner,
 } from "@/components/ui/Primitives";
@@ -19,7 +19,6 @@ import type {
   DatasetPreview,
   FBDIField,
   FBDITemplate,
-  TemplateSuggestion,
 } from "@/types";
 
 interface AppliedStep {
@@ -35,12 +34,11 @@ const COLUMN_WIDTH = 220;
 
 export const DatasetPreparationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const dsId = id!;
+  const dsId = Number(id);
   const nav = useNavigate();
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
-  const [templateSuggestions, setTemplateSuggestions] = useState<TemplateSuggestion[]>([]);
   const [projects, setProjects] = useState<Conversion[]>([]);
   const [templates, setTemplates] = useState<FBDITemplate[]>([]);
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
@@ -50,26 +48,15 @@ export const DatasetPreparationPage: React.FC = () => {
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
   const [learnedIds, setLearnedIds] = useState<Set<string>>(new Set());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const [flash, setFlash] = useState<string | null>(null);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showFlash = useCallback((msg: string) => {
-    if (flashTimer.current) clearTimeout(flashTimer.current);
-    setFlash(msg);
-    flashTimer.current = setTimeout(() => setFlash(null), 3000);
-  }, []);
   const [columnFilter, setColumnFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [stepView, setStepView] = useState<"columns" | "steps">("columns");
-  const [saving, setSaving] = useState(false);
 
   // Load dataset + preview + auxiliary data
   useEffect(() => {
     if (!dsId) return;
     DatasetsApi.get(dsId).then(setDataset);
-    DatasetsApi.preview(dsId, 200).then(setPreview).catch(() => setPreview({ columns: [], rows: [], total_rows: 0 }));
-    DatasetsApi.suggestTemplate(dsId)
-      .then(r => setTemplateSuggestions(r.suggestions))
-      .catch(() => {});
+    DatasetsApi.preview(dsId, 200).then(setPreview);
     ConversionsApi.list().then(setProjects);
     FbdiApi.list().then(setTemplates);
   }, [dsId]);
@@ -94,9 +81,19 @@ export const DatasetPreparationPage: React.FC = () => {
     return all.filter((r) => !dismissedIds.has(r.id));
   }, [dataset, preview, targetFields, dismissedIds]);
 
-  // ── All useCallback hooks must be declared BEFORE any conditional return ──
+  if (!dataset) return <PageLoader />;
 
-  const apply = useCallback(async (rec: Recommendation, learn: boolean) => {
+  // Build filtered column list for the left panel
+  const columns = dataset.columns
+    .filter((c) => !search || c.column_name.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => a.position - b.position);
+
+  // Pull values per column from the preview for distribution rendering
+  const valuesByColumn = (col: string) =>
+    (preview?.rows || []).map((r) => r[col]).filter((v) => v != null && v !== "");
+
+  // Recommendation handlers
+  const apply = (rec: Recommendation, learn: boolean) => {
     const step: AppliedStep = {
       id: rec.id,
       title: rec.title,
@@ -107,68 +104,18 @@ export const DatasetPreparationPage: React.FC = () => {
     };
     setSteps((s) => [step, ...s]);
     setAppliedIds((s) => new Set(s).add(rec.id));
-    if (learn) {
-      setLearnedIds((s) => new Set(s).add(rec.id));
-      try {
-        await LearningApi.capture({
-          kind: "rule",
-          category: rec.ruleType || "Custom Rule",
-          original_value: rec.column,
-          resolved_value: rec.title,
-        });
-        showFlash(`Rule saved to library: ${rec.title}`);
-      } catch {
-        showFlash("Step applied — rule could not be saved to library");
-      }
-    }
-  }, [showFlash]);
+    if (learn) setLearnedIds((s) => new Set(s).add(rec.id));
+  };
 
-  const dismiss = useCallback((rec: Recommendation) => {
+  const dismiss = (rec: Recommendation) => {
     setDismissedIds((s) => new Set(s).add(rec.id));
-  }, []);
+  };
 
-  const saveSteps = useCallback(async () => {
-    if (steps.length === 0) { showFlash("No steps to save — apply recommendations first"); return; }
-    setSaving(true);
-    try {
-      const learnedSteps = steps.filter(s => s.learned && s.ruleType);
-      if (learnedSteps.length > 0) {
-        for (const s of learnedSteps) {
-          await LearningApi.capture({
-            kind: "rule",
-            category: s.ruleType!,
-            original_value: s.column,
-            resolved_value: s.title,
-          });
-        }
-        showFlash(`${learnedSteps.length} rule(s) saved to Rule Library`);
-      } else {
-        showFlash(`${steps.length} step(s) logged — use 'Apply & Learn' to save rules permanently`);
-      }
-    } catch {
-      showFlash("Failed to save rules");
-    } finally {
-      setSaving(false);
-    }
-  }, [steps, showFlash]);
-
-  const removeStep = useCallback((id: string) => {
+  const removeStep = (id: string) => {
     setSteps((s) => s.filter((x) => x.id !== id));
     setAppliedIds((s) => { const n = new Set(s); n.delete(id); return n; });
     setLearnedIds((s) => { const n = new Set(s); n.delete(id); return n; });
-  }, []);
-
-  // ── Conditional early return — no more hooks below this line ──
-  if (!dataset) return <PageLoader />;
-
-  // Build filtered column list for the left panel
-  const columns = (dataset.columns ?? [])
-    .filter((c) => !search || c.column_name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => a.position - b.position);
-
-  // Pull values per column from the preview for distribution rendering
-  const valuesByColumn = (col: string) =>
-    (preview?.rows || []).map((r) => r[col]).filter((v) => v != null && v !== "");
+  };
 
   return (
     <div className="-m-6 flex h-[calc(100vh-3.5rem)] flex-col bg-canvas">
@@ -179,21 +126,13 @@ export const DatasetPreparationPage: React.FC = () => {
         </Link>
         <Database className="h-4 w-4 text-slate-400" />
         <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <div className="text-sm font-semibold">{dataset.name}</div>
-            {dataset.detected_object_type && (
-              <span className="inline-flex items-center gap-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-medium text-amber-200">
-                <Sparkles className="h-3 w-3" />
-                {dataset.detected_object_type} · {Math.round((dataset.detection_confidence ?? 0) * 100)}%
-              </span>
-            )}
-          </div>
+          <div className="text-sm font-semibold">{dataset.name}</div>
           <div className="text-[11px] text-slate-400">
             {dataset.row_count.toLocaleString()} rows · {dataset.column_count} columns · {dataset.file_type.toUpperCase()}
           </div>
         </div>
         {boundProject ? (
-          <Link to={`/projects/${boundProject.project_id}`} className="flex items-center gap-2 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand">
+          <Link to={`/projects/${boundProject.id}`} className="flex items-center gap-2 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand">
             <FileSpreadsheet className="h-3.5 w-3.5" />
             <span>Project: {boundProject.name}</span>
           </Link>
@@ -205,57 +144,10 @@ export const DatasetPreparationPage: React.FC = () => {
             <Workflow className="h-3.5 w-3.5" /> Add to Dataflow
           </button>
         )}
-        <button
-          onClick={saveSteps}
-          disabled={saving}
-          className="flex items-center gap-1.5 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand-dark disabled:opacity-50"
-        >
-          <Save className="h-3.5 w-3.5" /> {saving ? "Saving…" : "Save"}
+        <button className="flex items-center gap-1.5 rounded-md bg-sidebar-hover px-3 py-1.5 text-xs text-slate-200 hover:bg-brand-dark">
+          <Save className="h-3.5 w-3.5" /> Save
         </button>
       </header>
-
-      {/* Flash toast */}
-      {flash && (
-        <div className="mx-4 mt-2 rounded-md bg-brand px-4 py-2 text-sm text-white shadow-md">
-          {flash}
-        </div>
-      )}
-
-      {/* Template Suggestions Banner */}
-      {templateSuggestions.length > 0 && !boundProject && (
-        <div className="mx-4 mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-1.5">
-            <Lightbulb className="h-4 w-4 text-amber-600" />
-            <span className="font-semibold text-amber-800 text-sm">Suggested FBDI Templates</span>
-          </div>
-          <p className="text-xs text-amber-700 mb-2">
-            Based on your file name and columns, these templates are the closest match:
-          </p>
-          <div className="flex gap-2 flex-wrap">
-            {templateSuggestions.map((s) => (
-              <div
-                key={s.template_id}
-                className="flex items-center gap-2 bg-white border border-amber-200 rounded px-3 py-1.5 text-xs"
-              >
-                <span className="font-medium text-gray-800">{s.template_name}</span>
-                <span className="text-gray-400">·</span>
-                <span className="text-gray-500">{s.business_object}</span>
-                <span
-                  className={`font-bold px-1.5 py-0.5 rounded-full ${
-                    s.confidence >= 0.7
-                      ? "bg-green-100 text-green-700"
-                      : s.confidence >= 0.4
-                      ? "bg-yellow-100 text-yellow-700"
-                      : "bg-gray-100 text-gray-500"
-                  }`}
-                >
-                  {Math.round(s.confidence * 100)}%
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Body — 3-column layout */}
       <div className="flex flex-1 overflow-hidden">

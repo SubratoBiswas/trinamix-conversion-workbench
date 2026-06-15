@@ -118,7 +118,7 @@ export const ApprovalsPage: React.FC = () => {
                           <Check className="h-3 w-3" /> Approve
                         </button>
                         <Link
-                          to={`/mappings?conversion=${project.id}`}
+                          to={`/mappings?project=${project.id}`}
                           className="btn-ghost h-7 px-2 text-xs"
                         >
                           Review →

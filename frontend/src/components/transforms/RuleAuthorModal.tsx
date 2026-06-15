@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Plus, Trash2, Wand2, Check, AlertTriangle, Code2, Eye,
+  Sparkles, MessageSquare, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { MappingApi } from "@/api";
 import { Button, Modal, Pill } from "@/components/ui/Primitives";
@@ -567,16 +568,43 @@ const CASE_OPS = [
   ["notblank", "is not blank"],
 ];
 
+// CASE_WHEN branches accept two shapes (the engine handles both):
+//   simple:   {if_column, op, value, then}
+//   compound: {all_of|any_of: [{column, op, value}, ...], then}
+// The form lets each branch toggle between the two shapes — analysts
+// authoring "if A is X and B is Y then ..." need the compound form, and
+// translator output may produce either depending on the description.
+
+type LeafCond = { column?: string; op?: string; value?: any };
+
+const _isCompound = (br: any): boolean =>
+  br && (Array.isArray(br.all_of) || Array.isArray(br.any_of));
+
+const _branchCombinator = (br: any): "all_of" | "any_of" =>
+  Array.isArray(br?.any_of) ? "any_of" : "all_of";
+
+const _branchConditions = (br: any): LeafCond[] => {
+  if (Array.isArray(br?.all_of)) return br.all_of;
+  if (Array.isArray(br?.any_of)) return br.any_of;
+  return [];
+};
+
 const CaseWhenForm: React.FC<FormProps> = ({ config, setConfig, sources }) => {
   const branches: any[] = config.branches ?? [];
+
   const update = (i: number, patch: any) => {
     const next = branches.slice();
     next[i] = { ...next[i], ...patch };
     setConfig({ ...config, branches: next });
   };
+  const replace = (i: number, newBranch: any) => {
+    const next = branches.slice();
+    next[i] = newBranch;
+    setConfig({ ...config, branches: next });
+  };
   const remove = (i: number) =>
     setConfig({ ...config, branches: branches.filter((_, j) => j !== i) });
-  const add = () =>
+  const addSimple = () =>
     setConfig({
       ...config,
       branches: [
@@ -584,70 +612,78 @@ const CaseWhenForm: React.FC<FormProps> = ({ config, setConfig, sources }) => {
         { if_column: sources[0]?.name ?? "", op: "eq", value: "", then: "" },
       ],
     });
+  const addCompound = () =>
+    setConfig({
+      ...config,
+      branches: [
+        ...branches,
+        {
+          all_of: [
+            { column: sources[0]?.name ?? "", op: "eq", value: "" },
+            { column: sources[1]?.name ?? sources[0]?.name ?? "", op: "eq", value: "" },
+          ],
+          then: "",
+        },
+      ],
+    });
+
+  const toCompound = (i: number) => {
+    const br = branches[i];
+    const seed: LeafCond = {
+      column: br?.if_column ?? sources[0]?.name ?? "",
+      op: br?.op ?? "eq",
+      value: br?.value ?? "",
+    };
+    replace(i, { all_of: [seed], then: br?.then ?? "" });
+  };
+  const toSimple = (i: number) => {
+    const br = branches[i];
+    const first = _branchConditions(br)[0] || {};
+    replace(i, {
+      if_column: first.column ?? "",
+      op: first.op ?? "eq",
+      value: first.value ?? "",
+      then: br?.then ?? "",
+    });
+  };
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
         When … then …
       </div>
-      {branches.map((br, i) => {
-        const noValueOp = ["isblank", "notblank"].includes(br.op);
-        return (
-          <div
-            key={i}
-            className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto] items-center gap-1.5"
-          >
-            <select
-              className="input !text-xs"
-              value={br.if_column ?? ""}
-              onChange={(e) => update(i, { if_column: e.target.value })}
-            >
-              <option value="">— column —</option>
-              {sources.map((s) => (
-                <option key={s.name} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input !w-auto !text-xs"
-              value={br.op ?? "eq"}
-              onChange={(e) => update(i, { op: e.target.value })}
-            >
-              {CASE_OPS.map(([v, label]) => (
-                <option key={v} value={v}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <input
-              className="input !text-xs font-mono"
-              value={noValueOp ? "" : br.value ?? ""}
-              disabled={noValueOp}
-              placeholder={noValueOp ? "—" : "value"}
-              onChange={(e) => update(i, { value: e.target.value })}
-            />
-            <span className="text-[10.5px] text-ink-muted">→</span>
-            <input
-              className="input !text-xs"
-              value={br.then ?? ""}
-              onChange={(e) => update(i, { then: e.target.value })}
-              placeholder="then"
-            />
-            <button
-              onClick={() => remove(i)}
-              className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        );
-      })}
-      <button
-        onClick={add}
-        className="inline-flex items-center gap-1 text-xs font-medium text-brand-dark hover:underline"
-      >
-        <Plus className="h-3 w-3" /> Add branch
-      </button>
+      {branches.map((br, i) =>
+        _isCompound(br) ? (
+          <CompoundBranchEditor
+            key={i} branch={br} sources={sources}
+            onChange={(next) => replace(i, next)}
+            onRemove={() => remove(i)}
+            onSwitchToSimple={() => toSimple(i)}
+          />
+        ) : (
+          <SimpleBranchEditor
+            key={i} branch={br} sources={sources}
+            onChange={(patch) => update(i, patch)}
+            onRemove={() => remove(i)}
+            onSwitchToCompound={() => toCompound(i)}
+          />
+        )
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={addSimple}
+          className="inline-flex items-center gap-1 text-xs font-medium text-brand-dark hover:underline"
+        >
+          <Plus className="h-3 w-3" /> Add simple branch
+        </button>
+        <span className="text-[10.5px] text-ink-muted">·</span>
+        <button
+          onClick={addCompound}
+          className="inline-flex items-center gap-1 text-xs font-medium text-brand-dark hover:underline"
+        >
+          <Plus className="h-3 w-3" /> Add compound (AND/OR)
+        </button>
+      </div>
       <Field label="Default (none of the above match)">
         <input
           className="input"
@@ -655,6 +691,195 @@ const CaseWhenForm: React.FC<FormProps> = ({ config, setConfig, sources }) => {
           onChange={(e) => setConfig({ ...config, default: e.target.value })}
         />
       </Field>
+    </div>
+  );
+};
+
+const _NO_VALUE_OPS = new Set(["isblank", "notblank"]);
+
+const SimpleBranchEditor: React.FC<{
+  branch: any;
+  sources: { name: string }[];
+  onChange: (patch: any) => void;
+  onRemove: () => void;
+  onSwitchToCompound: () => void;
+}> = ({ branch, sources, onChange, onRemove, onSwitchToCompound }) => {
+  const noValueOp = _NO_VALUE_OPS.has(branch.op);
+  return (
+    <div className="rounded-md border border-line bg-white p-2">
+      <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto] items-center gap-1.5">
+        <select
+          className="input !text-xs"
+          value={branch.if_column ?? ""}
+          onChange={(e) => onChange({ if_column: e.target.value })}
+        >
+          <option value="">— column —</option>
+          {sources.map((s) => (
+            <option key={s.name} value={s.name}>{s.name}</option>
+          ))}
+        </select>
+        <select
+          className="input !w-auto !text-xs"
+          value={branch.op ?? "eq"}
+          onChange={(e) => onChange({ op: e.target.value })}
+        >
+          {CASE_OPS.map(([v, label]) => (
+            <option key={v} value={v}>{label}</option>
+          ))}
+        </select>
+        <input
+          className="input !text-xs font-mono"
+          value={noValueOp ? "" : branch.value ?? ""}
+          disabled={noValueOp}
+          placeholder={noValueOp ? "—" : "value"}
+          onChange={(e) => onChange({ value: e.target.value })}
+        />
+        <span className="text-[10.5px] text-ink-muted">→</span>
+        <input
+          className="input !text-xs"
+          value={branch.then ?? ""}
+          onChange={(e) => onChange({ then: e.target.value })}
+          placeholder="then"
+        />
+        <button
+          onClick={onRemove}
+          className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <button
+        onClick={onSwitchToCompound}
+        className="mt-1 text-[10.5px] font-medium text-brand-dark hover:underline"
+      >
+        + add another condition (AND / OR)
+      </button>
+    </div>
+  );
+};
+
+const CompoundBranchEditor: React.FC<{
+  branch: any;
+  sources: { name: string }[];
+  onChange: (next: any) => void;
+  onRemove: () => void;
+  onSwitchToSimple: () => void;
+}> = ({ branch, sources, onChange, onRemove, onSwitchToSimple }) => {
+  const combinator = _branchCombinator(branch);
+  const conditions = _branchConditions(branch);
+
+  const setCombinator = (next: "all_of" | "any_of") => {
+    const { all_of: _a, any_of: _o, ...rest } = branch;
+    onChange({ ...rest, [next]: conditions });
+  };
+  const updateCondition = (i: number, patch: LeafCond) => {
+    const next = conditions.slice();
+    next[i] = { ...next[i], ...patch };
+    onChange({ ...branch, [combinator]: next });
+  };
+  const removeCondition = (i: number) => {
+    const next = conditions.filter((_, j) => j !== i);
+    if (next.length <= 1) {
+      // Collapse back to simple branch when only one condition remains —
+      // less visual noise and the engine reads it the same.
+      onSwitchToSimple();
+      return;
+    }
+    onChange({ ...branch, [combinator]: next });
+  };
+  const addCondition = () => {
+    onChange({
+      ...branch,
+      [combinator]: [
+        ...conditions,
+        { column: sources[0]?.name ?? "", op: "eq", value: "" },
+      ],
+    });
+  };
+
+  return (
+    <div className="rounded-md border-2 border-brand/30 bg-brand-subtle/15 p-2">
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="inline-flex items-center gap-1 rounded-md border border-line bg-white p-0.5 text-[10.5px] font-medium">
+          {(["all_of", "any_of"] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setCombinator(k)}
+              className={cn(
+                "rounded px-1.5 py-0.5",
+                combinator === k ? "bg-brand text-white" : "text-ink-muted hover:text-ink",
+              )}
+            >
+              {k === "all_of" ? "ALL of (AND)" : "ANY of (OR)"}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={onRemove}
+          className="rounded p-1 text-ink-subtle hover:bg-white hover:text-danger"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="space-y-1.5">
+        {conditions.map((cond, ci) => {
+          const noVal = _NO_VALUE_OPS.has(cond.op || "");
+          return (
+            <div
+              key={ci}
+              className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-1.5"
+            >
+              <select
+                className="input !text-xs"
+                value={cond.column ?? ""}
+                onChange={(e) => updateCondition(ci, { column: e.target.value })}
+              >
+                <option value="">— column —</option>
+                {sources.map((s) => (
+                  <option key={s.name} value={s.name}>{s.name}</option>
+                ))}
+              </select>
+              <select
+                className="input !w-auto !text-xs"
+                value={cond.op ?? "eq"}
+                onChange={(e) => updateCondition(ci, { op: e.target.value })}
+              >
+                {CASE_OPS.map(([v, label]) => (
+                  <option key={v} value={v}>{label}</option>
+                ))}
+              </select>
+              <input
+                className="input !text-xs font-mono"
+                value={noVal ? "" : (cond.value ?? "")}
+                disabled={noVal}
+                placeholder={noVal ? "—" : "value"}
+                onChange={(e) => updateCondition(ci, { value: e.target.value })}
+              />
+              <button
+                onClick={() => removeCondition(ci)}
+                className="rounded p-1 text-ink-subtle hover:bg-white hover:text-danger"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        onClick={addCondition}
+        className="mt-1.5 inline-flex items-center gap-1 text-[10.5px] font-medium text-brand-dark hover:underline"
+      >
+        <Plus className="h-3 w-3" /> add condition
+      </button>
+      <div className="mt-2 grid grid-cols-[auto_1fr] items-center gap-2">
+        <span className="text-[10.5px] font-medium text-ink-muted">then →</span>
+        <input
+          className="input !text-xs"
+          value={branch.then ?? ""}
+          onChange={(e) => onChange({ ...branch, then: e.target.value })}
+          placeholder="value when this branch matches"
+        />
+      </div>
     </div>
   );
 };
@@ -779,10 +1004,10 @@ const RULE_GROUPS: { label: string; types: string[] }[] = [
 interface RuleAuthorModalProps {
   open: boolean;
   onClose: () => void;
-  conversionId: string;
+  conversionId: number;
   fields: FBDIField[];
   sourceColumns: DatasetDetail["columns"];
-  defaultTargetFieldId?: string | null;
+  defaultTargetFieldId?: number | null;
   defaultSourceColumn?: string | null;
   onSaved: () => void;
 }
@@ -798,7 +1023,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   onSaved,
 }) => {
   const [type, setType] = useState<string>("VALUE_MAP");
-  const [targetFieldId, setTargetFieldId] = useState<string | null>(
+  const [targetFieldId, setTargetFieldId] = useState<number | null>(
     defaultTargetFieldId ?? null
   );
   const [sourceColumn, setSourceColumn] = useState<string>(
@@ -818,6 +1043,20 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   >(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
+  // Natural-language translator state. The local pattern matcher
+  // works without an API key for most rules — we never auto-hide the
+  // pane anymore. ``nlSource`` records whether the latest translation
+  // came from the deterministic matcher or from Claude.
+  const [nlOpen, setNlOpen] = useState(false);
+  const [nlDescription, setNlDescription] = useState("");
+  const [nlBusy, setNlBusy] = useState(false);
+  const [nlExplanation, setNlExplanation] = useState<string | null>(null);
+  const [nlAmbiguities, setNlAmbiguities] = useState<
+    { phrase: string; interpreted_as: string; alternatives: string[] }[]
+  >([]);
+  const [nlError, setNlError] = useState<string | null>(null);
+  const [nlSource, setNlSource] = useState<"local" | "ai" | null>(null);
+
   // Reset on open
   useEffect(() => {
     if (!open) return;
@@ -831,7 +1070,40 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     setAdvancedError(null);
     setSaveError(null);
     setPreview(null);
+    setNlOpen(false);
+    setNlDescription("");
+    setNlExplanation(null);
+    setNlAmbiguities([]);
+    setNlError(null);
+    setNlSource(null);
   }, [open]);
+
+  const translateNL = async () => {
+    if (!nlDescription.trim()) return;
+    setNlBusy(true);
+    setNlError(null);
+    try {
+      const res = await MappingApi.translateRule(conversionId, {
+        description: nlDescription,
+        target_field_id: targetFieldId ?? undefined,
+        source_column: sourceColumn || undefined,
+        sample_size: 5,
+      });
+      // Mirror the translated rule into the structured form. The user
+      // can confirm or edit before saving.
+      setType(res.rule_type);
+      setConfig(res.config || {});
+      setAdvancedRaw(JSON.stringify(res.config || {}, null, 2));
+      setNlExplanation(res.explanation || null);
+      setNlAmbiguities(res.ambiguities || []);
+      setNlSource(res.source || "ai");
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || "Translation failed";
+      setNlError(detail);
+    } finally {
+      setNlBusy(false);
+    }
+  };
 
   // Default config swap on type change
   const onTypeChange = (next: string) => {
@@ -944,6 +1216,102 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
       <div className="grid grid-cols-[1fr_320px] gap-5">
         {/* Left: form */}
         <div className="space-y-4">
+          {/* Natural-language translator — only when the server reports the
+              translator is reachable. Collapsed by default so the structured
+              form remains the primary affordance. */}
+          {true && (
+            <div className="rounded-md border border-brand/30 bg-brand-subtle/15">
+              <button
+                onClick={() => setNlOpen((o) => !o)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left"
+              >
+                <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand-dark">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Describe this rule in plain English
+                </span>
+                {nlOpen ? (
+                  <ChevronDown className="h-3.5 w-3.5 text-brand-dark" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 text-brand-dark" />
+                )}
+              </button>
+              {nlOpen && (
+                <div className="border-t border-brand/30 p-3">
+                  <textarea
+                    className="input min-h-[88px] text-[12.5px]"
+                    placeholder="e.g. if STATUS is active and REGION is US then DOMESTIC_ACTIVE; if STATUS is active and REGION is anything else then INTERNATIONAL_ACTIVE; otherwise INACTIVE"
+                    value={nlDescription}
+                    onChange={(e) => setNlDescription(e.target.value)}
+                  />
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <div className="text-[10.5px] text-ink-muted">
+                      The translator picks the rule type for you and pre-fills
+                      the form below. Review the structured form, then save.
+                    </div>
+                    <Button
+                      onClick={translateNL}
+                      loading={nlBusy}
+                      disabled={!nlDescription.trim()}
+                      className="!h-8"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Translate
+                    </Button>
+                  </div>
+                  {nlError && (
+                    <div className="mt-2 rounded-md bg-danger-subtle px-3 py-2 text-[11px] text-danger">
+                      <AlertTriangle className="mr-1 inline h-3 w-3" />
+                      {nlError}
+                    </div>
+                  )}
+                  {nlExplanation && (
+                    <div className="mt-2 rounded-md border border-brand/30 bg-white px-3 py-2 text-[11.5px] text-ink">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-brand-dark">
+                          Interpretation
+                        </span>
+                        {nlSource && (
+                          <span className={cn(
+                            "rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider",
+                            nlSource === "local"
+                              ? "bg-success-subtle text-success"
+                              : "bg-brand-subtle text-brand-dark"
+                          )}>
+                            {nlSource === "local" ? "Local · deterministic" : "AI · Claude"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 leading-snug">{nlExplanation}</div>
+                      <div className="mt-1.5 text-[10px] text-ink-muted">
+                        Rule populated in the structured form below — review, edit, then Save.
+                      </div>
+                    </div>
+                  )}
+                  {nlAmbiguities.length > 0 && (
+                    <div className="mt-2 rounded-md border border-warning/40 bg-warning-subtle/50 px-3 py-2">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-warning">
+                        Confirm interpretation
+                      </div>
+                      <ul className="mt-1 space-y-1 text-[11.5px] text-ink">
+                        {nlAmbiguities.map((a, i) => (
+                          <li key={i}>
+                            <span className="font-mono">“{a.phrase}”</span> →{" "}
+                            <span className="font-medium">{a.interpreted_as}</span>
+                            {a.alternatives.length > 0 && (
+                              <span className="text-ink-muted">
+                                {" "}(alternatives: {a.alternatives.join(", ")})
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="Rule type">
               <select
@@ -970,7 +1338,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
                 className="input"
                 value={targetFieldId ?? ""}
                 onChange={(e) =>
-                  setTargetFieldId(e.target.value || null)
+                  setTargetFieldId(e.target.value ? Number(e.target.value) : null)
                 }
               >
                 <option value="">— pick a target field —</option>

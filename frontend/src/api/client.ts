@@ -1,8 +1,7 @@
 import axios from "axios";
-import { useAuth } from "@/store/authStore";
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : "/api",
+  baseURL: "/api",
   timeout: 60_000,
 });
 
@@ -16,15 +15,10 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err?.response?.status === 401) {
-      // Log which URL caused the 401 so we can debug
-      const failedUrl = err?.config?.url ?? "unknown";
-      const tok = localStorage.getItem("trinamix.token");
-      localStorage.setItem(
-        "trinamix.last401",
-        JSON.stringify({ url: failedUrl, hadToken: !!tok, ts: Date.now() })
-      );
-      console.error("[auth] 401 on", failedUrl, "| had token:", !!tok);
-      useAuth.getState().clear();
+      localStorage.removeItem("trinamix.token");
+      localStorage.removeItem("trinamix.user");
+      // Avoid hard redirect loops if already on /login
+      if (!location.pathname.startsWith("/login")) location.href = "/login";
     }
     return Promise.reject(err);
   }

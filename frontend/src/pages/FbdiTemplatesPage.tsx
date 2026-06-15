@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search,
-  BadgeCheck, Package, Layers,
 } from "lucide-react";
 import { FbdiApi } from "@/api";
 import {
@@ -36,9 +35,6 @@ const PHASE_TONE: Record<string, "info" | "warning" | "brand" | "success"> = {
 };
 
 export const FbdiTemplatesPage: React.FC = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get("tab") === "targets" ? "targets" : "templates";
-
   const [items, setItems] = useState<FBDITemplate[] | null>(null);
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -55,17 +51,6 @@ export const FbdiTemplatesPage: React.FC = () => {
 
   const refresh = () => FbdiApi.list().then(setItems);
   useEffect(() => { refresh(); }, []);
-
-  // Group by business_object for Target Objects view
-  const byObject = useMemo(() => {
-    if (!items) return {};
-    const out: Record<string, FBDITemplate[]> = {};
-    for (const t of items) {
-      const key = t.business_object || "Uncategorised";
-      out[key] = [...(out[key] || []), t];
-    }
-    return out;
-  }, [items]);
 
   const submit = async () => {
     if (!file) return;
@@ -98,85 +83,16 @@ export const FbdiTemplatesPage: React.FC = () => {
   return (
     <>
       <PageTitle
-        title={activeTab === "targets" ? "Target Objects" : "FBDI Manifest"}
+        title="FBDI Manifest"
         subtitle={
-          activeTab === "targets"
-            ? items ? `${Object.keys(byObject).length} business objects across ${items.length} templates` : undefined
-            : items ? `v2.0 · ${items.length} templates across ${countModules(items)} modules` : undefined
+          items
+            ? `v2.0 · ${items.length} templates across ${countModules(items)} modules`
+            : undefined
         }
-        right={
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-md border border-line bg-white">
-              <button
-                onClick={() => setSearchParams({})}
-                className={cn("flex items-center gap-1.5 rounded-l-md px-3 py-1.5 text-xs font-medium transition",
-                  activeTab === "templates" ? "bg-brand text-white" : "text-ink-muted hover:text-ink")}
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5" /> Templates
-              </button>
-              <button
-                onClick={() => setSearchParams({ tab: "targets" })}
-                className={cn("flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-xs font-medium transition",
-                  activeTab === "targets" ? "bg-brand text-white" : "text-ink-muted hover:text-ink")}
-              >
-                <BadgeCheck className="h-3.5 w-3.5" /> Target Objects
-              </button>
-            </div>
-            {activeTab === "templates" && (
-              <Button onClick={() => setOpen(true)}><Upload className="h-4 w-4" /> Upload Template</Button>
-            )}
-          </div>
-        }
+        right={<Button onClick={() => setOpen(true)}><Upload className="h-4 w-4" /> Upload Template</Button>}
       />
 
-      {/* TARGET OBJECTS VIEW */}
-      {activeTab === "targets" && (
-        items === null ? <div className="p-8 text-center"><PageLoader /></div> :
-        Object.keys(byObject).length === 0 ? (
-          <Card><CardBody><EmptyState icon={<BadgeCheck className="h-5 w-5" />} title="No target objects" description="Upload FBDI templates to see target objects here." /></CardBody></Card>
-        ) : (
-          <div className="space-y-3">
-            {Object.entries(byObject).sort((a, b) => a[0].localeCompare(b[0])).map(([obj, tmpls]) => (
-              <Card key={obj}>
-                <CardHeader
-                  title={obj}
-                  subtitle={`${tmpls.length} template${tmpls.length === 1 ? "" : "s"} · Modules: ${[...new Set(tmpls.map(t => t.module).filter(Boolean))].join(", ") || "—"}`}
-                  actions={
-                    <div className="flex gap-1">
-                      {[...new Set(tmpls.map(t => t.tier).filter(Boolean))].sort().map(tier => (
-                        <Pill key={tier} tone="neutral"><span className="font-mono">{tier}</span></Pill>
-                      ))}
-                    </div>
-                  }
-                />
-                <table className="table-shell">
-                  <thead>
-                    <tr><th>Template</th><th>Module</th><th>Tier</th><th>Phase</th><th>Required Fields</th><th>Status</th><th></th></tr>
-                  </thead>
-                  <tbody>
-                    {tmpls.map(t => (
-                      <tr key={t.id}>
-                        <td>
-                          <Link to={`/fbdi/${t.id}`} className="font-mono text-[12.5px] text-ink hover:text-brand-dark">{t.name}</Link>
-                        </td>
-                        <td><Pill tone="brand">{t.module || "—"}</Pill></td>
-                        <td><span className="font-mono text-[11px] text-ink-muted">{t.tier}</span></td>
-                        <td><Pill tone={PHASE_TONE[t.phase] || "neutral"}>{t.phase}</Pill></td>
-                        <td className="font-mono tabular-nums text-[12px] text-ink-muted">{t.required_field_count} required</td>
-                        <td><Pill tone={t.status === "parsed" ? "success" : "neutral"}>{t.status === "parsed" ? "complete" : t.status}</Pill></td>
-                        <td className="text-right"><Link to={`/fbdi/${t.id}`} className="btn-ghost h-7 px-2 text-xs">Open</Link></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-            ))}
-          </div>
-        )
-      )}
-
-      {/* TEMPLATES VIEW */}
-      {activeTab === "templates" && <Card>
+      <Card>
         {/* Filter bar */}
         <div className="border-b border-line px-4 py-3">
           {/* Search */}
@@ -288,7 +204,7 @@ export const FbdiTemplatesPage: React.FC = () => {
             </table>
           )
         }
-      </Card>}
+      </Card>
 
       <Modal
         open={open}
@@ -365,8 +281,8 @@ export const FbdiTemplateDetailPage: React.FC = () => {
 
   const loadAll = () => {
     if (!id) return;
-    FbdiApi.get(id!).then(setTpl);
-    FbdiApi.fields(id!).then(setFields);
+    FbdiApi.get(Number(id)).then(setTpl);
+    FbdiApi.fields(Number(id)).then(setFields);
   };
   useEffect(() => { loadAll(); }, [id]);
 

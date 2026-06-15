@@ -32,6 +32,7 @@ class Project(Document):
     phase: str = "discovery"
     dress_rehearsal_count: int = 0
     source_connection_id: Optional[str] = None
+    current_environment: str = "DEV"
 
     class Settings:
         name = "projects"

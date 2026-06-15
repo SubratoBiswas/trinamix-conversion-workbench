@@ -6,10 +6,10 @@ import {
   Plus, Upload,
 } from "lucide-react";
 import { CutoverApi, ProjectsApi } from "@/api";
-import { PromoteToEnvironmentModal } from "@/components/cutover/PromoteToEnvironmentModal";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
+import { PromoteToEnvironmentModal } from "@/components/cutover/PromoteToEnvironmentModal";
 import { cn, formatDate } from "@/lib/utils";
 import type {
   Conversion, CutoverDashboard, CutoverEnvironmentColumn, CutoverStage, Project,
@@ -47,23 +47,55 @@ const ENV_ACCENT_TEXT: Record<string, string> = {
  */
 export const MigrationMonitorPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const pid = id!;
+  const pid = Number(id);
 
   const [project, setProject] = useState<Project | null>(null);
   const [board, setBoard] = useState<CutoverDashboard | null>(null);
-  const [promoteConversion, setPromoteConversion] = useState<Conversion | null>(null);
   const [conversions, setConversions] = useState<Conversion[]>([]);
+  // P4 — Promote action. `promoteFor` carries the conversion the user clicked.
+  const [promoteFor, setPromoteFor] = useState<Conversion | null>(null);
+  // Banner shown after a successful promote
+  const [flash, setFlash] = useState<string | null>(null);
 
   const refresh = () => {
     if (!pid) return;
     ProjectsApi.get(pid).then(setProject);
     CutoverApi.dashboard(pid).then(setBoard);
-    ProjectsApi.conversions(pid).then(setConversions).catch(() => {});
+    ProjectsApi.conversions(pid).then(setConversions);
   };
 
   useEffect(() => { refresh(); }, [pid]);
 
+  // Auto-dismiss the flash so it doesn't linger when the user navigates around
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 4000);
+    return () => clearTimeout(t);
+  }, [flash]);
+
+  // Look up a Conversion object for a given stage row — needed because the
+  // dashboard payload only carries summary fields and the modal needs the
+  // full Conversion shape.
+  const conversionFor = (cid: number): Conversion | null =>
+    conversions.find((c) => c.id === cid) || null;
+
   if (!project || !board) return <PageLoader />;
+
+  const ENGAGEMENT_BANNER = (
+    <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-line bg-canvas px-3 py-2 text-[12px]">
+      <span className="text-ink-muted">
+        Engagement <span className="font-semibold text-ink">{project.name}</span>
+        {project.client && <> · {project.client}</>}
+        {project.source_system && <> · src <span className="font-mono text-ink">{project.source_system}</span></>}
+        {Array.isArray(project.selected_modules) && project.selected_modules.length > 0 && (
+          <> · scope <span className="text-ink">{project.selected_modules.join(", ")}</span></>
+        )}
+      </span>
+      <Link to="/cutover" className="text-[11.5px] font-medium text-brand-dark hover:underline">
+        Switch engagement
+      </Link>
+    </div>
+  );
 
   const days = board.days_to_go_live;
   const onTrack = (board.environments.find((e) => e.name === "PROD")?.failed_count ?? 0) === 0;
@@ -87,6 +119,15 @@ export const MigrationMonitorPage: React.FC = () => {
             <Link to={`/projects/${pid}`} className="btn-ghost">
               <ArrowLeft className="h-4 w-4" /> Engagement overview
             </Link>
+            {conversions.length > 0 && (
+              <Button
+                onClick={() => setPromoteFor(conversions[0])}
+                className="!h-8 !text-xs"
+                title="Promote a conversion to the next environment"
+              >
+                <ArrowRight className="h-3.5 w-3.5" /> Promote
+              </Button>
+            )}
             {days !== null && days !== undefined && (
               <Pill tone={days < 30 ? "danger" : days < 90 ? "warning" : "success"}>
                 {days}d to go-live
@@ -95,6 +136,14 @@ export const MigrationMonitorPage: React.FC = () => {
           </div>
         }
       />
+
+      {ENGAGEMENT_BANNER}
+
+      {flash && (
+        <div className="mb-3 rounded-md border border-success/40 bg-success-subtle/50 px-3 py-2 text-[12.5px] text-success">
+          {flash}
+        </div>
+      )}
 
       {/* Days-to-go-live hero card */}
       <Card className="mb-4">
@@ -148,9 +197,9 @@ export const MigrationMonitorPage: React.FC = () => {
           <EnvironmentColumn
             key={env.id}
             env={env}
-            onPromote={(conversionId) => {
-              const conv = conversions.find((c) => c.id === conversionId);
-              if (conv) setPromoteConversion(conv);
+            onPromote={(cid) => {
+              const conv = conversionFor(cid);
+              if (conv) setPromoteFor(conv);
             }}
           />
         ))}
@@ -181,11 +230,11 @@ export const MigrationMonitorPage: React.FC = () => {
           subtitle={`${board.pipeline_runs.length} run${board.pipeline_runs.length === 1 ? "" : "s"} logged`}
           actions={
             <Button
-              variant="primary"
-              className="!h-8 !px-3 !text-xs"
-              onClick={() => conversions.length > 0 && setPromoteConversion(conversions[0])}
+              variant="primary" className="!h-8 !px-3 !text-xs"
+              disabled={conversions.length === 0}
+              onClick={() => conversions.length && setPromoteFor(conversions[0])}
             >
-              <Plus className="h-3 w-3" /> Promote to Env
+              <Plus className="h-3 w-3" /> New Run
             </Button>
           }
         />
@@ -238,14 +287,19 @@ export const MigrationMonitorPage: React.FC = () => {
         )}
       </Card>
 
-      {/* Promote to environment modal */}
-      {promoteConversion && project && (
+      {/* P4 — Promote-to-environment modal. Shared between header button,
+          per-stage Promote actions, and the "New Run" action. */}
+      {promoteFor && project && (
         <PromoteToEnvironmentModal
-          open={!!promoteConversion}
-          onClose={() => setPromoteConversion(null)}
-          conversion={promoteConversion}
+          open
+          onClose={() => setPromoteFor(null)}
+          conversion={promoteFor}
           project={project}
-          onPromoted={() => { setPromoteConversion(null); refresh(); }}
+          onPromoted={(run) => {
+            setFlash(`Promoted ${promoteFor.name} → ${run.environment_name}.`);
+            setPromoteFor(null);
+            refresh();
+          }}
         />
       )}
     </>
@@ -256,12 +310,11 @@ export const MigrationMonitorPage: React.FC = () => {
 
 const EnvironmentColumn: React.FC<{
   env: CutoverEnvironmentColumn;
-  onPromote: (conversionId: string) => void;
+  onPromote: (conversionId: number) => void;
 }> = ({ env, onPromote }) => {
   const total = env.stages.length;
   const accent = ENV_ACCENT[env.name] || "border-line";
   const accentText = ENV_ACCENT_TEXT[env.name] || "text-ink";
-  const isDevEnv = env.name === "DEV";
 
   return (
     <div className={cn(
@@ -290,57 +343,113 @@ const EnvironmentColumn: React.FC<{
         </div>
       </div>
 
-      {/* Stages list */}
+      {/* Stages list — grouped by track (data / process / integration)
+          so the cutover board reflects the full conversion workbench:
+          not just data, but also the processes and integrations
+          discovered on the engagement. */}
       <div className="flex-1 px-4 pb-4">
         {env.stages.length === 0 ? (
           <div className="py-4 text-center text-[11px] text-ink-subtle">No stages yet.</div>
         ) : (
-          <div className="space-y-1.5">
-            {env.stages.map((s) => (
-              <StageRow
-                key={s.conversion_id}
-                stage={s}
-                showPromote={!isDevEnv && s.status === "pending"}
-                onPromote={() => onPromote(s.conversion_id)}
-              />
-            ))}
-          </div>
+          <TrackedStages stages={env.stages} envName={env.name} onPromote={onPromote} />
         )}
       </div>
     </div>
   );
 };
 
+const TRACK_LABEL: Record<string, string> = {
+  data: "Data conversions",
+  process: "Processes",
+  integration: "Integrations",
+};
+
+const TrackedStages: React.FC<{
+  stages: CutoverStage[];
+  envName: string;
+  onPromote: (conversionId: number) => void;
+}> = ({ stages, envName, onPromote }) => {
+  const groups: Record<string, CutoverStage[]> = {
+    data: [],
+    process: [],
+    integration: [],
+  };
+  for (const s of stages) {
+    const t = s.track || "data";
+    (groups[t] ||= []).push(s);
+  }
+  return (
+    <div className="space-y-3">
+      {(["data", "process", "integration"] as const).map((track) => {
+        const rows = groups[track] || [];
+        if (rows.length === 0) return null;
+        return (
+          <details key={track} open={track === "data"} className="group">
+            <summary className="flex cursor-pointer items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+              {TRACK_LABEL[track]} <span className="font-mono">{rows.length}</span>
+            </summary>
+            <div className="mt-1.5 space-y-1.5">
+              {rows.map((s, i) => (
+                <StageRow
+                  key={`${track}-${s.conversion_id ?? s.external_id ?? i}`}
+                  stage={s}
+                  envName={envName}
+                  onPromote={onPromote}
+                />
+              ))}
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+};
+
 const StageRow: React.FC<{
   stage: CutoverStage;
-  showPromote?: boolean;
-  onPromote?: () => void;
-}> = ({ stage, showPromote, onPromote }) => {
+  envName: string;
+  onPromote: (conversionId: number) => void;
+}> = ({ stage, envName, onPromote }) => {
   const tone = STATUS_TONE[stage.status] || STATUS_TONE.pending;
+  // Promote action is only meaningful for *data* conversions on non-DEV
+  // columns that haven't yet reached `complete`. Process / integration
+  // tracks aren't promotable via the EnvironmentRun model; their
+  // progression is driven by the runbook + sign-off actions instead.
+  const isData = (stage.track || "data") === "data";
+  const canPromote = isData && envName !== "DEV" && stage.status !== "complete" && stage.conversion_id != null;
   return (
-    <div className="group flex items-center gap-1 rounded-md border border-line/60 bg-canvas/40 transition hover:border-brand hover:bg-brand-subtle/30">
-      <Link
-        to={`/conversions/${stage.conversion_id}`}
-        className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5"
-      >
-        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dotClass)} />
-        <span className="truncate text-[12px] font-medium text-ink group-hover:text-brand-dark">
-          {stage.conversion_name}
-        </span>
-      </Link>
-      {showPromote ? (
-        <button
-          onClick={(e) => { e.preventDefault(); onPromote?.(); }}
-          className="mr-1.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-brand-dark hover:bg-brand hover:text-white transition"
-          title="Promote to this environment"
+    <div className="group flex items-center justify-between gap-2 rounded-md border border-line/60 bg-canvas/40 px-2 py-1.5 transition hover:border-brand hover:bg-brand-subtle/30">
+      {isData && stage.conversion_id != null ? (
+        <Link
+          to={`/conversions/${stage.conversion_id}`}
+          className="flex min-w-0 flex-1 items-center gap-1.5"
         >
-          Promote →
-        </button>
+          <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dotClass)} />
+          <span className="truncate text-[12px] font-medium text-ink group-hover:text-brand-dark">
+            {stage.conversion_name}
+          </span>
+        </Link>
       ) : (
-        <Pill tone={tone.pillTone} className="mr-1.5 shrink-0 !text-[9.5px]">
-          {stage.status}
-        </Pill>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5"
+             title={stage.target_object || ""}>
+          <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dotClass)} />
+          <span className="truncate text-[12px] font-medium text-ink-muted">
+            {stage.conversion_name}
+          </span>
+        </div>
       )}
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Pill tone={tone.pillTone} className="!text-[9.5px]">{stage.status}</Pill>
+        {canPromote && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPromote(stage.conversion_id!); }}
+            title={`Promote ${stage.conversion_name} to ${envName}`}
+            className="rounded p-0.5 text-ink-muted hover:bg-white hover:text-brand-dark"
+          >
+            <ArrowRight className="h-3 w-3" />
+          </button>
+        )}
+      </div>
     </div>
   );
 };

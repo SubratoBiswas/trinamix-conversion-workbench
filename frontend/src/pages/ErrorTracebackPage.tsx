@@ -8,7 +8,7 @@ import {
   AlertTriangle, Network, ArrowLeftRight, AlertCircle, ChevronRight,
   X, Database, Link2, ArrowDown, FileX,
 } from "lucide-react";
-import { ConversionsApi, DependencyApi, LoadApi } from "@/api";
+import { ConversionsApi, DependencyApi, LoadApi, ProjectsApi } from "@/api";
 import {
   Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -18,6 +18,7 @@ import type {
   Dependency,
   LoadError,
   LoadSummary,
+  Project,
 } from "@/types";
 
 interface TracebackNode extends Node {
@@ -39,37 +40,58 @@ const TONE_STYLES: Record<string, { bg: string; border: string; text: string }> 
  */
 export const ErrorTracebackPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
-  const projParam = params.get("conversion");
-
-  const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<string | null>(projParam ?? null);
+  const [engagements, setEngagements] = useState<Project[]>([]);
+  const [conversions, setConversions] = useState<Conversion[]>([]);
+  const [projectId, setProjectId] = useState<number | null>(
+    params.get("project") ? Number(params.get("project")) : null,
+  );
+  const [pid, setPid] = useState<number | null>(
+    params.get("conversion") ? Number(params.get("conversion")) : null,
+  );
   const [project, setProject] = useState<Conversion | null>(null);
   const [deps, setDeps] = useState<Dependency[]>([]);
   const [summary, setSummary] = useState<LoadSummary | null>(null);
   const [errors, setErrors] = useState<LoadError[]>([]);
   const [drawerObject, setDrawerObject] = useState<string | null>(null);
 
+  // Load engagements; default to the first if not URL-pinned. Then
+  // load that engagement's conversions and pick the first one as
+  // default — same Item Master from two engagements no longer collides.
   useEffect(() => {
-    ConversionsApi.list().then((ps) => {
-      setProjects(ps);
-      if (!pid && ps[0]) {
-        setPid(ps[0].id);
-        setParams({ conversion: String(ps[0].id) });
-      }
+    ProjectsApi.list().then((rows) => {
+      setEngagements(rows);
+      if (!projectId && rows[0]) setProjectId(rows[0].id);
     });
     DependencyApi.list().then(setDeps);
   }, []);
 
   useEffect(() => {
-    if (!pid) return;
+    if (!projectId) { setConversions([]); return; }
+    ProjectsApi.conversions(projectId).then((rows) => {
+      setConversions(rows);
+      const pinnedBelongsToProject = !!rows.find((c) => c.id === pid);
+      if (!pinnedBelongsToProject) {
+        const first = rows[0];
+        setPid(first ? first.id : null);
+        if (first) setParams({ project: String(projectId), conversion: String(first.id) });
+      }
+    });
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!pid) { setProject(null); setSummary(null); setErrors([]); return; }
     ConversionsApi.get(pid).then(setProject);
     LoadApi.summary(pid).then(setSummary).catch(() => setSummary(null));
     LoadApi.latestErrors(pid).then(setErrors).catch(() => setErrors([]));
   }, [pid]);
 
-  // Build the dependency graph + paint the load summary on top
-  const targetObject = project?.template_name ?
-    project.template_name.split(" ")[0] : "Item";
+  // Build the dependency graph + paint the load summary on top.
+  // Prefer the conversion's explicit target_object (e.g. "Sales Order") so it
+  // matches the dependency-graph node ids; the template name ("Sales Order
+  // Headers (OM)") would mis-split to "Sales" and orphan the error arrows.
+  const targetObject =
+    project?.target_object ||
+    (project?.template_name ? project.template_name.split(" ")[0] : "Item");
 
   const { nodes, edges } = useMemo(() =>
     buildTracebackGraph(deps, targetObject, summary),
@@ -91,10 +113,32 @@ export const ErrorTracebackPage: React.FC = () => {
         title="Error Traceback"
         subtitle="Post-load failures traced back through the dependency graph to upstream master objects"
         right={
-          <select className="input !w-auto !min-w-[280px]" value={pid ?? ""}
-            onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              className="input !w-auto min-w-[220px]"
+              value={projectId ?? ""}
+              onChange={(e) => setProjectId(Number(e.target.value))}
+              title="Engagement"
+            >
+              {engagements.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}{p.client ? ` · ${p.client}` : ""}</option>
+              ))}
+            </select>
+            <select
+              className="input !w-auto min-w-[220px]"
+              value={pid ?? ""}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setPid(v);
+                setParams({ project: String(projectId || ""), conversion: String(v) });
+              }}
+              title="Conversion object"
+            >
+              {conversions.map((c) => (
+                <option key={c.id} value={c.id}>{c.name} ({c.target_object})</option>
+              ))}
+            </select>
+          </div>
         }
       />
 
