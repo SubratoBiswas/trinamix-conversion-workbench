@@ -241,3 +241,141 @@ export const CutoverApi = {
   dashboard: (projectId: string) =>
     api.get<CutoverDashboard>(`/projects/${projectId}/cutover`).then(r => r.data),
 };
+
+// ─────────────────────────────────────────────────────────────────
+// v10 — Discovery (source connections + scan runs)
+// ─────────────────────────────────────────────────────────────────
+
+export const DiscoveryApi = {
+  listConnections: (projectId?: string) =>
+    api.get("/discovery/connections", { params: projectId ? { project_id: projectId } : {} }).then(r => r.data),
+
+  createConnection: (body: Record<string, unknown>) =>
+    api.post("/discovery/connections", body).then(r => r.data),
+
+  getConnection: (id: string) =>
+    api.get(`/discovery/connections/${id}`).then(r => r.data),
+
+  deleteConnection: (id: string) =>
+    api.delete(`/discovery/connections/${id}`),
+
+  testConnection: (id: string) =>
+    api.post(`/discovery/connections/${id}/test`).then(r => r.data),
+
+  startRun: (connectionId: string, modules: string[] = []) =>
+    api.post(`/discovery/connections/${connectionId}/runs`, { modules }).then(r => r.data),
+
+  listRuns: (connectionId: string) =>
+    api.get(`/discovery/connections/${connectionId}/runs`).then(r => r.data),
+
+  listObjects: (runId: string) =>
+    api.get(`/discovery/runs/${runId}/objects`).then(r => r.data),
+
+  toggleObject: (objId: string, selected: boolean) =>
+    api.patch(`/discovery/objects/${objId}/select`, null, { params: { selected } }).then(r => r.data),
+};
+
+// ─────────────────────────────────────────────────────────────────
+// v10 — Audit log
+// ─────────────────────────────────────────────────────────────────
+
+export const AuditApi = {
+  list: (params: { project_id?: string; conversion_id?: string; actor?: string; action?: string; limit?: number } = {}) =>
+    api.get("/audit/events", { params }).then(r => r.data),
+
+  create: (body: Record<string, unknown>) =>
+    api.post("/audit/events", body).then(r => r.data),
+};
+
+// ─────────────────────────────────────────────────────────────────
+// v10 — Chart of Accounts
+// ─────────────────────────────────────────────────────────────────
+
+export const CoaApi = {
+  listStructures: (projectId: string) =>
+    api.get("/coa/structures", { params: { project_id: projectId } }).then(r => r.data),
+
+  createStructure: (body: Record<string, unknown>) =>
+    api.post("/coa/structures", body).then(r => r.data),
+
+  getStructure: (id: string) =>
+    api.get(`/coa/structures/${id}`).then(r => r.data),
+
+  listSegments: (structureId: string) =>
+    api.get(`/coa/structures/${structureId}/segments`).then(r => r.data),
+
+  createSegment: (body: Record<string, unknown>) =>
+    api.post("/coa/segments", body).then(r => r.data),
+
+  listCrosswalks: (segmentId: string, status?: string) =>
+    api.get(`/coa/segments/${segmentId}/crosswalks`, { params: status ? { status } : {} }).then(r => r.data),
+
+  createCrosswalk: (body: Record<string, unknown>) =>
+    api.post("/coa/crosswalks", body).then(r => r.data),
+
+  updateCrosswalk: (id: string, body: Record<string, unknown>) =>
+    api.patch(`/coa/crosswalks/${id}`, body).then(r => r.data),
+
+  stats: (structureId: string) =>
+    api.get(`/coa/structures/${structureId}/stats`).then(r => r.data),
+};
+
+// ─────────────────────────────────────────────────────────────────
+// v10 — Governance (issues, risks, sign-offs, rehearsals, recon)
+// ─────────────────────────────────────────────────────────────────
+
+export const GovernanceApi = {
+  // Issues
+  listIssues: (projectId: string, status?: string) =>
+    api.get("/governance/issues", { params: { project_id: projectId, ...(status ? { status } : {}) } }).then(r => r.data),
+  createIssue: (body: Record<string, unknown>) =>
+    api.post("/governance/issues", body).then(r => r.data),
+  updateIssue: (id: string, body: Record<string, unknown>) =>
+    api.patch(`/governance/issues/${id}`, body).then(r => r.data),
+  deleteIssue: (id: string) =>
+    api.delete(`/governance/issues/${id}`),
+
+  // Risks
+  listRisks: (projectId: string, status?: string) =>
+    api.get("/governance/risks", { params: { project_id: projectId, ...(status ? { status } : {}) } }).then(r => r.data),
+  createRisk: (body: Record<string, unknown>) =>
+    api.post("/governance/risks", body).then(r => r.data),
+  updateRisk: (id: string, body: Record<string, unknown>) =>
+    api.patch(`/governance/risks/${id}`, body).then(r => r.data),
+  deleteRisk: (id: string) =>
+    api.delete(`/governance/risks/${id}`),
+
+  // Sign-offs
+  listSignOffs: (projectId: string) =>
+    api.get("/governance/sign-offs", { params: { project_id: projectId } }).then(r => r.data),
+  createSignOff: (body: Record<string, unknown>) =>
+    api.post("/governance/sign-offs", body).then(r => r.data),
+  updateSignOff: (id: string, body: Record<string, unknown>) =>
+    api.patch(`/governance/sign-offs/${id}`, body).then(r => r.data),
+
+  // Dress rehearsals
+  listRehearsals: (projectId: string) =>
+    api.get("/governance/rehearsals", { params: { project_id: projectId } }).then(r => r.data),
+  createRehearsal: (body: Record<string, unknown>) =>
+    api.post("/governance/rehearsals", body).then(r => r.data),
+  updateRehearsal: (id: string, body: Record<string, unknown>) =>
+    api.patch(`/governance/rehearsals/${id}`, body).then(r => r.data),
+
+  // Cutover tasks
+  listTasks: (projectId: string, rehearsalId?: string) =>
+    api.get("/governance/cutover-tasks", { params: { project_id: projectId, ...(rehearsalId ? { rehearsal_id: rehearsalId } : {}) } }).then(r => r.data),
+  createTask: (body: Record<string, unknown>) =>
+    api.post("/governance/cutover-tasks", body).then(r => r.data),
+  updateTask: (id: string, body: Record<string, unknown>) =>
+    api.patch(`/governance/cutover-tasks/${id}`, body).then(r => r.data),
+
+  // Reconciliation
+  listRecon: (projectId: string, conversionId?: string) =>
+    api.get("/governance/reconciliation", { params: { project_id: projectId, ...(conversionId ? { conversion_id: conversionId } : {}) } }).then(r => r.data),
+  createRecon: (body: Record<string, unknown>) =>
+    api.post("/governance/reconciliation", body).then(r => r.data),
+
+  // Summary
+  summary: (projectId: string) =>
+    api.get(`/governance/summary/${projectId}`).then(r => r.data),
+};

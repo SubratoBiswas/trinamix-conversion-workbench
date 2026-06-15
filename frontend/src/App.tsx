@@ -34,6 +34,10 @@ import { RuleLibraryPage } from "@/pages/RuleLibraryPage";
 import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
+import { DiscoveryPage } from "@/pages/DiscoveryPage";
+import { CoaPage } from "@/pages/CoaPage";
+import { GovernancePage } from "@/pages/GovernancePage";
+import { ReconciliationPage } from "@/pages/ReconciliationPage";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const token = useAuth((s) => s.token);
@@ -102,6 +106,16 @@ const App: React.FC = () => {
         {/* Compliance */}
         <Route path="audit"                  element={<AuditPage />} />
         <Route path="approvals"              element={<ApprovalsPage />} />
+
+        {/* v10 — Discovery & Source Systems */}
+        <Route path="discovery"              element={<DiscoveryPage />} />
+
+        {/* v10 — Chart of Accounts */}
+        <Route path="coa"                    element={<CoaPage />} />
+
+        {/* v10 — Governance */}
+        <Route path="governance"             element={<GovernancePage />} />
+        <Route path="reconciliation"         element={<ReconciliationPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -137,19 +151,14 @@ const OutputPreviewLanding: React.FC = () => {
 // Cutover landing — auto-redirects to the latest active engagement's monitor.
 const CutoverLanding: React.FC = () => {
   const nav = useNavigate();
+  const [empty, setEmpty] = React.useState(false);
+
   React.useEffect(() => {
     import("@/api").then(({ ProjectsApi }) =>
       ProjectsApi.list().then((ps: any[]) => {
         const active = ps.find((p) => p.status === "in_progress") || ps[0];
-        if (active) nav(`/projects/${active.id}/cutover`, { replace: true });
-      })
-    );
-  }, [nav]);
-  return (
-    <div className="flex h-64 items-center justify-center text-sm text-ink-muted">
-      Loading migration monitor…
-    </div>
-  );
-};
-
-export default App;
+        if (active) {
+          nav(`/projects/${active.id}/cutover`, { replace: true });
+        } else {
+          setEmpty(true);
+        }

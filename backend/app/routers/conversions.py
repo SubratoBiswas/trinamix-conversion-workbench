@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 from beanie import PydanticObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from app.models.conversion import Conversion
 from app.models.dataset import Dataset
@@ -11,6 +11,22 @@ from app.models.project import Project
 from app.models.user import User
 from app.schemas.conversion import ConversionCreate, ConversionOut, ConversionUpdate
 from app.services.auth_service import get_current_user
+
+
+async def _auto_map(conversion_id) -> None:
+    """Run AI mapping suggestions in the background if none exist yet."""
+    try:
+        from app.models.mapping import MappingSuggestion
+        from app.services.mapping_service import run_mapping_suggestions
+        existing = await MappingSuggestion.find(
+            MappingSuggestion.conversion_id == conversion_id
+        ).count()
+        if existing == 0:
+            conv = await Conversion.get(conversion_id)
+            if conv and conv.dataset_id and conv.template_id:
+                await run_mapping_suggestions(conv)
+    except Exception:
+        pass  # Background task — never crash the request
 
 router = APIRouter(prefix="/api/conversions", tags=["conversions"])
 
@@ -54,7 +70,11 @@ async def get_conversion(conversion_id: str, _: User = Depends(get_current_user)
 
 
 @router.post("", response_model=ConversionOut)
-async def create_conversion(payload: ConversionCreate, user: User = Depends(get_current_user)):
+async def create_conversion(
+    payload: ConversionCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+):
     proj = await Project.get(PydanticObjectId(payload.project_id))
     if not proj:
         raise HTTPException(400, f"Project {payload.project_id} does not exist")
@@ -71,12 +91,18 @@ async def create_conversion(payload: ConversionCreate, user: User = Depends(get_
         data["status"] = "draft" if data.get("dataset_id") and data.get("template_id") else "planning"
     c = Conversion(**data)
     await c.insert()
+    # Auto-run AI mapping when both dataset and template are set
+    if c.dataset_id and c.template_id:
+        background_tasks.add_task(_auto_map, c.id)
     return await _hydrate(c)
 
 
 @router.patch("/{conversion_id}", response_model=ConversionOut)
 async def update_conversion(
-    conversion_id: str, payload: ConversionUpdate, _: User = Depends(get_current_user)
+    conversion_id: str,
+    payload: ConversionUpdate,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(get_current_user),
 ):
     c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
@@ -88,6 +114,10 @@ async def update_conversion(
         update_data["template_id"] = PydanticObjectId(update_data["template_id"])
     update_data["updated_at"] = datetime.utcnow()
     await c.set(update_data)
+    await c.sync()
+    # Auto-run AI mapping if this update completed the dataset+template pair
+    if c.dataset_id and c.template_id:
+        background_tasks.add_task(_auto_map, c.id)
     return await _hydrate(c)
 
 

@@ -17,6 +17,10 @@ from app.routers import mapping as mapping_router
 from app.routers import operations as ops_router
 from app.routers import projects as projects_router
 from app.routers import quality as quality_router
+from app.routers import discovery as discovery_router
+from app.routers import audit as audit_router
+from app.routers import coa as coa_router
+from app.routers import governance as governance_router
 
 
 @asynccontextmanager
@@ -36,8 +40,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN, "http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -62,8 +66,4 @@ app.include_router(cutover_router.router)
 app.include_router(mapping_router.router)
 app.include_router(quality_router.router)
 app.include_router(learned_router.router)
-app.include_router(ops_router.output_router)
-app.include_router(ops_router.load_router)
-app.include_router(ops_router.workflow_router)
-app.include_router(ops_router.dep_router)
-app.include_router(ops_router.dashboard_router)
+app.include_router(ops_rout

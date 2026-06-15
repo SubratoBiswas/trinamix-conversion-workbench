@@ -33,7 +33,19 @@ export const LearningCenterPage: React.FC = () => {
           : `${stats.total} learned mapping(s) — auto-applied in future cycles`
         }
         right={!isEmpty && (
-          <Button variant="secondary">
+          <Button variant="secondary" onClick={() => {
+            const rows = items.map((m) =>
+              [m.id, m.kind, m.category,
+               JSON.stringify(m.original_value ?? ""),
+               JSON.stringify(m.resolved_value ?? ""),
+               m.target_object || "",
+               m.captured_at].join(",")
+            );
+            const csv = ["id,kind,category,original_value,resolved_value,target_object,captured_at", ...rows].join("\n");
+            const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+            const a = document.createElement("a"); a.href = url; a.download = "learned_mappings.csv";
+            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+          }}>
             <Download className="h-4 w-4" /> Export Registry
           </Button>
         )}
