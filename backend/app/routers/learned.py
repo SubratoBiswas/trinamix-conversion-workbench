@@ -48,7 +48,7 @@ async def list_learned(
     if category:
         filters.append(LearnedMapping.category == category)
     query = LearnedMapping.find(*filters)
-    items = await query.sort(-LearnedMapping.captured_at).to_list()
+    items = await query.sort("-captured_at").to_list()
     return [{**item.model_dump(), "id": str(item.id)} for item in items]
 
 
@@ -77,6 +77,18 @@ async def learning_stats(_: User = Depends(get_current_user)):
         "analyst_minutes_saved": minutes_saved,
         "by_category": cat_rows,
     }
+
+
+@router.get("/knowledge-bank/stats")
+async def knowledge_bank_stats(_: User = Depends(get_current_user)):
+    """Per-source-ERP stats for the Knowledge Bank panel in Learning Center."""
+    items = await LearnedMapping.find_all().to_list()
+    from collections import Counter
+    by_erp: Counter = Counter()
+    for item in items:
+        erp = getattr(item, "source_erp", None) or getattr(item, "captured_from", None) or "unknown"
+        by_erp[erp] += 1
+    return [{"source_erp": erp, "count": cnt} for erp, cnt in by_erp.most_common()]
 
 
 @router.delete("/{learned_id}")

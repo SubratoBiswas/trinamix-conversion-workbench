@@ -36,7 +36,7 @@ async def upload_dataset(
 
 @router.get("", response_model=list[DatasetOut])
 async def list_datasets(_: User = Depends(get_current_user)):
-    datasets = await Dataset.find_all().sort(-Dataset.uploaded_at).to_list()
+    datasets = await Dataset.find_all().sort("-uploaded_at").to_list()
     return [_ds_out(ds) for ds in datasets]
 
 
@@ -47,7 +47,7 @@ async def get_dataset(dataset_id: str, _: User = Depends(get_current_user)):
         raise HTTPException(404, "Dataset not found")
     columns = await DatasetColumnProfile.find(
         DatasetColumnProfile.dataset_id == ds.id
-    ).sort(+DatasetColumnProfile.position).to_list()
+    ).sort("position").to_list()
     return _ds_out(ds, columns)
 
 
@@ -66,7 +66,7 @@ async def get_profile(dataset_id: str, _: User = Depends(get_current_user)):
         raise HTTPException(404, "Dataset not found")
     columns = await DatasetColumnProfile.find(
         DatasetColumnProfile.dataset_id == ds.id
-    ).sort(+DatasetColumnProfile.position).to_list()
+    ).sort("position").to_list()
     return _ds_out(ds, columns)
 
 

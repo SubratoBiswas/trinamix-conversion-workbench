@@ -67,7 +67,7 @@ async def list_outputs(
 ):
     outputs = await ConvertedOutput.find(
         ConvertedOutput.conversion_id == PydanticObjectId(conversion_id)
-    ).sort(-ConvertedOutput.generated_at).to_list()
+    ).sort("-generated_at").to_list()
     return [
         {**o.model_dump(), "id": str(o.id), "conversion_id": str(o.conversion_id)}
         for o in outputs
@@ -81,7 +81,7 @@ async def download_output(
 ):
     out = await ConvertedOutput.find(
         ConvertedOutput.conversion_id == PydanticObjectId(conversion_id)
-    ).sort(-ConvertedOutput.generated_at).first_or_none()
+    ).sort("-generated_at").first_or_none()
     if not out or not Path(out.output_file_path).exists():
         raise HTTPException(404, "No output artifact found — generate output first")
     return FileResponse(out.output_file_path, filename=out.output_file_name)
@@ -110,7 +110,7 @@ async def list_load_runs(
 ):
     runs = await LoadRun.find(
         LoadRun.conversion_id == PydanticObjectId(conversion_id)
-    ).sort(-LoadRun.started_at).to_list()
+    ).sort("-started_at").to_list()
     return [
         {**r.model_dump(), "id": str(r.id), "conversion_id": str(r.conversion_id)}
         for r in runs
@@ -140,7 +140,7 @@ async def list_latest_load_errors(
 ):
     latest = await LoadRun.find(
         LoadRun.conversion_id == PydanticObjectId(conversion_id)
-    ).sort(-LoadRun.started_at).first_or_none()
+    ).sort("-started_at").first_or_none()
     if not latest:
         return []
     errors = await LoadError.find(
@@ -180,7 +180,7 @@ async def create_workflow(
 
 @workflow_router.get("", response_model=list[WorkflowOut])
 async def list_workflows(_: User = Depends(get_current_user)):
-    workflows = await Workflow.find_all().sort(-Workflow.updated_at).to_list()
+    workflows = await Workflow.find_all().sort("-updated_at").to_list()
     return [
         {**w.model_dump(), "id": str(w.id),
          "conversion_id": str(w.conversion_id) if w.conversion_id else None}

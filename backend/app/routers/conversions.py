@@ -57,7 +57,7 @@ async def list_conversions(
         query["project_id"] = PydanticObjectId(project_id)
     if status:
         query["status"] = status
-    convs = await Conversion.find(query).sort(+Conversion.planned_load_order).to_list()
+    convs = await Conversion.find(query).sort("planned_load_order").to_list()
     return [await _hydrate(c) for c in convs]
 
 

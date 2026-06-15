@@ -20,8 +20,8 @@ def _fld_out(f: FBDIField) -> dict:
 
 
 async def _detail_payload(tpl: FBDITemplate) -> dict:
-    sheets = await FBDISheet.find(FBDISheet.template_id == tpl.id).sort(+FBDISheet.sequence).to_list()
-    fields = await FBDIField.find(FBDIField.template_id == tpl.id).sort(+FBDIField.sequence).to_list()
+    sheets = await FBDISheet.find(FBDISheet.template_id == tpl.id).sort("sequence").to_list()
+    fields = await FBDIField.find(FBDIField.template_id == tpl.id).sort("sequence").to_list()
     d = tpl.model_dump()
     d["id"] = str(tpl.id)
     d["sheets"] = [{"id": str(s.id), "template_id": str(s.template_id), **{k: v for k, v in s.model_dump().items() if k not in ("id","template_id")}} for s in sheets]
@@ -46,7 +46,7 @@ async def upload_template(
 
 @router.get("/templates", response_model=list[FBDITemplateOut])
 async def list_templates(_: User = Depends(get_current_user)):
-    templates = await FBDITemplate.find_all().sort(-FBDITemplate.uploaded_at).to_list()
+    templates = await FBDITemplate.find_all().sort("-uploaded_at").to_list()
     return [{"id": str(t.id), **{k: v for k, v in t.model_dump().items() if k != "id"}} for t in templates]
 
 
@@ -62,7 +62,7 @@ async def get_template(template_id: str, _: User = Depends(get_current_user)):
 async def list_template_fields(template_id: str, _: User = Depends(get_current_user)):
     fields = await FBDIField.find(
         FBDIField.template_id == PydanticObjectId(template_id)
-    ).sort(+FBDIField.sequence).to_list()
+    ).sort("sequence").to_list()
     return [_fld_out(f) for f in fields]
 
 

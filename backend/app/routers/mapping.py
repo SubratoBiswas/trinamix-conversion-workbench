@@ -151,7 +151,7 @@ async def preview_rules(
 async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
     rules = await TransformationRule.find(
         TransformationRule.conversion_id == PydanticObjectId(conversion_id)
-    ).sort(+TransformationRule.sequence).to_list()
+    ).sort("sequence").to_list()
     return [{"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id","conversion_id")}} for r in rules]
 
 
