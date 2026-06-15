@@ -14,7 +14,7 @@ class LearnedMappingBase(BaseModel):
     target_field: Optional[str] = None
     rule_type: Optional[str] = None
     rule_config: Optional[Any] = None
-    project_id: Optional[int] = None
+    project_id: Optional[str] = None
     captured_from: Optional[str] = None
     confidence_boost: Optional[float] = 0.26
     records_auto_fixed: Optional[int] = 0
