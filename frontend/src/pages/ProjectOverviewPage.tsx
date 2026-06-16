@@ -52,7 +52,30 @@ export const ProjectOverviewPage: React.FC = () => {
     DependencyApi.list().then(setDeps);
   };
 
-  useEffect(() => { refresh(); }, [pid]);
+  // Auto-populate silently when project has stored modules but 0 conversions
+  const autoPopulateIfNeeded = async (proj: typeof project, convs: typeof conversions) => {
+    if (!proj || !convs) return;
+    if (convs.length > 0) return;
+    const mods = (proj as any).selected_modules as string[] | undefined;
+    if (!mods || mods.length === 0) return;
+    try {
+      const r = await ProjectsApi.autoPopulate(proj.id, mods);
+      flash(`Auto-populated ${r.created?.length ?? 0} conversion(s) from saved modules`);
+      refresh();
+    } catch { /* silent */ }
+  };
+
+  useEffect(() => {
+    Promise.all([
+      ProjectsApi.get(pid),
+      ProjectsApi.conversions(pid),
+      DependencyApi.list().then(setDeps),
+    ]).then(([proj, convs]) => {
+      setProject(proj);
+      setConversions(convs);
+      autoPopulateIfNeeded(proj, convs);
+    });
+  }, [pid]);
 
   if (!project || !conversions) return <PageLoader />;
 
@@ -112,7 +135,23 @@ export const ProjectOverviewPage: React.FC = () => {
             >
               <GitBranch className="h-4 w-4" /> Derive Load Order
             </Button>
-            <Button variant="secondary" onClick={() => setShowModuleModal(true)}>
+            <Button
+              variant="secondary"
+              loading={busy === "auto_pop"}
+              onClick={async () => {
+                const mods = (project as any).selected_modules as string[] | undefined;
+                if (mods && mods.length > 0) {
+                  setBusy("auto_pop");
+                  try {
+                    const r = await ProjectsApi.autoPopulate(pid, mods);
+                    flash(`Auto-populated ${r.created?.length ?? 0} conversion(s)`);
+                    refresh();
+                  } finally { setBusy(null); }
+                } else {
+                  setShowModuleModal(true);
+                }
+              }}
+            >
               <Wand2 className="h-4 w-4" /> Auto-populate
             </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
