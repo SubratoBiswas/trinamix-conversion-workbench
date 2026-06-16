@@ -112,7 +112,7 @@ async def record_learning_from_mapping(
     if mapping.suggested_transformation and isinstance(mapping.suggested_transformation, dict):
         rule_type = mapping.suggested_transformation.get("rule_type")
         rule_config = mapping.suggested_transformation.get("config", {})
-    captured_from = f"{conversion.name} — {target_field}"
+    captured_from = f"{conversion.name} -- {target_field}"
     lm = await _upsert(
         kind="column_mapping", category="Column Mapping Alias",
         original_value=mapping.source_column, resolved_value=target_field,
@@ -146,7 +146,7 @@ async def record_learning_from_rule(
             target_field = f.field_name
     if not target_field:
         return None
-    captured_from = f"{conversion.name} — {target_field} (manual)"
+    captured_from = f"{conversion.name} -- {target_field} (manual)"
     lm = await _upsert(
         kind="rule", category=_category_for(rule.rule_type),
         original_value=rule.source_column or "", resolved_value=target_field,
@@ -277,4 +277,6 @@ async def propagate_rules_to_downstream(
                 ).insert()
             propagated.append({
                 "conversion_id": str(conv.id), "conversion_name": conv.name,
-                "target_field": f.field_name, "rule_type": rule_t
+                "target_field": f.field_name, "rule_type": rule_type,
+            })
+    return propagated
