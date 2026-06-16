@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useAuth } from "@/store/authStore";
 
@@ -11,7 +11,8 @@ import { DatasetPreparationPage } from "@/pages/DatasetPreparationPage";
 import { FbdiTemplatesPage, FbdiTemplateDetailPage } from "@/pages/FbdiTemplatesPage";
 
 // Engagement-level pages
-import { ProjectsPage, NewProjectPage } from "@/pages/ProjectsPage";
+import { ProjectsPage } from "@/pages/ProjectsPage";
+import { SetupWizard } from "@/components/setup/SetupWizard";
 import { ProjectOverviewPage } from "@/pages/ProjectOverviewPage";
 
 // Conversion-level pages
@@ -63,11 +64,11 @@ const App: React.FC = () => {
 
         {/* Engagements */}
         <Route path="projects"               element={<ProjectsPage />} />
-        <Route path="projects/new"           element={<NewProjectPage />} />
+        <Route path="projects/new"           element={<SetupWizard />} />
         <Route path="projects/:id"           element={<ProjectOverviewPage />} />
         <Route path="projects/:id/cutover"   element={<MigrationMonitorPage />} />
 
-        {/* Cutover landing — picks the first active engagement */}
+        {/* Cutover landing */}
         <Route path="cutover"                element={<CutoverLanding />} />
 
         {/* Conversion objects */}
@@ -75,7 +76,7 @@ const App: React.FC = () => {
         <Route path="conversions/:id"        element={<ConversionDetailPage />} />
         <Route path="conversions/:id/output" element={<OutputPreviewPage />} />
 
-        {/* Conversion workspaces (operate on a conversion via ?conversion= query param) */}
+        {/* Conversion workspaces */}
         <Route path="mappings"               element={<MappingReviewPage />} />
         <Route path="transformations"        element={<TransformationStudioPage />} />
         <Route path="recommendations"        element={<RecommendationsHubPage />} />
@@ -109,14 +110,11 @@ const App: React.FC = () => {
   );
 };
 
-// Output Preview landing — project-scoped picker. Two engagements
-// implementing SCM can each have an "Item Master" conversion; without
-// the project layer the user sees both and can't tell which is which.
-// The URL carries ?project=N so deep-links and back-button work.
+// ─── Output Preview landing — project-scoped conversion picker ────────────────
 const OutputPreviewLanding: React.FC = () => {
   const [projects, setProjects] = React.useState<any[]>([]);
   const [conversions, setConversions] = React.useState<any[]>([]);
-  const [projectId, setProjectId] = React.useState<string | null>(null);
+  const [projectId, setProjectId] = React.useState<string | null>(null);  // string ID (MongoDB)
   const [loading, setLoading] = React.useState(false);
   const loc = useLocation();
   const nav = useNavigate();
@@ -126,7 +124,8 @@ const OutputPreviewLanding: React.FC = () => {
       setProjects(rows);
       const qsId = new URLSearchParams(loc.search).get("project");
       const fallback = rows[0]?.id ?? null;
-      setProjectId(qsId ?? fallback);
+      // IDs are MongoDB strings — never coerce to number
+      setProjectId(qsId || (fallback != null ? String(fallback) : null));
     }));
   }, []);
 
@@ -134,7 +133,7 @@ const OutputPreviewLanding: React.FC = () => {
     if (!projectId) { setConversions([]); return; }
     setLoading(true);
     import("@/api").then(({ ProjectsApi }) =>
-      ProjectsApi.conversions(projectId).then((rows: any[]) => {
+      ProjectsApi.conversions(String(projectId)).then((rows: any[]) => {
         setConversions(rows);
         setLoading(false);
       }).catch(() => setLoading(false))
@@ -146,7 +145,7 @@ const OutputPreviewLanding: React.FC = () => {
     nav(`/output?project=${id}`, { replace: true });
   };
 
-  const project = projects.find((p) => p.id === projectId);
+  const project = projects.find((p) => String(p.id) === String(projectId));
   const ready = conversions.filter((c) => c.dataset_id && c.template_id);
 
   return (
@@ -165,7 +164,7 @@ const OutputPreviewLanding: React.FC = () => {
           <select
             className="input !h-9 !text-sm min-w-[260px]"
             value={projectId ?? ""}
-            onChange={(e) => onChangeProject(e.target.value)}
+            onChange={(e) => onChangeProject(e.target.value)}  // no Number() — IDs are strings
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -197,11 +196,12 @@ const OutputPreviewLanding: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {ready.map((c) => (
-            <a key={c.id} href={`/conversions/${c.id}/output`} className="card flex flex-col gap-2 p-4 hover:border-brand">
+            // React Router Link — soft navigation, no full-page reload
+            <Link key={c.id} to={`/conversions/${c.id}/output`} className="card flex flex-col gap-2 p-4 hover:border-brand">
               <div className="text-sm font-semibold text-ink">{c.name}</div>
               <div className="text-xs text-ink-muted">{c.dataset_name} → {c.template_name}</div>
               <div className="text-[11px] text-ink-muted">{c.status}</div>
-            </a>
+            </Link>
           ))}
         </div>
       )}
@@ -209,9 +209,7 @@ const OutputPreviewLanding: React.FC = () => {
   );
 };
 
-// Cutover landing — explicit project picker. Auto-redirecting to the
-// "first active engagement" was misleading because the user couldn't
-// tell the page had silently chosen one project out of many.
+// ─── Cutover landing — explicit project picker ────────────────────────────────
 const CutoverLanding: React.FC = () => {
   const [projects, setProjects] = React.useState<any[]>([]);
   const nav = useNavigate();
@@ -225,8 +223,7 @@ const CutoverLanding: React.FC = () => {
       <div className="mb-5">
         <h1 className="text-2xl font-semibold text-ink">Migration Monitor</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Pick an engagement to open its cutover board — environments × entities
-          × processes × integrations, with safeguards and recon side-by-side.
+          Pick an engagement to open its cutover board.
         </p>
       </div>
       {projects.length === 0 ? (

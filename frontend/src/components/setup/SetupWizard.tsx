@@ -202,6 +202,10 @@ export const SetupWizard: React.FC = () => {
         selected_modules: selectedModules,
       };
       const p = await ProjectsApi.create(payload as any);
+      // Auto-create planned conversions for selected Fusion modules
+      if (selectedModules.length > 0) {
+        await ProjectsApi.autoPopulate(p.id, selectedModules);
+      }
       nav(`/projects/${p.id}`);
     } catch (e: any) {
       setError(e?.response?.data?.detail || e?.message || "Failed to create engagement");
