@@ -376,4 +376,8 @@ export const GovernanceApi = {
   listRecon: (projectId: string, conversionId?: string) =>
     api.get("/governance/reconciliation", { params: { project_id: projectId, ...(conversionId ? { conversion_id: conversionId } : {}) } }).then(r => r.data),
   createRecon: (body: Record<string, unknown>) =>
-    api.post("/gover
+    api.post("/governance/reconciliation", body).then(r => r.data),
+
+  reconSummary: (projectId: string) =>
+    api.get(`/governance/summary/${projectId}`).then(r => r.data),
+};
