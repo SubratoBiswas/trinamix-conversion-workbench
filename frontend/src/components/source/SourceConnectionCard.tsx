@@ -3,7 +3,8 @@ import {
   Cable, CheckCircle2, AlertTriangle, Loader2, ShieldCheck, Database,
   Workflow, Plus, Clock, Lock, X,
 } from "lucide-react";
-import { ProjectsApi, SourceConnectionsApi, SourceSystemsApi } from "@/api";
+import { SourceConnectionsApi, SourceSystemsApi } from "@/api";
+import { api } from "@/api/client";
 import {
   Button, Card, CardBody, CardHeader, Pill,
 } from "@/components/ui/Primitives";
@@ -31,7 +32,7 @@ const STATUS_PILL: Record<string, { tone: "success" | "warning" | "danger" | "ne
 };
 
 export const SourceConnectionCard: React.FC<{
-  projectId: number;
+  projectId: string;
   projectSourceSystem?: string | null;
   className?: string;
 }> = ({ projectId, projectSourceSystem, className }) => {
@@ -43,7 +44,7 @@ export const SourceConnectionCard: React.FC<{
   const [error, setError] = useState<string | null>(null);
 
   const reload = async () => {
-    const conns = await ProjectsApi.connections(projectId);
+    const conns = await api.get(`/projects/${projectId}/source-connections`).then(r => r.data);
     setConn(conns[0] || null);
     setTestResult(null);
   };
@@ -62,7 +63,7 @@ export const SourceConnectionCard: React.FC<{
       setTestResult(result);
       // The connection row's status is server-updated by the test endpoint —
       // refresh it so the pill picks up the new status.
-      const conns = await ProjectsApi.connections(projectId);
+      const conns = await api.get(`/projects/${projectId}/source-connections`).then(r => r.data);
       setConn(conns[0] || null);
     } catch (e: any) {
       setError(e?.response?.data?.detail || "Connection test failed");
@@ -274,7 +275,7 @@ const ProbeRow: React.FC<{ probe: { name: string; status: string; latency_ms?: n
 // ─────── Inline add-connection form (used only when no connection exists) ───────
 
 const AddConnectionInline: React.FC<{
-  projectId: number;
+  projectId: string;
   sourceSystemCode: string;
   sourceSystems: SourceSystem[];
   onClose: () => void;

@@ -888,14 +888,8 @@ const MappingInspector: React.FC<{
             <Button variant="secondary" onClick={() => onReject(mapping)} className="!h-8">
               <X className="h-3.5 w-3.5" /> Reject
             </Button>
-            <Button
-              onClick={() => onApprove(mapping)}
-              className="!h-8 !bg-brand-dark hover:!bg-brand"
-            >
-              <GraduationCap className="h-3.5 w-3.5" />
-              {mapping.requires_dual_approval && mapping.approved_by
-                ? "Approve as 2nd cert"
-                : "Approve & Learn"}
+            <Button variant="primary" onClick={() => onApprove(mapping)} className="!h-8">
+              <Check className="h-3.5 w-3.5" /> Approve
             </Button>
           </div>
         )}

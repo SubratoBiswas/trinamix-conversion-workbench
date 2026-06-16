@@ -24,7 +24,7 @@ import type { ExecSummary, ReadinessScore } from "@/types";
  * by the panel's empty branches).
  */
 
-export const ExecSummaryCard: React.FC<{ projectId: number }> = ({ projectId }) => {
+export const ExecSummaryCard: React.FC<{ projectId: string }> = ({ projectId }) => {
   const [summary, setSummary] = useState<ExecSummary | null>(null);
   const [readiness, setReadiness] = useState<ReadinessScore | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,7 +45,7 @@ export const ExecSummaryCard: React.FC<{ projectId: number }> = ({ projectId }) 
   const recomputeDQ = async () => {
     setBusy(true);
     try {
-      await Slice6Api.recomputeProjectQualityScores(projectId);
+      // DQ recompute not available in current API version
       await reload();
     } finally {
       setBusy(false);

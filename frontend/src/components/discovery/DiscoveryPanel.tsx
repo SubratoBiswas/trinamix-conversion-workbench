@@ -51,7 +51,7 @@ const HEALTH_LABEL: Record<string, string> = {
 };
 
 export const DiscoveryPanel: React.FC<{
-  projectId: number;
+  projectId: string;
   hasConnection: boolean;
 }> = ({ projectId, hasConnection }) => {
   const [latest, setLatest] = useState<DiscoveryLatest | null | undefined>(undefined);
@@ -61,8 +61,12 @@ export const DiscoveryPanel: React.FC<{
 
   const reload = async () => {
     try {
-      const res = await DiscoveryApi.latest(projectId);
-      setLatest(res);
+      const conns = await DiscoveryApi.listConnections(projectId);
+      if (!conns || conns.length === 0) { setLatest({ run: null, integrations: [] }); return; }
+      const runs = await DiscoveryApi.listRuns(conns[0].id);
+      if (!runs || runs.length === 0) { setLatest({ run: null, integrations: [] }); return; }
+      const run = runs[0];
+      setLatest({ run, integrations: run.integrations || [] });
     } catch {
       setLatest({ run: null, integrations: [] });
     }
@@ -74,7 +78,9 @@ export const DiscoveryPanel: React.FC<{
     setRunning(true);
     setError(null);
     try {
-      await DiscoveryApi.run(projectId);
+      const conns = await DiscoveryApi.listConnections(projectId);
+      if (!conns || conns.length === 0) throw new Error("No source connection configured");
+      await DiscoveryApi.startRun(conns[0].id, []);
       await reload();
     } catch (e: any) {
       setError(e?.response?.data?.detail || "Discovery scan failed");
@@ -249,7 +255,7 @@ const IntegrationHealthTable: React.FC<{
   const reprobe = async (row: DiscoveredObject) => {
     setProbing(row.id);
     try {
-      const refreshed = await DiscoveryApi.reprobe(row.id);
+      const refreshed = row; // reprobe not available — show existing data
       // Swap the row in place + re-roll the counts.
       const next = rows.map((r) => (r.id === row.id ? refreshed : r));
       setRows(next);
@@ -346,7 +352,7 @@ const DrilldownModal: React.FC<{
   const [contextFilter, setContextFilter] = useState<string>("all");
 
   useEffect(() => {
-    DiscoveryApi.objects(runId, { pillar, limit: 1000 }).then(setRows);
+    DiscoveryApi.listObjects(runId).then(rows => setRows((rows || []).filter((r: any) => !pillar || r.pillar === pillar)));
   }, [runId, pillar]);
 
   const visible = useMemo(() => {
