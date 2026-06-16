@@ -381,3 +381,67 @@ export const GovernanceApi = {
   reconSummary: (projectId: string) =>
     api.get(`/governance/summary/${projectId}`).then(r => r.data),
 };
+
+// === Source Systems / Fusion Modules (Setup Wizard) ===========================
+export const SourceSystemsApi = {
+  list: () => api.get<any[]>("/source-systems").then(r => r.data),
+};
+
+export const FusionModulesApi = {
+  list: () => api.get<any[]>("/fusion-modules").then(r => r.data),
+};
+
+export const SourceConnectionsApi = {
+  create: (body: Record<string, unknown>) =>
+    api.post<any>("/source-connections", body).then(r => r.data),
+  get: (id: string) => api.get<any>(`/source-connections/${id}`).then(r => r.data),
+  update: (id: string, body: Record<string, unknown>) =>
+    api.patch<any>(`/source-connections/${id}`, body).then(r => r.data),
+  test: (id: string) =>
+    api.post<any>(`/source-connections/${id}/test`).then(r => r.data),
+  remove: (id: string) => api.delete(`/source-connections/${id}`).then(r => r.data),
+};
+
+// === Copilot ===================================================================
+export const CopilotApi = {
+  ask: (body: { project_id: string; messages: { role: string; content: string }[] }) =>
+    api.post<{ answer: string; citations: string[] }>("/copilot/ask", body).then(r => r.data),
+};
+
+// === Inherited Reference Standards ============================================
+export interface InheritedStandard {
+  target_field: string;
+  master_object: string;
+  rule_type: string;
+  rule_config: Record<string, any>;
+  captured_from: string;
+  originated_in_project_id: string | null;
+}
+
+export const InheritedStandardsApi = {
+  forConversion: (conversionId: string) =>
+    api.get<InheritedStandard[]>(`/conversions/${conversionId}/inherited-standards`).then(r => r.data),
+};
+
+// === Slice6 (readiness / safeguards / exec-summary) ===========================
+export const Slice6Api = {
+  safeguards: (projectId: string) =>
+    api.get<any>(`/projects/${projectId}/safeguards`).then(r => r.data),
+  readiness: (projectId: string) =>
+    api.get<any>(`/projects/${projectId}/readiness`).then(r => r.data),
+  execSummary: (projectId: string) =>
+    api.get<any>(`/projects/${projectId}/exec-summary`).then(r => r.data),
+  reconciliation: (projectId: string) =>
+    api.get<any[]>(`/projects/${projectId}/reconciliation`).then(r => r.data),
+  seedReconciliation: (projectId: string) =>
+    api.post<any[]>(`/projects/${projectId}/reconciliation/seed`).then(r => r.data),
+  runbook: (projectId: string) =>
+    api.get<any[]>(`/projects/${projectId}/runbook`).then(r => r.data),
+  seedRunbook: (projectId: string, force = false) =>
+    api.post<any[]>(`/projects/${projectId}/runbook/seed`, null, { params: { force } }).then(r => r.data),
+  updateRunbookTask: (taskId: string, body: Record<string, unknown>) =>
+    api.patch<any>(`/runbook-tasks/${taskId}`, body).then(r => r.data),
+};
+
+// === COAApi alias (some pages import COAApi, others import CoaApi) =============
+export { CoaApi as COAApi };
