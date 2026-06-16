@@ -27,7 +27,8 @@ async def run_cleansing(conversion: Conversion) -> list[ValidationIssue]:
     fields_by_id = {f.id: f for f in fields}
     mappings = await MappingSuggestion.find(MappingSuggestion.conversion_id == conversion.id).to_list()
     mapping_dicts = [
-        {"source_column": m.source_column, "target_field_name": (fields_by_id.get(m.target_field_id) or None) and fields_by_id[m.target_field_id].field_name if m.target_field_id in fields_by_id else None,
+        {"source_column": m.source_column,
+         "target_field_name": fields_by_id[m.target_field_id].field_name if m.target_field_id in fields_by_id else None,
          "target_required": bool(fields_by_id[m.target_field_id].required) if m.target_field_id in fields_by_id else False,
          "status": m.status, "confidence": m.confidence}
         for m in mappings
@@ -84,6 +85,14 @@ def _normalize_key(v: str | None) -> str:
 
 
 async def simulate_conversion_load(conversion: Conversion) -> LoadRun:
+    if not conversion.dataset_id or not conversion.template_id:
+        run = LoadRun(
+            conversion_id=conversion.id, run_type="simulate", status="skipped",
+            total_records=0, passed_count=0, failed_count=0,
+            warning_count=0, error_count=0, completed_at=datetime.utcnow(),
+        )
+        await run.insert()
+        return run
     df, _lineage = await build_converted_dataframe(conversion)
     converted = df.fillna("").to_dict(orient="records")
     issues = await ValidationIssue.find(ValidationIssue.conversion_id == conversion.id).to_list()
@@ -106,9 +115,10 @@ async def simulate_conversion_load(conversion: Conversion) -> LoadRun:
 
 
 async def build_load_summary(conversion: Conversion) -> dict[str, Any]:
-    latest = await LoadRun.find(LoadRun.conversion_id == conversion.id).sort(-LoadRun.started_at).first_or_none()
+    latest = await LoadRun.find(LoadRun.conversion_id == conversion.id).sort("-started_at").first_or_none()
     if not latest:
-        return {"total_records":0,"passed_count":0,"failed_count":0,"warning_count":0,"error_count":0,"error_categories":[],"root_causes":[],"dependency_impacts":[]}
+        return {"total_records": 0, "passed_count": 0, "failed_count": 0, "warning_count": 0,
+                "error_count": 0, "error_categories": [], "root_causes": [], "dependency_impacts": []}
     errors = await LoadError.find(LoadError.load_run_id == latest.id).to_list()
     cat: dict[str, int] = {}
     cause: dict[str, int] = {}
