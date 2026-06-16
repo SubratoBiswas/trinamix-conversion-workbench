@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/conversions", tags=["conversions"])
 
 
 async def _hydrate(c: Conversion) -> ConversionOut:
+    """Hydrate a single conversion (used for create/update responses)."""
     data = {**c.model_dump(), "id": str(c.id), "project_id": str(c.project_id)}
     if c.dataset_id:
         data["dataset_id"] = str(c.dataset_id)
@@ -46,6 +47,42 @@ async def _hydrate(c: Conversion) -> ConversionOut:
     return ConversionOut(**data)
 
 
+async def _hydrate_bulk(convs: list[Conversion]) -> list[ConversionOut]:
+    """Hydrate many conversions with bulk lookups — avoids N+1 queries."""
+    if not convs:
+        return []
+
+    # Collect unique IDs
+    project_ids = list({c.project_id for c in convs})
+    dataset_ids = list({c.dataset_id for c in convs if c.dataset_id})
+    template_ids = list({c.template_id for c in convs if c.template_id})
+
+    # Bulk fetch in 3 queries instead of 3*N
+    projects_list = await Project.find({"_id": {"$in": project_ids}}).to_list()
+    datasets_list = await Dataset.find({"_id": {"$in": dataset_ids}}).to_list() if dataset_ids else []
+    templates_list = await FBDITemplate.find({"_id": {"$in": template_ids}}).to_list() if template_ids else []
+
+    proj_map = {p.id: p for p in projects_list}
+    ds_map = {d.id: d for d in datasets_list}
+    tpl_map = {t.id: t for t in templates_list}
+
+    results = []
+    for c in convs:
+        data = {**c.model_dump(), "id": str(c.id), "project_id": str(c.project_id)}
+        if c.dataset_id:
+            data["dataset_id"] = str(c.dataset_id)
+            ds = ds_map.get(c.dataset_id)
+            data["dataset_name"] = ds.name if ds else None
+        if c.template_id:
+            data["template_id"] = str(c.template_id)
+            tmpl = tpl_map.get(c.template_id)
+            data["template_name"] = tmpl.name if tmpl else None
+        proj = proj_map.get(c.project_id)
+        data["project_name"] = proj.name if proj else None
+        results.append(ConversionOut(**data))
+    return results
+
+
 @router.get("", response_model=list[ConversionOut])
 async def list_conversions(
     project_id: Optional[str] = Query(None),
@@ -58,7 +95,7 @@ async def list_conversions(
     if status:
         query["status"] = status
     convs = await Conversion.find(query).sort("planned_load_order").to_list()
-    return [await _hydrate(c) for c in convs]
+    return await _hydrate_bulk(convs)
 
 
 @router.get("/{conversion_id}", response_model=ConversionOut)

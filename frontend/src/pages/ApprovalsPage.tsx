@@ -26,19 +26,25 @@ export const ApprovalsPage: React.FC = () => {
   const [pending, setPending] = useState<PendingItem[] | null>(null);
 
   const refresh = async () => {
-    const projects = await ConversionsApi.list();
-    const all: PendingItem[] = [];
-    for (const p of projects) {
-      try {
-        const ms = await MappingApi.list(p.id);
-        for (const m of ms) {
-          if (m.status === "suggested" && m.source_column) {
-            all.push({ project: p, mapping: m });
+    try {
+      const projects = await ConversionsApi.list();
+      const all: PendingItem[] = [];
+      // Only check conversions that have mappings (have dataset + template linked)
+      const mapped = projects.filter(p => p.dataset_id && p.template_id);
+      await Promise.all(mapped.map(async (p) => {
+        try {
+          const ms = await MappingApi.list(p.id);
+          for (const m of ms) {
+            if (m.status === "suggested" && m.source_column) {
+              all.push({ project: p, mapping: m });
+            }
           }
-        }
-      } catch { /* ignore */ }
+        } catch { /* ignore individual conversion errors */ }
+      }));
+      setPending(all.sort((a, b) => a.mapping.confidence - b.mapping.confidence));
+    } catch {
+      setPending([]); // ensure we exit PageLoader even on total failure
     }
-    setPending(all.sort((a, b) => a.mapping.confidence - b.mapping.confidence));
   };
   useEffect(() => { refresh(); }, []);
 

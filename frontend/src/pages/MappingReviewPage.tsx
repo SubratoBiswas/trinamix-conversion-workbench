@@ -42,9 +42,10 @@ export const MappingReviewPage: React.FC = () => {
   const projParam = params.get("conversion");
 
   const [projects, setProjects] = useState<Conversion[]>([]);
-  const [pid, setPid] = useState<number | null>(projParam ?? null);
+  const [pid, setPid] = useState<string | null>(projParam ?? null);
 
   const [project, setProject] = useState<Conversion | null>(null);
+  const [loadingConversion, setLoadingConversion] = useState(true);
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
@@ -85,6 +86,7 @@ export const MappingReviewPage: React.FC = () => {
   // Load project context
   const loadAll = async () => {
     if (!pid) return;
+    setLoadingConversion(true);
     setMappings([]);
     const proj = await ConversionsApi.get(pid);
     setProject(proj);
@@ -92,6 +94,7 @@ export const MappingReviewPage: React.FC = () => {
       // Conversion is in planning — nothing to map yet
       setDataset(null);
       setTargetFields([]);
+      setLoadingConversion(false);
       return;
     }
     const [ds, fields, ms, std] = await Promise.all([
@@ -104,6 +107,7 @@ export const MappingReviewPage: React.FC = () => {
     setTargetFields(fields);
     setMappings(ms);
     setInherited(std);
+    setLoadingConversion(false);
   };
   useEffect(() => { loadAll(); }, [pid]);
 
@@ -191,7 +195,16 @@ export const MappingReviewPage: React.FC = () => {
     loadAll();
   };
 
-  if (!pid || !project || !dataset) return <PageLoader />;
+  if (!pid || !project || loadingConversion) return <PageLoader />;
+  if (!dataset) return (
+    <div className="p-6">
+      <EmptyState
+        icon={<ArrowLeftRight className="h-5 w-5" />}
+        title="No source file linked yet"
+        description="Upload a source extract and link it to this conversion to begin mapping."
+      />
+    </div>
+  );
 
   return (
     <div className="-m-6 flex h-[calc(100vh-3.5rem)] flex-col bg-canvas">

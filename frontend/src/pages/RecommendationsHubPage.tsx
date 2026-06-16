@@ -66,24 +66,28 @@ export const RecommendationsHubPage: React.FC = () => {
 
   useEffect(() => {
     (async () => {
-      const projects = await ConversionsApi.list();
-      const out: ProjectRecs[] = [];
-      for (const p of projects) {
-        if (!p.dataset_id || !p.template_id) continue;  // planning-only — skip
-        try {
-          const [ds, fields] = await Promise.all([
-            DatasetsApi.get(p.dataset_id),
-            FbdiApi.fields(p.template_id),
-          ]);
-          out.push({
-            project: p,
-            dataset: ds,
-            fields,
-            recs: buildRecommendations({ dataset: ds, targetFields: fields }),
-          });
-        } catch { /* skip */ }
+      try {
+        const projects = await ConversionsApi.list();
+        const out: ProjectRecs[] = [];
+        for (const p of projects) {
+          if (!p.dataset_id || !p.template_id) continue;  // planning-only — skip
+          try {
+            const [ds, fields] = await Promise.all([
+              DatasetsApi.get(p.dataset_id),
+              FbdiApi.fields(p.template_id),
+            ]);
+            out.push({
+              project: p,
+              dataset: ds,
+              fields,
+              recs: buildRecommendations({ dataset: ds, targetFields: fields }),
+            });
+          } catch { /* skip individual project errors */ }
+        }
+        setItems(out);
+      } catch {
+        setItems([]); // ensure we exit PageLoader even on total failure
       }
-      setItems(out);
     })();
   }, []);
 
