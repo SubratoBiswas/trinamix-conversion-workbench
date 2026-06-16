@@ -60,29 +60,19 @@ async def auto_populate_conversions(
 ) -> list[Conversion]:
     """Create Conversion placeholders for every object implied by modules.
 
+    Uses the fusion_modules catalog (codes like 'scm', 'hcm') as the
+    authoritative source of truth.  Falls back to the legacy MODULE_OBJECT_MAP
+    for any code that isn't found in the catalog (backwards compatibility).
+
     Idempotent: skips any target_object already present in the project.
     Returns the list of newly-created Conversion documents.
     """
+    from app.fusion_modules import all_objects_for_modules, MODULE_BY_CODE
+
     existing_convs = await Conversion.find(
         Conversion.project_id == project.id
     ).to_list()
     existing_objects = {c.target_object for c in existing_convs if c.target_object}
-
-    # Expand aliases
-    expanded: list[str] = []
-    for m in modules:
-        if m in MODULE_ALIASES:
-            expanded.extend(MODULE_ALIASES[m])
-        else:
-            expanded.append(m)
-
-    # De-duplicate while preserving order
-    seen: set[str] = set()
-    module_list: list[str] = []
-    for m in expanded:
-        if m not in seen:
-            seen.add(m)
-            module_list.append(m)
 
     # Index templates by business_object
     templates = await FBDITemplate.find_all().to_list()
@@ -92,10 +82,48 @@ async def auto_populate_conversions(
         if obj and obj not in tpl_by_obj:
             tpl_by_obj[obj] = tpl
 
+    # Split incoming codes into catalog codes vs legacy codes
+    catalog_codes = [m for m in modules if m in MODULE_BY_CODE]
+    legacy_codes = [m for m in modules if m not in MODULE_BY_CODE]
+
+    # --- Catalog path (scm, hcm, financials, …) ---
+    catalog_objects = all_objects_for_modules(catalog_codes)
+
+    # --- Legacy path (SCM, OM, PO, …) with alias expansion ---
+    legacy_expanded: list[str] = []
+    for m in legacy_codes:
+        if m in MODULE_ALIASES:
+            legacy_expanded.extend(MODULE_ALIASES[m])
+        else:
+            legacy_expanded.append(m)
+
     created: list[Conversion] = []
-    for module in module_list:
-        objects = MODULE_OBJECT_MAP.get(module, [])
-        for obj_def in objects:
+
+    # Insert from catalog
+    for obj in catalog_objects:
+        if obj.target_object in existing_objects:
+            continue
+        existing_objects.add(obj.target_object)
+        tpl = tpl_by_obj.get(obj.target_object)
+        conv = Conversion(
+            project_id=project.id,
+            name=obj.label,
+            target_object=obj.target_object,
+            template_id=tpl.id if tpl else None,
+            planned_load_order=obj.planned_load_order,
+            status="planning",
+            created_by=created_by,
+        )
+        await conv.insert()
+        created.append(conv)
+
+    # Insert from legacy map
+    seen_legacy: set[str] = set()
+    for module in legacy_expanded:
+        if module in seen_legacy:
+            continue
+        seen_legacy.add(module)
+        for obj_def in MODULE_OBJECT_MAP.get(module, []):
             obj_name = obj_def["business_object"]
             if obj_name in existing_objects:
                 continue
