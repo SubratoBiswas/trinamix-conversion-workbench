@@ -1,45 +1,21 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactFlow, {
-  Background, Controls, MarkerType,
+  Background, Controls, MarkerType, useEdgesState, useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity, CheckCircle, CircleDot,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
 } from "lucide-react";
-import { DependencyApi, ProjectsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, ProjectsApi } from "@/api";
+import type { AutoPopulateResult, Dataset, FBDITemplate, LoadOrderResult } from "@/types";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
-import { CopilotFab } from "@/components/copilot/CopilotFab";
-import { CutoverPanel } from "@/components/cutover/CutoverPanel";
-import { ExecSummaryCard } from "@/components/cutover/ExecSummaryCard";
-import { DiscoveryPanel } from "@/components/discovery/DiscoveryPanel";
-import { SourceConnectionCard } from "@/components/source/SourceConnectionCard";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, statusTone } from "@/lib/utils";
 import type { Conversion, Dependency, Project } from "@/types";
-
-// Source-system code → display label for the engagement subtitle. The full
-// catalog is server-driven via /api/source-systems; this is the static
-// fallback used in the subtitle line.
-const SOURCE_DISPLAY: Record<string, string> = {
-  netsuite: "NetSuite",
-  oracle_ebs: "Oracle EBS",
-  sap_ecc: "SAP ECC",
-  sap_s4: "SAP S/4 HANA",
-  workday: "Workday",
-  jde: "JD Edwards",
-  custom: "Custom",
-};
-
-const PHASES: { code: string; label: string; detail: string }[] = [
-  { code: "blueprint", label: "Blueprint", detail: "Discovery + scoping + design sign-off" },
-  { code: "own",       label: "Own",       detail: "Build + SIT (mapping, transforms, validation)" },
-  { code: "lift",      label: "Lift",      detail: "Load (DEV / QA / UAT → cutover)" },
-  { code: "thrive",    label: "Thrive",    detail: "Stabilisation + hypercare" },
-];
 
 const STATUS_TONE = (s: string) => {
   if (s === "loaded" || s === "complete") return "success";
@@ -58,17 +34,25 @@ const STATUS_TONE = (s: string) => {
  */
 export const ProjectOverviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const pid = id;
+  const pid = id!;
 
   const [project, setProject] = useState<Project | null>(null);
   const [conversions, setConversions] = useState<Conversion[] | null>(null);
   const [deps, setDeps] = useState<Dependency[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [showModuleModal, setShowModuleModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
 
-  useEffect(() => {
+  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
+
+  const refresh = () => {
     ProjectsApi.get(pid).then(setProject);
     ProjectsApi.conversions(pid).then(setConversions);
     DependencyApi.list().then(setDeps);
-  }, [pid]);
+  };
+
+  useEffect(() => { refresh(); }, [pid]);
 
   if (!project || !conversions) return <PageLoader />;
 
@@ -98,12 +82,6 @@ export const ProjectOverviewPage: React.FC = () => {
                 <span>{project.target_environment}</span>
               </>
             )}
-            {project.source_system && (
-              <span className="inline-flex items-center gap-1.5 text-brand-dark">
-                <Database className="h-3.5 w-3.5" />
-                {SOURCE_DISPLAY[project.source_system] || project.source_system}
-              </span>
-            )}
             {project.go_live_date && (
               <span className="inline-flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5" /> Go-live {formatDate(project.go_live_date)}
@@ -120,18 +98,29 @@ export const ProjectOverviewPage: React.FC = () => {
             <Link to={`/projects/${pid}/cutover`} className="btn-ghost">
               <Activity className="h-4 w-4" /> Migration Monitor
             </Link>
-            <Button variant="primary">
+            <Button
+              variant="secondary"
+              loading={busy === "load_order"}
+              onClick={async () => {
+                setBusy("load_order");
+                try {
+                  const r = await ProjectsApi.deriveLoadOrder(pid);
+                  flash(`Load order derived for ${r.load_order.length} object(s)`);
+                  refresh();
+                } finally { setBusy(null); }
+              }}
+            >
+              <GitBranch className="h-4 w-4" /> Derive Load Order
+            </Button>
+            <Button variant="secondary" onClick={() => setShowModuleModal(true)}>
+              <Wand2 className="h-4 w-4" /> Auto-populate
+            </Button>
+            <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
             </Button>
           </div>
         }
       />
-
-      {/* Phase bar — lifecycle position of this engagement */}
-      <PhaseBar project={project} onPhaseChange={async (next) => {
-        await ProjectsApi.update(project.id, { phase: next });
-        ProjectsApi.get(project.id).then(setProject);
-      }} />
 
       {/* Top KPI strip */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -154,18 +143,6 @@ export const ProjectOverviewPage: React.FC = () => {
           </div>
         </CardBody>
       </Card>
-
-      {/* Exec summary — CFO / steering committee rollup */}
-      <ExecSummaryCard projectId={project.id} />
-
-      {/* Discovery — 6-pillar inventory + Integration Health table */}
-      <DiscoveryPanel
-        projectId={project.id}
-        hasConnection={Boolean(project.has_active_source_connection || (project.source_connection_count || 0) > 0)}
-      />
-
-      {/* Cutover orchestration — Safeguards / Runbook / Recon / Issues / Risks / Rehearsals / Sign-offs */}
-      <CutoverPanel projectId={project.id} />
 
       {/* Two-column layout */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -233,22 +210,16 @@ export const ProjectOverviewPage: React.FC = () => {
           )}
         </Card>
 
-        {/* Right column: Source Connection + Load Order graph */}
-        <div className="flex flex-col gap-4">
-          <SourceConnectionCard
-            projectId={project.id}
-            projectSourceSystem={project.source_system}
+        {/* Project-scoped dependency graph */}
+        <Card>
+          <CardHeader
+            title={<><Network className="mr-2 inline h-4 w-4 text-brand" />Load Order</>}
+            subtitle="Conversion objects + cross-object dependencies"
           />
-          <Card>
-            <CardHeader
-              title={<><Network className="mr-2 inline h-4 w-4 text-brand" />Load Order</>}
-              subtitle="Conversion objects + cross-object dependencies"
-            />
-            <div className="h-[400px]">
-              <ProjectDependencyGraph conversions={conversions} dependencies={deps} />
-            </div>
-          </Card>
-        </div>
+          <div className="h-[400px]">
+            <ProjectDependencyGraph conversions={conversions} dependencies={deps} />
+          </div>
+        </Card>
       </div>
 
       {project.description && (
@@ -259,9 +230,27 @@ export const ProjectOverviewPage: React.FC = () => {
           </CardBody>
         </Card>
       )}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 rounded-md bg-ink px-4 py-2 text-xs text-white shadow-soft">
+          {toast}
+        </div>
+      )}
 
-      {/* Floating Copilot — only renders when ANTHROPIC_API_KEY is configured server-side. */}
-      <CopilotFab projectId={project.id} />
+      {showAddModal && (
+        <AddConversionModal
+          projectId={pid}
+          onClose={() => setShowAddModal(false)}
+          onDone={() => { flash("Conversion created"); refresh(); setShowAddModal(false); }}
+        />
+      )}
+
+      {showModuleModal && (
+        <AutoPopulateModal
+          projectId={pid}
+          onClose={() => setShowModuleModal(false)}
+          onDone={(r) => { flash(`Created ${r.created_count} conversion(s)`); refresh(); setShowModuleModal(false); }}
+        />
+      )}
     </>
   );
 };
@@ -387,84 +376,197 @@ const ProjectDependencyGraph: React.FC<{
   );
 };
 
-// ─────── Phase bar — engagement lifecycle ───────
+// ─────── Add Conversion Modal ───────────────────────────────────────────────
 
-const PhaseBar: React.FC<{
-  project: Project;
-  onPhaseChange: (next: string) => Promise<void> | void;
-}> = ({ project, onPhaseChange }) => {
-  const current = project.phase || "blueprint";
-  const currentIdx = Math.max(0, PHASES.findIndex((p) => p.code === current));
-  const [busy, setBusy] = useState<string | null>(null);
+const OBJECT_TYPES = [
+  "Supplier", "Item Master", "Customer", "Purchase Order", "Sales Order",
+  "Open AP Invoice", "Open AR Invoice", "GL Journal", "Asset", "Employee",
+  "Bank Account", "Cost Center", "Chart of Accounts", "BOM", "Work Order",
+];
 
-  const advance = async (code: string) => {
-    if (code === current || busy) return;
-    setBusy(code);
+const AddConversionModal: React.FC<{
+  projectId: string;
+  onClose: () => void;
+  onDone: () => void;
+}> = ({ projectId, onClose, onDone }) => {
+  const [name, setName] = React.useState("");
+  const [targetObject, setTargetObject] = React.useState("");
+  const [datasetId, setDatasetId] = React.useState("");
+  const [templateId, setTemplateId] = React.useState("");
+  const [datasets, setDatasets] = React.useState<Dataset[]>([]);
+  const [templates, setTemplates] = React.useState<FBDITemplate[]>([]);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    DatasetsApi.list().then(setDatasets).catch(() => {});
+    FbdiApi.list().then(setTemplates).catch(() => {});
+  }, []);
+
+  const submit = async () => {
+    if (!name.trim()) { setErr("Name is required"); return; }
+    setBusy(true);
+    setErr(null);
     try {
-      await onPhaseChange(code);
-    } finally {
-      setBusy(null);
-    }
+      const conv = await ConversionsApi.create({
+        project_id: projectId,
+        name: name.trim(),
+        target_object: targetObject.trim() || undefined,
+      } as any);
+      if ((datasetId || templateId) && conv.id) {
+        await ConversionsApi.update(conv.id, {
+          ...(datasetId ? { dataset_id: datasetId } : {}),
+          ...(templateId ? { template_id: templateId } : {}),
+        } as any);
+      }
+      onDone();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Failed to create conversion");
+    } finally { setBusy(false); }
   };
 
   return (
-    <div className="mb-4 rounded-lg border border-line bg-white p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-          Lifecycle phase
-        </span>
-        <span className="text-[11px] text-ink-muted">{PHASES[currentIdx]?.detail}</span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Add Conversion Object</h2>
+            <p className="mt-0.5 text-xs text-ink-muted">Create a new conversion object in this engagement.</p>
+          </div>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Name <span className="text-danger">*</span></label>
+            <input
+              autoFocus
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Purchase Order"
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+              onKeyDown={e => e.key === "Enter" && submit()}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Target Object Type</label>
+            <select
+              value={targetObject}
+              onChange={e => setTargetObject(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+            >
+              <option value="">-- select or leave blank --</option>
+              {OBJECT_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Source Dataset</label>
+            <select
+              value={datasetId}
+              onChange={e => setDatasetId(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+            >
+              <option value="">-- select or upload later --</option>
+              {datasets.map(d => (
+                <option key={d.id} value={d.id}>{d.name} ({d.row_count ?? 0} rows)</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1">Target FBDI Template</label>
+            <select
+              value={templateId}
+              onChange={e => setTemplateId(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+            >
+              <option value="">-- select or bind later --</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name}{t.business_object ? " - " + t.business_object : ""}</option>
+              ))}
+            </select>
+          </div>
+          {err && <p className="text-xs text-danger">{err}</p>}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={!name.trim() || busy}
+            className="btn-primary disabled:opacity-50"
+          >
+            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {busy ? "Creating..." : "Create Conversion"}
+          </button>
+        </div>
       </div>
-      <ol className="flex items-center gap-2">
-        {PHASES.map((p, i) => {
-          const done = i < currentIdx;
-          const active = i === currentIdx;
-          return (
-            <React.Fragment key={p.code}>
-              <li className="flex-1">
-                <button
-                  onClick={() => advance(p.code)}
-                  disabled={busy !== null}
-                  className={cn(
-                    "group w-full rounded-md border px-3 py-2 text-left transition",
-                    active && "border-brand bg-brand-subtle/40",
-                    done && "border-success bg-success-subtle/40",
-                    !active && !done && "border-line bg-white hover:border-brand-dark/30",
-                  )}
-                  title={`Switch to ${p.label}`}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span className={cn(
-                      "flex h-5 w-5 items-center justify-center rounded-full text-[10.5px] font-semibold",
-                      active && "bg-brand text-white",
-                      done && "bg-success text-white",
-                      !active && !done && "bg-canvas text-ink-muted",
-                    )}>
-                      {done ? <CheckCircle className="h-3 w-3" /> :
-                       active ? <CircleDot className="h-3 w-3" /> :
-                       <span>{i + 1}</span>}
-                    </span>
-                    <span className={cn(
-                      "text-xs font-semibold",
-                      active && "text-brand-dark",
-                      done && "text-success",
-                      !active && !done && "text-ink-muted",
-                    )}>
-                      {p.label}
-                    </span>
-                  </div>
-                </button>
-              </li>
-              {i < PHASES.length - 1 && (
-                <span className={cn(
-                  "h-px w-6 shrink-0",
-                  done ? "bg-success" : "bg-line",
-                )} />
-              )}
-            </React.Fragment>
-          );
-        })}
-      </ol>
+    </div>
+  );
+};
+
+// --------- Auto-populate Modal ----------------------------------------------
+
+const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
+
+const AutoPopulateModal: React.FC<{
+  projectId: string;
+  onClose: () => void;
+  onDone: (r: AutoPopulateResult) => void;
+}> = ({ projectId, onClose, onDone }) => {
+  const [selected, setSelected] = React.useState<string[]>([]);
+  const [busy, setBusy] = React.useState(false);
+
+  const toggle = (m: string) =>
+    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+
+  const submit = async () => {
+    if (!selected.length) return;
+    setBusy(true);
+    try {
+      const r = await ProjectsApi.autoPopulate(projectId, selected);
+      onDone(r);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              Select Oracle Cloud modules to create conversion objects automatically.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-5">
+          {AVAILABLE_MODULES.map(m => (
+            <button
+              key={m}
+              onClick={() => toggle(m)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                selected.includes(m)
+                  ? "border-brand bg-brand-subtle text-brand-dark"
+                  : "border-line bg-canvas text-ink-muted hover:border-brand"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={!selected.length || busy}
+            className="btn-primary disabled:opacity-50"
+          >
+            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
