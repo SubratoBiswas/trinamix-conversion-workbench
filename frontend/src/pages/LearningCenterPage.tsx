@@ -91,12 +91,26 @@ export const LearningCenterPage: React.FC = () => {
         onForget={async (id) => { await LearningApi.delete(id); refresh(); }}
       />
 
-      {/* Category cards — always shown so users see the buckets even when empty */}
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {stats.by_category.map((c) => (
-          <CategoryCard key={c.category} category={c.category} count={c.count} />
-        ))}
-      </div>
+      {/* Category cards — counts reflect filtered set when a project is selected */}
+      {(() => {
+        const filteredCounts = selectedProjectId
+          ? filteredItems.reduce((acc, m) => {
+              acc[m.category] = (acc[m.category] || 0) + 1;
+              return acc;
+            }, {} as Record<string, number>)
+          : null;
+        const categories = stats.by_category.map((c) => ({
+          category: c.category,
+          count: filteredCounts ? (filteredCounts[c.category] || 0) : c.count,
+        }));
+        return (
+          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {categories.map((c) => (
+              <CategoryCard key={c.category} category={c.category} count={c.count} />
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Registry table */}
       {filteredItems.length > 0 && (

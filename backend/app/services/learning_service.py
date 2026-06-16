@@ -76,6 +76,7 @@ async def _upsert(*, kind, category, original_value, resolved_value,
                 "resolved_value": resolved_value, "rule_config": rule_config or {},
                 "captured_from": captured_from, "captured_by": captured_by,
                 "captured_at": datetime.utcnow(),
+                "project_id": project_id,
             })
             return lm
     lm = LearnedMapping(
@@ -276,6 +277,4 @@ async def propagate_rules_to_downstream(
                 ).insert()
             propagated.append({
                 "conversion_id": str(conv.id), "conversion_name": conv.name,
-                "target_field": f.field_name, "rule_type": rule_type,
-            })
-    return propagated
+                "target_field": f.field_name, "rule_type": rule_t

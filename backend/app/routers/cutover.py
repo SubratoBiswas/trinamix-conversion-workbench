@@ -87,7 +87,7 @@ async def list_runs_for_conversion(
 ):
     runs = await EnvironmentRun.find(
         EnvironmentRun.conversion_id == PydanticObjectId(conversion_id)
-    ).sort(+EnvironmentRun.id).to_list()
+    ).sort("_id").to_list()
     return [await _hydrate_run(r) for r in runs]
 
 
@@ -154,23 +154,6 @@ async def cutover_dashboard(
         Environment.project_id == pid
     ).sort("sort_order").to_list()
 
-    # Auto-seed DEV/QA/UAT/PROD if this project has no environments yet
-    if not envs:
-        existing_names: set = set()
-        for env_def in DEFAULT_ENVIRONMENTS:
-            if env_def["name"] not in existing_names:
-                await Environment(
-                    project_id=pid,
-                    name=env_def["name"],
-                    description=env_def["description"],
-                    sort_order=env_def["order"],
-                    color=env_def["color"],
-                    sox_controlled=1 if env_def["name"] == "PROD" else 0,
-                ).insert()
-        envs = await Environment.find(
-            Environment.project_id == pid
-        ).sort("sort_order").to_list()
-
     conversions = await Conversion.find(
         Conversion.project_id == pid
     ).sort("planned_load_order").to_list()
@@ -218,7 +201,9 @@ async def cutover_dashboard(
         })
 
     # Recent pipeline runs
-    recent_runs = await EnvironmentRun.find({"conversion_id": {"$in": conv_ids}}).sort("-_id").limit(20).to_list()
+    recent_runs = await EnvironmentRun.find(
+        EnvironmentRun.conversion_id.in_(conv_ids)
+    ).sort("-_id").limit(20).to_list()
 
     pipeline_runs = []
     for r in recent_runs:
