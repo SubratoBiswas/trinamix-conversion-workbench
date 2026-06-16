@@ -1,4 +1,4 @@
-﻿"""Learning library endpoints - registry of human-approved mappings/rules."""
+"""Learning library endpoints - registry of human-approved mappings/rules."""
 from collections import Counter
 
 from beanie import PydanticObjectId
@@ -26,6 +26,13 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def _serialize(item: LearnedMapping) -> dict:
+    d = item.model_dump()
+    d["id"] = str(item.id)
+    d["project_id"] = str(item.project_id) if item.project_id else None
+    return d
+
+
 @router.post("", response_model=LearnedMappingOut)
 async def create_learned(
     payload: LearnedMappingCreate,
@@ -33,7 +40,7 @@ async def create_learned(
 ):
     item = LearnedMapping(**payload.model_dump(), captured_by=user.email)
     await item.insert()
-    return {**item.model_dump(), "id": str(item.id)}
+    return _serialize(item)
 
 
 @router.get("", response_model=list[LearnedMappingOut])
@@ -49,7 +56,7 @@ async def list_learned(
         filters.append(LearnedMapping.category == category)
     query = LearnedMapping.find(*filters)
     items = await query.sort("-captured_at").to_list()
-    return [{**item.model_dump(), "id": str(item.id)} for item in items]
+    return [_serialize(item) for item in items]
 
 
 @router.get("/stats", response_model=LearningStats)
