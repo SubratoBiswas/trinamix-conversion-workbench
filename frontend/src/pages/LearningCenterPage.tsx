@@ -1,54 +1,38 @@
 import React, { useEffect, useState } from "react";
 import {
   BookOpen, TrendingUp, Zap, Clock, Download, GraduationCap,
-  Sparkles, Trash2, Link2, ChevronRight, Database, Brain, Repeat,
+  Sparkles, Trash2, Link2, ChevronRight,
 } from "lucide-react";
 import { LearningApi, ProjectsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
 import { formatDate, cn } from "@/lib/utils";
-import type { KnowledgeBankStat, LearnedMapping, LearningStats, Project } from "@/types";
-
-// Server-driven enum has the canonical display name. This static fallback
-// avoids a second async load on the Learning Center for a tiny dictionary.
-const SOURCE_DISPLAY: Record<string, string> = {
-  netsuite: "NetSuite",
-  oracle_ebs: "Oracle EBS",
-  sap_ecc: "SAP ECC",
-  sap_s4: "SAP S/4 HANA",
-  workday: "Workday",
-  jde: "JD Edwards",
-  custom: "Custom",
-};
+import type { LearnedMapping, LearningStats, Project } from "@/types";
 
 export const LearningCenterPage: React.FC = () => {
-  const [projects, setProjects] = useState<Project[]>([]);
-  // null = "All engagements" (cross-project rollup); number = filter to
-  // one engagement's contributions to the bank. The Knowledge Bank
-  // rollup card is always cross-project — that's its whole point.
-  const [projectId, setProjectId] = useState<number | null>(null);
   const [stats, setStats] = useState<LearningStats | null>(null);
   const [items, setItems] = useState<LearnedMapping[] | null>(null);
-  const [kbStats, setKbStats] = useState<KnowledgeBankStat[] | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
 
   const refresh = () => {
-    const filter = projectId ? { project_id: projectId } : undefined;
-    LearningApi.stats(filter).then(setStats);
-    LearningApi.list(filter).then(setItems);
-    LearningApi.knowledgeBankStats()
-      .then(setKbStats)
-      .catch(() => setKbStats([]));
+    LearningApi.stats().then(setStats);
+    LearningApi.list().then(setItems);
   };
+
   useEffect(() => {
-    ProjectsApi.list().then(setProjects);
+    refresh();
+    ProjectsApi.list().then(setProjects).catch(() => {});
   }, []);
-  useEffect(() => { refresh(); }, [projectId]);
 
   if (!stats || !items) return <PageLoader />;
 
+  const filteredItems = selectedProjectId
+    ? items.filter((m) => m.project_id === selectedProjectId)
+    : items;
+
   const isEmpty = stats.total === 0;
-  const project = projects.find((p) => p.id === projectId);
 
   return (
     <>
@@ -56,23 +40,39 @@ export const LearningCenterPage: React.FC = () => {
         title="Learning Center"
         subtitle={isEmpty
           ? "AI feedback loop — analyst actions train the matching engine"
-          : `${stats.total} learned mapping(s) — auto-applied in future cycles${project ? ` · scoped to ${project.name}` : ""}`
+          : `${stats.total} learned mapping(s) — auto-applied in future cycles`
         }
         right={
           <div className="flex items-center gap-2">
-            <select
-              className="input !h-9 !text-sm min-w-[220px]"
-              value={projectId ?? ""}
-              onChange={(e) => setProjectId(e.target.value || null)}
-              title="Filter by engagement"
-            >
-              <option value="">All engagements</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}{p.client ? ` · ${p.client}` : ""}</option>
-              ))}
-            </select>
+            {/* Engagement filter */}
+            {projects.length > 0 && (
+              <select
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="h-9 rounded-md border border-line bg-white pl-3 pr-8 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              >
+                <option value="">All engagements</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.client ? ` · ${p.client}` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
             {!isEmpty && (
-              <Button variant="secondary">
+              <Button variant="secondary" onClick={() => {
+                const rows = filteredItems.map((m) =>
+                  [m.id, m.kind, m.category,
+                   JSON.stringify(m.original_value ?? ""),
+                   JSON.stringify(m.resolved_value ?? ""),
+                   m.target_object || "",
+                   m.captured_at].join(",")
+                );
+                const csv = ["id,kind,category,original_value,resolved_value,target_object,captured_at", ...rows].join("\n");
+                const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+                const a = document.createElement("a"); a.href = url; a.download = "learned_mappings.csv";
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+              }}>
                 <Download className="h-4 w-4" /> Export Registry
               </Button>
             )}
@@ -86,10 +86,8 @@ export const LearningCenterPage: React.FC = () => {
         <KpiStrip stats={stats} />
       )}
 
-      <KnowledgeBankRollup stats={kbStats} />
-
       <ReferenceStandards
-        items={items.filter((m) => m.kind === "reference_standard")}
+        items={filteredItems.filter((m) => m.kind === "reference_standard")}
         onForget={async (id) => { await LearningApi.delete(id); refresh(); }}
       />
 
@@ -101,9 +99,12 @@ export const LearningCenterPage: React.FC = () => {
       </div>
 
       {/* Registry table */}
-      {items.length > 0 && (
+      {filteredItems.length > 0 && (
         <Card className="mt-5">
-          <CardHeader title="Learned Mapping Registry" subtitle={`${items.length} entr${items.length === 1 ? "y" : "ies"}`} />
+          <CardHeader
+            title="Learned Mapping Registry"
+            subtitle={`${filteredItems.length} entr${filteredItems.length === 1 ? "y" : "ies"}${selectedProjectId ? " in this engagement" : ""}`}
+          />
           <table className="table-shell">
             <thead>
               <tr>
@@ -118,9 +119,9 @@ export const LearningCenterPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {items.map((m) => (
+              {filteredItems.map((m) => (
                 <tr key={m.id}>
-                  <td className="font-mono text-[11px] text-ink-muted">LM-{String(m.id).padStart(8, "0")}</td>
+                  <td className="font-mono text-[11px] text-ink-muted">LM-{String(m.id).slice(-8).toUpperCase()}</td>
                   <td><Pill tone="brand">{m.category}</Pill></td>
                   <td className="font-mono text-danger">{m.original_value}</td>
                   <td className="font-mono text-success">{m.resolved_value}</td>
@@ -142,115 +143,21 @@ export const LearningCenterPage: React.FC = () => {
           </table>
         </Card>
       )}
+
+      {filteredItems.length === 0 && !isEmpty && selectedProjectId && (
+        <div className="mt-5 rounded-lg border border-line bg-white px-6 py-10 text-center text-sm text-ink-muted">
+          No learned mappings captured for this engagement yet.
+        </div>
+      )}
     </>
   );
 };
 
 // ─────── Reference Standards section ───────
-//
-// A Reference Standard is a transformation rule taught on a master entity's
-// key column (e.g. Item Master's InventoryItemNumber) that auto-prepends to
-// every downstream conversion's FK column referencing the same master.
-// Captured automatically when an analyst saves a rule on the master's key
-// field — the user doesn't have to manage it explicitly.
-
-// ─────── Knowledge Bank rollup ───────
-//
-// Cross-source-system view: every prior approved mapping bucketed by the
-// source ERP it was taught against. Drives the "new EBS project benefits
-// from prior EBS projects on day 1" story. Source-isolated so a NetSuite
-// alias never accidentally pre-populates an EBS conversion.
-
-const KnowledgeBankRollup: React.FC<{ stats: KnowledgeBankStat[] | null }> = ({
-  stats,
-}) => (
-  <Card className="mt-5">
-    <CardHeader
-      title={
-        <span className="inline-flex items-center gap-1.5">
-          <Brain className="h-4 w-4 text-brand" /> Mapping Knowledge Bank
-        </span>
-      }
-      subtitle={
-        stats && stats.length > 0
-          ? `${stats.length} source system${stats.length === 1 ? "" : "s"} learned — pre-applied on every new project of the same source`
-          : "Captures every approved mapping per source ERP. The first project starts empty; every subsequent project benefits."
-      }
-    />
-    {!stats ? (
-      <CardBody>
-        <div className="text-xs text-ink-muted">Loading Knowledge Bank…</div>
-      </CardBody>
-    ) : stats.length === 0 ? (
-      <CardBody>
-        <div className="flex items-start gap-3 rounded-md border border-dashed border-line bg-canvas px-4 py-3">
-          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand-subtle text-brand-dark">
-            <Database className="h-3.5 w-3.5" />
-          </div>
-          <div className="text-[12px] text-ink-muted">
-            <span className="font-semibold text-ink">No source-system mappings captured yet.</span>{" "}
-            Approve a mapping in any project — the Knowledge Bank stores it
-            against that project's source (NetSuite, Oracle EBS, …). Every
-            subsequent project on the same source picks up these mappings as
-            pre-fills at 0.85 confidence, status "suggested" (analyst confirms).
-          </div>
-        </div>
-      </CardBody>
-    ) : (
-      <div className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-2 lg:grid-cols-3">
-        {stats.map((s) => (
-          <div
-            key={s.source_system}
-            className="rounded-lg border border-line bg-white px-4 py-3 transition hover:border-brand/40 hover:shadow-soft"
-          >
-            <div className="flex items-center justify-between">
-              <div className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink">
-                <Database className="h-3.5 w-3.5 text-brand-dark" />
-                {SOURCE_DISPLAY[s.source_system] || s.source_system}
-              </div>
-              <Pill tone="brand" className="!text-[9px]">KB</Pill>
-            </div>
-            <div className="mt-2 grid grid-cols-3 gap-1.5 text-center text-[10.5px]">
-              <BankTile label="Mappings" value={s.mappings} />
-              <BankTile label="Rules"    value={s.rules} />
-              <BankTile label="Ref std." value={s.reference_standards} />
-            </div>
-            <div className="mt-2.5 flex items-center justify-between border-t border-line/60 pt-2 text-[10.5px] text-ink-muted">
-              <span className="inline-flex items-center gap-1">
-                <Repeat className="h-3 w-3" />
-                {s.total_reuses} reuse{s.total_reuses === 1 ? "" : "s"}
-                {s.avg_reuse_per_mapping > 0 && (
-                  <span className="ml-1 font-mono">
-                    (avg {s.avg_reuse_per_mapping}/mapping)
-                  </span>
-                )}
-              </span>
-              <span>
-                {s.project_count} project{s.project_count === 1 ? "" : "s"}
-              </span>
-            </div>
-            {s.last_reused_at && (
-              <div className="mt-1 text-[10px] text-ink-muted">
-                last reused {formatDate(s.last_reused_at)}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    )}
-  </Card>
-);
-
-const BankTile: React.FC<{ label: string; value: number }> = ({ label, value }) => (
-  <div className="rounded-md bg-canvas px-1.5 py-1.5">
-    <div className="font-mono text-base font-semibold tabular-nums text-ink">{value}</div>
-    <div className="text-[9.5px] uppercase tracking-wider text-ink-muted">{label}</div>
-  </div>
-);
 
 const ReferenceStandards: React.FC<{
   items: LearnedMapping[];
-  onForget: (id: number) => void | Promise<void>;
+  onForget: (id: string) => void | Promise<void>;
 }> = ({ items, onForget }) => (
   <Card className="mt-5">
     <CardHeader
@@ -378,7 +285,7 @@ const KpiTile: React.FC<{ icon: React.ElementType; label: string; value: React.R
   </div>
 );
 
-// ─────── Category card (CHRM-AI-style) ───────
+// ─────── Category card ───────
 
 const CategoryCard: React.FC<{ category: string; count: number }> = ({ category, count }) => (
   <div className={cn(
