@@ -10,12 +10,78 @@ import {
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, ProjectsApi } from "@/api";
-import type { AutoPopulateResult, Dataset, FBDITemplate, LoadOrderResult } from "@/types";
+import type { Dataset, FBDITemplate } from "@/types";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import type { Conversion, Dependency, Project } from "@/types";
+import { ExecSummaryCard } from "@/components/cutover/ExecSummaryCard";
+import { CutoverPanel } from "@/components/cutover/CutoverPanel";
+import { SourceConnectionCard } from "@/components/source/SourceConnectionCard";
+import { DiscoveryPanel } from "@/components/discovery/DiscoveryPanel";
+
+// ─── Lifecycle phases ────────────────────────────────────────────────────────
+
+const PHASES: { code: string; label: string }[] = [
+  { code: "blueprint", label: "Blueprint" },
+  { code: "own",       label: "Own" },
+  { code: "lift",      label: "Lift" },
+  { code: "thrive",    label: "Thrive" },
+];
+
+const LifecycleTracker: React.FC<{ phase: string | null | undefined }> = ({ phase }) => {
+  const current = PHASES.findIndex(p => p.code === (phase ?? "blueprint"));
+  return (
+    <Card className="mb-4">
+      <CardBody className="!py-3">
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+          Lifecycle Phase
+        </div>
+        <div className="flex items-center gap-0">
+          {PHASES.map((p, i) => {
+            const done    = i < current;
+            const active  = i === current;
+            const future  = i > current;
+            return (
+              <React.Fragment key={p.code}>
+                <div
+                  className={cn(
+                    "flex min-w-[140px] flex-1 items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm font-medium transition-all",
+                    done   ? "border-success/60 bg-success/5 text-success"      :
+                    active ? "border-brand/70 bg-brand-subtle text-brand-dark"  :
+                             "border-line bg-canvas text-ink-muted",
+                  )}
+                >
+                  {done ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
+                  ) : active ? (
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-brand bg-brand">
+                      <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                    </span>
+                  ) : (
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-line bg-canvas text-[10px] font-bold text-ink-muted">
+                      {i + 1}
+                    </span>
+                  )}
+                  {p.label}
+                </div>
+                {i < PHASES.length - 1 && (
+                  <div className={cn(
+                    "h-0.5 w-6 shrink-0",
+                    i < current ? "bg-success" : "bg-line",
+                  )} />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </CardBody>
+    </Card>
+  );
+};
+
+// ─── Status tone helpers ─────────────────────────────────────────────────────
 
 const STATUS_TONE = (s: string) => {
   if (s === "loaded" || s === "complete") return "success";
@@ -25,13 +91,8 @@ const STATUS_TONE = (s: string) => {
   return "warning";
 };
 
-/**
- * Engagement detail page.
- *
- * Shows the engagement metadata, all conversion objects within it, and a
- * project-scoped dependency graph that plots each conversion as a node and
- * draws arrows between them based on the global object-type dependency map.
- */
+// ─── Page ────────────────────────────────────────────────────────────────────
+
 export const ProjectOverviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const pid = id!;
@@ -52,7 +113,6 @@ export const ProjectOverviewPage: React.FC = () => {
     DependencyApi.list().then(setDeps);
   };
 
-  // Auto-populate silently when project has stored modules but 0 conversions
   const autoPopulateIfNeeded = async (proj: typeof project, convs: typeof conversions) => {
     if (!proj || !convs) return;
     if (convs.length > 0) return;
@@ -80,8 +140,8 @@ export const ProjectOverviewPage: React.FC = () => {
   if (!project || !conversions) return <PageLoader />;
 
   const totals = {
-    total: conversions.length,
-    planning: conversions.filter(c => c.status === "planning").length,
+    total:      conversions.length,
+    planning:   conversions.filter(c => c.status === "planning").length,
     inProgress: conversions.filter(c =>
       ["draft", "mapping_suggested", "awaiting_approval", "validated", "output_generated"].includes(c.status)
     ).length,
@@ -89,6 +149,7 @@ export const ProjectOverviewPage: React.FC = () => {
     failed: conversions.filter(c => c.status === "failed").length,
   };
   const pct = totals.total > 0 ? Math.round((totals.loaded / totals.total) * 100) : 0;
+  const hasConnection = !!(project as any).has_active_source_connection;
 
   return (
     <>
@@ -100,10 +161,7 @@ export const ProjectOverviewPage: React.FC = () => {
               <Building2 className="h-3.5 w-3.5" /> {project.client || "—"}
             </span>
             {project.target_environment && (
-              <>
-                <span>→</span>
-                <span>{project.target_environment}</span>
-              </>
+              <><span>→</span><span>{project.target_environment}</span></>
             )}
             {project.go_live_date && (
               <span className="inline-flex items-center gap-1.5">
@@ -161,17 +219,20 @@ export const ProjectOverviewPage: React.FC = () => {
         }
       />
 
-      {/* Top KPI strip */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <KpiTile label="Conversions" value={totals.total} icon={<Layers className="h-3.5 w-3.5" />} tone="text-ink" />
-        <KpiTile label="Planning"    value={totals.planning} icon={<Clock className="h-3.5 w-3.5" />} tone="text-info" />
-        <KpiTile label="In progress" value={totals.inProgress} icon={<PlayCircle className="h-3.5 w-3.5" />} tone="text-warning" />
-        <KpiTile label="Loaded"      value={totals.loaded} icon={<CheckCircle2 className="h-3.5 w-3.5" />} tone="text-success" />
-        <KpiTile label="Failed"      value={totals.failed} icon={<AlertCircle className="h-3.5 w-3.5" />} tone="text-danger" />
+      {/* Lifecycle phase tracker */}
+      <LifecycleTracker phase={(project as any).phase} />
+
+      {/* KPI strip */}
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <KpiTile label="Conversions" value={totals.total}      icon={<Layers      className="h-3.5 w-3.5" />} tone="text-ink" />
+        <KpiTile label="Planning"    value={totals.planning}   icon={<Clock       className="h-3.5 w-3.5" />} tone="text-info" />
+        <KpiTile label="In progress" value={totals.inProgress} icon={<PlayCircle  className="h-3.5 w-3.5" />} tone="text-warning" />
+        <KpiTile label="Loaded"      value={totals.loaded}     icon={<CheckCircle2 className="h-3.5 w-3.5" />} tone="text-success" />
+        <KpiTile label="Failed"      value={totals.failed}     icon={<AlertCircle className="h-3.5 w-3.5" />} tone="text-danger" />
       </div>
 
       {/* Progress bar */}
-      <Card className="mt-4">
+      <Card className="mb-4">
         <CardBody>
           <div className="flex items-center justify-between text-xs">
             <span className="font-medium text-ink">Engagement progress</span>
@@ -183,17 +244,25 @@ export const ProjectOverviewPage: React.FC = () => {
         </CardBody>
       </Card>
 
-      {/* Two-column layout */}
+      {/* Migration Readiness exec summary */}
+      <ExecSummaryCard projectId={pid} />
+
+      {/* Cutover Orchestration */}
+      <CutoverPanel projectId={pid} />
+
+      {/* Conversion Objects + Source Connection + Load Order */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Conversions list */}
         <Card className="lg:col-span-2">
-          <CardHeader title="Conversion Objects" subtitle={`${totals.total} object${totals.total === 1 ? "" : "s"} ordered by planned load sequence`} />
+          <CardHeader
+            title="Conversion Objects"
+            subtitle={`${totals.total} object${totals.total === 1 ? "" : "s"} ordered by planned load sequence`}
+          />
           {conversions.length === 0 ? (
             <CardBody>
               <EmptyState
                 icon={<Layers className="h-5 w-5" />}
                 title="No conversion objects yet"
-                description="Add the first conversion object to this engagement (e.g. Item Master, Customer Master)."
+                description="Add the first conversion object to this engagement."
               />
             </CardBody>
           ) : (
@@ -221,20 +290,14 @@ export const ProjectOverviewPage: React.FC = () => {
                       )}
                     </td>
                     <td>
-                      {c.template_name ? (
-                        <span className="inline-flex items-center gap-1 text-[12px] text-ink">
-                          <FileSpreadsheet className="h-3 w-3 text-indigo-500" />
-                          {c.template_name}
-                        </span>
-                      ) : <span className="text-ink-subtle italic">not selected</span>}
+                      {c.template_name
+                        ? <span className="inline-flex items-center gap-1 text-[12px] text-ink"><FileSpreadsheet className="h-3 w-3 text-indigo-500" />{c.template_name}</span>
+                        : <span className="text-ink-subtle italic">not selected</span>}
                     </td>
                     <td>
-                      {c.dataset_name ? (
-                        <span className="inline-flex items-center gap-1 text-[12px] text-ink">
-                          <Database className="h-3 w-3 text-emerald-500" />
-                          {c.dataset_name}
-                        </span>
-                      ) : <span className="text-ink-subtle italic">awaiting file</span>}
+                      {c.dataset_name
+                        ? <span className="inline-flex items-center gap-1 text-[12px] text-ink"><Database className="h-3 w-3 text-emerald-500" />{c.dataset_name}</span>
+                        : <span className="text-ink-subtle italic">awaiting file</span>}
                     </td>
                     <td><Pill tone={STATUS_TONE(c.status)}>{c.status.replace("_", " ")}</Pill></td>
                     <td className="text-right">
@@ -249,18 +312,30 @@ export const ProjectOverviewPage: React.FC = () => {
           )}
         </Card>
 
-        {/* Project-scoped dependency graph */}
-        <Card>
-          <CardHeader
-            title={<><Network className="mr-2 inline h-4 w-4 text-brand" />Load Order</>}
-            subtitle="Conversion objects + cross-object dependencies"
+        {/* Right sidebar: Source Connection + Load Order */}
+        <div className="flex flex-col gap-4">
+          <SourceConnectionCard
+            projectId={pid}
+            projectSourceSystem={(project as any).source_system}
           />
-          <div className="h-[400px]">
-            <ProjectDependencyGraph conversions={conversions} dependencies={deps} />
-          </div>
-        </Card>
+          <Card>
+            <CardHeader
+              title={<><Network className="mr-2 inline h-4 w-4 text-brand" />Load Order</>}
+              subtitle="Conversion objects + cross-object dependencies"
+            />
+            <div className="h-[320px]">
+              <ProjectDependencyGraph conversions={conversions} dependencies={deps} />
+            </div>
+          </Card>
+        </div>
       </div>
 
+      {/* Discovery */}
+      <div className="mt-4">
+        <DiscoveryPanel projectId={pid} hasConnection={hasConnection} />
+      </div>
+
+      {/* Notes */}
       {project.description && (
         <Card className="mt-4">
           <CardHeader title="Notes" />
@@ -269,6 +344,7 @@ export const ProjectOverviewPage: React.FC = () => {
           </CardBody>
         </Card>
       )}
+
       {toast && (
         <div className="fixed bottom-6 right-6 z-50 rounded-md bg-ink px-4 py-2 text-xs text-white shadow-soft">
           {toast}
@@ -303,20 +379,18 @@ const KpiTile: React.FC<{ label: string; value: number; icon: React.ReactNode; t
   </div>
 );
 
-// ─────── Project-scoped dependency graph ───────
+// ─────── Project-scoped dependency graph ───────────────────────────────────
 
 const ProjectDependencyGraph: React.FC<{
   conversions: Conversion[];
   dependencies: Dependency[];
 }> = ({ conversions, dependencies }) => {
   const { nodes, edges } = useMemo(() => {
-    // Map target_object → conversion (the engagement's actual objects)
     const byObject: Record<string, Conversion> = {};
     for (const c of conversions) {
       if (c.target_object) byObject[c.target_object.toLowerCase()] = c;
     }
 
-    // Compute depth for layered layout
     const incoming = new Map<string, string[]>();
     const outgoing = new Map<string, string[]>();
     const objectsInProject = new Set<string>(Object.keys(byObject));
@@ -336,7 +410,6 @@ const ProjectDependencyGraph: React.FC<{
       for (const nx of outgoing.get(n) || []) q.push([nx, d + 1]);
     }
 
-    // Layout
     const COL_W = 200, ROW_H = 80, OFF_X = 30, OFF_Y = 30;
     const byDepth = new Map<number, string[]>();
     for (const o of objectsInProject) {
@@ -396,7 +469,7 @@ const ProjectDependencyGraph: React.FC<{
   if (nodes.length === 0) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-center text-xs text-ink-muted">
-        Add conversions with target objects to see the project-scoped dependency map.
+        Add conversions with target objects to see the dependency map.
       </div>
     );
   }
@@ -474,66 +547,44 @@ const AddConversionModal: React.FC<{
           </div>
           <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
         </div>
-
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-ink mb-1">Name <span className="text-danger">*</span></label>
             <input
-              autoFocus
-              value={name}
-              onChange={e => setName(e.target.value)}
+              autoFocus value={name} onChange={e => setName(e.target.value)}
               placeholder="e.g. Purchase Order"
               className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
               onKeyDown={e => e.key === "Enter" && submit()}
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-ink mb-1">Target Object Type</label>
-            <select
-              value={targetObject}
-              onChange={e => setTargetObject(e.target.value)}
-              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-            >
+            <label className="block text-xs font-medium text-ink mb-1">Target Object Type</label>            <select value={targetObject} onChange={e => setTargetObject(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none">
               <option value="">-- select or leave blank --</option>
               {OBJECT_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-ink mb-1">Source Dataset</label>
-            <select
-              value={datasetId}
-              onChange={e => setDatasetId(e.target.value)}
-              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-            >
+            <select value={datasetId} onChange={e => setDatasetId(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none">
               <option value="">-- select or upload later --</option>
-              {datasets.map(d => (
-                <option key={d.id} value={d.id}>{d.name} ({d.row_count ?? 0} rows)</option>
-              ))}
+              {datasets.map(d => <option key={d.id} value={d.id}>{d.name} ({d.row_count ?? 0} rows)</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-ink mb-1">Target FBDI Template</label>
-            <select
-              value={templateId}
-              onChange={e => setTemplateId(e.target.value)}
-              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-            >
+            <select value={templateId} onChange={e => setTemplateId(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none">
               <option value="">-- select or bind later --</option>
-              {templates.map(t => (
-                <option key={t.id} value={t.id}>{t.name}{t.business_object ? " - " + t.business_object : ""}</option>
-              ))}
+              {templates.map(t => <option key={t.id} value={t.id}>{t.name}{t.business_object ? " - " + t.business_object : ""}</option>)}
             </select>
           </div>
           {err && <p className="text-xs text-danger">{err}</p>}
         </div>
-
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button
-            onClick={submit}
-            disabled={!name.trim() || busy}
-            className="btn-primary disabled:opacity-50"
-          >
+          <button onClick={submit} disabled={!name.trim() || busy} className="btn-primary disabled:opacity-50">
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             {busy ? "Creating..." : "Create Conversion"}
           </button>
@@ -543,14 +594,14 @@ const AddConversionModal: React.FC<{
   );
 };
 
-// --------- Auto-populate Modal ----------------------------------------------
+// ─── Auto-populate Modal ─────────────────────────────────────────────────────
 
 const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
 
 const AutoPopulateModal: React.FC<{
   projectId: string;
   onClose: () => void;
-  onDone: (r: AutoPopulateResult) => void;
+  onDone: (r: any) => void;
 }> = ({ projectId, onClose, onDone }) => {
   const [selected, setSelected] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
@@ -561,10 +612,8 @@ const AutoPopulateModal: React.FC<{
   const submit = async () => {
     if (!selected.length) return;
     setBusy(true);
-    try {
-      const r = await ProjectsApi.autoPopulate(projectId, selected);
-      onDone(r);
-    } finally { setBusy(false); }
+    try { const r = await ProjectsApi.autoPopulate(projectId, selected); onDone(r); }
+    finally { setBusy(false); }
   };
 
   return (
@@ -573,34 +622,21 @@ const AutoPopulateModal: React.FC<{
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
-            <p className="mt-0.5 text-xs text-ink-muted">
-              Select Oracle Cloud modules to create conversion objects automatically.
-            </p>
+            <p className="mt-0.5 text-xs text-ink-muted">Select Oracle Cloud modules to create conversion objects automatically.</p>
           </div>
           <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
         </div>
         <div className="flex flex-wrap gap-2 mb-5">
           {AVAILABLE_MODULES.map(m => (
-            <button
-              key={m}
-              onClick={() => toggle(m)}
+            <button key={m} onClick={() => toggle(m)}
               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                selected.includes(m)
-                  ? "border-brand bg-brand-subtle text-brand-dark"
-                  : "border-line bg-canvas text-ink-muted hover:border-brand"
-              }`}
-            >
-              {m}
-            </button>
+                selected.includes(m) ? "border-brand bg-brand-subtle text-brand-dark" : "border-line bg-canvas text-ink-muted hover:border-brand"
+              }`}>{m}</button>
           ))}
         </div>
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button
-            onClick={submit}
-            disabled={!selected.length || busy}
-            className="btn-primary disabled:opacity-50"
-          >
+          <button onClick={submit} disabled={!selected.length || busy} className="btn-primary disabled:opacity-50">
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
             {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
           </button>
