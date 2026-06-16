@@ -202,8 +202,8 @@ async def cutover_dashboard(
 
     # Recent pipeline runs
     recent_runs = await EnvironmentRun.find(
-        EnvironmentRun.conversion_id.in_(conv_ids)
-    ).sort("-_id").limit(20).to_list()
+        {"conversion_id": {"$in": conv_ids}}
+    ).sort("-id").limit(20).to_list()
 
     pipeline_runs = []
     for r in recent_runs:
