@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  BookOpen, TrendingUp, Zap, Clock, Download, GraduationCap,
-  Sparkles, Trash2, Link2, ChevronRight,
+  BookOpen, TrendingUp, Zap, Clock, Download, Sparkles, Trash2, Link2, ChevronRight,
 } from "lucide-react";
 import { LearningApi, ProjectsApi } from "@/api";
 import {
@@ -15,10 +14,12 @@ export const LearningCenterPage: React.FC = () => {
   const [items, setItems] = useState<LearnedMapping[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [backfilling, setBackfilling] = useState(false);
 
-  const refresh = () => {
-    LearningApi.stats().then(setStats);
-    LearningApi.list().then(setItems);
+  const refresh = (pid?: string) => {
+    const params = pid ? { project_id: pid } : undefined;
+    LearningApi.stats(params).then(setStats);
+    LearningApi.list(params ? { ...params } : undefined).then(setItems);
   };
 
   useEffect(() => {
@@ -26,11 +27,14 @@ export const LearningCenterPage: React.FC = () => {
     ProjectsApi.list().then(setProjects).catch(() => {});
   }, []);
 
-  if (!stats || !items) return <PageLoader />;
+  const handleProjectChange = (pid: string) => {
+    setSelectedProjectId(pid);
+    setStats(null);
+    setItems(null);
+    refresh(pid || undefined);
+  };
 
-  const filteredItems = selectedProjectId
-    ? items.filter((m) => m.project_id === selectedProjectId)
-    : items;
+  if (!stats || !items) return <PageLoader />;
 
   const isEmpty = stats.total === 0;
 
@@ -40,15 +44,14 @@ export const LearningCenterPage: React.FC = () => {
         title="Learning Center"
         subtitle={isEmpty
           ? "AI feedback loop — analyst actions train the matching engine"
-          : `${stats.total} learned mapping(s) — auto-applied in future cycles`
+          : `${stats.total} learned mapping(s)${selectedProjectId ? " in this engagement" : ""} — auto-applied in future cycles`
         }
         right={
           <div className="flex items-center gap-2">
-            {/* Engagement filter */}
             {projects.length > 0 && (
               <select
                 value={selectedProjectId}
-                onChange={(e) => setSelectedProjectId(e.target.value)}
+                onChange={(e) => handleProjectChange(e.target.value)}
                 className="h-9 rounded-md border border-line bg-white pl-3 pr-8 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
               >
                 <option value="">All engagements</option>
@@ -60,8 +63,22 @@ export const LearningCenterPage: React.FC = () => {
               </select>
             )}
             {!isEmpty && (
+              <Button variant="secondary" onClick={async () => {
+                setBackfilling(true);
+                try {
+                  const result = await LearningApi.backfillProjects();
+                  alert(`Backfill complete: ${result.updated} updated, ${result.skipped_no_match} skipped`);
+                  refresh(selectedProjectId || undefined);
+                } finally {
+                  setBackfilling(false);
+                }
+              }} disabled={backfilling}>
+                {backfilling ? "Fixing..." : "Fix Project Links"}
+              </Button>
+            )}
+            {!isEmpty && (
               <Button variant="secondary" onClick={() => {
-                const rows = filteredItems.map((m) =>
+                const rows = items.map((m) =>
                   [m.id, m.kind, m.category,
                    JSON.stringify(m.original_value ?? ""),
                    JSON.stringify(m.resolved_value ?? ""),
@@ -87,37 +104,21 @@ export const LearningCenterPage: React.FC = () => {
       )}
 
       <ReferenceStandards
-        items={filteredItems.filter((m) => m.kind === "reference_standard")}
-        onForget={async (id) => { await LearningApi.delete(id); refresh(); }}
+        items={items.filter((m) => m.kind === "reference_standard")}
+        onForget={async (id) => { await LearningApi.delete(id); refresh(selectedProjectId || undefined); }}
       />
 
-      {/* Category cards — counts reflect filtered set when a project is selected */}
-      {(() => {
-        const filteredCounts = selectedProjectId
-          ? filteredItems.reduce((acc, m) => {
-              acc[m.category] = (acc[m.category] || 0) + 1;
-              return acc;
-            }, {} as Record<string, number>)
-          : null;
-        const categories = stats.by_category.map((c) => ({
-          category: c.category,
-          count: filteredCounts ? (filteredCounts[c.category] || 0) : c.count,
-        }));
-        return (
-          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {categories.map((c) => (
-              <CategoryCard key={c.category} category={c.category} count={c.count} />
-            ))}
-          </div>
-        );
-      })()}
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {stats.by_category.map((c) => (
+          <CategoryCard key={c.category} category={c.category} count={c.count} />
+        ))}
+      </div>
 
-      {/* Registry table */}
-      {filteredItems.length > 0 && (
+      {items.length > 0 && (
         <Card className="mt-5">
           <CardHeader
             title="Learned Mapping Registry"
-            subtitle={`${filteredItems.length} entr${filteredItems.length === 1 ? "y" : "ies"}${selectedProjectId ? " in this engagement" : ""}`}
+            subtitle={`${items.length} entr${items.length === 1 ? "y" : "ies"}${selectedProjectId ? " in this engagement" : ""}`}
           />
           <table className="table-shell">
             <thead>
@@ -133,7 +134,7 @@ export const LearningCenterPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.map((m) => (
+              {items.map((m) => (
                 <tr key={m.id}>
                   <td className="font-mono text-[11px] text-ink-muted">LM-{String(m.id).slice(-8).toUpperCase()}</td>
                   <td><Pill tone="brand">{m.category}</Pill></td>
@@ -144,7 +145,7 @@ export const LearningCenterPage: React.FC = () => {
                   <td className="text-right font-mono text-success">+{Math.round((m.confidence_boost || 0) * 100)}%</td>
                   <td className="text-right">
                     <button
-                      onClick={async () => { await LearningApi.delete(m.id); refresh(); }}
+                      onClick={async () => { await LearningApi.delete(m.id); refresh(selectedProjectId || undefined); }}
                       className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger"
                       title="Forget this rule"
                     >
@@ -158,16 +159,18 @@ export const LearningCenterPage: React.FC = () => {
         </Card>
       )}
 
-      {filteredItems.length === 0 && !isEmpty && selectedProjectId && (
+      {items.length === 0 && !isEmpty && selectedProjectId && (
         <div className="mt-5 rounded-lg border border-line bg-white px-6 py-10 text-center text-sm text-ink-muted">
           No learned mappings captured for this engagement yet.
+          <br />
+          <span className="text-xs">Try clicking "Fix Project Links" to backfill existing mappings.</span>
         </div>
       )}
     </>
   );
 };
 
-// ─────── Reference Standards section ───────
+// -- Reference Standards section --
 
 const ReferenceStandards: React.FC<{
   items: LearnedMapping[];
@@ -194,7 +197,7 @@ const ReferenceStandards: React.FC<{
           </div>
           <div className="text-[12px] text-ink-muted">
             <span className="font-semibold text-ink">No standards yet.</span>{" "}
-            Save a transformation on a master conversion's key column (e.g. <span className="font-mono text-ink">InventoryItemNumber</span> on Item Master) and it auto-applies on every downstream conversion's matching FK column — Sales Order, BOM, On-Hand, POs, …
+            Save a transformation on a master conversion's key column (e.g. <span className="font-mono text-ink">InventoryItemNumber</span> on Item Master) and it auto-applies on every downstream conversion's matching FK column.
           </div>
         </div>
       </CardBody>
@@ -257,7 +260,7 @@ const summariseConfig = (cfg: any): string => {
     .join(", ");
 };
 
-// ─────── Empty hero card ───────
+// -- Empty hero --
 
 const EmptyHero: React.FC = () => (
   <div className="rounded-lg border border-line bg-white px-6 py-12 text-center">
@@ -266,12 +269,12 @@ const EmptyHero: React.FC = () => (
     </div>
     <div className="mt-4 text-base font-semibold text-ink">No learned mappings yet</div>
     <p className="mx-auto mt-2 max-w-lg text-sm text-ink-muted">
-      In the <span className="font-semibold text-ink">Mapping Review</span> screen, click <span className="font-semibold text-ink">Approve &amp; Learn</span> on any AI suggestion. Each capture trains the matching engine and is auto-applied in future cycles — across all conversion categories.
+      In the <span className="font-semibold text-ink">Mapping Review</span> screen, click <span className="font-semibold text-ink">Approve &amp; Learn</span> on any AI suggestion.
     </p>
   </div>
 );
 
-// ─────── Top KPI strip ───────
+// -- KPI strip --
 
 const KpiStrip: React.FC<{ stats: LearningStats }> = ({ stats }) => (
   <div className="rounded-lg border border-brand/20 bg-gradient-to-br from-brand-subtle/50 to-white p-4">
@@ -299,7 +302,7 @@ const KpiTile: React.FC<{ icon: React.ElementType; label: string; value: React.R
   </div>
 );
 
-// ─────── Category card ───────
+// -- Category card --
 
 const CategoryCard: React.FC<{ category: string; count: number }> = ({ category, count }) => (
   <div className={cn(

@@ -1,9 +1,11 @@
 """Learning library endpoints - registry of human-approved mappings/rules."""
 from collections import Counter
+from typing import Optional
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.models.conversion import Conversion
 from app.models.learned import LearnedMapping
 from app.models.user import User
 from app.schemas.learned import LearnedMappingCreate, LearnedMappingOut, LearningStats
@@ -30,6 +32,9 @@ def _serialize(item: LearnedMapping) -> dict:
     d = item.model_dump()
     d["id"] = str(item.id)
     d["project_id"] = str(item.project_id) if item.project_id else None
+    d["originated_in_project_id"] = (
+        str(item.originated_in_project_id) if item.originated_in_project_id else None
+    )
     return d
 
 
@@ -45,8 +50,9 @@ async def create_learned(
 
 @router.get("", response_model=list[LearnedMappingOut])
 async def list_learned(
-    kind: str | None = None,
-    category: str | None = None,
+    kind: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    project_id: Optional[str] = Query(None),
     _: User = Depends(get_current_user),
 ):
     filters = []
@@ -54,14 +60,24 @@ async def list_learned(
         filters.append(LearnedMapping.kind == kind)
     if category:
         filters.append(LearnedMapping.category == category)
+    if project_id:
+        filters.append(LearnedMapping.project_id == PydanticObjectId(project_id))
     query = LearnedMapping.find(*filters)
     items = await query.sort("-captured_at").to_list()
     return [_serialize(item) for item in items]
 
 
 @router.get("/stats", response_model=LearningStats)
-async def learning_stats(_: User = Depends(get_current_user)):
-    items = await LearnedMapping.find_all().to_list()
+async def learning_stats(
+    project_id: Optional[str] = Query(None),
+    _: User = Depends(get_current_user),
+):
+    if project_id:
+        items = await LearnedMapping.find(
+            LearnedMapping.project_id == PydanticObjectId(project_id)
+        ).to_list()
+    else:
+        items = await LearnedMapping.find_all().to_list()
     total = len(items)
     avg_boost = round(
         sum(i.confidence_boost or 0 for i in items) / total, 3
@@ -94,6 +110,44 @@ async def knowledge_bank_stats(_: User = Depends(get_current_user)):
         erp = getattr(item, "source_erp", None) or getattr(item, "captured_from", None) or "unknown"
         by_erp[erp] += 1
     return [{"source_erp": erp, "count": cnt} for erp, cnt in by_erp.most_common()]
+
+
+@router.post("/backfill-projects")
+async def backfill_project_ids(_: User = Depends(get_current_user)):
+    """
+    One-time migration: stamp project_id on learned mappings that are missing it.
+    Infers project from the conversion name embedded in captured_from.
+    """
+    items = await LearnedMapping.find(
+        LearnedMapping.project_id == None  # noqa: E711
+    ).to_list()
+
+    # Build a lookup: conversion name -> project_id
+    all_convs = await Conversion.find_all().to_list()
+    name_to_project: dict[str, PydanticObjectId] = {
+        c.name: c.project_id for c in all_convs if c.project_id
+    }
+
+    updated = 0
+    skipped = 0
+    for lm in items:
+        if not lm.captured_from:
+            skipped += 1
+            continue
+        # captured_from format: "ConversionName -- field_name" or "ConversionName -- field_name (manual)"
+        conv_name = lm.captured_from.split(" -- ")[0].strip()
+        pid = name_to_project.get(conv_name)
+        if pid:
+            await lm.set({"project_id": pid})
+            updated += 1
+        else:
+            skipped += 1
+
+    return {
+        "total_without_project": len(items),
+        "updated": updated,
+        "skipped_no_match": skipped,
+    }
 
 
 @router.delete("/{learned_id}")
