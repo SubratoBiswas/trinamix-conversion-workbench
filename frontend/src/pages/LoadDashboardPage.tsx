@@ -124,9 +124,9 @@ export const LoadDashboardPage: React.FC = () => {
               className="input !w-auto min-w-[260px]"
               value={pid ?? ""}
               onChange={(e) => {
-                const v = Number(e.target.value);
+                const v = e.target.value || null;
                 setPid(v);
-                setParams({ project: String(projectId || ""), conversion: String(v) });
+                setParams({ project: String(projectId || ""), conversion: String(v ?? "") });
               }}
             >
               {conversions.map((c) => (
