@@ -97,8 +97,6 @@ async def simulate_load_endpoint(
     _: User = Depends(get_current_user),
 ):
     c = await _require_conversion(conversion_id)
-    if not c.dataset_id or not c.template_id:
-        raise HTTPException(400, "Conversion is not fully bound")
     run = await simulate_conversion_load(c)
     return {**run.model_dump(), "id": str(run.id), "conversion_id": str(run.conversion_id)}
 

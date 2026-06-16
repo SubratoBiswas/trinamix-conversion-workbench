@@ -1,8 +1,10 @@
 """Learned mappings registry."""
 from datetime import datetime
 from typing import Any, Optional
+
 from beanie import Document, PydanticObjectId
 from pydantic import Field
+
 
 class LearnedMapping(Document):
     kind: str
@@ -19,10 +21,9 @@ class LearnedMapping(Document):
     captured_at: datetime = Field(default_factory=datetime.utcnow)
     confidence_boost: float = 0.26
     records_auto_fixed: int = 0
-
-    # v10: cross-project knowledge base tracking
     times_reused: int = 0
-    originated_in_project_id: Optional[str] = None
+    originated_in_project_id: Optional[PydanticObjectId] = None
+    source_erp: Optional[str] = None
 
     class Settings:
         name = "learned_mappings"
