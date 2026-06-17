@@ -300,11 +300,17 @@ export function buildRecommendations(input: BuildRecommendationsInput): Recommen
     }
   }
 
-  // Sort by confidence × impact
-  return recs.sort((a, b) =>
-    (b.confidence * (1 + Math.log10(Math.max(b.impact.records, 1)))) -
-    (a.confidence * (1 + Math.log10(Math.max(a.impact.records, 1))))
-  );
+  // Sort by confidence × impact, then stamp each rec with a stable deterministic
+  // ID derived from column + kind so that dismiss/applied state survives re-renders.
+  return recs
+    .sort((a, b) =>
+      (b.confidence * (1 + Math.log10(Math.max(b.impact.records, 1)))) -
+      (a.confidence * (1 + Math.log10(Math.max(a.impact.records, 1))))
+    )
+    .map((rec, idx) => ({
+      ...rec,
+      id: `rec__${rec.column}__${rec.kind}__${idx}`,
+    }));
 }
 
 // Try to guess which FBDI target field a source column might map to (cheap heuristic)
