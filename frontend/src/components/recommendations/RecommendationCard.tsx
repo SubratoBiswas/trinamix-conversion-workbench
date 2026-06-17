@@ -2,7 +2,7 @@ import React from "react";
 import {
   Calendar, Hash, Replace, Trash2, Filter as FilterIcon,
   ScissorsLineDashed, Sparkles, Layers, AlertTriangle,
-  Plus, X, GraduationCap, CornerDownRight,
+  Plus, X, GraduationCap, CornerDownRight, CheckCircle2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Recommendation, RecommendationKind } from "@/lib/recommendations";
@@ -119,9 +119,11 @@ export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, o
         </div>
       )}
       {(applied || learned) && (
-        <div className="mt-2 flex items-center gap-1 border-t border-line pt-2 text-[11px] text-ink-muted">
-          {applied && <span className="inline-flex items-center gap-1 text-success"><Sparkles className="h-3 w-3" /> Applied</span>}
-          {learned && <span className="inline-flex items-center gap-1 text-brand-dark"><GraduationCap className="h-3 w-3" /> Learned</span>}
+        <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-success/30 bg-success-subtle/40 py-1.5 border-t border-line pt-2">
+          <CheckCircle2 className="h-4 w-4 text-success" />
+          <span className="text-[12px] font-semibold text-success">
+            {learned ? "Applied and Learned" : "Applied"}
+          </span>
         </div>
       )}
     </div>

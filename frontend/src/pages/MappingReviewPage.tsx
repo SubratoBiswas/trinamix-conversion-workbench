@@ -64,6 +64,7 @@ export const MappingReviewPage: React.FC = () => {
   const [showRecs, setShowRecs] = useState(true);
   const [appliedRecIds, setAppliedRecIds] = useState<Set<string>>(new Set());
   const [learnedRecIds, setLearnedRecIds] = useState<Set<string>>(new Set());
+  const [dismissedRecIds, setDismissedRecIds] = useState<Set<string>>(new Set());
 
   // Track which source columns have been highlighted in the canvas
   const [hoveredSource, setHoveredSource] = useState<string | null>(null);
@@ -266,6 +267,11 @@ export const MappingReviewPage: React.FC = () => {
         flash(`Applied — ${rec.title}`);
       }
 
+      // Dismiss the card from the list after a brief "Applied" display
+      setTimeout(() => {
+        setDismissedRecIds((prev) => new Set([...prev, rec.id]));
+      }, 1500);
+
       // Refresh mappings so the canvas reflects the approve
       loadAll();
     } catch (err) {
@@ -424,11 +430,14 @@ export const MappingReviewPage: React.FC = () => {
         {/* Recommendations panel */}
         {showRecs && (
           <RecommendationsPanel
-            recommendations={recommendations}
+            recommendations={recommendations.filter(r => !dismissedRecIds.has(r.id))}
             appliedIds={appliedRecIds}
             learnedIds={learnedRecIds}
             onApply={applyRecommendation}
-            onDismiss={(rec) => setAppliedRecIds((prev) => new Set([...prev, rec.id]))}
+            onDismiss={(rec) => {
+              setAppliedRecIds((prev) => new Set([...prev, rec.id]));
+              setTimeout(() => setDismissedRecIds((prev) => new Set([...prev, rec.id])), 1500);
+            }}
             className="w-[340px]"
           />
         )}
