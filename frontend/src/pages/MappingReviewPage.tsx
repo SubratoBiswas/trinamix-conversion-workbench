@@ -7,7 +7,7 @@ import {
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
 const PiiLockGlyph: React.FC = () => <Lock className="h-2 w-2" />;
-import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, MappingApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi } from "@/api";
 import type { InheritedStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import {
@@ -62,6 +62,8 @@ export const MappingReviewPage: React.FC = () => {
   const [selectedMappingId, setSelectedMappingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showRecs, setShowRecs] = useState(true);
+  const [appliedRecIds, setAppliedRecIds] = useState<Set<string>>(new Set());
+  const [learnedRecIds, setLearnedRecIds] = useState<Set<string>>(new Set());
 
   // Track which source columns have been highlighted in the canvas
   const [hoveredSource, setHoveredSource] = useState<string | null>(null);
@@ -193,6 +195,83 @@ export const MappingReviewPage: React.FC = () => {
     await MappingApi.update(m.id, { source_column: newSourceColumn, status: "overridden" });
     flash("Override saved");
     loadAll();
+  };
+
+  // ── Apply & (optionally) Learn a recommendation ──
+  const applyRecommendation = async (rec: Recommendation, learn: boolean) => {
+    if (!pid || !rec.ruleType) {
+      flash("No transformation rule available for this recommendation");
+      return;
+    }
+
+    try {
+      // 1. Add transformation rule to this conversion
+      await MappingApi.addRule(pid, {
+        source_column: rec.column,
+        rule_type: rec.ruleType,
+        rule_config: rec.ruleConfig ?? {},
+        description: rec.title,
+        ...(rec.targetField
+          ? { target_field_id: targetFields.find((f) => f.field_name === rec.targetField)?.id?.toString() }
+          : {}),
+      });
+
+      // 2. Approve the mapping for this source column (if one exists)
+      const matchingMapping = mappings.find((m) => m.source_column === rec.column);
+      if (matchingMapping && matchingMapping.status !== "approved") {
+        await MappingApi.update(matchingMapping.id, { status: "approved" });
+      }
+
+      // 3. On "Apply & Learn" — capture to Learning Center + propagate to all other conversions
+      if (learn) {
+        // Capture to Learning Center (Rule Library)
+        await LearningApi.capture({
+          kind: "transformation_rule",
+          category: rec.kind,
+          original_value: rec.column,
+          resolved_value: rec.ruleType,
+          rule_type: rec.ruleType,
+          rule_config: rec.ruleConfig ?? {},
+          target_field: rec.targetField,
+          captured_from: rec.title,
+          project_id: pid,
+          records_auto_fixed: rec.impact.records,
+        });
+
+        // Propagate rule to all other conversions that have the same source column
+        const allConversions = await ConversionsApi.list();
+        const others = allConversions.filter((c) => c.id !== pid);
+        await Promise.allSettled(
+          others.map(async (conv) => {
+            const theirMappings = await MappingApi.list(conv.id);
+            const hasColumn = theirMappings.some((m) => m.source_column === rec.column);
+            if (!hasColumn) return;
+            await MappingApi.addRule(conv.id, {
+              source_column: rec.column,
+              rule_type: rec.ruleType!,
+              rule_config: rec.ruleConfig ?? {},
+              description: `[learned] ${rec.title}`,
+            });
+            const theirMapping = theirMappings.find((m) => m.source_column === rec.column);
+            if (theirMapping && theirMapping.status !== "approved") {
+              await MappingApi.update(theirMapping.id, { status: "approved" });
+            }
+          })
+        );
+
+        setLearnedRecIds((prev) => new Set([...prev, rec.id]));
+        flash(`Applied & learned — rule propagated to all conversions with ${rec.column}`);
+      } else {
+        setAppliedRecIds((prev) => new Set([...prev, rec.id]));
+        flash(`Applied — ${rec.title}`);
+      }
+
+      // Refresh mappings so the canvas reflects the approve
+      loadAll();
+    } catch (err) {
+      flash("Failed to apply recommendation");
+      console.error(err);
+    }
   };
 
   if (!pid || !project || loadingConversion) return <PageLoader />;
@@ -346,8 +425,10 @@ export const MappingReviewPage: React.FC = () => {
         {showRecs && (
           <RecommendationsPanel
             recommendations={recommendations}
-            onApply={() => flash("Applied")}
-            onDismiss={() => {}}
+            appliedIds={appliedRecIds}
+            learnedIds={learnedRecIds}
+            onApply={applyRecommendation}
+            onDismiss={(rec) => setAppliedRecIds((prev) => new Set([...prev, rec.id]))}
             className="w-[340px]"
           />
         )}
@@ -829,9 +910,7 @@ const MappingInspector: React.FC<{
         </div>
       </div>
 
-      {/* P6 — dual-cert banner. Shown whenever the row carries
-          requires_dual_approval=1, both before AND after the first sign-off,
-          so reviewers know exactly which state they're in. */}
+      {/* P6 — dual-cert banner */}
       {!!mapping.requires_dual_approval && (
         <div className="border-t border-line bg-warning-subtle/60 px-4 py-2 text-[11.5px]">
           <div className="flex items-center gap-1.5 font-semibold text-warning">
