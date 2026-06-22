@@ -83,9 +83,6 @@ export const ConversionDetailPage: React.FC = () => {
 
   if (!conv) return <PageLoader />;
 
-  const isPlanning = conv.status === "planning";
-  const isFullyBound = !!conv.dataset_id && !!conv.template_id;
-
   const runOp = async (op: string, fn: () => Promise<any>, successMsg: string) => {
     setBusy(op);
     try {
@@ -120,7 +117,7 @@ export const ConversionDetailPage: React.FC = () => {
             <Link to="/conversions" className="btn-ghost">
               <ArrowLeft className="h-4 w-4" /> All conversions
             </Link>
-            {project && isFullyBound && (
+            {project && (
               <Button onClick={() => setPromoteOpen(true)}>
                 <ArrowRight className="h-4 w-4" /> Promote to environment
               </Button>
@@ -187,14 +184,7 @@ export const ConversionDetailPage: React.FC = () => {
       <Card className="mb-4">
         <CardHeader title="Conversion Pipeline" subtitle="Run each stage in order, or jump to the dedicated workspace" />
         <CardBody>
-          {!isFullyBound ? (
-            <EmptyState
-              icon={<Sparkles className="h-5 w-5" />}
-              title="Conversion is not fully bound"
-              description="This conversion is in planning status. Add a source dataset and a target FBDI template to enable AI mapping, validation, output generation, and load simulation."
-            />
-          ) : (
-            <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
               <Button
                 variant="primary"
                 loading={busy === "ai_map"}
@@ -249,7 +239,6 @@ export const ConversionDetailPage: React.FC = () => {
                 <Download className="h-4 w-4" /> Download Output
               </a>
             </div>
-          )}
         </CardBody>
       </Card>
 
