@@ -55,21 +55,51 @@ export const ConversionDetailPage: React.FC = () => {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [envRuns, setEnvRuns] = useState<EnvironmentRun[]>([]);
 
+  const [fbdiTemplates, setFbdiTemplates] = useState<FBDITemplate[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
+  // Upload a CSV/Excel file, create a dataset, and link it to this conversion
+  const handleDatasetUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy("upload_dataset");
+    try {
+      const newDataset = await DatasetsApi.upload(file);
+      await ConversionsApi.update(cid, { dataset_id: newDataset.id });
+      flash("Dataset uploaded and linked");
+      loadAll();
+    } catch (err: any) {
+      flash(`Upload failed: ${err?.response?.data?.detail || err?.message}`);
+    } finally { setBusy(null); }
+  };
+
+  // Link an existing FBDI template to this conversion
+  const handleTemplateChange = async (templateId: string) => {
+    if (!templateId) return;
+    setBusy("link_template");
+    try {
+      await ConversionsApi.update(cid, { template_id: templateId });
+      flash("Target FBDI updated");
+      loadAll();
+    } catch (err: any) {
+      flash(`Failed: ${err?.response?.data?.detail || err?.message}`);
+    } finally { setBusy(null); }
+  };
+
   const loadAll = async () => {
     const c = await ConversionsApi.get(cid);
     setConv(c);
     if (c.project_id) {
       ProjectsApi.get(c.project_id).then(setProject);
-      CutoverApi.environments(c.project_id).then(setEnvironments);
+      CutoverApi.environments(c.project_id).then(setEnvironments).catch(() => setEnvironments([]));
     }
     if (c.dataset_id) DatasetsApi.get(c.dataset_id).then((d) => setDataset(d));
     if (c.template_id) FbdiApi.get(c.template_id).then((t) => setTemplate(t));
+    FbdiApi.list().then(setFbdiTemplates).catch(() => {});
     CutoverApi.runsForConversion(cid).then(setEnvRuns).catch(() => setEnvRuns([]));
     if (c.dataset_id && c.template_id) {
       MappingApi.list(cid).then(setMappings).catch(() => setMappings([]));
@@ -127,14 +157,12 @@ export const ConversionDetailPage: React.FC = () => {
       />
 
       {/* Environment progression strip — shows DEV → QA → UAT → PROD status */}
-      {environments.length > 0 && (
-        <EnvironmentStrip
-          conversion={conv}
-          environments={environments}
-          runs={envRuns}
-          onPromote={() => setPromoteOpen(true)}
-        />
-      )}
+      <EnvironmentStrip
+        conversion={conv}
+        environments={environments}
+        runs={envRuns}
+        onPromote={() => setPromoteOpen(true)}
+      />
 
       {/* Bindings strip — shows source + target + lets user fix gaps */}
       <Card className="mb-4">
@@ -147,14 +175,31 @@ export const ConversionDetailPage: React.FC = () => {
               <div className="min-w-0 flex-1">
                 <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">Source dataset</div>
                 {dataset ? (
-                  <Link to={`/datasets/${dataset.id}/prepare`} className="block truncate text-sm font-semibold text-ink hover:text-brand-dark">
-                    {dataset.name}
-                    <span className="ml-1.5 font-mono text-[10.5px] text-ink-muted">
-                      {dataset.row_count.toLocaleString()} × {dataset.column_count}
-                    </span>
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link to={`/datasets/${dataset.id}/prepare`} className="truncate text-sm font-semibold text-ink hover:text-brand-dark">
+                      {dataset.name}
+                      <span className="ml-1.5 font-mono text-[10.5px] text-ink-muted">
+                        {dataset.row_count.toLocaleString()} × {dataset.column_count}
+                      </span>
+                    </Link>
+                    <label className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-canvas hover:text-ink" title="Replace dataset">
+                      <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} />
+                      ↩ Replace
+                    </label>
+                  </div>
                 ) : (
-                  <div className="text-sm italic text-ink-subtle">Awaiting source file</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm italic text-ink-subtle">Awaiting source file</span>
+                    <label className={cn(
+                      "shrink-0 cursor-pointer rounded px-2 py-0.5 text-[11px] font-medium",
+                      busy === "upload_dataset"
+                        ? "text-ink-subtle"
+                        : "bg-brand text-white hover:bg-brand-dark"
+                    )}>
+                      <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} disabled={busy === "upload_dataset"} />
+                      {busy === "upload_dataset" ? "Uploading…" : "↑ Upload"}
+                    </label>
+                  </div>
                 )}
               </div>
             </div>
@@ -165,14 +210,44 @@ export const ConversionDetailPage: React.FC = () => {
               <div className="min-w-0 flex-1">
                 <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">Target FBDI</div>
                 {template ? (
-                  <Link to={`/fbdi/${template.id}`} className="block truncate text-sm font-semibold text-ink hover:text-brand-dark">
-                    {template.name}
-                    {template.business_object && (
-                      <span className="ml-1.5 font-mono text-[10.5px] text-ink-muted">{template.business_object}</span>
+                  <div className="flex items-center gap-2">
+                    <Link to={`/fbdi/${template.id}`} className="truncate text-sm font-semibold text-ink hover:text-brand-dark">
+                      {template.name}
+                      {template.business_object && (
+                        <span className="ml-1.5 font-mono text-[10.5px] text-ink-muted">{template.business_object}</span>
+                      )}
+                    </Link>
+                    {fbdiTemplates.length > 0 && (
+                      <select
+                        className="shrink-0 cursor-pointer rounded border border-line bg-canvas px-1.5 py-0.5 text-[11px] text-ink-muted hover:border-brand"
+                        defaultValue=""
+                        onChange={(e) => handleTemplateChange(e.target.value)}
+                        disabled={busy === "link_template"}
+                      >
+                        <option value="" disabled>Change</option>
+                        {fbdiTemplates.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
                     )}
-                  </Link>
+                  </div>
                 ) : (
-                  <div className="text-sm italic text-ink-subtle">No FBDI selected</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm italic text-ink-subtle">No FBDI selected</span>
+                    {fbdiTemplates.length > 0 && (
+                      <select
+                        className="shrink-0 cursor-pointer rounded border border-brand bg-brand px-2 py-0.5 text-[11px] font-medium text-white hover:bg-brand-dark"
+                        defaultValue=""
+                        onChange={(e) => handleTemplateChange(e.target.value)}
+                        disabled={busy === "link_template"}
+                      >
+                        <option value="" disabled>Select template</option>
+                        {fbdiTemplates.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -380,13 +455,22 @@ export const ConversionDetailPage: React.FC = () => {
 
 // ─────── Environment progression strip (DEV → QA → UAT → PROD) ───────
 
+const DEFAULT_ENVS: Environment[] = [
+  { id: -1, name: "DEV",  sort_order: 1, sox_controlled: 0 } as Environment,
+  { id: -2, name: "QA",   sort_order: 2, sox_controlled: 0 } as Environment,
+  { id: -3, name: "UAT",  sort_order: 3, sox_controlled: 0 } as Environment,
+  { id: -4, name: "PROD", sort_order: 4, sox_controlled: 1 } as Environment,
+];
+
 const EnvironmentStrip: React.FC<{
   conversion: Conversion;
   environments: Environment[];
   runs: EnvironmentRun[];
   onPromote: () => void;
 }> = ({ conversion, environments, runs, onPromote }) => {
-  const sorted = [...environments].sort((a, b) => a.sort_order - b.sort_order);
+  const sorted = environments.length > 0
+    ? [...environments].sort((a, b) => a.sort_order - b.sort_order)
+    : DEFAULT_ENVS;
 
   // Map env_id → most-recent run for display.
   const runByEnvId = new Map<number, EnvironmentRun>();
