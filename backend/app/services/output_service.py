@@ -82,9 +82,52 @@ async def build_converted_dataframe(
     return out_df, lineage
 
 
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column headers to UPPER_UNDERSCORE (Oracle FBDI format)."""
+    df.columns = [c.strip().upper().replace(" ", "_").replace("-", "_") for c in df.columns]
+    return df
+
+
+def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
+    """Reformat any date/Date columns to YYYYMMDD as required by Oracle FBDI."""
+    date_field_names = {
+        f.field_name.strip().upper().replace(" ", "_").replace("-", "_")
+        for f in fields
+        if (f.data_type or "").lower() in ("date", "datetime")
+    }
+    for col in df.columns:
+        if col in date_field_names:
+            def _reformat(v: Any) -> Any:
+                if v is None or str(v).strip() == "":
+                    return v
+                s = str(v).strip()
+                for fmt_in in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y",
+                               "%Y%m%d", "%Y/%m/%d %H:%M:%S"):
+                    try:
+                        return datetime.strptime(s, fmt_in).strftime("%Y%m%d")
+                    except ValueError:
+                        pass
+                return v
+            df[col] = df[col].apply(_reformat)
+    return df
+
+
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
+    from app.models.fbdi import FBDISheet
     df, _ = await build_converted_dataframe(conversion)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+
+    # Fetch fields for date-column detection, and primary sheet name for xlsx tab
+    fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
+    primary_sheet = await FBDISheet.find(
+        FBDISheet.template_id == template.id
+    ).sort(+FBDISheet.sequence).first_or_none() if template else None
+    sheet_name = (primary_sheet.sheet_name if primary_sheet else None) or "SCM Items"
+
+    # Normalize columns and format dates
+    df = _normalize_columns(df)
+    df = _format_date_columns(df, fields)
+
     fmt = fmt.lower()
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +136,8 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     if fmt == "xlsx":
         out_name = f"{obj_name}_{ts}.xlsx"
         out_path = out_dir / out_name
-        df.to_excel(out_path, index=False)
+        # Use canonical Oracle sheet name so the file can be loaded directly
+        df.to_excel(out_path, index=False, sheet_name=sheet_name[:31])  # Excel max 31 chars
     else:
         out_name = f"{obj_name}_{ts}.csv"
         out_path = out_dir / out_name

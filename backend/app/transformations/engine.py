@@ -175,7 +175,7 @@ def apply_rule(
 
     if rt == "DATE_FORMAT":
         in_fmt = cfg.get("input_format", "%m/%d/%Y")
-        out_fmt = cfg.get("output_format", "%Y/%m/%d")
+        out_fmt = cfg.get("output_format", "%Y%m%d")
         s = _to_str(value).strip()
         if not s:
             return s
@@ -283,9 +283,9 @@ def apply_rule(
         fmt = cfg.get("format")
         now = ctx.get("now") or datetime.utcnow()
         if source == "today":
-            return now.strftime(fmt or "%Y/%m/%d")
+            return now.strftime(fmt or "%Y%m%d")
         if source == "now":
-            return now.strftime(fmt or "%Y/%m/%d %H:%M:%S")
+            return now.strftime(fmt or "%Y%m%d %H:%M:%S")
         if source == "row_index":
             return ctx.get("row_index", 0)
         if source == "uuid":

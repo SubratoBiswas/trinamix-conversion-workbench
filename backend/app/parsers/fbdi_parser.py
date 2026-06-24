@@ -136,7 +136,7 @@ def parse_fbdi_template(file_path: Path | str) -> dict[str, Any]:
                     "required": required,
                     "data_type": data_type,
                     "max_length": max_length,
-                    "format_mask": "YYYY/MM/DD" if data_type.lower() == "date" else None,
+                    "format_mask": "YYYYMMDD" if data_type.lower() == "date" else None,
                     "sample_value": None,
                     "lookup_type": None,
                     "validation_notes": None,
