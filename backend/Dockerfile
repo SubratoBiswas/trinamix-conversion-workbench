@@ -11,7 +11,7 @@ WORKDIR /app
 # thick mode supports legacy 10g password verifier (DPY-3015 fix)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential libffi-dev libaio1 wget unzip \
+        build-essential libffi-dev libaio1t64 wget unzip \
     && wget -q \
         "https://download.oracle.com/otn_software/linux/instantclient/219000/instantclient-basiclite-linux.x64-21.9.0.0.0dbru.zip" \
         -O /tmp/ic.zip \
