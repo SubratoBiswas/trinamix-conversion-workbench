@@ -18,6 +18,18 @@ export const OutputPreviewPage: React.FC = () => {
   const [data, setData] = useState<OutputPreview | null>(null);
   const [tab, setTab] = useState("data");
   const [generating, setGenerating] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      await OutputApi.download(pid, `${project?.template_name ?? "output"}.csv`);
+    } catch {
+      alert("No output file found — please generate output first.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const refresh = async () => {
     setData(null);
@@ -50,9 +62,9 @@ export const OutputPreviewPage: React.FC = () => {
           <Button variant="secondary" onClick={generate} loading={generating}>
             <FileOutput className="h-4 w-4" /> Re-generate
           </Button>
-          <a href={OutputApi.downloadUrl(pid)} target="_blank" rel="noreferrer" className="btn-primary">
+          <Button variant="primary" onClick={handleDownload} loading={downloading}>
             <Download className="h-4 w-4" /> Download CSV
-          </a>
+          </Button>
         </>}
       />
 
