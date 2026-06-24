@@ -31,6 +31,10 @@ class FusionObject:
     # Hints — per source ERP — for how the source extract is typically
     # labelled. Surfaced as the placeholder text on the dataset upload step.
     source_extracts: dict[str, str] = field(default_factory=dict)
+    # Representative row counts for mock mode (per source ERP code).
+    # Used by the Setup Wizard scope step to show realistic volume estimates
+    # before a live Discovery scan has been run.
+    mock_row_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from GL_CODE_COMBINATIONS",
             "netsuite":   "Saved Search → Accounts list export",
         },
+        mock_row_counts={"oracle_ebs": 4_200, "netsuite": 1_850},
     ),
     FusionObject(
         "Legal Entity", "Legal Entity",
@@ -62,6 +67,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from XLE_ENTITY_PROFILES",
             "netsuite":   "Setup → Subsidiaries CSV export",
         },
+        mock_row_counts={"oracle_ebs": 8, "netsuite": 6},
     ),
     FusionObject(
         "Ledger", "Ledger", fbdi_template="Ledger (FBDI)", planned_load_order=20,
@@ -69,6 +75,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from GL_LEDGERS",
             "netsuite":   "Accounting Books listing",
         },
+        mock_row_counts={"oracle_ebs": 4, "netsuite": 3},
     ),
     FusionObject(
         "Business Unit", "Business Unit", planned_load_order=25,
@@ -76,6 +83,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from HR_OPERATING_UNITS",
             "netsuite":   "Subsidiary → BU mapping export",
         },
+        mock_row_counts={"oracle_ebs": 12, "netsuite": 8},
     ),
     FusionObject(
         "Open AP Invoices", "Open AP Invoices",
@@ -84,6 +92,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from AP_INVOICES_ALL (status=Open)",
             "netsuite":   "Saved Search → Open Vendor Bills",
         },
+        mock_row_counts={"oracle_ebs": 42_000, "netsuite": 8_400},
     ),
     FusionObject(
         "Open AR Invoices", "Open AR Invoices",
@@ -92,6 +101,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from AR_PAYMENT_SCHEDULES_ALL",
             "netsuite":   "Saved Search → Open Customer Invoices",
         },
+        mock_row_counts={"oracle_ebs": 28_000, "netsuite": 6_200},
     ),
     FusionObject(
         "Bank Accounts", "Bank Accounts",
@@ -100,6 +110,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from CE_BANK_ACCOUNTS",
             "netsuite":   "Setup → Bank Accounts export",
         },
+        mock_row_counts={"oracle_ebs": 24, "netsuite": 18},
     ),
     FusionObject(
         "Fixed Assets", "Fixed Assets",
@@ -108,6 +119,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from FA_BOOKS / FA_ASSET_HISTORY",
             "netsuite":   "Fixed Asset Management module export",
         },
+        mock_row_counts={"oracle_ebs": 4_300, "netsuite": 1_200},
     ),
     FusionObject(
         "Open GL Journals", "Open GL Journals",
@@ -116,6 +128,7 @@ _FINANCIALS_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from GL_JE_HEADERS / GL_JE_LINES (unposted)",
             "netsuite":   "Saved Search → Unposted Journal Entries",
         },
+        mock_row_counts={"oracle_ebs": 142_000, "netsuite": 31_000},
     ),
 )
 
@@ -128,6 +141,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from MTL_UNITS_OF_MEASURE",
             "netsuite":   "Setup → Units of Measure export",
         },
+        mock_row_counts={"oracle_ebs": 847, "netsuite": 42},
     ),
     FusionObject(
         "Inventory Org", "Inventory Organization",
@@ -136,6 +150,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from MTL_PARAMETERS",
             "netsuite":   "Locations export",
         },
+        mock_row_counts={"oracle_ebs": 42, "netsuite": 18},
     ),
     FusionObject(
         "Item Class", "Item Catalog / Class",
@@ -144,6 +159,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from MTL_CATEGORIES_B",
             "netsuite":   "Item Categories export",
         },
+        mock_row_counts={"oracle_ebs": 384, "netsuite": 120},
     ),
     FusionObject(
         "Item", "Item Master",
@@ -152,6 +168,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from MTL_SYSTEM_ITEMS_B",
             "netsuite":   "Saved Search → All Active Items",
         },
+        mock_row_counts={"oracle_ebs": 8_500, "netsuite": 3_200},
     ),
     FusionObject(
         "Customer", "Customer Master",
@@ -161,6 +178,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from HZ_PARTIES (party_type=Customer)",
             "netsuite":   "Saved Search → All Active Customers",
         },
+        mock_row_counts={"oracle_ebs": 5_600, "netsuite": 2_100},
     ),
     FusionObject(
         "Supplier", "Supplier Master",
@@ -169,6 +187,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from HZ_PARTIES (party_type=Supplier)",
             "netsuite":   "Saved Search → All Active Vendors",
         },
+        mock_row_counts={"oracle_ebs": 3_200, "netsuite": 980},
     ),
     FusionObject(
         "BOM", "Bills of Material",
@@ -177,6 +196,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from BOM_BILL_OF_MATERIALS / BOM_COMPONENTS",
             "netsuite":   "Manufacturing → BOM CSV export",
         },
+        mock_row_counts={"oracle_ebs": 1_200, "netsuite": 480},
     ),
     FusionObject(
         "On-Hand Balance", "On-Hand Inventory Balances",
@@ -185,6 +205,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from MTL_ONHAND_QUANTITIES_DETAIL",
             "netsuite":   "Saved Search → Inventory on Hand by Location",
         },
+        mock_row_counts={"oracle_ebs": 2_400, "netsuite": 1_100},
     ),
     FusionObject(
         "Sales Order", "Open Sales Orders",
@@ -193,6 +214,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from OE_ORDER_HEADERS_ALL (status=Open)",
             "netsuite":   "Saved Search → Open Sales Orders",
         },
+        mock_row_counts={"oracle_ebs": 12_400, "netsuite": 4_800},
     ),
     FusionObject(
         "Purchase Order", "Open Purchase Orders",
@@ -201,6 +223,7 @@ _SCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PO_HEADERS_ALL (status=Open)",
             "netsuite":   "Saved Search → Open Purchase Orders",
         },
+        mock_row_counts={"oracle_ebs": 9_800, "netsuite": 2_600},
     ),
 )
 
@@ -213,6 +236,7 @@ _HCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from HR_ORGANIZATION_UNITS",
             "netsuite":   "Departments list export",
         },
+        mock_row_counts={"oracle_ebs": 120, "netsuite": 48},
     ),
     FusionObject(
         "Location", "Workforce Locations",
@@ -221,6 +245,7 @@ _HCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from HR_LOCATIONS",
             "netsuite":   "Locations list",
         },
+        mock_row_counts={"oracle_ebs": 85, "netsuite": 32},
     ),
     FusionObject(
         "Job", "Jobs", fbdi_template="HCM Jobs (FBDI)", planned_load_order=20,
@@ -228,6 +253,7 @@ _HCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PER_JOBS",
             "netsuite":   "—",
         },
+        mock_row_counts={"oracle_ebs": 480},
     ),
     FusionObject(
         "Position", "Positions",
@@ -236,6 +262,7 @@ _HCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PER_ALL_POSITIONS",
             "netsuite":   "—",
         },
+        mock_row_counts={"oracle_ebs": 680},
     ),
     FusionObject(
         "Worker", "Workers (Employees + Contingents)",
@@ -244,6 +271,7 @@ _HCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PER_ALL_PEOPLE_F",
             "netsuite":   "Employees list export",
         },
+        mock_row_counts={"oracle_ebs": 1_847, "netsuite": 620},
     ),
     FusionObject(
         "Payroll Element", "Payroll Elements",
@@ -252,6 +280,7 @@ _HCM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PAY_ELEMENT_TYPES_F",
             "netsuite":   "Payroll items export",
         },
+        mock_row_counts={"oracle_ebs": 280, "netsuite": 140},
     ),
 )
 
@@ -264,6 +293,7 @@ _PPM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PA_PROJECTS_ALL",
             "netsuite":   "Projects module export",
         },
+        mock_row_counts={"oracle_ebs": 340, "netsuite": 160},
     ),
     FusionObject(
         "Project Task", "Project Tasks",
@@ -272,6 +302,7 @@ _PPM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PA_TASKS",
             "netsuite":   "Tasks export",
         },
+        mock_row_counts={"oracle_ebs": 1_820, "netsuite": 840},
     ),
     FusionObject(
         "Project Budget", "Project Budgets",
@@ -280,6 +311,7 @@ _PPM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PA_BUDGET_VERSIONS",
             "netsuite":   "Project Budgets export",
         },
+        mock_row_counts={"oracle_ebs": 480, "netsuite": 220},
     ),
     FusionObject(
         "Project Cost", "Project Expenditures (Costs)",
@@ -288,6 +320,7 @@ _PPM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from PA_EXPENDITURE_ITEMS_ALL",
             "netsuite":   "Project Expenses report",
         },
+        mock_row_counts={"oracle_ebs": 12_400, "netsuite": 3_800},
     ),
 )
 
@@ -300,6 +333,7 @@ _EPM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from Hyperion / Essbase export",
             "netsuite":   "Budget CSV export",
         },
+        mock_row_counts={"oracle_ebs": 2_400, "netsuite": 800},
     ),
     FusionObject(
         "EPM Forecast", "EPM Forecasts",
@@ -308,6 +342,7 @@ _EPM_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from forecasting tools",
             "netsuite":   "Forecast scenarios export",
         },
+        mock_row_counts={"oracle_ebs": 1_800, "netsuite": 600},
     ),
 )
 
@@ -320,6 +355,7 @@ _RISK_OBJECTS: tuple[FusionObject, ...] = (
             "oracle_ebs": "Extract from GRC schema",
             "netsuite":   "Risk register CSV",
         },
+        mock_row_counts={"oracle_ebs": 320, "netsuite": 140},
     ),
 )
 
@@ -329,73 +365,4 @@ MODULES: tuple[FusionModule, ...] = (
         "financials", "Financials",
         family="financials",
         description=(
-            "GL / AP / AR / Cash Management / Fixed Assets — the core "
-            "finance modules. Foundation for any Fusion go-live."
-        ),
-        objects=_FINANCIALS_OBJECTS,
-    ),
-    FusionModule(
-        "scm", "Supply Chain (Inventory, Procurement, OM)",
-        family="scm",
-        description=(
-            "Items, Customers, Suppliers, Orders, POs, BOMs, Inventory "
-            "balances. Standard SCM go-live scope."
-        ),
-        objects=_SCM_OBJECTS,
-    ),
-    FusionModule(
-        "hcm", "Human Capital Management",
-        family="hcm",
-        description=(
-            "Workforce, Departments, Jobs, Positions, Payroll Elements. "
-            "Independent go-live from Financials but often combined."
-        ),
-        objects=_HCM_OBJECTS,
-    ),
-    FusionModule(
-        "ppm", "Project Portfolio Management",
-        family="ppm",
-        description=(
-            "Projects, Tasks, Budgets, Expenditures. Depends on Financials "
-            "+ HCM being live first."
-        ),
-        objects=_PPM_OBJECTS,
-    ),
-    FusionModule(
-        "epm", "Enterprise Performance Management",
-        family="epm",
-        description=(
-            "Planning, Budgeting, Forecasting. Pulls from GL once "
-            "Financials is live."
-        ),
-        objects=_EPM_OBJECTS,
-    ),
-    FusionModule(
-        "risk", "Risk Management & Compliance",
-        family="risk",
-        description="GRC Controls + Risk Library. Audit / compliance overlay.",
-        objects=_RISK_OBJECTS,
-    ),
-)
-
-
-MODULE_BY_CODE: dict[str, FusionModule] = {m.code: m for m in MODULES}
-
-
-def modules_for_codes(codes: Iterable[str]) -> list[FusionModule]:
-    return [MODULE_BY_CODE[c] for c in codes if c in MODULE_BY_CODE]
-
-
-def all_objects_for_modules(codes: Iterable[str]) -> list[FusionObject]:
-    """Flat, de-duplicated list of objects across the selected modules.
-    Items / Customers / Suppliers etc. that appear in multiple modules
-    (e.g., Suppliers in both SCM and Financials) are returned once."""
-    seen: set[str] = set()
-    out: list[FusionObject] = []
-    for m in modules_for_codes(codes):
-        for o in m.objects:
-            if o.target_object in seen:
-                continue
-            seen.add(o.target_object)
-            out.append(o)
-    return out
+            "GL / AP / AR / Cash Management / Fi

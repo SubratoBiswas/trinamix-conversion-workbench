@@ -24,6 +24,10 @@ class FusionObjectOut(BaseModel):
     fbdi_template: str | None = None
     planned_load_order: int
     source_extracts: dict[str, str] = {}
+    # Representative row counts for mock mode (per source ERP code).
+    # Allows the Setup Wizard scope step to show realistic volume numbers
+    # before a live Discovery scan is run.
+    mock_row_counts: dict[str, int] = {}
 
 
 class FusionModuleOut(BaseModel):
@@ -44,12 +48,4 @@ async def list_fusion_modules(_: User = Depends(get_current_user)):
                 FusionObjectOut(
                     target_object=o.target_object,
                     label=o.label,
-                    fbdi_template=o.fbdi_template,
-                    planned_load_order=o.planned_load_order,
-                    source_extracts=o.source_extracts,
-                )
-                for o in m.objects
-            ],
-        )
-        for m in MODULES
-    ]
+                    fbdi_template=o.fbdi_template

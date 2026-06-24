@@ -141,6 +141,17 @@ export interface FusionObject {
   fbdi_template?: string | null;
   planned_load_order: number;
   source_extracts: Record<string, string>;
+  /** Representative row counts per source ERP for mock mode display.
+   *  Key = source ERP code ("oracle_ebs", "netsuite", ...). */
+  mock_row_counts?: Record<string, number>;
+}
+
+/** Response from GET /api/projects/{id}/discovery/scope-hints */
+export interface ScopeHints {
+  is_mock: boolean;
+  run_id?: string | null;
+  /** Map of UPPER_CASE_TABLE_NAME → row_count (null = table found but count unavailable) */
+  table_counts: Record<string, number | null>;
 }
 
 export interface FusionModule {
@@ -714,23 +725,4 @@ export interface LearnedMapping {
   kind: string;
   category: string;
   original_value: string;
-  resolved_value: string;
-  target_object?: string | null;
-  target_field?: string | null;
-  rule_type?: string | null;
-  rule_config?: any;
-  project_id?: number | null;
-  captured_from?: string | null;
-  captured_by?: string | null;
-  captured_at: string;
-  confidence_boost: number;
-  records_auto_fixed: number;
-}
-
-export interface LearningStats {
-  total: number;
-  avg_confidence_boost: number;
-  records_auto_fixed: number;
-  analyst_minutes_saved: number;
-  by_category: { category: string; count: number }[];
-}
+  resolved

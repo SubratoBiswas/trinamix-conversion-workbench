@@ -782,3 +782,62 @@ async def reprobe_object(obj_id: str, _: User = Depends(get_current_user)):
     obj.suggestion_confidence = min(1.0, obj.suggestion_confidence + 0.05)
     await obj.save()
     return _obj_to_frontend(obj)
+
+
+# ── Scope-hints endpoint ───────────────────────────────────────────────────────
+
+class ScopeHintsOut(BaseModel):
+    """
+    Discovery enrichment for the Scope step.
+    Maps each canonical EBS source-table name (all caps) to the actual row
+    count found in the most recent discovery scan, plus a boolean indicating
+    whether the table was seen at all.  `is_mock` mirrors the run so the
+    frontend can badge mock counts accordingly.
+    """
+    is_mock: bool = True
+    run_id: Optional[str] = None
+    table_counts: Dict[str, Optional[int]] = {}
+
+
+@project_router.get("/projects/{project_id}/discovery/scope-hints", response_model=ScopeHintsOut)
+async def discovery_scope_hints(
+    project_id: str,
+    _: User = Depends(get_current_user),
+):
+    """
+    Return a flat map of { TABLE_NAME: row_count } from the latest discovery
+    run.  Used by the Scope step preview (and the Project Overview scope card)
+    to enrich source-extract hints with real volume numbers.
+
+    If no run exists yet, returns an empty table_counts dict so the caller
+    can fall back to mock fixtures.
+    """
+    try:
+        pid = PydanticObjectId(project_id)
+    except Exception:
+        raise HTTPException(400, "Invalid project_id")
+
+    run = await DiscoveryRun.find(
+        DiscoveryRun.project_id == pid,
+        DiscoveryRun.status == "completed",
+    ).sort("-created_at").first_or_none()
+
+    if not run:
+        return ScopeHintsOut()
+
+    # Determine mock vs live
+    conn = await SourceConnection.get(run.connection_id)
+    is_mock = conn is None or conn.encrypted_password == "__mock__" or not conn.encrypted_password
+
+    # Build table -> row_count lookup from discovered objects
+    objects = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
+    table_counts: Dict[str, Optional[int]] = {
+        o.object_name.upper(): o.row_count
+        for o in objects
+    }
+
+    return ScopeHintsOut(
+        is_mock=is_mock,
+        run_id=str(run.id),
+        table_counts=table_counts,
+    )

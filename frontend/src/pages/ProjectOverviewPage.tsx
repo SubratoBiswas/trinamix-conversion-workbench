@@ -9,9 +9,9 @@ import {
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, ProjectsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
-import type { Dataset, FBDITemplate } from "@/types";
+import type { Dataset, FBDITemplate, FusionModule, ScopeHints } from "@/types";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -338,6 +338,15 @@ export const ProjectOverviewPage: React.FC = () => {
         <DiscoveryPanel projectId={pid} hasConnection={hasConnection} />
       </div>
 
+      {/* Source coverage — only rendered when a discovery scan exists */}
+      <div className="mt-4">
+        <ScopeHintsCard
+          projectId={pid}
+          sourceSystem={(project as any).source_system || "oracle_ebs"}
+          selectedModules={(project as any).selected_modules || []}
+        />
+      </div>
+
       {/* Notes */}
       {project.description && (
         <Card className="mt-4">
@@ -597,54 +606,46 @@ const AddConversionModal: React.FC<{
   );
 };
 
-// ─── Auto-populate Modal ─────────────────────────────────────────────────────
+// ─────── Source Coverage (Scope Hints) Card ────────────────────────────────
 
-const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
+/** Extract the first ALL_CAPS table name from a source-extract hint string.
+ *  "Extract from MTL_SYSTEM_ITEMS_B"   → "MTL_SYSTEM_ITEMS_B"
+ *  "Extract from FA_BOOKS / FA_ASSET_HISTORY" → "FA_BOOKS"
+ *  "Saved Search → ..."               → null  */
+function extractScopeTable(hint: string): string | null {
+  const m = hint.match(/\b([A-Z][A-Z0-9_]{3,})\b/);
+  return m ? m[1] : null;
+}
 
-const AutoPopulateModal: React.FC<{
+const ScopeHintsCard: React.FC<{
   projectId: string;
-  onClose: () => void;
-  onDone: (r: any) => void;
-}> = ({ projectId, onClose, onDone }) => {
-  const [selected, setSelected] = React.useState<string[]>([]);
-  const [busy, setBusy] = React.useState(false);
+  sourceSystem: string;
+  selectedModules: string[];
+}> = ({ projectId, sourceSystem, selectedModules }) => {
+  const [hints, setHints] = React.useState<ScopeHints | null>(null);
+  const [modules, setModules] = React.useState<FusionModule[]>([]);
+  const [loading, setLoading] = React.useState(true);
 
-  const toggle = (m: string) =>
-    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  React.useEffect(() => {
+    Promise.all([
+      api.get(`/projects/${projectId}/discovery/scope-hints`).then(r => r.data as ScopeHints),
+      FusionModulesApi.list(),
+    ]).then(([h, mods]) => {
+      setHints(h);
+      setModules(mods);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, [projectId]);
 
-  const submit = async () => {
-    if (!selected.length) return;
-    setBusy(true);
-    try { const r = await ProjectsApi.autoPopulate(projectId, selected); onDone(r); }
-    finally { setBusy(false); }
-  };
+  // Only render if a scan has run and there are selected modules
+  if (loading || !hints?.run_id || selectedModules.length === 0) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
-            <p className="mt-0.5 text-xs text-ink-muted">Select Oracle Cloud modules to create conversion objects automatically.</p>
-          </div>
-          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
-        </div>
-        <div className="flex flex-wrap gap-2 mb-5">
-          {AVAILABLE_MODULES.map(m => (
-            <button key={m} onClick={() => toggle(m)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                selected.includes(m) ? "border-brand bg-brand-subtle text-brand-dark" : "border-line bg-canvas text-ink-muted hover:border-brand"
-              }`}>{m}</button>
-          ))}
-        </div>
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button onClick={submit} disabled={!selected.length || busy} className="btn-primary disabled:opacity-50">
-            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+  // Flatten all canonical objects across selected modules (de-duped)
+  const seen = new Set<string>();
+  const rows: { label: string; hint: string; table: string | null; found: boolean; rowCount: number | null }[] = [];
+  for (const mod of modules) {
+    if (!selectedModules.includes(mod.code)) continue;
+    for (const obj of mod.objects) {
+      if (seen.has(obj.target_object)) continue;
+      seen.add(obj.target_object);
+      const hint = obj.source_extracts[sourceSystem] || "—";
+      const table = hint !== "—" ? extractScopeTable(hin

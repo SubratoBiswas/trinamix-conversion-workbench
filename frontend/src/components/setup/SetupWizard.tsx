@@ -271,6 +271,7 @@ export const SetupWizard: React.FC = () => {
         <Step4Scope
           modules={fusionModules}
           sourceCode={sourceCode}
+          isMock={conn.mock_mode}
           selected={selectedModules}
           onChange={setSelectedModules}
         />
@@ -645,12 +646,22 @@ const Step3Connection: React.FC<{
 
 // ─────── Step 4 — implementation scope (Fusion modules) ───────
 
+/** Extract the primary (first) ALL_CAPS table name from a source-extract hint string.
+ *  e.g. "Extract from MTL_SYSTEM_ITEMS_B"   → "MTL_SYSTEM_ITEMS_B"
+ *       "Extract from FA_BOOKS / FA_ASSET_HISTORY" → "FA_BOOKS"
+ *       "Saved Search → ..."                 → null  */
+function extractTableName(hint: string): string | null {
+  const m = hint.match(/\b([A-Z][A-Z0-9_]{3,})\b/);
+  return m ? m[1] : null;
+}
+
 const Step4Scope: React.FC<{
   modules: FusionModule[];
   sourceCode: string;
+  isMock: boolean;
   selected: string[];
   onChange: (codes: string[]) => void;
-}> = ({ modules, sourceCode, selected, onChange }) => {
+}> = ({ modules, sourceCode, isMock, selected, onChange }) => {
   const toggle = (code: string) => {
     if (selected.includes(code)) {
       onChange(selected.filter((c) => c !== code));
@@ -660,7 +671,12 @@ const Step4Scope: React.FC<{
   };
 
   // Compute the de-duplicated set of conversions that will be created.
-  const objectsToCreate = new Map<string, { label: string; planned: number; sourceHint: string }>();
+  const objectsToCreate = new Map<string, {
+    label: string;
+    planned: number;
+    sourceHint: string;
+    mockRowCount?: number;
+  }>();
   modules
     .filter((m) => selected.includes(m.code))
     .forEach((m) => {
@@ -670,6 +686,7 @@ const Step4Scope: React.FC<{
             label: o.label,
             planned: o.planned_load_order,
             sourceHint: o.source_extracts[sourceCode] || "—",
+            mockRowCount: o.mock_row_counts?.[sourceCode],
           });
         }
       });
@@ -732,12 +749,30 @@ const Step4Scope: React.FC<{
         {/* Preview of conversions that will be auto-created */}
         {objectsToCreate.size > 0 && (
           <div className="mt-4 rounded-md border border-brand/30 bg-brand-subtle/15 p-3">
-            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
-              {objectsToCreate.size} conversion{objectsToCreate.size === 1 ? "" : "s"} will be auto-created
+            <div className="flex items-center justify-between">
+              <div className="text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+                {objectsToCreate.size} conversion{objectsToCreate.size === 1 ? "" : "s"} will be auto-created
+              </div>
+              {!isMock && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-ink-muted">
+                  <Database className="h-3 w-3" />
+                  Row counts after first Discovery scan
+                </span>
+              )}
+              {isMock && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                  <Workflow className="h-3 w-3" /> mock estimates
+                </span>
+              )}
             </div>
             <table className="mt-2 w-full text-[11.5px]">
               <thead className="text-left text-[10px] uppercase tracking-wider text-ink-muted">
-                <tr><th>Object</th><th>Load order</th><th>Source extract</th></tr>
+                <tr>
+                  <th className="pb-1 pr-2">Object</th>
+                  <th className="pb-1 pr-2">Load order</th>
+                  <th className="pb-1 pr-2">Source extract</th>
+                  <th className="pb-1">Rows</th>
+                </tr>
               </thead>
               <tbody>
                 {[...objectsToCreate.entries()]
@@ -746,7 +781,26 @@ const Step4Scope: React.FC<{
                     <tr key={target} className="border-t border-line/60">
                       <td className="py-1 pr-2 font-medium text-ink">{info.label}</td>
                       <td className="py-1 pr-2 font-mono text-ink-muted">{info.planned}</td>
-                      <td className="py-1 font-mono text-[10.5px] text-ink-muted">{info.sourceHint}</td>
+                      <td className="py-1 pr-2 font-mono text-[10.5px] text-ink-muted">
+                        {info.sourceHint !== "—" ? (
+                          <>
+                            {info.sourceHint.replace(/^Extract from\s+/, "")}
+                          </>
+                        ) : "—"}
+                      </td>
+                      <td className="py-1 whitespace-nowrap">
+                        {isMock ? (
+                          info.mockRowCount !== undefined ? (
+                            <span className="font-mono text-[10.5px] text-amber-700">
+                              ~{info.mockRowCount.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-ink-muted">—</span>
+                          )
+                        ) : (
+                          <span className="text-[10px] italic text-ink-muted">pending scan</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
               </tbody>
@@ -810,71 +864,4 @@ const Step5Review: React.FC<{
               </div>
             ) : (
               <>
-                {scopedModules.map((m) => (
-                  <ReviewRow key={m.code} k={m.name} v={`${m.objects.length} object(s)`} />
-                ))}
-                <ReviewRow k="Auto-create"
-                  v={`${uniqueObjects.size} planned conversion${uniqueObjects.size === 1 ? "" : "s"}`} />
-              </>
-            )}
-          </ReviewBlock>
-        </div>
-        <div className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-success-subtle/60 px-3 py-2 text-[11px] text-success">
-          <ShieldCheck className="h-3.5 w-3.5" />
-          Creating the engagement saves the project, the source connection,
-          {uniqueObjects.size > 0 && (
-            <> {uniqueObjects.size} planned conversion{uniqueObjects.size === 1 ? "" : "s"},</>
-          )}
-          {" "}and an audit-log entry — all atomically.
-        </div>
-      </CardBody>
-    </Card>
-  );
-};
-
-// ─────── Tiny primitives kept local so this component is self-contained ───────
-
-const SectionTitle: React.FC<{ icon: React.ReactNode; children: React.ReactNode }> = ({
-  icon, children,
-}) => (
-  <div className="flex items-center gap-2 text-sm font-semibold text-ink">
-    {icon}
-    {children}
-  </div>
-);
-
-const SectionSubtitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-    {children}
-  </div>
-);
-
-const Field: React.FC<{
-  label: string; required?: boolean; children: React.ReactNode;
-}> = ({ label, required, children }) => (
-  <div>
-    <label className="label">
-      {label}
-      {required && <span className="ml-1 text-danger">*</span>}
-    </label>
-    {children}
-  </div>
-);
-
-const ReviewBlock: React.FC<{ title: string; children: React.ReactNode }> = ({
-  title, children,
-}) => (
-  <div className="rounded-md border border-line bg-canvas p-3">
-    <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-      {title}
-    </div>
-    <div className="space-y-1.5">{children}</div>
-  </div>
-);
-
-const ReviewRow: React.FC<{ k: string; v: string }> = ({ k, v }) => (
-  <div className="flex items-baseline justify-between gap-3 text-xs">
-    <span className="text-ink-muted">{k}</span>
-    <span className="truncate font-mono text-ink">{v}</span>
-  </div>
-);
+            
