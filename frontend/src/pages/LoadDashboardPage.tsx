@@ -314,4 +314,4 @@ const KpiBadge: React.FC<{ label: string; value: number; icon?: React.ElementTyp
         <div className={`mt-1 text-2xl font-semibold tabular-nums ${text}`}>{value}</div>
       </div>
     );
-};};
+};
