@@ -156,19 +156,21 @@ export const MappingReviewPage: React.FC = () => {
 
   const visibleTargetIds = useMemo(() => new Set(visibleMappings.map((m) => m.target_field_id)), [visibleMappings]);
 
-  // ── Stats ──
+  // ── Stats — scoped to the active FBDI template's fields only ──
   const stats = useMemo(() => {
-    const total = mappings.length;
-    const mapped = mappings.filter((m) => m.source_column).length;
-    const approved = mappings.filter((m) => m.status === "approved").length;
-    const reqMissing = mappings.filter((m) => m.target_required && !m.source_column && m.status !== "approved").length;
-    const learned = mappings.filter(
+    const activeIds = new Set(targetFields.map((f) => f.id));
+    const scoped = mappings.filter((m) => activeIds.has(m.target_field_id));
+    const total = targetFields.length;
+    const mapped = scoped.filter((m) => m.source_column).length;
+    const approved = scoped.filter((m) => m.status === "approved").length;
+    const reqMissing = scoped.filter((m) => m.target_required && !m.source_column && m.status !== "approved").length;
+    const learned = scoped.filter(
       (m) => m.status === "approved" &&
         (m.approved_by === "learning-engine" || m.comment?.includes("[learned]"))
     ).length;
-    const kb = mappings.filter((m) => !!m.kb_source).length;
+    const kb = scoped.filter((m) => !!m.kb_source).length;
     return { total, mapped, approved, reqMissing, learned, kb };
-  }, [mappings]);
+  }, [mappings, targetFields]);
 
   // ── Recommendations (column-level cleansing tied to this project) ──
   const recommendations = useMemo<Recommendation[]>(() => {
