@@ -13,6 +13,31 @@ from app.models.v10 import (
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 
 
+def _jdbc_url_from_conn(conn: "SourceConnection") -> str:
+    """Build JDBC URL using base_url as the authoritative source (user's last saved value).
+    Falls back to individual host/port/service_name fields."""
+    base = conn.base_url or ""
+    if base:
+        parts = base.split(":")
+        host = parts[0].strip() if parts else (conn.host or "")
+        rest = parts[1] if len(parts) > 1 else ""
+        slash = rest.find("/")
+        if slash != -1:
+            try:
+                port = int(rest[:slash]) or 1521
+            except ValueError:
+                port = conn.port or 1521
+            svc = rest[slash + 1:] or conn.service_name or ""
+        else:
+            port = conn.port or 1521
+            svc = conn.service_name or ""
+    else:
+        host = conn.host or ""
+        port = conn.port or 1521
+        svc = conn.service_name or ""
+    return f"jdbc:oracle:thin:@{host}:{port}/{svc}"
+
+
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 class ConnectionCreate(BaseModel):
@@ -195,7 +220,7 @@ async def test_connection(conn_id: str):
             if password == "__mock__":
                 ok = True
             else:
-                jdbc_url = f"jdbc:oracle:thin:@{conn.host}:{conn.port or 1521}/{conn.service_name}"
+                jdbc_url = _jdbc_url_from_conn(conn)
                 c = jaydebeapi.connect(
                     "oracle.jdbc.OracleDriver",
                     jdbc_url,
@@ -510,7 +535,7 @@ async def _live_oracle_discovery(conn: SourceConnection) -> tuple:
     if password.startswith("PLAIN:"):
         password = password[6:]
 
-    jdbc_url = f"jdbc:oracle:thin:@{conn.host}:{conn.port or 1521}/{conn.service_name}"
+    jdbc_url = _jdbc_url_from_conn(conn)
     db = jaydebeapi.connect(
         "oracle.jdbc.OracleDriver",
         jdbc_url,

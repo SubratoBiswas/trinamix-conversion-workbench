@@ -320,9 +320,28 @@ async def test_connection(
         )
 
     # ── Live mode — Oracle EBS ─────────────────────────────────────────────────
-    host = conn.host
-    port = conn.port or 1521
-    service_name = conn.service_name
+    # Derive host/port/service from base_url (the display endpoint) as the
+    # authoritative source — it's always what the user last saved via Edit.
+    # Fall back to the individual fields if base_url is absent.
+    _base = conn.base_url or ""
+    if _base:
+        _parts = _base.split(":")
+        host = _parts[0].strip() if _parts else conn.host
+        _rest = _parts[1] if len(_parts) > 1 else ""
+        _slash = _rest.find("/")
+        if _slash != -1:
+            try:
+                port = int(_rest[:_slash]) or 1521
+            except ValueError:
+                port = conn.port or 1521
+            service_name = _rest[_slash + 1:] or conn.service_name
+        else:
+            port = conn.port or 1521
+            service_name = conn.service_name
+    else:
+        host = conn.host
+        port = conn.port or 1521
+        service_name = conn.service_name
     username = conn.username
     # Password stored as plain in this router (no Fernet here)
     password = conn.encrypted_password
