@@ -188,15 +188,20 @@ async def test_connection(conn_id: str):
     error_msg = None
     try:
         if conn.system_type == "oracle_ebs":
-            import oracledb
+            import jaydebeapi
             password = conn.encrypted_password or ""
             if password.startswith("PLAIN:"):
                 password = password[6:]
             if password == "__mock__":
                 ok = True
             else:
-                dsn = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
-                c = oracledb.connect(user=conn.username, password=password, dsn=dsn)
+                jdbc_url = f"jdbc:oracle:thin:@{conn.host}:{conn.port or 1521}/{conn.service_name}"
+                c = jaydebeapi.connect(
+                    "oracle.jdbc.OracleDriver",
+                    jdbc_url,
+                    [conn.username, password],
+                    "/app/ojdbc11.jar",
+                )
                 c.close()
                 ok = True
         else:
@@ -495,27 +500,33 @@ def _mock_ebs_objects() -> List[Dict[str, Any]]:
 
 async def _live_oracle_discovery(conn: SourceConnection) -> tuple:
     """
-    Connect to Oracle EBS and inventory visible tables.
+    Connect to Oracle EBS via JDBC and inventory visible tables.
     Returns (objects_list, scan_notes).
+    JDBC handles legacy 10g password hashes (DPY-3015 bypass).
     """
-    import oracledb
+    import jaydebeapi
 
     password = conn.encrypted_password or ""
     if password.startswith("PLAIN:"):
         password = password[6:]
 
-    dsn = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
-    db = oracledb.connect(user=conn.username, password=password, dsn=dsn)
+    jdbc_url = f"jdbc:oracle:thin:@{conn.host}:{conn.port or 1521}/{conn.service_name}"
+    db = jaydebeapi.connect(
+        "oracle.jdbc.OracleDriver",
+        jdbc_url,
+        [conn.username, password],
+        "/app/ojdbc11.jar",
+    )
     cur = db.cursor()
 
     # Query all tables visible to the connected user, ordered by row count desc
     cur.execute("""
         SELECT table_name, num_rows, last_analyzed
         FROM all_tables
-        WHERE owner = :owner
+        WHERE owner = ?
         ORDER BY num_rows DESC NULLS LAST
         FETCH FIRST 300 ROWS ONLY
-    """, owner=(conn.username or "APPS").upper())
+    """, [(conn.username or "APPS").upper()])
 
     rows = cur.fetchall()
     cur.close()

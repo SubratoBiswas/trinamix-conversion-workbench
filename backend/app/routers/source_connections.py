@@ -339,13 +339,18 @@ async def test_connection(
         probes.append(ProbeResult(name="TCP connect", status="failed", latency_ms=ms,
                                   message=str(e)))
 
-    # Probe 2: Oracle authentication
+    # Probe 2: Oracle authentication via JDBC (handles legacy 10g password hashes)
     if overall_ok:
         t0 = time.monotonic()
         try:
-            import oracledb
-            dsn = f"{host}:{port}/{service_name}"
-            db_conn = oracledb.connect(user=username, password=password, dsn=dsn)
+            import jaydebeapi
+            jdbc_url = f"jdbc:oracle:thin:@{host}:{port}/{service_name}"
+            db_conn = jaydebeapi.connect(
+                "oracle.jdbc.OracleDriver",
+                jdbc_url,
+                [username, password],
+                "/app/ojdbc11.jar",
+            )
             ms = round((time.monotonic() - t0) * 1000, 1)
             total_latency += ms
             probes.append(ProbeResult(name="Oracle auth", status="ok", latency_ms=ms,
@@ -359,13 +364,13 @@ async def test_connection(
                 cur.execute("SELECT banner FROM v$version WHERE rownum = 1")
                 row = cur.fetchone()
                 db_version = row[0].strip() if row else None
-                # Accessible tables
+                # Accessible tables (JDBC uses ? for positional params)
                 cur.execute(
-                    "SELECT COUNT(*) FROM all_tables WHERE owner = :owner",
-                    owner=(username or "").upper(),
+                    "SELECT COUNT(*) FROM all_tables WHERE owner = ?",
+                    [(username or "").upper()],
                 )
                 row2 = cur.fetchone()
-                table_count = row2[0] if row2 else 0
+                table_count = int(row2[0]) if row2 else 0
                 cur.close()
                 db_conn.close()
                 ms = round((time.monotonic() - t0) * 1000, 1)
@@ -390,7 +395,7 @@ async def test_connection(
         except ImportError:
             overall_ok = False
             probes.append(ProbeResult(name="Oracle auth", status="failed",
-                                      message="oracledb package not installed on server"))
+                                      message="jaydebeapi not installed on server"))
             probes.append(ProbeResult(name="Schema probe", status="skipped",
                                       message="Skipped — auth failed"))
         except Exception as e:
