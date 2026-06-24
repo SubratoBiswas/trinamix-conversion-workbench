@@ -347,20 +347,13 @@ const EditConnectionInline: React.FC<{
     setBusy(true);
     setError(null);
     try {
-      const endpoint = host && port && serviceName
-        ? `${host.trim()}:${port.trim()}/${serviceName.trim()}`
-        : undefined;
       const patch: Record<string, any> = {};
       if (displayName.trim())  patch.display_name = displayName.trim();
-      if (endpoint)            patch.endpoint = endpoint;
-      if (username.trim() || password.trim()) {
-        patch.credentials = {
-          ...(username.trim() ? { username: username.trim() } : {}),
-          ...(password.trim() ? { password: password.trim() } : {}),
-        };
-      }
-      if (username.trim()) patch.username = username.trim();
-      if (password.trim()) patch.password = password.trim();
+      if (host.trim())         patch.host = host.trim();
+      if (port.trim())         patch.port = parseInt(port.trim(), 10) || 1521;
+      if (serviceName.trim())  patch.service_name = serviceName.trim();
+      if (username.trim())     patch.username = username.trim();
+      if (password.trim())     patch.password = password.trim();
       await SourceConnectionsApi.update(conn.id, patch);
       onSaved();
     } catch (e: any) {

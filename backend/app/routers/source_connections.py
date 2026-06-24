@@ -255,7 +255,8 @@ async def update_connection(
         conn.port = data.pop("port")
     if "service_name" in data:
         conn.service_name = data.pop("service_name")
-        # Also rebuild the display endpoint string
+    # Rebuild the display endpoint whenever any of host/port/service_name were touched
+    if conn.host and conn.service_name:
         conn.base_url = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
     creds = data.pop("credentials", {}) or {}
     if creds.get("password"):
