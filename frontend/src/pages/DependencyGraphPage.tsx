@@ -37,7 +37,7 @@ function layout(deps: Dependency[]): { nodes: Node[]; edges: Edge[] } {
   }
 
   const nodes: Node[] = [];
-  const COL_W = 220, ROW_H = 90;
+  const COL_W = 310, ROW_H = 100;
   Array.from(byDepth.entries())
     .sort((a, b) => a[0] - b[0])
     .forEach(([d, list]) => {
@@ -47,7 +47,7 @@ function layout(deps: Dependency[]): { nodes: Node[]; edges: Edge[] } {
           position: { x: d * COL_W, y: i * ROW_H + 40 },
           data: { label: obj },
           style: {
-            width: 180,
+            width: 200,
             background: "white",
             border: "1px solid #E2E8F0",
             borderRadius: 8,
@@ -68,9 +68,11 @@ function layout(deps: Dependency[]): { nodes: Node[]; edges: Edge[] } {
     animated: false,
     style: { stroke: "#94A3B8", strokeWidth: 1.5 },
     markerEnd: { type: MarkerType.ArrowClosed, color: "#94A3B8" },
-    label: d.relationship_type,
-    labelStyle: { fontSize: 10, fill: "#64748B" },
-    labelBgStyle: { fill: "#F8FAFC" },
+    label: (d.relationship_type || "prerequisite").toLowerCase().startsWith("prerequis") ? "prereq" : (d.relationship_type || "requires"),
+    labelStyle: { fontSize: 10, fill: "#64748B", fontFamily: "inherit" },
+    labelBgStyle: { fill: "#F8FAFC", fillOpacity: 0.9 },
+    labelBgPadding: [4, 6] as [number, number],
+    labelBgBorderRadius: 3,
   }));
   return { nodes, edges };
 }

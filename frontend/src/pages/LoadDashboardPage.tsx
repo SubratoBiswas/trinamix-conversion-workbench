@@ -39,6 +39,7 @@ export const LoadDashboardPage: React.FC = () => {
   const [summary, setSummary] = useState<LoadSummary | null>(null);
   const [errors, setErrors] = useState<LoadError[]>([]);
   const [running, setRunning] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Load projects once; default the engagement if not URL-pinned.
   useEffect(() => {
@@ -81,8 +82,16 @@ export const LoadDashboardPage: React.FC = () => {
   const loadToFusion = async () => {
     if (!pid) return;
     setRunning(true);
-    try { await LoadApi.simulate(pid); await refresh(); }
-    finally { setRunning(false); }
+    setLoadError(null);
+    try {
+      await LoadApi.simulate(pid);
+      await refresh();
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || "Load simulation failed.";
+      setLoadError(typeof msg === "string" ? msg : JSON.stringify(msg));
+    } finally {
+      setRunning(false);
+    }
   };
 
   const project = projects.find((p) => p.id === projectId) || null;
@@ -150,6 +159,12 @@ export const LoadDashboardPage: React.FC = () => {
         </CardBody>
       </Card>
 
+      {loadError && (
+        <div className="mb-4 rounded-md border border-danger/40 bg-danger-subtle/50 px-4 py-3 text-[12.5px] text-danger">
+          <strong>Load failed:</strong> {loadError}
+        </div>
+      )}
+
       {!conversion ? (
         <Card>
           <CardBody><EmptyState
@@ -157,7 +172,7 @@ export const LoadDashboardPage: React.FC = () => {
             description="Load Management runs in the context of one engagement at a time. Each engagement has its own conversion list."
           /></CardBody>
         </Card>
-      ) : (!summary || summary.total_records === 0) ? (
+      ) : (runs.length === 0) ? (
         <Card>
           <CardBody><EmptyState
             title="No load runs yet"
@@ -169,10 +184,10 @@ export const LoadDashboardPage: React.FC = () => {
         <>
           {/* Top KPI strip */}
           <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-            <KpiBadge label="Total Records" value={summary.total_records} />
-            <KpiBadge label="Passed" value={summary.passed_count} icon={CheckCircle2} tone="success" />
-            <KpiBadge label="Failed" value={summary.failed_count} icon={XCircle} tone="danger" />
-            <KpiBadge label="Warnings" value={summary.warning_count} icon={AlertTriangle} tone="warning" />
+            <KpiBadge label="Total Records" value={summary?.total_records ?? 0} />
+            <KpiBadge label="Passed" value={summary?.passed_count ?? 0} icon={CheckCircle2} tone="success" />
+            <KpiBadge label="Failed" value={summary?.failed_count ?? 0} icon={XCircle} tone="danger" />
+            <KpiBadge label="Warnings" value={summary?.warning_count ?? 0} icon={AlertTriangle} tone="warning" />
           </div>
 
           <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -196,11 +211,11 @@ export const LoadDashboardPage: React.FC = () => {
             <Card className="lg:col-span-2">
               <CardHeader title="Error Categories" subtitle="Distribution of failures by category" />
               <CardBody>
-                {summary.error_categories.length === 0 ? (
+                {(summary?.error_categories ?? []).length === 0 ? (
                   <EmptyState title="No errors" description="All records passed validation." />
                 ) : (
                   <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={summary.error_categories} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 160 }}>
+                    <BarChart data={summary?.error_categories ?? []} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 160 }}>
                       <CartesianGrid stroke="#F1F5F9" horizontal={false} />
                       <XAxis type="number" allowDecimals={false} stroke="#94A3B8" fontSize={11} />
                       <YAxis type="category" dataKey="name" stroke="#475569" fontSize={11} tickLine={false} axisLine={false} width={150} />
@@ -218,12 +233,12 @@ export const LoadDashboardPage: React.FC = () => {
           {/* Root causes + dependencies */}
           <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card>
-              <CardHeader title="Root Causes" subtitle={`${summary.root_causes.length} unique cause(s)`} />
-              {summary.root_causes.length === 0 ? <CardBody><EmptyState title="No causes recorded" /></CardBody> :
+              <CardHeader title="Root Causes" subtitle={`${summary?.root_causes?.length ?? 0} unique cause(s)`} />
+              {(summary?.root_causes?.length ?? 0) === 0 ? <CardBody><EmptyState title="No causes recorded" /></CardBody> :
                 <table className="table-shell">
                   <thead><tr><th>Cause</th><th className="text-right">Count</th></tr></thead>
                   <tbody>
-                    {summary.root_causes.map((c, i) => (
+                    {(summary?.root_causes ?? []).map((c, i) => (
                       <tr key={i}>
                         <td className="text-ink">{c.cause}</td>
                         <td className="text-right tabular-nums text-ink-muted">{c.count}</td>
@@ -235,11 +250,11 @@ export const LoadDashboardPage: React.FC = () => {
             </Card>
             <Card>
               <CardHeader title="Dependency Impact" subtitle="Upstream objects driving these failures" />
-              {summary.dependency_impacts.length === 0 ? <CardBody><EmptyState title="No dependency impacts" /></CardBody> :
+              {(summary?.dependency_impacts?.length ?? 0) === 0 ? <CardBody><EmptyState title="No dependency impacts" /></CardBody> :
                 <table className="table-shell">
                   <thead><tr><th>Object</th><th className="text-right">Impacted</th></tr></thead>
                   <tbody>
-                    {summary.dependency_impacts.map((d, i) => (
+                    {(summary?.dependency_impacts ?? []).map((d, i) => (
                       <tr key={i}>
                         <td><Pill tone="warning">{d.object}</Pill></td>
                         <td className="text-right tabular-nums text-ink-muted">{d.count}</td>
@@ -299,4 +314,4 @@ const KpiBadge: React.FC<{ label: string; value: number; icon?: React.ElementTyp
         <div className={`mt-1 text-2xl font-semibold tabular-nums ${text}`}>{value}</div>
       </div>
     );
-  };
+};};
