@@ -274,6 +274,16 @@ const ProbeRow: React.FC<{ probe: { name: string; status: string; latency_ms?: n
 
 // ─────── Inline add-connection form (used only when no connection exists) ───────
 
+// Real Oracle EBS connection defaults — same values used in SetupWizard.
+const EBS_INLINE_DEFAULTS = {
+  displayName: "Client Oracle EBS",
+  endpoint: "130.61.179.1:1521/ebscdb",
+  authType: "db_basic",
+  mockMode: false,
+  metadata: { host: "130.61.179.1", service_name: "ebscdb", instance_name: "ebscdb", port: "1521" },
+  credentials: { username: "apps", password: "apps" },
+};
+
 const AddConnectionInline: React.FC<{
   projectId: string;
   sourceSystemCode: string;
@@ -282,10 +292,12 @@ const AddConnectionInline: React.FC<{
   onSaved: () => void;
 }> = ({ projectId, sourceSystemCode, sourceSystems, onClose, onSaved }) => {
   const sys = sourceSystems.find((s) => s.code === sourceSystemCode);
+  const isEbs = sourceSystemCode === "oracle_ebs";
+
   const [displayName, setDisplayName] = useState(
-    sys ? `${sys.display_name} (mock)` : ""
+    isEbs ? EBS_INLINE_DEFAULTS.displayName : (sys ? `${sys.display_name} (mock)` : "")
   );
-  const [endpoint, setEndpoint] = useState("");
+  const [endpoint, setEndpoint] = useState(isEbs ? EBS_INLINE_DEFAULTS.endpoint : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -298,8 +310,12 @@ const AddConnectionInline: React.FC<{
         source_system: sourceSystemCode,
         display_name: displayName.trim(),
         endpoint: endpoint.trim() || undefined,
-        auth_type: "mock",
-        mock_mode: true,
+        auth_type: isEbs ? EBS_INLINE_DEFAULTS.authType : "mock",
+        mock_mode: isEbs ? EBS_INLINE_DEFAULTS.mockMode : true,
+        ...(isEbs && {
+          connection_metadata: EBS_INLINE_DEFAULTS.metadata,
+          credentials: EBS_INLINE_DEFAULTS.credentials,
+        }),
       });
       onSaved();
     } catch (e: any) {
@@ -338,11 +354,18 @@ const AddConnectionInline: React.FC<{
             className="input"
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
-            placeholder={sourceSystemCode === "oracle_ebs"
-              ? "ebs-prod-db.internal:1521/APPS"
+            placeholder={isEbs
+              ? "130.61.179.1:1521/ebscdb"
               : "https://account.suitetalk.api.netsuite.com"}
           />
         </div>
+        {isEbs && (
+          <div className="rounded-md border border-info/30 bg-info-subtle/40 px-3 py-2 text-[11px] text-ink">
+            <Lock className="mr-1 inline h-3 w-3 text-info" />
+            Pre-filled with live Oracle EBS credentials (host 130.61.179.1, service ebscdb).
+            Connection will be created in <strong>live mode</strong>.
+          </div>
+        )}
         {error && (
           <div className="rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger">{error}</div>
         )}

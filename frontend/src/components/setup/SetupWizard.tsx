@@ -57,6 +57,25 @@ const STATUS_OPTIONS = [
   "planning", "in_progress", "ready_for_uat", "complete", "on_hold",
 ];
 
+// Default Oracle EBS connection — pre-filled when the user picks Oracle EBS.
+// The user can override any field before submitting.
+const EBS_DEFAULTS = {
+  display_name: "Client Oracle EBS",
+  endpoint: "130.61.179.1:1521/ebscdb",
+  auth_type: "db_basic",
+  mock_mode: false,
+  metadata: {
+    host: "130.61.179.1",
+    service_name: "ebscdb",
+    instance_name: "ebscdb",
+    port: "1521",
+  },
+  credentials: {
+    username: "apps",
+    password: "apps",
+  },
+};
+
 // Per-source metadata field templates. Each field becomes a labelled input
 // in step 3; the value lands in connection.connection_metadata on the server.
 const META_FIELDS: Record<string, { key: string; label: string; placeholder: string; required?: boolean }[]> = {
@@ -139,8 +158,21 @@ export const SetupWizard: React.FC = () => {
   // When the source flips, reset auth_type and the metadata/credential
   // sub-forms to a sensible default for that source so old field values
   // from an unrelated source don't leak forward.
+  // Oracle EBS: pre-fill with real DB defaults so the team can connect
+  // immediately without entering anything manually.
   useEffect(() => {
     if (!sourceCode) return;
+    if (sourceCode === "oracle_ebs") {
+      setConn({
+        display_name: EBS_DEFAULTS.display_name,
+        endpoint: EBS_DEFAULTS.endpoint,
+        auth_type: EBS_DEFAULTS.auth_type,
+        mock_mode: EBS_DEFAULTS.mock_mode,
+        metadata: { ...EBS_DEFAULTS.metadata },
+        credentials: { ...EBS_DEFAULTS.credentials },
+      });
+      return;
+    }
     const allowed = AUTH_TYPE_OPTIONS_BY_SOURCE[sourceCode] || ["mock"];
     setConn((prev) => ({
       ...prev,
