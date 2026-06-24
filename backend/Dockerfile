@@ -1,6 +1,8 @@
-# Stage 1 — Oracle Instant Client (public Docker Hub image, no auth needed)
-# gvenzl/oracle-instant-client:21-slim = Basic Lite 21.x on Oracle Linux
-FROM gvenzl/oracle-instant-client:21-slim AS oracle-ic
+# Stage 1 — Oracle Instant Client via official Oracle Linux 8 repos
+# oraclelinux:8-slim is public on Docker Hub; oracle-instantclient21-basiclite
+# is in Oracle's pre-configured yum repos inside that image.
+FROM oraclelinux:8-slim AS oracle-ic
+RUN microdnf install -y oracle-instantclient21-basiclite && microdnf clean all
 
 # Stage 2 — Application
 FROM python:3.12-slim
