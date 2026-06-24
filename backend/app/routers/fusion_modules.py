@@ -48,4 +48,13 @@ async def list_fusion_modules(_: User = Depends(get_current_user)):
                 FusionObjectOut(
                     target_object=o.target_object,
                     label=o.label,
-                    fbdi_template=o.fbdi_template
+                    fbdi_template=o.fbdi_template,
+                    planned_load_order=o.planned_load_order,
+                    source_extracts=o.source_extracts,
+                    mock_row_counts=o.mock_row_counts,
+                )
+                for o in m.objects
+            ],
+        )
+        for m in MODULES
+    ]

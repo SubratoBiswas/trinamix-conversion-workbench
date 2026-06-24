@@ -864,4 +864,71 @@ const Step5Review: React.FC<{
               </div>
             ) : (
               <>
-            
+                {scopedModules.map((m) => (
+                  <ReviewRow key={m.code} k={m.name} v={`${m.objects.length} object(s)`} />
+                ))}
+                <ReviewRow k="Auto-create"
+                  v={`${uniqueObjects.size} planned conversion${uniqueObjects.size === 1 ? "" : "s"}`} />
+              </>
+            )}
+          </ReviewBlock>
+        </div>
+        <div className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-success-subtle/60 px-3 py-2 text-[11px] text-success">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          Creating the engagement saves the project, the source connection,
+          {uniqueObjects.size > 0 && (
+            <> {uniqueObjects.size} planned conversion{uniqueObjects.size === 1 ? "" : "s"},</>
+          )}
+          {" "}and an audit-log entry — all atomically.
+        </div>
+      </CardBody>
+    </Card>
+  );
+};
+
+// ─────── Tiny primitives kept local so this component is self-contained ───────
+
+const SectionTitle: React.FC<{ icon: React.ReactNode; children: React.ReactNode }> = ({
+  icon, children,
+}) => (
+  <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+    {icon}
+    {children}
+  </div>
+);
+
+const SectionSubtitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+    {children}
+  </div>
+);
+
+const Field: React.FC<{
+  label: string; required?: boolean; children: React.ReactNode;
+}> = ({ label, required, children }) => (
+  <div>
+    <label className="label">
+      {label}
+      {required && <span className="ml-1 text-danger">*</span>}
+    </label>
+    {children}
+  </div>
+);
+
+const ReviewBlock: React.FC<{ title: string; children: React.ReactNode }> = ({
+  title, children,
+}) => (
+  <div className="rounded-md border border-line bg-canvas p-3">
+    <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+      {title}
+    </div>
+    <div className="space-y-1.5">{children}</div>
+  </div>
+);
+
+const ReviewRow: React.FC<{ k: string; v: string }> = ({ k, v }) => (
+  <div className="flex items-baseline justify-between gap-3 text-xs">
+    <span className="text-ink-muted">{k}</span>
+    <span className="truncate font-mono text-ink">{v}</span>
+  </div>
+);

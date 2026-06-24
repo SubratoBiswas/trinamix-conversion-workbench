@@ -725,4 +725,23 @@ export interface LearnedMapping {
   kind: string;
   category: string;
   original_value: string;
-  resolved
+  resolved_value: string;
+  target_object?: string | null;
+  target_field?: string | null;
+  rule_type?: string | null;
+  rule_config?: any;
+  project_id?: number | null;
+  captured_from?: string | null;
+  captured_by?: string | null;
+  captured_at: string;
+  confidence_boost: number;
+  records_auto_fixed: number;
+}
+
+export interface LearningStats {
+  total: number;
+  avg_confidence_boost: number;
+  records_auto_fixed: number;
+  analyst_minutes_saved: number;
+  by_category: { category: string; count: number }[];
+}

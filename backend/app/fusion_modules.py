@@ -365,4 +365,73 @@ MODULES: tuple[FusionModule, ...] = (
         "financials", "Financials",
         family="financials",
         description=(
-            "GL / AP / AR / Cash Management / Fi
+            "GL / AP / AR / Cash Management / Fixed Assets — the core "
+            "finance modules. Foundation for any Fusion go-live."
+        ),
+        objects=_FINANCIALS_OBJECTS,
+    ),
+    FusionModule(
+        "scm", "Supply Chain (Inventory, Procurement, OM)",
+        family="scm",
+        description=(
+            "Items, Customers, Suppliers, Orders, POs, BOMs, Inventory "
+            "balances. Standard SCM go-live scope."
+        ),
+        objects=_SCM_OBJECTS,
+    ),
+    FusionModule(
+        "hcm", "Human Capital Management",
+        family="hcm",
+        description=(
+            "Workforce, Departments, Jobs, Positions, Payroll Elements. "
+            "Independent go-live from Financials but often combined."
+        ),
+        objects=_HCM_OBJECTS,
+    ),
+    FusionModule(
+        "ppm", "Project Portfolio Management",
+        family="ppm",
+        description=(
+            "Projects, Tasks, Budgets, Expenditures. Depends on Financials "
+            "+ HCM being live first."
+        ),
+        objects=_PPM_OBJECTS,
+    ),
+    FusionModule(
+        "epm", "Enterprise Performance Management",
+        family="epm",
+        description=(
+            "Planning, Budgeting, Forecasting. Pulls from GL once "
+            "Financials is live."
+        ),
+        objects=_EPM_OBJECTS,
+    ),
+    FusionModule(
+        "risk", "Risk Management & Compliance",
+        family="risk",
+        description="GRC Controls + Risk Library. Audit / compliance overlay.",
+        objects=_RISK_OBJECTS,
+    ),
+)
+
+
+MODULE_BY_CODE: dict[str, FusionModule] = {m.code: m for m in MODULES}
+
+
+def modules_for_codes(codes: Iterable[str]) -> list[FusionModule]:
+    return [MODULE_BY_CODE[c] for c in codes if c in MODULE_BY_CODE]
+
+
+def all_objects_for_modules(codes: Iterable[str]) -> list[FusionObject]:
+    """Flat, de-duplicated list of objects across the selected modules.
+    Items / Customers / Suppliers etc. that appear in multiple modules
+    (e.g., Suppliers in both SCM and Financials) are returned once."""
+    seen: set[str] = set()
+    out: list[FusionObject] = []
+    for m in modules_for_codes(codes):
+        for o in m.objects:
+            if o.target_object in seen:
+                continue
+            seen.add(o.target_object)
+            out.append(o)
+    return out

@@ -648,4 +648,133 @@ const ScopeHintsCard: React.FC<{
       if (seen.has(obj.target_object)) continue;
       seen.add(obj.target_object);
       const hint = obj.source_extracts[sourceSystem] || "—";
-      const table = hint !== "—" ? extractScopeTable(hin
+      const table = hint !== "—" ? extractScopeTable(hint) : null;
+      const rowCount = table ? (hints.table_counts[table] ?? null) : null;
+      rows.push({
+        label: obj.label,
+        hint,
+        table,
+        found: table !== null && table in hints.table_counts,
+        rowCount,
+      });
+    }
+  }
+
+  if (rows.length === 0) return null;
+
+  const foundCount = rows.filter(r => r.found).length;
+  const isMock = hints.is_mock;
+
+  return (
+    <Card>
+      <CardHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Database className="h-4 w-4 text-brand" />
+            Source Coverage
+            {isMock && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                mock scan
+              </span>
+            )}
+          </span>
+        }
+        subtitle={`${foundCount} of ${rows.length} canonical source tables confirmed in last ${isMock ? "mock" : "live"} scan`}
+      />
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11.5px]">
+          <thead>
+            <tr className="border-b border-line bg-canvas text-left text-[10px] uppercase tracking-wider text-ink-muted">
+              <th className="px-4 py-2">Fusion Object</th>
+              <th className="px-4 py-2">Source Table</th>
+              <th className="px-4 py-2 text-center">Found</th>
+              <th className="px-4 py-2 text-right">Rows in DB</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label} className="border-b border-line/50 hover:bg-canvas/50">
+                <td className="px-4 py-1.5 font-medium text-ink">{r.label}</td>
+                <td className="px-4 py-1.5 font-mono text-[10.5px] text-ink-muted">
+                  {r.table ?? <span className="italic">—</span>}
+                </td>
+                <td className="px-4 py-1.5 text-center">
+                  {r.table === null ? (
+                    <span className="text-ink-muted">—</span>
+                  ) : r.found ? (
+                    <CheckCircle2 className="inline h-3.5 w-3.5 text-success" />
+                  ) : (
+                    <AlertCircle className="inline h-3.5 w-3.5 text-danger" />
+                  )}
+                </td>
+                <td className="px-4 py-1.5 text-right font-mono">
+                  {r.rowCount !== null ? (
+                    <span className={isMock ? "text-amber-700" : "text-ink"}>
+                      {r.rowCount.toLocaleString()}
+                    </span>
+                  ) : r.found ? (
+                    <span className="text-[10px] italic text-ink-muted">n/a</span>
+                  ) : (
+                    <span className="text-[10px] italic text-ink-muted">not found</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+};
+
+// ─── Auto-populate Modal ─────────────────────────────────────────────────────
+
+const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
+
+const AutoPopulateModal: React.FC<{
+  projectId: string;
+  onClose: () => void;
+  onDone: (r: any) => void;
+}> = ({ projectId, onClose, onDone }) => {
+  const [selected, setSelected] = React.useState<string[]>([]);
+  const [busy, setBusy] = React.useState(false);
+
+  const toggle = (m: string) =>
+    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+
+  const submit = async () => {
+    if (!selected.length) return;
+    setBusy(true);
+    try { const r = await ProjectsApi.autoPopulate(projectId, selected); onDone(r); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
+            <p className="mt-0.5 text-xs text-ink-muted">Select Oracle Cloud modules to create conversion objects automatically.</p>
+          </div>
+          <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-5">
+          {AVAILABLE_MODULES.map(m => (
+            <button key={m} onClick={() => toggle(m)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                selected.includes(m) ? "border-brand bg-brand-subtle text-brand-dark" : "border-line bg-canvas text-ink-muted hover:border-brand"
+              }`}>{m}</button>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost">Cancel</button>
+          <button onClick={submit} disabled={!selected.length || busy} className="btn-primary disabled:opacity-50">
+            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
