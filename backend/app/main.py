@@ -30,8 +30,21 @@ from app.routers import cutover_slice6 as cutover_slice6_router
 from app.routers import copilot as copilot_router
 
 
+def _init_oracle_thick_mode() -> None:
+    """Switch python-oracledb to thick mode so it supports legacy 10g password
+    verifier (DPY-3015).  Requires Oracle Instant Client to be on LD_LIBRARY_PATH
+    (installed in the Dockerfile).  Safe to call repeatedly — subsequent calls
+    are silently ignored by the driver."""
+    try:
+        import oracledb
+        oracledb.init_oracle_client()
+    except Exception:
+        pass  # not installed or already initialised — proceed (thin mode used)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _init_oracle_thick_mode()
     await init_db()
     from app.seed import run_seed
     await run_seed()
