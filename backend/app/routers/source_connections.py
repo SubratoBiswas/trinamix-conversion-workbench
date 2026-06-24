@@ -247,6 +247,16 @@ async def update_connection(
         conn.encrypted_password = "__mock__"
     if "display_name" in data:
         conn.name = data.pop("display_name")
+    if "username" in data:
+        conn.username = data.pop("username")
+    if "host" in data:
+        conn.host = data.pop("host")
+    if "port" in data:
+        conn.port = data.pop("port")
+    if "service_name" in data:
+        conn.service_name = data.pop("service_name")
+        # Also rebuild the display endpoint string
+        conn.base_url = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
     creds = data.pop("credentials", {}) or {}
     if creds.get("password"):
         conn.encrypted_password = creds["password"]

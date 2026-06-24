@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Cable, CheckCircle2, AlertTriangle, Loader2, ShieldCheck, Database,
-  Workflow, Plus, Clock, Lock, X, FlaskConical, Zap,
+  Workflow, Plus, Clock, Lock, X, FlaskConical, Zap, Pencil,
 } from "lucide-react";
 import { SourceConnectionsApi, SourceSystemsApi } from "@/api";
 import { api } from "@/api/client";
@@ -42,6 +42,7 @@ export const SourceConnectionCard: React.FC<{
   const [toggling, setToggling] = useState(false);
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reload = async () => {
@@ -244,6 +245,13 @@ export const SourceConnectionCard: React.FC<{
             <Workflow className="h-3.5 w-3.5" /> Test connection
           </Button>
           <Button
+            onClick={() => setEditing((v) => !v)}
+            variant="secondary"
+            className="!h-8 !text-xs"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Edit
+          </Button>
+          <Button
             onClick={onToggleMock}
             loading={toggling}
             variant="secondary"
@@ -264,6 +272,13 @@ export const SourceConnectionCard: React.FC<{
           )}
         </div>
       </CardBody>
+      {editing && (
+        <EditConnectionInline
+          conn={conn}
+          onClose={() => setEditing(false)}
+          onSaved={async () => { setEditing(false); await reload(); }}
+        />
+      )}
     </Card>
   );
 };
@@ -304,6 +319,144 @@ const ProbeRow: React.FC<{ probe: { name: string; status: string; latency_ms?: n
       {probe.message && (
         <div className="mt-0.5 text-[10.5px] text-ink-muted">{probe.message}</div>
       )}
+    </div>
+  );
+};
+
+// ─────── Inline edit-connection form ────────────────────────────────────────────
+
+const EditConnectionInline: React.FC<{
+  conn: SourceConnection;
+  onClose: () => void;
+  onSaved: () => void;
+}> = ({ conn, onClose, onSaved }) => {
+  const [displayName, setDisplayName] = useState(conn.display_name || "");
+  const [host, setHost]               = useState(conn.endpoint?.split(":")[0] || "");
+  const [port, setPort]               = useState(
+    conn.endpoint?.split(":")[1]?.split("/")[0] || "1521"
+  );
+  const [serviceName, setServiceName] = useState(
+    conn.endpoint?.split("/")[1] || ""
+  );
+  const [username, setUsername]       = useState("");
+  const [password, setPassword]       = useState("");
+  const [busy, setBusy]               = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const endpoint = host && port && serviceName
+        ? `${host.trim()}:${port.trim()}/${serviceName.trim()}`
+        : undefined;
+      const patch: Record<string, any> = {};
+      if (displayName.trim())  patch.display_name = displayName.trim();
+      if (endpoint)            patch.endpoint = endpoint;
+      if (username.trim() || password.trim()) {
+        patch.credentials = {
+          ...(username.trim() ? { username: username.trim() } : {}),
+          ...(password.trim() ? { password: password.trim() } : {}),
+        };
+      }
+      if (username.trim()) patch.username = username.trim();
+      if (password.trim()) patch.password = password.trim();
+      await SourceConnectionsApi.update(conn.id, patch);
+      onSaved();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || "Failed to update connection");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-line bg-canvas px-5 py-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+          Edit connection
+        </span>
+        <button
+          onClick={onClose}
+          className="rounded p-1 text-ink-muted hover:bg-white hover:text-ink"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <label className="label">Display name</label>
+          <input
+            className="input"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Client Oracle EBS"
+          />
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="col-span-2">
+            <label className="label">DB Host</label>
+            <input
+              className="input font-mono"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder="130.61.179.1"
+            />
+          </div>
+          <div>
+            <label className="label">Port</label>
+            <input
+              className="input font-mono"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              placeholder="1521"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="label">Service name</label>
+          <input
+            className="input font-mono"
+            value={serviceName}
+            onChange={(e) => setServiceName(e.target.value)}
+            placeholder="ebsdb"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="label">Username</label>
+            <input
+              className="input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Leave blank to keep current"
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input
+              className="input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Leave blank to keep current"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+        <div className="rounded-md border border-info/30 bg-info-subtle/40 px-3 py-2 text-[11px] text-ink-muted">
+          <Lock className="mr-1 inline h-3 w-3 text-info" />
+          Leave username/password blank to keep the current sealed credentials.
+        </div>
+        {error && (
+          <div className="rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger">{error}</div>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} loading={busy}>Save changes</Button>
+        </div>
+      </div>
     </div>
   );
 };
