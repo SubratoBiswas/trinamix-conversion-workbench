@@ -10,6 +10,7 @@ import {
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, ProjectsApi } from "@/api";
+import { api } from "@/api/client";
 import type { Dataset, FBDITemplate } from "@/types";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
@@ -104,6 +105,7 @@ export const ProjectOverviewPage: React.FC = () => {
   const [toast, setToast] = useState<string | null>(null);
   const [showModuleModal, setShowModuleModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [hasConnection, setHasConnection] = useState(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
 
@@ -130,9 +132,11 @@ export const ProjectOverviewPage: React.FC = () => {
       ProjectsApi.get(pid),
       ProjectsApi.conversions(pid),
       DependencyApi.list().then(setDeps),
-    ]).then(([proj, convs]) => {
+      api.get(`/projects/${pid}/source-connections`).then(r => r.data).catch(() => []),
+    ]).then(([proj, convs, , conns]) => {
       setProject(proj);
       setConversions(convs);
+      setHasConnection(Array.isArray(conns) && conns.length > 0);
       autoPopulateIfNeeded(proj, convs);
     });
   }, [pid]);
@@ -149,7 +153,6 @@ export const ProjectOverviewPage: React.FC = () => {
     failed: conversions.filter(c => c.status === "failed").length,
   };
   const pct = totals.total > 0 ? Math.round((totals.loaded / totals.total) * 100) : 0;
-  const hasConnection = !!(project as any).has_active_source_connection;
 
   return (
     <>
