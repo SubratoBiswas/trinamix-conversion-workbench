@@ -194,9 +194,15 @@ async def test_connection(conn_id: str):
             import oracledb
             dsn = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
             # Use oracledb thin mode (no client install required)
-            c = oracledb.connect(user=conn.username, password="", dsn=dsn)
-            c.close()
-            ok = True
+            password = conn.encrypted_password or ""
+            if password.startswith("PLAIN:"):
+                password = password[6:]
+            if password == "__mock__":
+                ok = True  # mock mode — skip real connect
+            else:
+                c = oracledb.connect(user=conn.username, password=password, dsn=dsn)
+                c.close()
+                ok = True
         else:
             # For REST-based sources do a trivial HTTP ping (head request)
             import httpx

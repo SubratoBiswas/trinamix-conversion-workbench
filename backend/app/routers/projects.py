@@ -46,12 +46,62 @@ async def get_project(project_id: str, _: User = Depends(get_current_user)):
 
 @router.post("", response_model=ProjectOut)
 async def create_project(payload: ProjectCreate, user: User = Depends(get_current_user)):
+    from app.models.v10 import SourceConnection
     data = payload.model_dump(exclude_unset=True)
+    # initial_connection is handled separately — don't try to store it on Project
+    ic = data.pop("initial_connection", None)
     data.setdefault("owner", user.email)
     data.setdefault("created_at", datetime.utcnow())
     data.setdefault("updated_at", datetime.utcnow())
     p = Project(**data)
     await p.insert()
+
+    # Persist the initial SourceConnection if the wizard provided one
+    if ic:
+        meta = ic.get("connection_metadata") or {}
+        creds = ic.get("credentials") or {}
+        mock = ic.get("mock_mode", True)
+        password = creds.get("password") or creds.get("token")
+        if mock:
+            password = "__mock__"
+
+        # Extract host/port/service from connection_metadata or endpoint string
+        host = meta.get("host")
+        service_name = meta.get("service_name")
+        port_raw = meta.get("port")
+        port = int(port_raw) if port_raw else 1521
+
+        endpoint = ic.get("endpoint") or ""
+        if not host and endpoint:
+            # Parse "host:port/service" format
+            parts = endpoint.split(":")
+            host = parts[0] if parts else None
+            if len(parts) > 1:
+                rest = parts[1]
+                slash = rest.find("/")
+                if slash != -1:
+                    try:
+                        port = int(rest[:slash])
+                    except ValueError:
+                        pass
+                    if not service_name:
+                        service_name = rest[slash + 1:]
+
+        conn = SourceConnection(
+            project_id=p.id,
+            system_type=ic.get("source_system", "manual"),
+            name=ic.get("display_name", "Connection"),
+            host=host,
+            port=port,
+            service_name=service_name,
+            username=creds.get("username"),
+            encrypted_password=password,
+            base_url=endpoint or None,
+            auth_type=ic.get("auth_type"),
+            connection_metadata=meta or None,
+        )
+        await conn.insert()
+
     return await _hydrate(p)
 
 

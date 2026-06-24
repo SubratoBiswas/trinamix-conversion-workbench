@@ -45,10 +45,16 @@ class SourceConnection(Document):
     encrypted_client_secret: Optional[str] = None
     token_url: Optional[str] = None
     base_url: Optional[str] = None
+    # Extra per-source metadata (instance_name, edition, etc.)
+    connection_metadata: Optional[Dict[str, Any]] = None
+    # Auth type label (mock | db_basic | db_wallet | oauth1_tba | oauth2_client_credentials)
+    auth_type: Optional[str] = None
     # Test status
     last_tested_at: Optional[datetime] = None
     last_test_ok: Optional[bool] = None
     last_test_error: Optional[str] = None
+    # Structured test details stored after last probe run
+    last_test_details: Optional[Dict[str, Any]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

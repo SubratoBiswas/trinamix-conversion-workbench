@@ -1,6 +1,6 @@
 """Project schemas."""
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -17,6 +17,8 @@ class ProjectCreate(BaseModel):
     selected_modules: List[str] = []
     phase: Optional[str] = "discovery"
     source_connection_id: Optional[str] = None
+    # Wizard: create a SourceConnection at the same time as the project
+    initial_connection: Optional[Dict[str, Any]] = None
 
 
 class ProjectUpdate(BaseModel):
