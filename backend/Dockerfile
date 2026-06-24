@@ -1,3 +1,8 @@
+# Stage 1 — Oracle Instant Client (public Docker Hub image, no auth needed)
+# gvenzl/oracle-instant-client:21-slim = Basic Lite 21.x on Oracle Linux
+FROM gvenzl/oracle-instant-client:21-slim AS oracle-ic
+
+# Stage 2 — Application
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -7,22 +12,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# System deps + Oracle Instant Client 21 Basic Lite (enables thick-mode oracledb)
-# thick mode supports legacy 10g password verifier (DPY-3015 fix)
+# Copy Oracle Instant Client libraries from Stage 1
+COPY --from=oracle-ic /usr/lib/oracle /usr/lib/oracle
+
+# Install system deps.
+# libaio1t64 satisfies Oracle IC's libaio.so.1 requirement on Debian Trixie.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential libffi-dev libaio1t64 wget unzip \
-    && wget -q \
-        "https://download.oracle.com/otn_software/linux/instantclient/219000/instantclient-basiclite-linux.x64-21.9.0.0.0dbru.zip" \
-        -O /tmp/ic.zip \
-    && unzip -q /tmp/ic.zip -d /opt/oracle \
-    && rm /tmp/ic.zip \
-    && sh -c "echo /opt/oracle/instantclient_21_9 > /etc/ld.so.conf.d/oracle-instantclient.conf" \
+    && apt-get install -y --no-install-recommends build-essential libffi-dev libaio1t64 \
+    && echo "/usr/lib/oracle/21/client64/lib" > /etc/ld.so.conf.d/oracle-instantclient.conf \
     && ldconfig \
-    && apt-get remove -y wget unzip \
     && rm -rf /var/lib/apt/lists/*
 
-ENV LD_LIBRARY_PATH=/opt/oracle/instantclient_21_9:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/lib/oracle/21/client64/lib:${LD_LIBRARY_PATH}
 
 COPY requirements.txt ./
 RUN pip install -r requirements.txt

@@ -31,15 +31,29 @@ from app.routers import copilot as copilot_router
 
 
 def _init_oracle_thick_mode() -> None:
-    """Switch python-oracledb to thick mode so it supports legacy 10g password
-    verifier (DPY-3015).  Requires Oracle Instant Client to be on LD_LIBRARY_PATH
-    (installed in the Dockerfile).  Safe to call repeatedly — subsequent calls
-    are silently ignored by the driver."""
+    """Switch python-oracledb to thick mode (supports legacy 10g/DPY-3015).
+    Tries known Oracle Instant Client paths; falls back to LD_LIBRARY_PATH;
+    logs the outcome so Render deploy logs confirm the mode."""
+    import logging, os
+    logger = logging.getLogger(__name__)
+    # Candidate lib dirs — gvenzl/oracle-instant-client image puts libs here
+    candidates = [
+        "/usr/lib/oracle/21/client64/lib",
+        "/usr/lib/oracle/21.13/client64/lib",
+        "/opt/oracle/instantclient_21_9",
+        "/opt/oracle/instantclient_21_13",
+    ]
     try:
         import oracledb
-        oracledb.init_oracle_client()
-    except Exception:
-        pass  # not installed or already initialised — proceed (thin mode used)
+        lib_dir = next((d for d in candidates if os.path.isdir(d)), None)
+        if lib_dir:
+            oracledb.init_oracle_client(lib_dir=lib_dir)
+            logger.info(f"oracledb thick mode ON — lib_dir={lib_dir}")
+        else:
+            oracledb.init_oracle_client()
+            logger.info("oracledb thick mode ON — via LD_LIBRARY_PATH")
+    except Exception as e:
+        logger.warning(f"oracledb thick mode FAILED ({e}) — thin mode active")
 
 
 @asynccontextmanager
