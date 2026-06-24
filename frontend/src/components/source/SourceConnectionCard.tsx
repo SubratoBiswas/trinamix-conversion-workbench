@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Cable, CheckCircle2, AlertTriangle, Loader2, ShieldCheck, Database,
-  Workflow, Plus, Clock, Lock, X,
+  Workflow, Plus, Clock, Lock, X, FlaskConical, Zap,
 } from "lucide-react";
 import { SourceConnectionsApi, SourceSystemsApi } from "@/api";
 import { api } from "@/api/client";
@@ -38,7 +38,8 @@ export const SourceConnectionCard: React.FC<{
 }> = ({ projectId, projectSourceSystem, className }) => {
   const [conn, setConn] = useState<SourceConnection | null | undefined>(undefined);
   const [systems, setSystems] = useState<SourceSystem[]>([]);
-  const [testing, setTesting] = useState(false);
+  const [testing, setTesting]   = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +54,28 @@ export const SourceConnectionCard: React.FC<{
     reload();
     SourceSystemsApi.list().then(setSystems).catch(() => setSystems([]));
   }, [projectId]);
+
+  const onToggleMock = async () => {
+    if (!conn) return;
+    setToggling(true);
+    setError(null);
+    try {
+      const newMockMode = !conn.mock_mode;
+      await SourceConnectionsApi.update(conn.id, {
+        mock_mode: newMockMode,
+        // When switching to mock, clear live credentials from the stored record
+        ...(newMockMode ? {} : {
+          credentials: EBS_INLINE_DEFAULTS.credentials,
+          connection_metadata: EBS_INLINE_DEFAULTS.metadata,
+        }),
+      });
+      await reload();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || "Failed to update connection");
+    } finally {
+      setToggling(false);
+    }
+  };
 
   const onTest = async () => {
     if (!conn) return;
@@ -216,14 +239,27 @@ export const SourceConnectionCard: React.FC<{
           </div>
         )}
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button onClick={onTest} loading={testing} variant="primary" className="!h-8 !text-xs">
             <Workflow className="h-3.5 w-3.5" /> Test connection
+          </Button>
+          <Button
+            onClick={onToggleMock}
+            loading={toggling}
+            variant="secondary"
+            className="!h-8 !text-xs"
+            title={conn.mock_mode ? "Switch to live Oracle EBS connection" : "Switch to mock mode"}
+          >
+            {conn.mock_mode ? (
+              <><Zap className="h-3.5 w-3.5" /> Switch to Live</>
+            ) : (
+              <><FlaskConical className="h-3.5 w-3.5" /> Switch to Mock</>
+            )}
           </Button>
           {conn.mock_mode && (
             <span className="inline-flex items-center gap-1 text-[10.5px] text-ink-muted">
               <ShieldCheck className="h-3 w-3" />
-              Mock fixtures — no traffic leaves this host.
+              Mock — no live traffic.
             </span>
           )}
         </div>

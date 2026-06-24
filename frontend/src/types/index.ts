@@ -205,12 +205,12 @@ export interface AuditEvent {
 // ── Slice 4 — Discovery ────────────────────────────────────────────
 
 export interface DiscoveryRun {
-  id: number;
-  project_id: number;
-  connection_id?: number | null;
-  source_system: string;
+  id: string;
+  project_id?: string | null;
+  connection_id?: string | null;
+  source_system?: string | null;
   status: string;
-  started_at: string;
+  started_at?: string | null;
   completed_at?: string | null;
   triggered_by?: string | null;
   total_objects: number;
@@ -218,10 +218,11 @@ export interface DiscoveryRun {
   integration_health: Record<string, number>;
   complexity_score: number;
   scan_notes?: string | null;
+  is_mock?: boolean;
 }
 
 export interface DiscoveredObject {
-  id: number;
+  id: string;
   pillar: string;
   category: string;
   name: string;

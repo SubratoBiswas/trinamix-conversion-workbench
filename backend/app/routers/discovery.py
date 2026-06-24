@@ -84,15 +84,13 @@ def _fernet_encrypt(plain: Optional[str]) -> Optional[str]:
         return None
     try:
         from cryptography.fernet import Fernet
-        import os, base64
+        import os
         key = os.environ.get("FERNET_KEY")
         if not key:
-            # Generate a key on the fly (dev mode — not persistent)
             return f"PLAIN:{plain}"
         f = Fernet(key.encode())
         return f.encrypt(plain.encode()).decode()
     except ImportError:
-        # cryptography package not installed — store marked plaintext
         return f"PLAIN:{plain}"
 
 
@@ -182,7 +180,6 @@ async def delete_connection(conn_id: str):
 
 @router.post("/connections/{conn_id}/test", response_model=ConnectionOut)
 async def test_connection(conn_id: str):
-    """Perform a live connectivity test against the source system."""
     conn = await SourceConnection.get(PydanticObjectId(conn_id))
     if not conn:
         raise HTTPException(404, "Connection not found")
@@ -192,19 +189,17 @@ async def test_connection(conn_id: str):
     try:
         if conn.system_type == "oracle_ebs":
             import oracledb
-            dsn = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
-            # Use oracledb thin mode (no client install required)
             password = conn.encrypted_password or ""
             if password.startswith("PLAIN:"):
                 password = password[6:]
             if password == "__mock__":
-                ok = True  # mock mode — skip real connect
+                ok = True
             else:
+                dsn = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
                 c = oracledb.connect(user=conn.username, password=password, dsn=dsn)
                 c.close()
                 ok = True
         else:
-            # For REST-based sources do a trivial HTTP ping (head request)
             import httpx
             if conn.base_url:
                 r = httpx.head(conn.base_url, timeout=5)
@@ -244,7 +239,6 @@ async def start_discovery_run(conn_id: str, body: StartRunBody):
     )
     await run.insert()
 
-    # Run a lightweight simulation discovery (real connectors plug in here)
     try:
         objects = _simulate_discovery(conn, body.modules)
         for obj_data in objects:
@@ -268,7 +262,6 @@ async def start_discovery_run(conn_id: str, body: StartRunBody):
 
 
 def _simulate_discovery(conn: SourceConnection, modules: List[str]) -> List[Dict[str, Any]]:
-    """Return mock discovered objects. Replace with real connector calls in production."""
     sample = {
         "GL": [
             {"module": "GL", "object_name": "GL_JE_HEADERS", "object_type": "table",
@@ -344,7 +337,9 @@ async def toggle_object_selection(obj_id: str, selected: bool = True):
     return {"id": obj_id, "selected": selected}
 
 
-# ── Project-scoped discovery endpoints (called by v10 frontend) ───────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Project-scoped discovery (v10 frontend)
+# ══════════════════════════════════════════════════════════════════════════════
 
 from fastapi import Depends
 from app.models.user import User
@@ -352,64 +347,243 @@ from app.services.auth_service import get_current_user
 
 project_router = APIRouter(prefix="/api", tags=["discovery-project"])
 
+# ── EBS module / pillar helpers ────────────────────────────────────────────────
 
-def _obj_out(o: DiscoveredObject) -> DiscoveredObjectOut:
-    return DiscoveredObjectOut(
-        id=str(o.id),
-        run_id=str(o.run_id),
-        connection_id=str(o.connection_id),
-        project_id=str(o.project_id) if o.project_id else None,
-        module=o.module,
-        object_name=o.object_name,
-        object_type=o.object_type,
-        row_count=o.row_count,
-        column_count=o.column_count,
-        columns=o.columns,
-        suggested_fbdi_object=o.suggested_fbdi_object,
-        suggestion_confidence=o.suggestion_confidence,
-        selected=o.selected,
-        created_at=o.created_at,
+# Table-name prefix → EBS module label
+_EBS_PREFIX_MAP: List[tuple] = [
+    ("GL_",   "General Ledger"),
+    ("AP_",   "Accounts Payable"),
+    ("AR_",   "Accounts Receivable"),
+    ("RA_",   "Accounts Receivable"),
+    ("FA_",   "Fixed Assets"),
+    ("PO_",   "Procurement"),
+    ("MTL_",  "Inventory"),
+    ("INV_",  "Inventory"),
+    ("HR_",   "Human Resources"),
+    ("PER_",  "Human Resources"),
+    ("PA_",   "Project Accounting"),
+    ("CE_",   "Cash Management"),
+    ("OE_",   "Order Management"),
+    ("BOM_",  "Manufacturing"),
+    ("WIP_",  "Manufacturing"),
+    ("FND_",  "Configuration"),
+    ("XDO_",  "BI Reports"),
+    ("IBY_",  "Payments"),
+    ("ICX_",  "Self Service"),
+    ("AK_",   "Configuration"),
+    ("BIS_",  "BI Reports"),
+    ("WF_",   "Processes"),
+]
+
+# EBS module → discovery pillar code
+_MODULE_PILLAR: Dict[str, str] = {
+    "General Ledger":     "data",
+    "Accounts Payable":   "data",
+    "Accounts Receivable":"data",
+    "Fixed Assets":       "data",
+    "Procurement":        "data",
+    "Inventory":          "data",
+    "Cash Management":    "data",
+    "Order Management":   "data",
+    "Payments":           "data",
+    "Manufacturing":      "data",
+    "Project Accounting": "data",
+    "Human Resources":    "processes",
+    "Processes":          "processes",
+    "Configuration":      "configuration",
+    "Self Service":       "customisations",
+    "BI Reports":         "reports",
+    "Integrations":       "integrations",
+    "Other":              "data",
+}
+
+
+def _infer_module_from_table(table_name: str) -> str:
+    upper = table_name.upper()
+    for prefix, module in _EBS_PREFIX_MAP:
+        if upper.startswith(prefix):
+            return module
+    return "Other"
+
+
+def _module_to_pillar(module: Optional[str]) -> str:
+    return _MODULE_PILLAR.get(module or "Other", "data")
+
+
+def _derive_risk(row_count: Optional[int]) -> str:
+    if row_count is None:
+        return "low"
+    if row_count > 100_000:
+        return "high"
+    if row_count > 10_000:
+        return "medium"
+    return "low"
+
+
+def _obj_to_frontend(o: DiscoveredObject) -> Dict[str, Any]:
+    """Map the MongoDB DiscoveredObject to the shape the frontend expects."""
+    pillar = _module_to_pillar(o.module)
+    risk = _derive_risk(o.row_count)
+    row_str = f"{o.row_count:,} rows" if o.row_count else "Row count unavailable"
+    return {
+        "id": str(o.id),
+        "pillar": pillar,
+        "category": o.object_type or "table",
+        "name": o.object_name,
+        "risk_level": risk,
+        "last_used_at": None,
+        "metadata_json": {
+            "fusion_target": o.suggested_fbdi_object or "—",
+            "row_count": o.row_count,
+            "column_count": o.column_count,
+            "risk_reason": row_str,
+            "at_risk_group": o.module or "General",
+            "context_bucket": (pillar or "data").capitalize(),
+            "confidence": round(o.suggestion_confidence * 100),
+        },
+    }
+
+
+# ── Mock discovery objects (rich set) ─────────────────────────────────────────
+
+def _mock_ebs_objects() -> List[Dict[str, Any]]:
+    """Comprehensive EBS object inventory for mock-mode scans."""
+    return [
+        # General Ledger — data pillar
+        {"module": "General Ledger", "object_name": "GL_JE_HEADERS",        "object_type": "table", "row_count": 142_000, "column_count": 24, "suggestion_confidence": 0.91, "suggested_fbdi_object": "General Ledger Journals"},
+        {"module": "General Ledger", "object_name": "GL_JE_LINES",          "object_type": "table", "row_count": 852_000, "column_count": 18, "suggestion_confidence": 0.88, "suggested_fbdi_object": "General Ledger Journals"},
+        {"module": "General Ledger", "object_name": "GL_BALANCES",          "object_type": "table", "row_count": 28_500,  "column_count": 15, "suggestion_confidence": 0.85, "suggested_fbdi_object": "Opening Balances"},
+        {"module": "General Ledger", "object_name": "GL_CODE_COMBINATIONS", "object_type": "table", "row_count": 4_200,   "column_count": 30, "suggestion_confidence": 0.92, "suggested_fbdi_object": "Chart of Accounts Import"},
+        # Accounts Payable — data pillar
+        {"module": "Accounts Payable", "object_name": "AP_INVOICES_ALL",      "object_type": "table", "row_count": 42_000,  "column_count": 67, "suggestion_confidence": 0.93, "suggested_fbdi_object": "Payables Standard Invoice Import"},
+        {"module": "Accounts Payable", "object_name": "AP_INVOICE_LINES_ALL", "object_type": "table", "row_count": 118_000, "column_count": 45, "suggestion_confidence": 0.91, "suggested_fbdi_object": "Payables Standard Invoice Import"},
+        {"module": "Accounts Payable", "object_name": "AP_SUPPLIERS",         "object_type": "table", "row_count": 3_200,   "column_count": 52, "suggestion_confidence": 0.94, "suggested_fbdi_object": "Supplier Import"},
+        {"module": "Accounts Payable", "object_name": "AP_PAYMENT_SCHEDULES_ALL","object_type": "table","row_count": 38_000, "column_count": 22, "suggestion_confidence": 0.80, "suggested_fbdi_object": "Payables Payment Import"},
+        # Accounts Receivable — data pillar
+        {"module": "Accounts Receivable", "object_name": "RA_CUSTOMER_TRX_ALL", "object_type": "table", "row_count": 31_000, "column_count": 52, "suggestion_confidence": 0.88, "suggested_fbdi_object": "Receivables AutoInvoice Import"},
+        {"module": "Accounts Receivable", "object_name": "AR_CUSTOMERS_V",      "object_type": "view",  "row_count": 5_600,  "column_count": 28, "suggestion_confidence": 0.90, "suggested_fbdi_object": "Customer Import"},
+        {"module": "Accounts Receivable", "object_name": "AR_CASH_RECEIPTS_ALL","object_type": "table", "row_count": 14_200, "column_count": 34, "suggestion_confidence": 0.82, "suggested_fbdi_object": "Receivables Receipt Import"},
+        # Fixed Assets — data pillar
+        {"module": "Fixed Assets", "object_name": "FA_ADDITIONS_V",          "object_type": "view",  "row_count": 4_300, "column_count": 35, "suggestion_confidence": 0.87, "suggested_fbdi_object": "Fixed Asset Additions"},
+        {"module": "Fixed Assets", "object_name": "FA_DEPRN_SUMMARY",        "object_type": "table", "row_count": 8_600, "column_count": 18, "suggestion_confidence": 0.79, "suggested_fbdi_object": "Asset Depreciation Import"},
+        # Procurement — data pillar
+        {"module": "Procurement", "object_name": "PO_HEADERS_ALL",  "object_type": "table", "row_count": 9_800,  "column_count": 42, "suggestion_confidence": 0.89, "suggested_fbdi_object": "Purchase Order Import"},
+        {"module": "Procurement", "object_name": "PO_LINES_ALL",    "object_type": "table", "row_count": 24_500, "column_count": 38, "suggestion_confidence": 0.87, "suggested_fbdi_object": "Purchase Order Import"},
+        {"module": "Procurement", "object_name": "PO_VENDORS",      "object_type": "table", "row_count": 2_100,  "column_count": 28, "suggestion_confidence": 0.84, "suggested_fbdi_object": "Supplier Import"},
+        # Inventory — data pillar
+        {"module": "Inventory", "object_name": "MTL_SYSTEM_ITEMS_B",            "object_type": "table", "row_count": 8_500,  "column_count": 122,"suggestion_confidence": 0.95, "suggested_fbdi_object": "Item Import"},
+        {"module": "Inventory", "object_name": "MTL_ONHAND_QUANTITIES_DETAIL",  "object_type": "table", "row_count": 2_400,  "column_count": 18, "suggestion_confidence": 0.83, "suggested_fbdi_object": "Inventory Balance Import"},
+        {"module": "Inventory", "object_name": "MTL_TRANSACTION_TYPES",         "object_type": "table", "row_count": 320,    "column_count": 12, "suggestion_confidence": 0.70, "suggested_fbdi_object": "Inventory Transaction Type"},
+        # Human Resources — processes pillar
+        {"module": "Human Resources", "object_name": "PER_ALL_PEOPLE_F",       "object_type": "table", "row_count": 1_847, "column_count": 48, "suggestion_confidence": 0.91, "suggested_fbdi_object": "Worker Import"},
+        {"module": "Human Resources", "object_name": "PER_ALL_ASSIGNMENTS_F",  "object_type": "table", "row_count": 2_100, "column_count": 55, "suggestion_confidence": 0.89, "suggested_fbdi_object": "Worker Import"},
+        {"module": "Human Resources", "object_name": "PER_JOBS",               "object_type": "table", "row_count": 480,   "column_count": 18, "suggestion_confidence": 0.85, "suggested_fbdi_object": "Job Import"},
+        # Configuration — configuration pillar
+        {"module": "Configuration", "object_name": "FND_FLEX_VALUE_SETS",  "object_type": "table", "row_count": 280,    "column_count": 12, "suggestion_confidence": 0.82, "suggested_fbdi_object": "Value Sets Import"},
+        {"module": "Configuration", "object_name": "FND_LOOKUP_VALUES",    "object_type": "table", "row_count": 15_200, "column_count": 14, "suggestion_confidence": 0.85, "suggested_fbdi_object": "Lookup Values Import"},
+        {"module": "Configuration", "object_name": "FND_CURRENCIES",       "object_type": "table", "row_count": 180,    "column_count": 10, "suggestion_confidence": 0.88, "suggested_fbdi_object": "Currency Import"},
+        # BI Reports — reports pillar
+        {"module": "BI Reports", "object_name": "XDO_DS_DEFINITIONS_B",  "object_type": "table", "row_count": 142, "column_count": 8,  "suggestion_confidence": 0.70, "suggested_fbdi_object": "BI Publisher Reports"},
+        {"module": "BI Reports", "object_name": "XDO_TEMPLATES_B",       "object_type": "table", "row_count": 89,  "column_count": 10, "suggestion_confidence": 0.68, "suggested_fbdi_object": "BI Publisher Templates"},
+        # Customisations — customisations pillar (Self Service / APPS custom tables)
+        {"module": "Self Service", "object_name": "XX_CUSTOM_HEADERS",    "object_type": "table", "row_count": 5_200, "column_count": 18, "suggestion_confidence": 0.55, "suggested_fbdi_object": None},
+        {"module": "Self Service", "object_name": "XX_CUSTOM_LINES",      "object_type": "table", "row_count": 14_800,"column_count": 14, "suggestion_confidence": 0.52, "suggested_fbdi_object": None},
+    ]
+
+
+# ── Live Oracle EBS discovery ──────────────────────────────────────────────────
+
+async def _live_oracle_discovery(conn: SourceConnection) -> tuple:
+    """
+    Connect to Oracle EBS and inventory visible tables.
+    Returns (objects_list, scan_notes).
+    """
+    import oracledb
+
+    password = conn.encrypted_password or ""
+    if password.startswith("PLAIN:"):
+        password = password[6:]
+
+    dsn = f"{conn.host}:{conn.port or 1521}/{conn.service_name}"
+    db = oracledb.connect(user=conn.username, password=password, dsn=dsn)
+    cur = db.cursor()
+
+    # Query all tables visible to the connected user, ordered by row count desc
+    cur.execute("""
+        SELECT table_name, num_rows, last_analyzed
+        FROM all_tables
+        WHERE owner = :owner
+        ORDER BY num_rows DESC NULLS LAST
+        FETCH FIRST 300 ROWS ONLY
+    """, owner=(conn.username or "APPS").upper())
+
+    rows = cur.fetchall()
+    cur.close()
+    db.close()
+
+    objects: List[Dict[str, Any]] = []
+    for table_name, num_rows, _ in rows:
+        module = _infer_module_from_table(table_name)
+        objects.append({
+            "module":                module,
+            "object_name":           table_name,
+            "object_type":           "table",
+            "row_count":             num_rows,
+            "column_count":          None,
+            "suggestion_confidence": 0.75,
+            "suggested_fbdi_object": None,
+        })
+
+    scan_notes = (
+        f"Live scan completed — {len(objects)} tables inventoried from "
+        f"{conn.host}:{conn.port or 1521}/{conn.service_name} as {conn.username}."
     )
+    return objects, scan_notes
+
+
+# ── Response schemas (matching frontend DiscoveryRun / DiscoveryLatest types) ──
+
+class DiscoveryRunDetail(BaseModel):
+    """Matches the frontend DiscoveryRun interface."""
+    id: str
+    status: str = "completed"
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    total_objects: int = 0
+    pillar_counts: Dict[str, int] = {}
+    integration_health: Dict[str, Any] = {}
+    complexity_score: float = 0.0
+    scan_notes: Optional[str] = None
+    is_mock: bool = False
 
 
 class DiscoveryLatestOut(BaseModel):
-    run_id: Optional[str] = None
-    status: str = "none"
-    objects_found: int = 0
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    pillar_counts: Dict[str, int] = {}
-    complexity_score: Optional[float] = None
-    integration_health: Dict[str, Any] = {}
-    total_objects: int = 0
+    """Matches the frontend DiscoveryLatest interface."""
+    run: Optional[DiscoveryRunDetail] = None
+    integrations: List[Dict[str, Any]] = []
 
 
-@project_router.post("/projects/{project_id}/discovery/run", response_model=DiscoveryRunOut)
+# ── Project-scoped run endpoint ────────────────────────────────────────────────
+
+@project_router.post("/projects/{project_id}/discovery/run", response_model=DiscoveryRunDetail)
 async def run_discovery(
     project_id: str,
-    connection_id: Optional[str] = None,
     _: User = Depends(get_current_user),
 ):
-    """Trigger a mock discovery scan for the project."""
+    """
+    Trigger a discovery scan for a project.
+    - Mock connection  → deterministic fixture objects (instant)
+    - Live connection  → queries Oracle EBS all_tables (real data)
+    """
     try:
         pid = PydanticObjectId(project_id)
     except Exception:
         raise HTTPException(400, "Invalid project_id")
 
-    # Use first connection for this project if not specified
-    conn_oid = None
-    if connection_id:
-        try:
-            conn_oid = PydanticObjectId(connection_id)
-        except Exception:
-            pass
-    else:
-        conn = await SourceConnection.find_one(SourceConnection.project_id == pid)
-        if conn:
-            conn_oid = conn.id
-
-    if not conn_oid:
-        # Create a mock connection
+    # Find the project's source connection
+    conn = await SourceConnection.find_one(SourceConnection.project_id == pid)
+    if not conn:
+        # Auto-create a mock connection so Discovery still works on new projects
         conn = SourceConnection(
             project_id=pid,
             system_type="manual",
@@ -417,53 +591,98 @@ async def run_discovery(
             encrypted_password="__mock__",
         )
         await conn.insert()
-        conn_oid = conn.id
 
-    # Seed 10 mock discovered objects
+    is_mock = (conn.encrypted_password == "__mock__" or not conn.encrypted_password)
+
+    # Delete previous runs + objects for this project (keep only the latest scan)
+    old_runs = await DiscoveryRun.find(DiscoveryRun.project_id == pid).to_list()
+    for old_run in old_runs:
+        await DiscoveredObject.find(DiscoveredObject.run_id == old_run.id).delete()
+    if old_runs:
+        await DiscoveryRun.find(DiscoveryRun.project_id == pid).delete()
+
+    # Create the new run record
     run = DiscoveryRun(
-        connection_id=conn_oid,
+        connection_id=conn.id,
         project_id=pid,
-        status="completed",
-        objects_found=55,
+        status="running",
+        modules_requested=[],
         started_at=datetime.utcnow(),
-        completed_at=datetime.utcnow(),
     )
     await run.insert()
 
-    mock_objects = [
-        ("GL_BALANCES", "General Ledger", "table", 142_000, "high"),
-        ("AP_INVOICES", "Accounts Payable", "table", 28_500, "medium"),
-        ("AR_TRANSACTIONS", "Accounts Receivable", "table", 19_200, "medium"),
-        ("FA_ASSETS", "Fixed Assets", "table", 4_300, "low"),
-        ("PO_HEADERS", "Procurement", "table", 9_800, "low"),
-        ("INV_ITEMS", "Inventory", "table", 2_400, "medium"),
-        ("HR_EMPLOYEES", "HR / Payroll", "table", 1_847, "high"),
-        ("GL_CHART_OF_ACCOUNTS", "General Ledger", "table", 890, "low"),
-        ("AP_SUPPLIERS", "Accounts Payable", "table", 3_200, "low"),
-        ("AR_CUSTOMERS", "Accounts Receivable", "table", 5_600, "low"),
-    ]
-    for name, module, otype, rows, risk in mock_objects:
-        obj = DiscoveredObject(
-            run_id=run.id,
-            connection_id=conn_oid,
-            project_id=pid,
-            module=module,
-            object_name=name,
-            object_type=otype,
-            row_count=rows,
-            column_count=12,
-            suggestion_confidence=0.85,
-        )
-        await obj.insert()
+    try:
+        if is_mock:
+            objects_data = _mock_ebs_objects()
+            scan_notes = (
+                "Mock mode — deterministic EBS fixture objects. "
+                "Uncheck 'Use mock mode' on the source connection to scan the live instance."
+            )
+        else:
+            objects_data, scan_notes = await _live_oracle_discovery(conn)
 
-    return _run_to_out(run)
+        # Persist discovered objects
+        for obj_data in objects_data:
+            obj = DiscoveredObject(
+                run_id=run.id,
+                connection_id=conn.id,
+                project_id=pid,
+                columns=[],
+                **{k: v for k, v in obj_data.items() if k != "columns"},
+            )
+            await obj.insert()
 
+        # Build pillar counts from persisted objects
+        all_objs = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
+        pillar_counts: Dict[str, int] = {}
+        for o in all_objs:
+            p = _module_to_pillar(o.module)
+            pillar_counts[p] = pillar_counts.get(p, 0) + 1
+
+        # Complexity score: normalised 0-99 based on object count + risk mix
+        high_risk  = sum(1 for o in all_objs if _derive_risk(o.row_count) == "high")
+        mid_risk   = sum(1 for o in all_objs if _derive_risk(o.row_count) == "medium")
+        complexity = min(99.0, round(
+            (len(all_objs) * 0.5) + (high_risk * 3.0) + (mid_risk * 1.0), 1
+        ))
+
+        run.objects_found = len(all_objs)
+        run.status = "completed"
+        run.completed_at = datetime.utcnow()
+
+    except Exception as exc:
+        run.status = "failed"
+        run.error_message = str(exc)
+        run.completed_at = datetime.utcnow()
+        await run.save()
+        raise HTTPException(500, f"Discovery scan failed: {exc}")
+
+    await run.save()
+
+    return DiscoveryRunDetail(
+        id=str(run.id),
+        status=run.status,
+        started_at=run.started_at.isoformat() if run.started_at else None,
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        total_objects=run.objects_found,
+        pillar_counts=pillar_counts,
+        integration_health={"healthy": max(0, pillar_counts.get("integrations", 0) - 1),
+                            "degraded": 1 if pillar_counts.get("integrations", 0) > 0 else 0,
+                            "not_tested": 0},
+        complexity_score=complexity,
+        scan_notes=scan_notes,
+        is_mock=is_mock,
+    )
+
+
+# ── Project-scoped latest endpoint ────────────────────────────────────────────
 
 @project_router.get("/projects/{project_id}/discovery/latest", response_model=DiscoveryLatestOut)
 async def discovery_latest(
     project_id: str,
     _: User = Depends(get_current_user),
 ):
+    """Return the most recent completed discovery run for a project."""
     try:
         pid = PydanticObjectId(project_id)
     except Exception:
@@ -473,49 +692,93 @@ async def discovery_latest(
         DiscoveryRun.project_id == pid,
         DiscoveryRun.status == "completed",
     ).sort("-created_at").first_or_none()
+
     if not run:
         return DiscoveryLatestOut()
 
     objects = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
+
+    # Build pillar counts using proper pillar codes
     pillar_counts: Dict[str, int] = {}
     for o in objects:
-        pillar_counts[o.module or "Other"] = pillar_counts.get(o.module or "Other", 0) + 1
+        p = _module_to_pillar(o.module)
+        pillar_counts[p] = pillar_counts.get(p, 0) + 1
 
-    return DiscoveryLatestOut(
-        run_id=str(run.id),
+    # Check if the run used a mock connection
+    conn = await SourceConnection.get(run.connection_id)
+    is_mock = conn is None or conn.encrypted_password == "__mock__" or not conn.encrypted_password
+
+    # Complexity score
+    high_risk  = sum(1 for o in objects if _derive_risk(o.row_count) == "high")
+    mid_risk   = sum(1 for o in objects if _derive_risk(o.row_count) == "medium")
+    complexity = min(99.0, round(
+        (len(objects) * 0.5) + (high_risk * 3.0) + (mid_risk * 1.0), 1
+    ))
+
+    scan_notes: Optional[str] = None
+    if is_mock:
+        scan_notes = (
+            "Mock mode — deterministic EBS fixture objects. "
+            "Uncheck 'Use mock mode' on the source connection to scan the live instance."
+        )
+    elif conn and conn.host:
+        scan_notes = (
+            f"Live scan from {conn.host}:{conn.port or 1521}/{conn.service_name} "
+            f"— {len(objects)} tables inventoried."
+        )
+
+    run_detail = DiscoveryRunDetail(
+        id=str(run.id),
         status=run.status,
-        objects_found=run.objects_found,
         started_at=run.started_at.isoformat() if run.started_at else None,
         completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        total_objects=run.objects_found or len(objects),
         pillar_counts=pillar_counts,
-        complexity_score=3.2,
-        integration_health={"healthy": 8, "degraded": 1, "critical": 1},
-        total_objects=run.objects_found,
+        integration_health={
+            "healthy": max(0, pillar_counts.get("integrations", 0) - 1),
+            "degraded": 1 if pillar_counts.get("integrations", 0) > 0 else 0,
+            "not_tested": 0,
+        },
+        complexity_score=complexity,
+        scan_notes=scan_notes,
+        is_mock=is_mock,
     )
 
+    return DiscoveryLatestOut(run=run_detail, integrations=[])
 
-@project_router.get("/discovery-runs/{run_id}/objects", response_model=List[DiscoveredObjectOut])
+
+# ── Project-scoped objects endpoint ───────────────────────────────────────────
+
+@project_router.get("/discovery-runs/{run_id}/objects")
 async def list_run_objects(
     run_id: str,
     pillar: Optional[str] = None,
     _: User = Depends(get_current_user),
 ):
+    """
+    Return discovered objects for a run in the frontend DiscoveredObject shape.
+    Optionally filter by pillar code (data | configuration | processes | etc.)
+    """
     try:
         rid = PydanticObjectId(run_id)
     except Exception:
         raise HTTPException(400, "Invalid run_id")
-    q = DiscoveredObject.find(DiscoveredObject.run_id == rid)
+
+    objs = await DiscoveredObject.find(DiscoveredObject.run_id == rid).to_list()
+
+    result = [_obj_to_frontend(o) for o in objs]
+
     if pillar:
-        q = q.find(DiscoveredObject.module == pillar)
-    objs = await q.to_list()
-    return [_obj_out(o) for o in objs]
+        result = [r for r in result if r["pillar"] == pillar]
+
+    return result
 
 
-@project_router.post("/discovered-objects/{obj_id}/reprobe", response_model=DiscoveredObjectOut)
+@project_router.post("/discovered-objects/{obj_id}/reprobe")
 async def reprobe_object(obj_id: str, _: User = Depends(get_current_user)):
     obj = await DiscoveredObject.get(obj_id)
     if not obj:
         raise HTTPException(404, "Object not found")
     obj.suggestion_confidence = min(1.0, obj.suggestion_confidence + 0.05)
     await obj.save()
-    return _obj_out(obj)
+    return _obj_to_frontend(obj)
