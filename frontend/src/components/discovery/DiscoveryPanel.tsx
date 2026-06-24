@@ -151,8 +151,8 @@ export const DiscoveryPanel: React.FC<{
           }
           subtitle={
             <span className="text-xs text-ink-muted">
-              {run.total_objects.toLocaleString()} objects across 6 pillars · complexity{" "}
-              <span className="font-semibold text-ink">{Math.round(run.complexity_score)}</span>/100 · last scan{" "}
+              {(run.total_objects ?? 0).toLocaleString()} objects across 6 pillars · complexity{" "}
+              <span className="font-semibold text-ink">{Math.round(run.complexity_score ?? 0)}</span>/100 · last scan{" "}
               {run.completed_at ? formatDate(run.completed_at) : "—"}
             </span>
           }
@@ -229,7 +229,7 @@ const PillarTile: React.FC<{
         <ChevronRight className="h-3 w-3 text-ink-muted transition group-hover:translate-x-0.5" />
       </div>
       <div className="mt-1 font-mono text-xl font-semibold tabular-nums text-ink">
-        {count.toLocaleString()}
+        {(count ?? 0).toLocaleString()}
       </div>
       <div className="text-[11.5px] font-semibold text-ink">{spec.label}</div>
       <div className="text-[10.5px] text-ink-muted">{spec.subtitle}</div>
