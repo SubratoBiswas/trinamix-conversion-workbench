@@ -344,6 +344,14 @@ async def test_connection(
         t0 = time.monotonic()
         try:
             import oracledb
+            # Switch to thick mode so the driver supports Oracle 10g password
+            # verifier (0x939 / DPY-3015). Thick mode requires Oracle Instant
+            # Client, which is installed in the Docker image. The call is
+            # idempotent — subsequent calls within the same process are no-ops.
+            try:
+                oracledb.init_oracle_client()
+            except Exception:
+                pass  # already initialised, or client missing — thin mode used
             dsn = f"{host}:{port}/{service_name}"
             db_conn = oracledb.connect(user=username, password=password, dsn=dsn)
             ms = round((time.monotonic() - t0) * 1000, 1)
