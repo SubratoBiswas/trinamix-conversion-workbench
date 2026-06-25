@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Sparkles, Wand2 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, FbdiApi, MappingApi, LearningApi, ProjectsApi } from "@/api";
 import {
-  Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
+  Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Spinner,
 } from "@/components/ui/Primitives";
 import { RecommendationCard } from "@/components/recommendations/RecommendationCard";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
@@ -23,28 +23,31 @@ interface ProjectRecs {
 }
 
 /**
- * Cross-project recommendations hub. Walks each project, runs the
- * frontend recommendation engine against its dataset + target FBDI metadata,
- * and shows the consolidated feed.
+ * Per-engagement recommendations hub. Pick a project from the dropdown; each
+ * conversion in it loads its recommendations independently (lazy, in parallel)
+ * so the page renders immediately — important for EBS conversions whose source
+ * columns are fetched live and would otherwise block the whole page.
  */
 export const RecommendationsHubPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
-  const [items, setItems] = useState<ProjectRecs[] | null>(null);
+  const [convs, setConvs] = useState<Conversion[] | null>(null);
   const [authoring, setAuthoring] = useState<ProjectRecs | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [applied, setApplied] = useState<Set<string>>(new Set());
   const [learned, setLearned] = useState<Set<string>>(new Set());
 
-  const handleApply = async (entry: ProjectRecs, rec: import("@/lib/recommendations").Recommendation, learn: boolean) => {
+  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2400); };
+
+  const handleApply = async (entry: ProjectRecs, rec: Recommendation, learn: boolean) => {
     try {
       await MappingApi.addRule(entry.project.id, {
         source_column: rec.column,
         rule_type: rec.ruleType || rec.kind,
-        config: rec.config || {},
+        rule_config: rec.config || {},
         description: rec.title,
       });
-      setApplied(prev => new Set(prev).add(rec.id));
+      setApplied((prev) => new Set(prev).add(rec.id));
       if (learn) {
         try {
           await LearningApi.capture({
@@ -55,19 +58,17 @@ export const RecommendationsHubPage: React.FC = () => {
             rule_config: rec.config || {},
             confidence: rec.confidence,
             note: rec.reason || "",
-          });
-          setLearned(prev => new Set(prev).add(rec.id));
+          } as any);
+          setLearned((prev) => new Set(prev).add(rec.id));
         } catch { /* learn failure is non-fatal */ }
       }
-      setToast(learn ? "Rule applied & learned" : "Rule applied");
-      setTimeout(() => setToast(null), 2400);
+      flash(learn ? "Rule applied & learned" : "Rule applied");
     } catch {
-      setToast("Failed to apply rule");
-      setTimeout(() => setToast(null), 2400);
+      flash("Failed to apply rule");
     }
   };
 
-  // Load the engagement list once and pick an initial project (URL ?project= wins).
+  // Engagement list — pick an initial project (URL ?project= wins).
   useEffect(() => {
     ProjectsApi.list().then((ps) => {
       setProjects(ps);
@@ -76,48 +77,15 @@ export const RecommendationsHubPage: React.FC = () => {
     }).catch(() => setProjects([]));
   }, []);
 
-  // Build recommendations for every conversion in the SELECTED project. Works
-  // for dataset-backed conversions and EBS conversions (columns come from the
-  // live source-columns endpoint rather than an uploaded file).
+  // Conversions for the selected engagement (fast — recs load per card).
   useEffect(() => {
-    if (!projectId) { setItems([]); return; }
-    setItems(null);
-    (async () => {
-      try {
-        const convs = await ProjectsApi.conversions(String(projectId));
-        const out: ProjectRecs[] = [];
-        for (const c of convs) {
-          if (!c.template_id) continue;  // no target template — nothing to suggest against
-          try {
-            const fields = await FbdiApi.fields(c.template_id);
-            let dsLike: DatasetDetail;
-            if (c.dataset_id) {
-              dsLike = await DatasetsApi.get(c.dataset_id);
-            } else {
-              // EBS mode — synthesize a dataset-shaped object from live columns
-              const sc = await ConversionsApi.sourceColumns(c.id);
-              dsLike = { columns: sc.columns } as DatasetDetail;
-            }
-            out.push({
-              project: c,
-              dataset: dsLike,
-              fields,
-              recs: buildRecommendations({ dataset: dsLike, targetFields: fields }),
-            });
-          } catch { /* skip individual conversion errors */ }
-        }
-        setItems(out);
-      } catch {
-        setItems([]);
-      }
-    })();
+    if (!projectId) { setConvs([]); return; }
+    setConvs(null);
+    ProjectsApi.conversions(String(projectId)).then(setConvs).catch(() => setConvs([]));
   }, [projectId]);
 
-  if (items === null) return <PageLoader />;
-
   const selectedProject = projects.find((p) => String(p.id) === String(projectId));
-
-  const totalRecs = items.reduce((s, p) => s + p.recs.length, 0);
+  const templated = (convs || []).filter((c) => c.template_id);
 
   return (
     <>
@@ -144,72 +112,33 @@ export const RecommendationsHubPage: React.FC = () => {
         }
       />
 
-      {totalRecs === 0 ? (
+      {convs === null ? (
+        <PageLoader />
+      ) : templated.length === 0 ? (
         <Card>
           <CardBody>
             <EmptyState
               icon={<Sparkles className="h-5 w-5" />}
-              title="No recommendations for this engagement"
+              title="No conversions to recommend on"
               description={selectedProject
-                ? `No suggestions for ${selectedProject.name} right now — pick another engagement above, or its conversions may already be clean and bound.`
+                ? `${selectedProject.name} has no conversions with a target FBDI template yet. Bind a template, then return here.`
                 : "Pick an engagement above to surface AI suggestions for its conversions."}
             />
           </CardBody>
         </Card>
       ) : (
         <div className="space-y-4">
-          {items.filter((g) => g.recs.length > 0).map((entry) => {
-            const { project, recs } = entry;
-            return (
-              <Card key={project.id}>
-                <CardHeader
-                  title={
-                    <Link to={`/mappings?project=${project.id}`} className="hover:text-brand-dark">
-                      {project.name}
-                    </Link>
-                  }
-                  subtitle={`${recs.length} recommendation(s)`}
-                  actions={
-                    <div className="flex items-center gap-2">
-                      <Pill tone="brand">{project.template_name}</Pill>
-                      <button
-                        onClick={() => setAuthoring(entry)}
-                        className="inline-flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle"
-                      >
-                        <Wand2 className="h-3 w-3" /> Custom rule
-                      </button>
-                    </div>
-                  }
-                />
-                <CardBody>
-                  <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-                    {recs.slice(0, 6).map((r) => (
-                      <RecommendationCard
-                        key={r.id}
-                        rec={r}
-                        applied={applied.has(r.id)}
-                        learned={learned.has(r.id)}
-                        onApply={(rec, learn) => handleApply(entry, rec, learn)}
-                        onDismiss={() => setApplied(prev => new Set(prev).add(r.id))}
-                      />
-                    ))}
-                  </div>
-                  {recs.length > 6 && (
-                    <div className="mt-3 text-center">
-                      <Link
-                        to={project.dataset_id
-                          ? `/datasets/${project.dataset_id}/prepare`
-                          : `/mappings?conversion=${project.id}`}
-                        className="text-xs font-medium text-brand-dark hover:underline"
-                      >
-                        View all {recs.length} recommendations →
-                      </Link>
-                    </div>
-                  )}
-                </CardBody>
-              </Card>
-            );
-          })}
+          {templated.map((c) => (
+            <ConversionRecCard
+              key={c.id}
+              conversion={c}
+              applied={applied}
+              learned={learned}
+              onApply={handleApply}
+              onAuthor={setAuthoring}
+              onDismiss={(id) => setApplied((prev) => new Set(prev).add(id))}
+            />
+          ))}
         </div>
       )}
 
@@ -220,11 +149,7 @@ export const RecommendationsHubPage: React.FC = () => {
           conversionId={authoring.project.id}
           fields={authoring.fields}
           sourceColumns={authoring.dataset.columns}
-          onSaved={() => {
-            setAuthoring(null);
-            setToast("Rule saved & added to library");
-            setTimeout(() => setToast(null), 2400);
-          }}
+          onSaved={() => { setAuthoring(null); flash("Rule saved & added to library"); }}
         />
       )}
 
@@ -234,5 +159,116 @@ export const RecommendationsHubPage: React.FC = () => {
         </div>
       )}
     </>
+  );
+};
+
+/**
+ * One conversion's recommendation card. Loads its own fields + source columns
+ * (dataset profile OR live EBS) and builds recommendations independently, so a
+ * slow live-EBS fetch on one conversion never blocks the rest of the page.
+ */
+const ConversionRecCard: React.FC<{
+  conversion: Conversion;
+  applied: Set<string>;
+  learned: Set<string>;
+  onApply: (entry: ProjectRecs, rec: Recommendation, learn: boolean) => void;
+  onAuthor: (entry: ProjectRecs) => void;
+  onDismiss: (recId: string) => void;
+}> = ({ conversion, applied, learned, onApply, onAuthor, onDismiss }) => {
+  const [entry, setEntry] = useState<ProjectRecs | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const fields = await FbdiApi.fields(conversion.template_id as any);
+        let dsLike: DatasetDetail;
+        if (conversion.dataset_id) {
+          dsLike = await DatasetsApi.get(conversion.dataset_id);
+        } else {
+          // EBS mode — columns stream from the live source-columns endpoint
+          const sc = await ConversionsApi.sourceColumns(conversion.id);
+          dsLike = { columns: sc.columns } as DatasetDetail;
+        }
+        if (!alive) return;
+        setEntry({
+          project: conversion,
+          dataset: dsLike,
+          fields,
+          recs: buildRecommendations({ dataset: dsLike, targetFields: fields }),
+        });
+      } catch {
+        if (alive) setFailed(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [conversion.id]);
+
+  if (failed) return null;
+
+  if (!entry) {
+    return (
+      <Card>
+        <CardBody>
+          <div className="flex items-center gap-2 text-xs text-ink-muted">
+            <Spinner /> Loading recommendations for {conversion.name}…
+          </div>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const { recs } = entry;
+  return (
+    <Card>
+      <CardHeader
+        title={
+          <Link to={`/mappings?conversion=${conversion.id}`} className="hover:text-brand-dark">
+            {conversion.name}
+          </Link>
+        }
+        subtitle={recs.length ? `${recs.length} recommendation(s)` : "No recommendations — source looks clean"}
+        actions={
+          <div className="flex items-center gap-2">
+            {conversion.template_name && <Pill tone="brand">{conversion.template_name}</Pill>}
+            <button
+              onClick={() => onAuthor(entry)}
+              className="inline-flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle"
+            >
+              <Wand2 className="h-3 w-3" /> Custom rule
+            </button>
+          </div>
+        }
+      />
+      {recs.length > 0 && (
+        <CardBody>
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+            {recs.slice(0, 6).map((r) => (
+              <RecommendationCard
+                key={r.id}
+                rec={r}
+                applied={applied.has(r.id)}
+                learned={learned.has(r.id)}
+                onApply={(rec, learn) => onApply(entry, rec, learn)}
+                onDismiss={() => onDismiss(r.id)}
+              />
+            ))}
+          </div>
+          {recs.length > 6 && (
+            <div className="mt-3 text-center">
+              <Link
+                to={conversion.dataset_id
+                  ? `/datasets/${conversion.dataset_id}/prepare`
+                  : `/mappings?conversion=${conversion.id}`}
+                className="text-xs font-medium text-brand-dark hover:underline"
+              >
+                View all {recs.length} recommendations →
+              </Link>
+            </div>
+          )}
+        </CardBody>
+      )}
+    </Card>
   );
 };

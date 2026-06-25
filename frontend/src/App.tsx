@@ -146,12 +146,11 @@ const OutputPreviewLanding: React.FC = () => {
   };
 
   const project = projects.find((p) => String(p.id) === String(projectId));
-  // A conversion is previewable once it has a target template AND a bound
-  // source — either an uploaded dataset OR a live Oracle EBS source (EBS mode
-  // has no dataset_id; source_type === "ebs" / an ebs_table_hint marks it).
-  const ready = conversions.filter(
-    (c) => c.template_id && (c.dataset_id || c.source_type === "ebs" || c.ebs_table_hint)
-  );
+  // A conversion is previewable once it has a target FBDI template. With an
+  // uploaded dataset it converts the file; without one (dataset_id null) it
+  // streams live from Oracle EBS. (The conversions list response doesn't always
+  // include source_type/ebs_table_hint, so don't gate on those.)
+  const ready = conversions.filter((c) => c.template_id);
 
   return (
     <>
