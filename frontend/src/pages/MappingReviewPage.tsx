@@ -18,6 +18,7 @@ import { buildRecommendations, type Recommendation } from "@/lib/recommendations
 import { confidenceTone, cn, formatNumber, statusTone } from "@/lib/utils";
 import type {
   Conversion,
+  DatasetColumnProfile,
   DatasetDetail,
   FBDIField,
   MappingSuggestion,
@@ -47,6 +48,11 @@ export const MappingReviewPage: React.FC = () => {
   const [project, setProject] = useState<Conversion | null>(null);
   const [loadingConversion, setLoadingConversion] = useState(true);
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
+  // Unified source-column list for the canvas. In dataset mode these are the
+  // uploaded file's profiled columns; in EBS live mode they come from
+  // Oracle ALL_TAB_COLUMNS for the conversion's ebs_table_hint.
+  const [sourceColumns, setSourceColumns] = useState<DatasetColumnProfile[]>([]);
+  const [ebsTable, setEbsTable] = useState<string | null>(null);
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
   // Cascade visibility — when an upstream master has taught a rule
@@ -86,27 +92,48 @@ export const MappingReviewPage: React.FC = () => {
     });
   }, []);
 
-  // Load project context
+  // Load project context. Supports both source modes:
+  //   • dataset mode  → dataset_id set; columns come from the upload
+  //   • EBS live mode → dataset_id null; columns stream from Oracle EBS
+  // dataset_id presence (not source_type) decides the mode, mirroring the
+  // Conversion Detail page's source card rule.
   const loadAll = async () => {
     if (!pid) return;
     setLoadingConversion(true);
     setMappings([]);
     const proj = await ConversionsApi.get(pid);
     setProject(proj);
-    if (!proj.dataset_id || !proj.template_id) {
-      // Conversion is in planning — nothing to map yet
+
+    const isEbs = !proj.dataset_id;
+
+    // A target FBDI template is required in both modes — without it there are
+    // no fields to map against. Dataset mode additionally needs a linked file.
+    if (!proj.template_id || (!isEbs && !proj.dataset_id)) {
       setDataset(null);
+      setSourceColumns([]);
+      setEbsTable(null);
       setTargetFields([]);
       setLoadingConversion(false);
       return;
     }
-    const [ds, fields, ms, std] = await Promise.all([
-      DatasetsApi.get(proj.dataset_id),
+
+    const [fields, ms, std, src] = await Promise.all([
       FbdiApi.fields(proj.template_id),
       MappingApi.list(pid),
       InheritedStandardsApi.forConversion(pid).catch(() => [] as InheritedStandard[]),
+      ConversionsApi.sourceColumns(pid).catch(() => ({ source_type: "", table: null, columns: [] as DatasetColumnProfile[] })),
     ]);
+
+    // Dataset detail still drives the Recommendations panel (column-level
+    // cleansing). EBS mode has no file, so recommendations are skipped.
+    let ds: DatasetDetail | null = null;
+    if (!isEbs && proj.dataset_id) {
+      ds = await DatasetsApi.get(proj.dataset_id).catch(() => null);
+    }
+
     setDataset(ds);
+    setSourceColumns(src.columns || []);
+    setEbsTable(src.table ?? proj.ebs_table_hint ?? null);
     setTargetFields(fields);
     setMappings(ms);
     setInherited(std);
@@ -304,7 +331,21 @@ export const MappingReviewPage: React.FC = () => {
   };
 
   if (!pid || !project || loadingConversion) return <PageLoader />;
-  if (!dataset) return (
+
+  const isEbs = !project.dataset_id;
+
+  // No target template → nothing to map against, in either mode.
+  if (!project.template_id) return (
+    <div className="p-6">
+      <EmptyState
+        icon={<ArrowLeftRight className="h-5 w-5" />}
+        title="No FBDI template linked"
+        description="Link a target FBDI template to this conversion to begin mapping."
+      />
+    </div>
+  );
+  // Dataset mode with no uploaded file → prompt for a source extract.
+  if (!isEbs && !dataset) return (
     <div className="p-6">
       <EmptyState
         icon={<ArrowLeftRight className="h-5 w-5" />}
@@ -323,7 +364,15 @@ export const MappingReviewPage: React.FC = () => {
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-ink">Mapping Review</div>
             <div className="text-[11px] text-ink-muted">
-              <span className="text-ink">{dataset.name}</span>
+              {isEbs ? (
+                <span className="inline-flex items-center gap-1 text-emerald-700">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="font-mono text-emerald-800">{ebsTable || "Oracle EBS"}</span>
+                  <span className="text-emerald-600">· live</span>
+                </span>
+              ) : (
+                <span className="text-ink">{dataset?.name}</span>
+              )}
               <span className="mx-1.5">→</span>
               <span className="text-ink">{project.template_name}</span>
               <span className="ml-1.5 font-mono text-ink-subtle">· {targetFields.length} target fields</span>
@@ -439,11 +488,26 @@ export const MappingReviewPage: React.FC = () => {
         </div>
       )}
 
+      {/* EBS live mode but no columns came back — connection unreachable or
+          the conversion has no table hint. Keep the page usable. */}
+      {isEbs && sourceColumns.length === 0 && (
+        <div className="border-b border-line bg-warning-subtle px-5 py-2.5 text-[12px] text-warning-dark">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              No live columns returned from Oracle EBS
+              {ebsTable ? <> for <span className="font-mono">{ebsTable}</span></> : " (no table hint set)"}.
+              Confirm the EBS connection is healthy and the table hint is set, then re-run AI Mapping.
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {/* Mapping canvas */}
         <MappingCanvas
-          sourceColumns={dataset.columns}
+          sourceColumns={sourceColumns}
           targetFields={targetFields}
           mappings={mappings}
           visibleTargetIds={visibleTargetIds}
@@ -460,7 +524,7 @@ export const MappingReviewPage: React.FC = () => {
         {selectedMapping && (
           <MappingInspector
             mapping={selectedMapping}
-            sourceColumns={dataset.columns}
+            sourceColumns={sourceColumns}
             onClose={() => setSelectedMappingId(null)}
             onApprove={(m) => approve(m)}
             onReject={(m) => reject(m)}
@@ -491,13 +555,13 @@ export const MappingReviewPage: React.FC = () => {
         </div>
       )}
 
-      {pid && dataset && (
+      {pid && sourceColumns.length > 0 && (
         <RuleAuthorModal
           open={ruleAuthorOpen}
           onClose={() => setRuleAuthorOpen(false)}
           conversionId={pid}
           fields={targetFields}
-          sourceColumns={dataset.columns}
+          sourceColumns={sourceColumns}
           defaultTargetFieldId={ruleAuthorMapping?.target_field_id ?? null}
           defaultSourceColumn={ruleAuthorMapping?.source_column ?? null}
           onSaved={() => { setRuleAuthorOpen(false); flash("Rule saved & added to library"); }}

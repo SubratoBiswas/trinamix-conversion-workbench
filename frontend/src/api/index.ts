@@ -108,6 +108,13 @@ export const ConversionsApi = {
     api.post<{ updated: number; message: string }>(
       `/conversions/project/${projectId}/use-ebs-source`
     ).then(r => r.data),
+  /** Unified source columns for the Mapping Review canvas. Returns dataset
+   *  profiles in dataset mode, or live Oracle EBS ALL_TAB_COLUMNS metadata
+   *  when the conversion has no linked dataset (EBS live mode). */
+  sourceColumns: (id: string) =>
+    api.get<{ source_type: string; table: string | null; columns: import("@/types").DatasetColumnProfile[] }>(
+      `/conversions/${id}/source-columns`
+    ).then(r => r.data),
 };
 
 export const MappingApi = {
