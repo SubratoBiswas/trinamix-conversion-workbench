@@ -55,3 +55,21 @@ class ProjectOut(BaseModel):
     status: str
     production_cutover_start: Optional[datetime] = None
     production_cutover_end: Optional[datetime] = None
+    # v10 engagement metadata (previously dropped because they weren't declared)
+    source_system: Optional[str] = None
+    phase: Optional[str] = None
+    selected_modules: Optional[List[str]] = None
+    migration_lead: Optional[str] = None
+    data_owner: Optional[str] = None
+    sox_controlled: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    # Conversion roll-ups added by _hydrate (kept in sync with ProjectOverview's
+    # client-side definitions so the card and the detail page always agree).
+    conversion_count: int = 0
+    planning_count: int = 0
+    in_progress_count: int = 0
+    loaded_count: int = 0
+    failed_count: int = 0
+    source_connection_count: int = 0
+    has_active_source_connection: bool = False

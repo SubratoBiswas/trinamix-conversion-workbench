@@ -81,6 +81,7 @@ export const ProjectsPage: React.FC = () => {
 
 const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
   const total = project.conversion_count ?? 0;
+  const planning = project.planning_count ?? 0;
   const inProg = project.in_progress_count ?? 0;
   const loaded = project.loaded_count ?? 0;
   const failed = project.failed_count ?? 0;
@@ -131,11 +132,13 @@ const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
           </div>
         )}
 
-        {/* Object roll-ups */}
-        <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[10.5px]">
-          <Roll label="In progress" count={inProg} icon={<Clock className="h-3 w-3" />} tone="text-warning" />
-          <Roll label="Loaded"      count={loaded} icon={<CheckCircle2 className="h-3 w-3" />} tone="text-success" />
-          <Roll label="Failed"      count={failed} icon={<AlertCircle className="h-3 w-3" />} tone="text-danger" />
+        {/* Object roll-ups — mirrors the project detail page's KPI tiles */}
+        <div className="mt-3 grid grid-cols-5 gap-1.5 text-center text-[10.5px]">
+          <Roll label="Total"       count={total}   icon={<Boxes className="h-3 w-3" />} tone="text-ink" />
+          <Roll label="Planning"    count={planning} icon={<Clock className="h-3 w-3" />} tone="text-info" />
+          <Roll label="In progress" count={inProg}  icon={<Clock className="h-3 w-3" />} tone="text-warning" />
+          <Roll label="Loaded"      count={loaded}  icon={<CheckCircle2 className="h-3 w-3" />} tone="text-success" />
+          <Roll label="Failed"      count={failed}  icon={<AlertCircle className="h-3 w-3" />} tone="text-danger" />
         </div>
       </div>
 

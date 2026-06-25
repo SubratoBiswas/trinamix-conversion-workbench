@@ -118,6 +118,7 @@ export interface Project {
   updated_at: string;
   // Roll-ups
   conversion_count?: number;
+  planning_count?: number;
   in_progress_count?: number;
   loaded_count?: number;
   failed_count?: number;

@@ -17,6 +17,9 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 async def _hydrate(p: Project) -> ProjectOut:
     convs = await Conversion.find(Conversion.project_id == p.id).to_list()
+    # Definitions kept identical to ProjectOverviewPage so the card and the
+    # detail page always show the same numbers.
+    planning = sum(1 for c in convs if c.status == "planning")
     in_progress = sum(1 for c in convs if c.status in (
         "draft","mapping_suggested","awaiting_approval","validated","output_generated"))
     loaded = sum(1 for c in convs if c.status == "loaded")
@@ -24,6 +27,7 @@ async def _hydrate(p: Project) -> ProjectOut:
     data = p.model_dump()
     data["id"] = str(p.id)
     data["conversion_count"] = len(convs)
+    data["planning_count"] = planning
     data["in_progress_count"] = in_progress
     data["loaded_count"] = loaded
     data["failed_count"] = failed
