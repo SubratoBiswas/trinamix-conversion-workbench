@@ -410,6 +410,8 @@ export const SourceConnectionsApi = {
 export const CopilotApi = {
   ask: (body: { project_id: string; messages: { role: string; content: string }[] }) =>
     api.post<{ answer: string; citations: string[] }>("/copilot/ask", body).then(r => r.data),
+  suggestDefault: (body: { column_name: string; samples?: any[]; null_percent?: number; target_field?: string; target_data_type?: string }) =>
+    api.post<{ suggestion: string; available: boolean; reason?: string }>("/copilot/suggest-default", body).then(r => r.data),
 };
 
 // === Inherited Reference Standards ============================================

@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Calendar, Hash, Replace, Trash2, Filter as FilterIcon,
   ScissorsLineDashed, Sparkles, Layers, AlertTriangle,
-  Plus, X, GraduationCap, CornerDownRight, CheckCircle2,
+  Plus, X, GraduationCap, CornerDownRight, CheckCircle2, Wand2, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CopilotApi } from "@/api";
 import type { Recommendation, RecommendationKind } from "@/lib/recommendations";
 
 const KIND_META: Record<RecommendationKind, { icon: React.ElementType; tone: string }> = {
@@ -31,12 +32,49 @@ interface Props {
   onAddRule?: (rec: Recommendation) => void;
   applied?: boolean;
   learned?: boolean;
+  /** Sample values from the dataset column — used for AI suggestion */
+  columnSamples?: any[];
 }
 
-export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, onAddRule, applied, learned }) => {
+export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, onAddRule, applied, learned, columnSamples }) => {
   const meta = KIND_META[rec.kind] || KIND_META.trim;
   const Icon = meta.icon;
   const conf = Math.round(rec.confidence * 100);
+
+  // For fill_missing: editable default value with AI suggestion
+  const isFillMissing = rec.kind === "fill_missing";
+  const [defaultVal, setDefaultVal] = useState<string>(rec.ruleConfig?.value ?? "");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiUsed, setAiUsed] = useState(false);
+
+  const handleSuggestAI = async () => {
+    setAiLoading(true);
+    try {
+      const res = await CopilotApi.suggestDefault({
+        column_name: rec.column,
+        samples: columnSamples ?? [],
+        null_percent: parseFloat(rec.reason?.match(/(\d+\.?\d*)%/)?.[1] ?? "0"),
+        target_field: rec.targetField,
+      });
+      if (res.suggestion) {
+        setDefaultVal(res.suggestion);
+        setAiUsed(true);
+      }
+    } catch {
+      // silently ignore — user can type manually
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleApply = (learn: boolean) => {
+    if (isFillMissing) {
+      // Inject the user's chosen value into the rule config before applying
+      onApply?.({ ...rec, ruleConfig: { ...rec.ruleConfig, value: defaultVal } }, learn);
+    } else {
+      onApply?.(rec, learn);
+    }
+  };
 
   return (
     <div className={cn(
@@ -69,6 +107,41 @@ export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, o
             </div>
           )}
 
+          {/* Fill-missing: inline default value input + AI suggest */}
+          {isFillMissing && !applied && !learned && (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1.5">
+                <input
+                  className="h-7 flex-1 rounded border border-line bg-white px-2 text-[11.5px] text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                  placeholder="Enter default value…"
+                  value={defaultVal}
+                  onChange={(e) => setDefaultVal(e.target.value)}
+                />
+                <button
+                  onClick={handleSuggestAI}
+                  disabled={aiLoading}
+                  title="Ask Claude to suggest a default value"
+                  className={cn(
+                    "flex h-7 items-center gap-1 rounded border px-2 text-[11px] font-medium transition",
+                    aiUsed
+                      ? "border-brand/40 bg-brand-subtle text-brand"
+                      : "border-line bg-white text-ink-muted hover:border-brand hover:text-brand",
+                  )}
+                >
+                  {aiLoading
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <Wand2 className="h-3 w-3" />}
+                  <span>AI</span>
+                </button>
+              </div>
+              {aiUsed && defaultVal && (
+                <p className="text-[10px] text-brand">
+                  ✦ AI suggested — edit if needed
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Footer meta */}
           <div className="mt-2 flex items-center justify-between text-[10.5px] text-ink-muted">
             <span>
@@ -86,15 +159,17 @@ export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, o
       {!applied && !learned && (
         <div className="mt-2 flex items-center gap-1 border-t border-line pt-2">
           <button
-            onClick={() => onApply?.(rec, false)}
-            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle"
-            title="Apply this recommendation now"
+            onClick={() => handleApply(false)}
+            disabled={isFillMissing && !defaultVal.trim()}
+            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle disabled:cursor-not-allowed disabled:opacity-40"
+            title={isFillMissing && !defaultVal.trim() ? "Enter a default value first" : "Apply this recommendation now"}
           >
             <Sparkles className="h-3 w-3" /> Apply
           </button>
           <button
-            onClick={() => onApply?.(rec, true)}
-            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle"
+            onClick={() => handleApply(true)}
+            disabled={isFillMissing && !defaultVal.trim()}
+            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle disabled:cursor-not-allowed disabled:opacity-40"
             title="Apply and capture as a learned rule for future cycles"
           >
             <GraduationCap className="h-3 w-3" /> Apply &amp; Learn
