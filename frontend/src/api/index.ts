@@ -282,6 +282,29 @@ export const DiscoveryApi = {
 
   toggleObject: (objId: string, selected: boolean) =>
     api.patch(`/discovery/objects/${objId}/select`, null, { params: { selected } }).then(r => r.data),
+
+  /**
+   * Quick live COUNT(*) per EBS table — used by Setup Wizard scope step
+   * to replace "pending scan" with real record volumes before project creation.
+   */
+  quickTableCounts: (body: {
+    host: string;
+    port: number;
+    service_name: string;
+    username: string;
+    password: string;
+    source_extracts: string[];
+  }) =>
+    api.post<{ counts: Record<string, number | null>; errors: Record<string, string> }>(
+      "/discovery/quick-table-counts",
+      body,
+    ).then(r => r.data),
+
+  /** Row counts from the most recent completed discovery run for a project. */
+  scopeHints: (projectId: string) =>
+    api.get<{ is_mock: boolean; run_id: string | null; table_counts: Record<string, number | null> }>(
+      `/projects/${projectId}/discovery/scope-hints`,
+    ).then(r => r.data),
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -395,31 +418,6 @@ export const SourceSystemsApi = {
 
 export const FusionModulesApi = {
   list: () => api.get<any[]>("/fusion-modules").then(r => r.data),
-};
-
-export const DiscoveryApi = {
-  /**
-   * Quick live COUNT(*) per EBS table — used by Setup Wizard scope step
-   * to replace "pending scan" with real record volumes before project creation.
-   */
-  quickTableCounts: (body: {
-    host: string;
-    port: number;
-    service_name: string;
-    username: string;
-    password: string;
-    source_extracts: string[];
-  }) =>
-    api.post<{ counts: Record<string, number | null>; errors: Record<string, string> }>(
-      "/discovery/quick-table-counts",
-      body,
-    ).then(r => r.data),
-
-  /** Row counts from the most recent completed discovery run for a project. */
-  scopeHints: (projectId: string) =>
-    api.get<{ is_mock: boolean; run_id: string | null; table_counts: Record<string, number | null> }>(
-      `/projects/${projectId}/discovery/scope-hints`,
-    ).then(r => r.data),
 };
 
 export const SourceConnectionsApi = {
