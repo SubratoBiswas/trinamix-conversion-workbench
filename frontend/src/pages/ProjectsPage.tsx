@@ -97,6 +97,7 @@ const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number)
     try {
       await ProjectsApi.remove(String(project.id));
       onDeleted(project.id);
+      window.dispatchEvent(new Event("workbench:refresh"));  // refresh sidebar counts
     } catch {
       alert("Failed to delete engagement.");
       setDeleting(false);

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import React, { useCallback, useEffect, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   Home, Database, FileSpreadsheet, Boxes, Workflow as WfIcon,
   Sparkles, ListChecks, ShieldCheck, Cloud, Network, BookOpen,
@@ -97,7 +97,9 @@ export const Sidebar: React.FC = () => {
   const [activeCount, setActiveCount] = useState<{
     projects: number; conversions: number;
   } | null>(null);
-  useEffect(() => {
+  const loc = useLocation();
+
+  const load = useCallback(() => {
     Promise.all([
       ProjectsApi.list(),
       ConversionsApi.list(),
@@ -106,8 +108,17 @@ export const Sidebar: React.FC = () => {
         (p) => p.status === "in_progress" || p.status === "planning"
       ).length;
       setActiveCount({ projects: activeProjects, conversions: cs.length });
-    }).catch(() => setActiveCount(null));
+    }).catch(() => { /* keep last known counts */ });
   }, []);
+
+  // Refresh on mount, on every navigation, and whenever data changes elsewhere
+  // (e.g. a project/conversion delete fires a 'workbench:refresh' event).
+  useEffect(() => { load(); }, [load, loc.pathname]);
+  useEffect(() => {
+    const h = () => load();
+    window.addEventListener("workbench:refresh", h);
+    return () => window.removeEventListener("workbench:refresh", h);
+  }, [load]);
 
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col bg-sidebar text-slate-300">
