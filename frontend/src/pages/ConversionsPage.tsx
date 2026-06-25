@@ -20,7 +20,7 @@ const STATUS_TONE = (s: string) => {
 export const ConversionsPage: React.FC = () => {
   const [items, setItems] = useState<Conversion[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [filterProj, setFilterProj] = useState<number | "all">("all");
+  const [filterProj, setFilterProj] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
   useEffect(() => {
@@ -33,7 +33,7 @@ export const ConversionsPage: React.FC = () => {
   const visible = useMemo(() => {
     if (!items) return [];
     return items.filter(c => {
-      if (filterProj !== "all" && c.project_id !== filterProj) return false;
+      if (filterProj !== "all" && String(c.project_id) !== filterProj) return false;
       if (filterStatus !== "all" && c.status !== filterStatus) return false;
       return true;
     });
@@ -77,9 +77,9 @@ export const ConversionsPage: React.FC = () => {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-ink-muted">Filter:</span>
         <select className="input !h-8 !w-auto !text-xs"
-          value={filterProj} onChange={(e) => setFilterProj(e.target.value === "all" ? "all" : Number(e.target.value))}>
+          value={filterProj} onChange={(e) => setFilterProj(e.target.value)}>
           <option value="all">All engagements</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {projects.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
         </select>
         <select className="input !h-8 !w-auto !text-xs"
           value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
