@@ -104,6 +104,10 @@ export const ConversionsApi = {
   update: (id: string, body: Partial<Conversion>) =>
     api.patch<Conversion>(`/conversions/${id}`, body).then(r => r.data),
   remove: (id: string) => api.delete(`/conversions/${id}`).then(r => r.data),
+  switchProjectToEbs: (projectId: string) =>
+    api.post<{ updated: number; message: string }>(
+      `/conversions/project/${projectId}/use-ebs-source`
+    ).then(r => r.data),
 };
 
 export const MappingApi = {

@@ -14,17 +14,46 @@ from app.services.auth_service import get_current_user
 
 
 async def _auto_map(conversion_id) -> None:
-    """Run AI mapping suggestions in the background if none exist yet."""
+    """Run AI mapping suggestions in the background if none exist yet.
+
+    Before mapping, ensures the linked FBDI template has field records —
+    if the Excel upload parser returned 0 fields, auto-seeds from the
+    Oracle Fusion standard schema dictionary so mapping always produces results.
+    """
     try:
+        from app.models.fbdi import FBDIField
         from app.models.mapping import MappingSuggestion
         from app.services.mapping_service import run_mapping_suggestions
+
+        conv = await Conversion.get(conversion_id)
+        if not conv or not conv.template_id:
+            return
+        # Require either a dataset (dataset mode) or an EBS table hint (ebs mode)
+        if conv.source_type != "ebs" and not conv.dataset_id:
+            return
+
+        # Auto-seed standard fields if the template has none (handles templates
+        # whose Excel couldn't be parsed on upload)
+        tpl = await FBDITemplate.get(conv.template_id)
+        if tpl:
+            field_count = await FBDIField.find(
+                FBDIField.template_id == tpl.id
+            ).count()
+            if field_count == 0:
+                from app.routers.fbdi_seed import auto_seed_if_empty
+                seeded = await auto_seed_if_empty(tpl)
+                if seeded:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        f"_auto_map: seeded {seeded} standard fields for '{tpl.name}' "
+                        f"before running mapping on conversion {conversion_id}"
+                    )
+
         existing = await MappingSuggestion.find(
             MappingSuggestion.conversion_id == conversion_id
         ).count()
         if existing == 0:
-            conv = await Conversion.get(conversion_id)
-            if conv and conv.dataset_id and conv.template_id:
-                await run_mapping_suggestions(conv)
+            await run_mapping_suggestions(conv)
     except Exception:
         pass  # Background task -- never crash the request
 
@@ -163,3 +192,59 @@ async def delete_conversion(conversion_id: str, _: User = Depends(get_current_us
         raise HTTPException(404, "Conversion not found")
     await c.delete()
     return {"deleted": conversion_id}
+
+
+@router.post("/project/{project_id}/use-ebs-source", status_code=200)
+async def switch_project_to_ebs_source(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(get_current_user),
+):
+    """Switch all conversions in a project to live Oracle EBS as the data source.
+
+    Clears any uploaded dataset link and sets source_type='ebs'. The EBS table
+    hint is derived from the fusion_modules catalog using the conversion's
+    target_object. Mapping suggestions are re-triggered in the background.
+    """
+    from app.fusion_modules import ALL_MODULES
+    import re
+
+    def _first_table(extract_hint: str) -> str:
+        """Parse first table name from 'Extract from TABLE1, TABLE2 ...'"""
+        m = re.search(r"from\s+([A-Z_][A-Z0-9_#$]+)", extract_hint or "", re.IGNORECASE)
+        return m.group(1).upper() if m else ""
+
+    # Build target_object -> EBS table map from the catalog
+    obj_to_table: dict[str, str] = {}
+    for mod in ALL_MODULES:
+        for obj in mod.objects:
+            hint = (obj.source_extracts or {}).get("oracle_ebs", "")
+            table = _first_table(hint)
+            if table:
+                obj_to_table[obj.target_object.lower()] = table
+
+    convs = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)
+    ).to_list()
+
+    if not convs:
+        raise HTTPException(404, f"No conversions found for project {project_id}")
+
+    updated = 0
+    for conv in convs:
+        target_key = (conv.target_object or "").lower()
+        table_hint = obj_to_table.get(target_key, "")
+        await conv.set({
+            "source_type": "ebs",
+            "dataset_id": None,
+            "ebs_table_hint": table_hint,
+            "updated_at": datetime.utcnow(),
+        })
+        if conv.template_id:
+            background_tasks.add_task(_auto_map, conv.id)
+        updated += 1
+
+    return {
+        "updated": updated,
+        "message": f"Switched {updated} conversions to Oracle EBS live source",
+    }

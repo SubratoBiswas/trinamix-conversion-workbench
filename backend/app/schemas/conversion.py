@@ -23,6 +23,8 @@ class ConversionUpdate(BaseModel):
     template_id: Optional[str] = None
     planned_load_order: Optional[int] = None
     status: Optional[str] = None
+    source_type: Optional[str] = None       # "dataset" | "ebs"
+    ebs_table_hint: Optional[str] = None    # e.g. "MTL_SYSTEM_ITEMS_B"
 
 
 class ConversionOut(BaseModel):
@@ -37,6 +39,8 @@ class ConversionOut(BaseModel):
     template_id: Optional[str] = None
     planned_load_order: int
     status: str
+    source_type: str = "dataset"
+    ebs_table_hint: Optional[str] = None
     created_by: str
     created_at: datetime
     updated_at: datetime

@@ -7,7 +7,7 @@ import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
@@ -103,6 +103,7 @@ export const ProjectOverviewPage: React.FC = () => {
   const [deps, setDeps] = useState<Dependency[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [ebsBusy, setEbsBusy] = useState(false);
   const [showModuleModal, setShowModuleModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [hasConnection, setHasConnection] = useState(false);
@@ -259,6 +260,27 @@ export const ProjectOverviewPage: React.FC = () => {
           <CardHeader
             title="Conversion Objects"
             subtitle={`${totals.total} object${totals.total === 1 ? "" : "s"} ordered by planned load sequence`}
+            actions={
+              <button
+                onClick={async () => {
+                  setEbsBusy(true);
+                  try {
+                    const res = await ConversionsApi.switchProjectToEbs(pid);
+                    setToast(res.message);
+                    const updated = await ConversionsApi.list({ project_id: pid });
+                    setConversions(updated);
+                  } catch (e: any) {
+                    setToast(`Failed: ${e?.response?.data?.detail || e?.message}`);
+                  } finally { setEbsBusy(false); }
+                }}
+                disabled={ebsBusy}
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                title="Remove uploaded datasets and use live Oracle EBS as source for all conversions"
+              >
+                <Zap className="h-3 w-3" />
+                {ebsBusy ? "Switching…" : "Use EBS Source"}
+              </button>
+            }
           />
           {conversions.length === 0 ? (
             <CardBody>
@@ -298,9 +320,14 @@ export const ProjectOverviewPage: React.FC = () => {
                         : <span className="text-ink-subtle italic">not selected</span>}
                     </td>
                     <td>
-                      {c.dataset_name
-                        ? <span className="inline-flex items-center gap-1 text-[12px] text-ink"><Database className="h-3 w-3 text-emerald-500" />{c.dataset_name}</span>
-                        : <span className="text-ink-subtle italic">awaiting file</span>}
+                      {!c.dataset_id
+                        ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                            <Zap className="h-3 w-3" />
+                            {c.ebs_table_hint ? c.ebs_table_hint : "EBS Live"}
+                          </span>
+                        : c.dataset_name
+                          ? <span className="inline-flex items-center gap-1 text-[12px] text-ink"><Database className="h-3 w-3 text-emerald-500" />{c.dataset_name}</span>
+                          : <span className="text-ink-subtle italic">awaiting file</span>}
                     </td>
                     <td><Pill tone={STATUS_TONE(c.status)}>{c.status.replace("_", " ")}</Pill></td>
                     <td className="text-right">

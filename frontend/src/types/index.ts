@@ -538,6 +538,10 @@ export interface Conversion {
   template_id?: number | null;
   planned_load_order: number;
   status: string;
+  /** "dataset" = uploaded file source; "ebs" = live Oracle EBS query */
+  source_type?: string;
+  /** EBS staging table for this conversion, e.g. "MTL_SYSTEM_ITEMS_B" */
+  ebs_table_hint?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

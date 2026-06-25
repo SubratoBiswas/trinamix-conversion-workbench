@@ -49,10 +49,89 @@ async def _target_fields_for(template: FBDITemplate) -> list[TargetField]:
     ]
 
 
+async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
+    """Fetch column metadata from the live Oracle EBS connection for *table_name*.
+
+    Falls back to an empty list if no EBS connection is configured / reachable.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        from app.models.v10 import SourceConnection
+        conn = await SourceConnection.find_one(
+            {"source_type": "oracle_ebs", "status": "connected"}
+        )
+        if conn is None:
+            log.debug("_source_columns_for_ebs: no connected EBS connection found")
+            return []
+
+        import jaydebeapi
+        password = conn.encrypted_password or ""
+        if password.startswith("PLAIN:"):
+            password = password[6:]
+
+        host = conn.host or "localhost"
+        port = conn.port or 1521
+        service = conn.service_name or conn.database or "EBSDB"
+        jdbc_url = f"jdbc:oracle:thin:@{host}:{port}/{service}"
+
+        db = jaydebeapi.connect(
+            "oracle.jdbc.OracleDriver",
+            jdbc_url,
+            [conn.username, password],
+            "/app/ojdbc11.jar",
+        )
+        cur = db.cursor()
+        cur.execute("""
+            SELECT column_name, data_type, nullable, num_distinct
+            FROM all_tab_columns
+            WHERE table_name = UPPER(?)
+            ORDER BY column_id
+        """, [table_name.upper()])
+        rows = cur.fetchall()
+        cur.close()
+        db.close()
+
+        return [
+            SourceColumn(
+                name=col_name,
+                inferred_type=data_type.lower() if data_type else "string",
+                sample_values=[],
+                null_percent=0.0 if nullable == "N" else 50.0,
+                distinct_count=int(num_distinct or 0),
+                pattern_summary=None,
+            )
+            for col_name, data_type, nullable, num_distinct in rows
+        ]
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"_source_columns_for_ebs: failed for '{table_name}': {exc}"
+        )
+        return []
+
+
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
-    dataset = await Dataset.get(conversion.dataset_id)
     template = await FBDITemplate.get(conversion.template_id)
-    sources = await _source_columns_for(dataset)
+
+    # Determine source columns: EBS live query or static dataset
+    if getattr(conversion, "source_type", "dataset") == "ebs":
+        table = getattr(conversion, "ebs_table_hint", "") or ""
+        sources = await _source_columns_for_ebs(table) if table else []
+        if not sources:
+            # EBS unreachable or no table hint — nothing to map
+            import logging
+            logging.getLogger(__name__).warning(
+                f"run_mapping_suggestions: EBS source mode but no columns for "
+                f"table='{table}' on conversion {conversion.id} — skipping"
+            )
+            return []
+    else:
+        if not conversion.dataset_id:
+            return []
+        dataset = await Dataset.get(conversion.dataset_id)
+        sources = await _source_columns_for(dataset)
+
     targets = await _target_fields_for(template)
     provider = get_mapping_provider()
     ai_results = provider.suggest_mappings(sources, targets)

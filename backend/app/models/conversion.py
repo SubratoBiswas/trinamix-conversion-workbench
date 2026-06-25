@@ -18,6 +18,9 @@ class Conversion(Document):
     target_object: Optional[str] = None
     planned_load_order: int = 100
     status: str = "planning"
+    # Source mode: "ebs" = live Oracle EBS query (default), "dataset" = uploaded file
+    source_type: str = "ebs"
+    ebs_table_hint: Optional[str] = None   # e.g. "MTL_SYSTEM_ITEMS_B"
     created_by: str = "admin"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

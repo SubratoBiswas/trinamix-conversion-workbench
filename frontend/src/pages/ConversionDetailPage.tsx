@@ -3,7 +3,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Database, FileSpreadsheet, Sparkles, ShieldCheck,
   ListChecks, Play, Download, FileOutput, ArrowRight, Workflow as WfIcon,
-  Eye, Cloud, GitBranch, CheckCircle2, Clock, XCircle, Loader2,
+  Eye, Cloud, GitBranch, CheckCircle2, Clock, XCircle, Loader2, Zap, Table2,
 } from "lucide-react";
 import {
   ConversionsApi, CutoverApi, DatasetsApi, FbdiApi, LoadApi, MappingApi,
@@ -99,10 +99,11 @@ export const ConversionDetailPage: React.FC = () => {
       CutoverApi.environments(c.project_id).then(setEnvironments).catch(() => setEnvironments([]));
     }
     if (c.dataset_id) DatasetsApi.get(c.dataset_id).then((d) => setDataset(d));
+    else setDataset(null);
     if (c.template_id) FbdiApi.get(c.template_id).then((t) => setTemplate(t));
     FbdiApi.list().then(setFbdiTemplates).catch(() => {});
     CutoverApi.runsForConversion(cid).then(setEnvRuns).catch(() => setEnvRuns([]));
-    if (c.dataset_id && c.template_id) {
+    if (c.template_id) {
       FbdiApi.fields(c.template_id).then(setTargetFields).catch(() => setTargetFields([]));
       MappingApi.list(cid).then(setMappings).catch(() => setMappings([]));
       QualityApi.cleansing(cid).then((cl) =>
@@ -170,41 +171,69 @@ export const ConversionDetailPage: React.FC = () => {
       <Card className="mb-4">
         <CardBody>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="flex items-center gap-3 rounded-md border border-line bg-canvas px-3 py-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
-                <Database className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">Source dataset</div>
-                {dataset ? (
-                  <div className="flex items-center gap-2">
-                    <Link to={`/datasets/${dataset.id}/prepare`} className="truncate text-sm font-semibold text-ink hover:text-brand-dark">
-                      {dataset.name}
-                      <span className="ml-1.5 font-mono text-[10.5px] text-ink-muted">
-                        {dataset.row_count.toLocaleString()} × {dataset.column_count}
-                      </span>
-                    </Link>
-                    <label className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-canvas hover:text-ink" title="Replace dataset">
-                      <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} />
-                      ↩ Replace
-                    </label>
+            {!conv.dataset_id ? (
+              /* ── EBS live source card ── */
+              <div className="flex items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-600">
+                  <Zap className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <div className="text-[10.5px] font-semibold uppercase tracking-wider text-emerald-700">Oracle EBS Live Source</div>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      LIVE
+                    </span>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm italic text-ink-subtle">Awaiting source file</span>
-                    <label className={cn(
-                      "shrink-0 cursor-pointer rounded px-2 py-0.5 text-[11px] font-medium",
-                      busy === "upload_dataset"
-                        ? "text-ink-subtle"
-                        : "bg-brand text-white hover:bg-brand-dark"
-                    )}>
-                      <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} disabled={busy === "upload_dataset"} />
-                      {busy === "upload_dataset" ? "Uploading…" : "↑ Upload"}
-                    </label>
-                  </div>
-                )}
+                  {conv.ebs_table_hint ? (
+                    <div className="flex items-center gap-1.5">
+                      <Table2 className="h-3 w-3 text-emerald-600 shrink-0" />
+                      <span className="font-mono text-[11px] font-semibold text-emerald-800">{conv.ebs_table_hint}</span>
+                      <span className="text-[10.5px] text-emerald-600">· streamed at runtime</span>
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-emerald-700">Connected — table resolved at runtime</span>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              /* ── Uploaded dataset card ── */
+              <div className="flex items-center gap-3 rounded-md border border-line bg-canvas px-3 py-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+                  <Database className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">Source dataset</div>
+                  {dataset ? (
+                    <div className="flex items-center gap-2">
+                      <Link to={`/datasets/${dataset.id}/prepare`} className="truncate text-sm font-semibold text-ink hover:text-brand-dark">
+                        {dataset.name}
+                        <span className="ml-1.5 font-mono text-[10.5px] text-ink-muted">
+                          {dataset.row_count.toLocaleString()} × {dataset.column_count}
+                        </span>
+                      </Link>
+                      <label className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-canvas hover:text-ink" title="Replace dataset">
+                        <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} />
+                        ↩ Replace
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm italic text-ink-subtle">Awaiting source file</span>
+                      <label className={cn(
+                        "shrink-0 cursor-pointer rounded px-2 py-0.5 text-[11px] font-medium",
+                        busy === "upload_dataset"
+                          ? "text-ink-subtle"
+                          : "bg-brand text-white hover:bg-brand-dark"
+                      )}>
+                        <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} disabled={busy === "upload_dataset"} />
+                        {busy === "upload_dataset" ? "Uploading…" : "↑ Upload"}
+                      </label>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-3 rounded-md border border-line bg-canvas px-3 py-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
                 <FileSpreadsheet className="h-4 w-4" />
