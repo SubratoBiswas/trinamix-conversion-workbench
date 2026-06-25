@@ -12,6 +12,7 @@ from app.routers import conversions as conversions_router
 from app.routers import cutover as cutover_router
 from app.routers import datasets as datasets_router
 from app.routers import fbdi as fbdi_router
+from app.routers import fbdi_seed as fbdi_seed_router
 from app.routers import learned as learned_router
 from app.routers import mapping as mapping_router
 from app.routers import operations as ops_router
@@ -67,6 +68,7 @@ def health() -> dict:
 app.include_router(auth_router.router)
 app.include_router(datasets_router.router)
 app.include_router(fbdi_router.router)
+app.include_router(fbdi_seed_router.router)
 app.include_router(projects_router.router)
 app.include_router(conversions_router.router)
 app.include_router(cutover_router.router)

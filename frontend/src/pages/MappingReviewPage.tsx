@@ -114,6 +114,27 @@ export const MappingReviewPage: React.FC = () => {
   };
   useEffect(() => { loadAll(); }, [pid]);
 
+  // Seed standard Oracle Fusion fields for templates with 0 parsed fields
+  const [seeding, setSeeding] = useState(false);
+  const seedFields = async () => {
+    if (!project?.template_id) return;
+    setSeeding(true);
+    try {
+      const res = await FbdiApi.seedStandardFields(project.template_id);
+      flash(res.message);
+      if (res.seeded > 0) {
+        // Reload target fields then re-run mapping
+        const fields = await FbdiApi.fields(project.template_id);
+        setTargetFields(fields);
+        await suggest();
+      }
+    } catch (err: any) {
+      flash(err?.response?.data?.detail ?? "Seed failed — template name not recognised");
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   // Run AI mapping
   const suggest = async () => {
     if (!pid) return;
@@ -331,6 +352,25 @@ export const MappingReviewPage: React.FC = () => {
             {mappings.length ? "Re-run AI" : "Run AI Mapping"}
           </Button>
         </div>
+
+        {/* Zero-fields warning — template parsed with no columns */}
+        {targetFields.length === 0 && (
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning-dark">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">
+              This FBDI template has <strong>0 target fields</strong> — the Excel file may not have parsed correctly when uploaded.
+              Click <strong>Seed Standard Fields</strong> to inject Oracle Fusion standard columns, then re-run mapping.
+            </span>
+            <button
+              onClick={seedFields}
+              disabled={seeding}
+              className="flex items-center gap-1 rounded border border-warning/50 bg-white px-2 py-1 font-medium hover:bg-warning-subtle disabled:opacity-50"
+            >
+              {seeding ? <Spinner className="h-3 w-3" /> : <RefreshCw className="h-3 w-3" />}
+              Seed Standard Fields
+            </button>
+          </div>
+        )}
 
         {/* Stats + filters */}
         <div className="mt-3 flex items-center gap-3">
