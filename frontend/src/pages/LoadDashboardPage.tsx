@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Plug, Database, Loader2 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
 } from "recharts";
-import { LoadApi, ProjectsApi } from "@/api";
+import { LoadApi, ProjectsApi, FusionApi } from "@/api";
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
+  Button, Card, CardBody, CardHeader, EmptyState, Modal, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
 import { formatDate } from "@/lib/utils";
 import type {
@@ -40,6 +40,52 @@ export const LoadDashboardPage: React.FC = () => {
   const [errors, setErrors] = useState<LoadError[]>([]);
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // ── Oracle Fusion target connection + per-conversion interface tables ──
+  const [fusionConn, setFusionConn] = useState<Awaited<ReturnType<typeof FusionApi.getConnection>> | null>(null);
+  const [targets, setTargets] = useState<Awaited<ReturnType<typeof FusionApi.targets>> | null>(null);
+  const [fusionOpen, setFusionOpen] = useState(false);
+  const [fBaseUrl, setFBaseUrl] = useState("");
+  const [fUser, setFUser] = useState("");
+  const [fPass, setFPass] = useState("");
+  const [fTesting, setFTesting] = useState(false);
+  const [fTestMsg, setFTestMsg] = useState<{ ok: boolean; message: string } | null>(null);
+  const [fSaving, setFSaving] = useState(false);
+
+  const refreshFusionConn = () =>
+    FusionApi.getConnection().then((c) => {
+      setFusionConn(c);
+      setFBaseUrl(c.base_url || "");
+      setFUser(c.username || "");
+    }).catch(() => {});
+
+  useEffect(() => { refreshFusionConn(); }, []);
+  useEffect(() => {
+    if (!pid) { setTargets(null); return; }
+    FusionApi.targets(pid).then(setTargets).catch(() => setTargets(null));
+  }, [pid]);
+
+  const testFusion = async () => {
+    setFTesting(true); setFTestMsg(null);
+    try {
+      const r = await FusionApi.testConnection({ base_url: fBaseUrl, username: fUser, password: fPass || undefined });
+      setFTestMsg({ ok: r.ok, message: r.message });
+    } catch (e: any) {
+      setFTestMsg({ ok: false, message: e?.response?.data?.detail || "Test failed" });
+    } finally { setFTesting(false); }
+  };
+
+  const saveFusion = async () => {
+    setFSaving(true);
+    try {
+      await FusionApi.saveConnection({ base_url: fBaseUrl, username: fUser, password: fPass || undefined });
+      setFPass("");
+      await refreshFusionConn();
+      setFusionOpen(false);
+    } catch (e: any) {
+      setFTestMsg({ ok: false, message: e?.response?.data?.detail || "Save failed" });
+    } finally { setFSaving(false); }
+  };
 
   // Load projects once; default the engagement if not URL-pinned.
   useEffect(() => {
@@ -81,13 +127,22 @@ export const LoadDashboardPage: React.FC = () => {
 
   const loadToFusion = async () => {
     if (!pid) return;
+    // Require a configured Fusion connection — open the credentials modal first.
+    if (!fusionConn?.has_credentials || !fusionConn?.base_url) {
+      setFusionOpen(true);
+      return;
+    }
     setRunning(true);
     setLoadError(null);
     try {
-      await LoadApi.simulate(pid);
+      const res = await FusionApi.load(pid);
+      if (!res.ok) {
+        setLoadError(`${res.message}${res.status ? ` (HTTP ${res.status})` : ""}`);
+      }
       await refresh();
+      window.dispatchEvent(new Event("workbench:refresh"));  // status may have flipped to loaded
     } catch (err: any) {
-      const msg = err?.response?.data?.detail || err?.message || "Load simulation failed.";
+      const msg = err?.response?.data?.detail || err?.message || "Load to Fusion failed.";
       setLoadError(typeof msg === "string" ? msg : JSON.stringify(msg));
     } finally {
       setRunning(false);
@@ -108,9 +163,23 @@ export const LoadDashboardPage: React.FC = () => {
       <PageTitle
         title="Load Management"
         subtitle="Run Fusion loads per engagement and inspect failures by category & root cause"
-        right={<Button onClick={loadToFusion} loading={running} disabled={!pid}>
-          <Play className="h-4 w-4" /> Load to Fusion
-        </Button>}
+        right={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setFusionOpen(true)}
+              className="btn-ghost"
+              title="Configure the Oracle Fusion Cloud connection"
+            >
+              <Plug className={`h-4 w-4 ${fusionConn?.last_test_ok ? "text-success" : "text-ink-muted"}`} />
+              {fusionConn?.has_credentials
+                ? (fusionConn.last_test_ok ? "Fusion connected" : "Fusion configured")
+                : "Configure Fusion"}
+            </button>
+            <Button onClick={loadToFusion} loading={running} disabled={!pid}>
+              <Play className="h-4 w-4" /> Load to Fusion
+            </Button>
+          </div>
+        }
       />
 
       <Card className="mb-4">
@@ -159,11 +228,81 @@ export const LoadDashboardPage: React.FC = () => {
         </CardBody>
       </Card>
 
+      {/* Which Fusion FBDI interface tables this conversion will update */}
+      {conversion && targets && (
+        <Card className="mb-4">
+          <CardBody className="!py-3">
+            <div className="flex flex-wrap items-center gap-2 text-[12px]">
+              <Database className="h-4 w-4 shrink-0 text-brand" />
+              <span className="font-semibold text-ink">Loads into Fusion:</span>
+              {targets.interface_tables.length ? (
+                targets.interface_tables.map((t) => (
+                  <span key={t} className="rounded border border-line bg-canvas px-2 py-0.5 font-mono text-[11px] text-ink-muted">{t}</span>
+                ))
+              ) : (
+                <span className="italic text-ink-muted">No FBDI interface tables mapped for {targets.business_object || "this object"}</span>
+              )}
+              {!targets.loadable && (
+                <span className="ml-1 text-[11px] text-warning">· no import job mapped yet — can't load this object</span>
+              )}
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       {loadError && (
         <div className="mb-4 rounded-md border border-danger/40 bg-danger-subtle/50 px-4 py-3 text-[12.5px] text-danger">
           <strong>Load failed:</strong> {loadError}
         </div>
       )}
+
+      {/* Oracle Fusion connection modal */}
+      <Modal
+        open={fusionOpen}
+        onClose={() => setFusionOpen(false)}
+        title="Oracle Fusion Cloud connection"
+        size="md"
+        footer={
+          <div className="flex w-full items-center justify-between">
+            <Button variant="secondary" onClick={testFusion} loading={fTesting} disabled={!fBaseUrl || !fUser}>
+              <Plug className="h-3.5 w-3.5" /> Test Connection
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setFusionOpen(false)}>Cancel</Button>
+              <Button onClick={saveFusion} loading={fSaving} disabled={!fBaseUrl || !fUser}>Save</Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-muted">Fusion URL</label>
+            <input className="input" placeholder="https://your-pod.fa.us2.oraclecloud.com"
+              value={fBaseUrl} onChange={(e) => setFBaseUrl(e.target.value)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-muted">Service username</label>
+            <input className="input" placeholder="INTEGRATION_USER"
+              value={fUser} onChange={(e) => setFUser(e.target.value)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              {fusionConn?.has_credentials ? "Password (leave blank to keep current)" : "Password"}
+            </label>
+            <input type="password" className="input" autoComplete="new-password"
+              value={fPass} onChange={(e) => setFPass(e.target.value)} />
+          </div>
+          {fTestMsg && (
+            <div className={`flex items-center gap-1.5 text-[12px] ${fTestMsg.ok ? "text-success" : "text-danger"}`}>
+              {fTestMsg.ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+              {fTestMsg.message}
+            </div>
+          )}
+          <p className="text-[11px] text-ink-muted">
+            Loads use Oracle's ERP Integration Service (importBulkData) — the converted FBDI file is zipped, staged to UCM, and the import job is submitted. Credentials are stored on your backend.
+          </p>
+        </div>
+      </Modal>
 
       {!conversion ? (
         <Card>

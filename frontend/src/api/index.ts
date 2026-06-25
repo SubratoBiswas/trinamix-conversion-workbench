@@ -445,6 +445,20 @@ export const SourceConnectionsApi = {
     api.post<any>(`/source-connections/${id}/discover-scope`).then(r => r.data),
 };
 
+// === Oracle Fusion Cloud target (Load to Fusion) ==============================
+export const FusionApi = {
+  getConnection: () =>
+    api.get<{ id: string | null; base_url: string | null; username: string | null; has_credentials: boolean; last_test_ok: boolean | null; last_tested_at: string | null; last_test_error: string | null }>("/fusion/connection").then(r => r.data),
+  saveConnection: (body: { base_url: string; username: string; password?: string; name?: string }) =>
+    api.post("/fusion/connection", body).then(r => r.data),
+  testConnection: (body?: { base_url?: string; username?: string; password?: string }) =>
+    api.post<{ ok: boolean; status: number | null; message: string }>("/fusion/connection/test", body ?? {}).then(r => r.data),
+  targets: (conversionId: string) =>
+    api.get<{ business_object: string | null; interface_tables: string[]; loadable: boolean }>(`/conversions/${conversionId}/fusion-targets`).then(r => r.data),
+  load: (conversionId: string) =>
+    api.post<{ ok: boolean; status: number | null; message: string; request_id: string | null; rows: number; load_run_id: string }>(`/conversions/${conversionId}/load-to-fusion`).then(r => r.data),
+};
+
 // === Copilot ===================================================================
 export const CopilotApi = {
   ask: (body: { project_id: string; messages: { role: string; content: string }[] }) =>
