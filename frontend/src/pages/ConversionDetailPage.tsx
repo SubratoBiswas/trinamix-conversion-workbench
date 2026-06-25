@@ -48,6 +48,7 @@ export const ConversionDetailPage: React.FC = () => {
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [template, setTemplate] = useState<FBDITemplate | null>(null);
 
+  const [targetFields, setTargetFields] = useState<import("@/types").FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [outputs, setOutputs] = useState<ConvertedOutput[]>([]);
@@ -102,6 +103,7 @@ export const ConversionDetailPage: React.FC = () => {
     FbdiApi.list().then(setFbdiTemplates).catch(() => {});
     CutoverApi.runsForConversion(cid).then(setEnvRuns).catch(() => setEnvRuns([]));
     if (c.dataset_id && c.template_id) {
+      FbdiApi.fields(c.template_id).then(setTargetFields).catch(() => setTargetFields([]));
       MappingApi.list(cid).then(setMappings).catch(() => setMappings([]));
       QualityApi.cleansing(cid).then((cl) =>
         QualityApi.validation(cid).then((vl) => setIssues([...cl, ...vl]))
@@ -334,7 +336,7 @@ export const ConversionDetailPage: React.FC = () => {
         <Card>
           <CardHeader
             title={<><Sparkles className="mr-2 inline h-4 w-4 text-brand" />Mappings</>}
-            subtitle={`${mappings.length} suggestion(s)`}
+            subtitle={targetFields.length > 0 ? `${targetFields.length} target field(s)` : `${mappings.length} suggestion(s)`}
             actions={
               <Link to={`/mappings?conversion=${cid}`} className="btn-ghost h-7 px-2 text-xs">
                 Review <ArrowRight className="h-3 w-3" />
@@ -342,13 +344,21 @@ export const ConversionDetailPage: React.FC = () => {
             }
           />
           <CardBody>
-            <Stat
-              items={[
-                { label: "Auto-mapped", value: mappings.filter(m => m.source_column).length, tone: "text-info" },
-                { label: "Approved",    value: mappings.filter(m => m.status === "approved").length, tone: "text-success" },
-                { label: "Required gaps", value: mappings.filter(m => m.target_required && !m.source_column).length, tone: "text-danger" },
-              ]}
-            />
+            {(() => {
+              const activeIds = new Set(targetFields.map(f => f.id));
+              const scoped = targetFields.length > 0
+                ? mappings.filter(m => activeIds.has(m.target_field_id))
+                : mappings;
+              return (
+                <Stat
+                  items={[
+                    { label: "Auto-mapped",   value: scoped.filter(m => m.source_column).length, tone: "text-info" },
+                    { label: "Approved",       value: scoped.filter(m => m.status === "approved").length, tone: "text-success" },
+                    { label: "Required gaps",  value: scoped.filter(m => m.target_required && !m.source_column).length, tone: "text-danger" },
+                  ]}
+                />
+              );
+            })()}
           </CardBody>
         </Card>
 
