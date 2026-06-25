@@ -112,7 +112,7 @@ export const ConversionsApi = {
    *  profiles in dataset mode, or live Oracle EBS ALL_TAB_COLUMNS metadata
    *  when the conversion has no linked dataset (EBS live mode). */
   sourceColumns: (id: string) =>
-    api.get<{ source_type: string; table: string | null; columns: import("@/types").DatasetColumnProfile[] }>(
+    api.get<{ source_type: string; table: string | null; columns: import("@/types").DatasetColumnProfile[]; debug?: Record<string, any> | null }>(
       `/conversions/${id}/source-columns`
     ).then(r => r.data),
 };

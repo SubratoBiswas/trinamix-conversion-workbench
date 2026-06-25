@@ -71,11 +71,15 @@ async def source_columns(conversion_id: str, _: User = Depends(get_current_user)
     # source_type — decides which source the canvas shows.
     is_ebs = not conv.dataset_id
     columns: list[dict[str, Any]] = []
+    debug: dict[str, Any] | None = None
 
     if is_ebs:
-        from app.services.mapping_service import _source_columns_for_ebs
+        from app.services.mapping_service import _ebs_columns_with_diag
         table = getattr(conv, "ebs_table_hint", "") or ""
-        srcs = await _source_columns_for_ebs(table) if table else []
+        if table:
+            srcs, debug = await _ebs_columns_with_diag(table)
+        else:
+            srcs, debug = [], {"stage": "no_table_hint", "table": None}
         for i, s in enumerate(srcs):
             columns.append({
                 "id": i + 1,
@@ -118,6 +122,7 @@ async def source_columns(conversion_id: str, _: User = Depends(get_current_user)
         "source_type": "ebs" if is_ebs else "dataset",
         "table": getattr(conv, "ebs_table_hint", None) if is_ebs else None,
         "columns": columns,
+        "debug": debug,
     }
 
 

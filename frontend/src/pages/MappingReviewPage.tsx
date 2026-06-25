@@ -53,6 +53,9 @@ export const MappingReviewPage: React.FC = () => {
   // Oracle ALL_TAB_COLUMNS for the conversion's ebs_table_hint.
   const [sourceColumns, setSourceColumns] = useState<DatasetColumnProfile[]>([]);
   const [ebsTable, setEbsTable] = useState<string | null>(null);
+  // Diagnostic returned by the source-columns endpoint in EBS mode — explains
+  // why zero columns came back (no connection / JDBC error / table not found).
+  const [ebsDebug, setEbsDebug] = useState<Record<string, any> | null>(null);
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
   // Cascade visibility — when an upstream master has taught a rule
@@ -112,6 +115,7 @@ export const MappingReviewPage: React.FC = () => {
       setDataset(null);
       setSourceColumns([]);
       setEbsTable(null);
+      setEbsDebug(null);
       setTargetFields([]);
       setLoadingConversion(false);
       return;
@@ -134,6 +138,7 @@ export const MappingReviewPage: React.FC = () => {
     setDataset(ds);
     setSourceColumns(src.columns || []);
     setEbsTable(src.table ?? proj.ebs_table_hint ?? null);
+    setEbsDebug((src as any).debug ?? null);
     setTargetFields(fields);
     setMappings(ms);
     setInherited(std);
@@ -497,9 +502,17 @@ export const MappingReviewPage: React.FC = () => {
             <span>
               No live columns returned from Oracle EBS
               {ebsTable ? <> for <span className="font-mono">{ebsTable}</span></> : " (no table hint set)"}.
-              Confirm the EBS connection is healthy and the table hint is set, then re-run AI Mapping.
+              {ebsDebug?.stage === "no_connection" && " No Oracle EBS connection is configured — add one under Source Connections."}
+              {ebsDebug?.stage === "error" && <> Connection error: <span className="font-mono">{String(ebsDebug.error)}</span>.</>}
+              {ebsDebug?.stage === "no_columns" && <> Connected as <span className="font-mono">{String(ebsDebug.username)}</span> but the table was not found in ALL_TAB_COLUMNS.</>}
+              {!ebsDebug?.stage && " Confirm the EBS connection is healthy and the table hint is set, then re-run AI Mapping."}
             </span>
           </div>
+          {ebsDebug && (
+            <div className="mt-1 font-mono text-[10.5px] text-warning-dark/70">
+              diag: {JSON.stringify(ebsDebug)}
+            </div>
+          )}
         </div>
       )}
 

@@ -49,13 +49,26 @@ async def _target_fields_for(template: FBDITemplate) -> list[TargetField]:
     ]
 
 
-async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
-    """Fetch column metadata from the live Oracle EBS connection for *table_name*.
+async def _ebs_columns_with_diag(table_name: str) -> tuple[list[SourceColumn], dict]:
+    """Fetch live Oracle EBS column metadata for *table_name* + a diagnostic dict.
 
-    Falls back to an empty list if no EBS connection is configured / reachable.
+    The diagnostic explains *why* zero columns came back (no connection, JDBC
+    error, table/owner not found, ...) so the UI can surface an actionable
+    message instead of a silent empty canvas.
+
+    Robustness fixes vs. the original:
+      * Connection lookup falls back to any ``oracle_ebs`` connection when none
+        is flagged ``last_test_ok == True`` (discovery finds the connection by
+        project_id with no such flag — so a healthy connection whose flag was
+        never set would wrongly yield zero columns).
+      * Column query tries owner-scoped first, then resolves an APPS/PUBLIC
+        synonym to the real base-table owner, then finally any owner — so EBS
+        base tables that live in a product schema (INV, AP, AR, ...) still
+        resolve even though the login user is APPS.
     """
     import logging
     log = logging.getLogger(__name__)
+    diag: dict = {"table": table_name, "stage": "start"}
     try:
         from app.models.v10 import SourceConnection
         conn = await SourceConnection.find_one(
@@ -63,8 +76,20 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
             SourceConnection.last_test_ok == True,
         )
         if conn is None:
-            log.debug("_source_columns_for_ebs: no connected EBS connection found")
-            return []
+            # last_test_ok may simply never have been set — fall back to any
+            # configured EBS connection rather than bailing.
+            conn = await SourceConnection.find_one(
+                SourceConnection.system_type == "oracle_ebs"
+            )
+            diag["used_fallback_connection"] = conn is not None
+        if conn is None:
+            diag["stage"] = "no_connection"
+            log.warning("_ebs_columns_with_diag: no oracle_ebs SourceConnection found")
+            return [], diag
+
+        diag["connection_id"] = str(conn.id)
+        diag["username"] = conn.username
+        diag["last_test_ok"] = conn.last_test_ok
 
         import jaydebeapi
         password = conn.encrypted_password or ""
@@ -82,18 +107,67 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
             "/app/ojdbc11.jar",
         )
         cur = db.cursor()
-        cur.execute("""
+        owner = (conn.username or "APPS").upper()
+        tbl = table_name.upper()
+
+        def _fetch(sql: str, params: list) -> list:
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+        # 1) owner-scoped (login schema owns the table)
+        rows = _fetch(
+            """
             SELECT column_name, data_type, nullable, num_distinct
             FROM all_tab_columns
-            WHERE table_name = UPPER(?)
-              AND owner = UPPER(?)
+            WHERE table_name = ? AND owner = ?
             ORDER BY column_id
-        """, [table_name.upper(), (conn.username or "APPS").upper()])
-        rows = cur.fetchall()
+            """,
+            [tbl, owner],
+        )
+        diag["owner_scoped_rows"] = len(rows)
+
+        # 2) resolve an APPS/PUBLIC synonym to the real base-table owner
+        if not rows:
+            syn = _fetch(
+                """
+                SELECT table_owner FROM all_synonyms
+                WHERE synonym_name = ? AND owner IN (?, 'PUBLIC')
+                ORDER BY DECODE(owner, ?, 0, 1)
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                [tbl, owner, owner],
+            )
+            if syn:
+                real_owner = syn[0][0]
+                diag["synonym_owner"] = real_owner
+                rows = _fetch(
+                    """
+                    SELECT column_name, data_type, nullable, num_distinct
+                    FROM all_tab_columns
+                    WHERE table_name = ? AND owner = ?
+                    ORDER BY column_id
+                    """,
+                    [tbl, real_owner],
+                )
+                diag["synonym_scoped_rows"] = len(rows)
+
+        # 3) last resort — any owner with that table name
+        if not rows:
+            rows = _fetch(
+                """
+                SELECT column_name, data_type, nullable, num_distinct
+                FROM all_tab_columns
+                WHERE table_name = ?
+                ORDER BY owner, column_id
+                """,
+                [tbl],
+            )
+            diag["any_owner_rows"] = len(rows)
+
         cur.close()
         db.close()
 
-        return [
+        cols = [
             SourceColumn(
                 name=col_name,
                 inferred_type=data_type.lower() if data_type else "string",
@@ -104,12 +178,25 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
             )
             for col_name, data_type, nullable, num_distinct in rows
         ]
+        diag["stage"] = "ok" if cols else "no_columns"
+        diag["returned"] = len(cols)
+        return cols, diag
     except Exception as exc:
-        import logging
+        diag["stage"] = "error"
+        diag["error"] = f"{type(exc).__name__}: {exc}"
         logging.getLogger(__name__).warning(
-            f"_source_columns_for_ebs: failed for '{table_name}': {exc}"
+            f"_ebs_columns_with_diag: failed for '{table_name}': {exc}"
         )
-        return []
+        return [], diag
+
+
+async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
+    """Fetch column metadata from the live Oracle EBS connection for *table_name*.
+
+    Thin wrapper over :func:`_ebs_columns_with_diag` that drops the diagnostic.
+    """
+    cols, _diag = await _ebs_columns_with_diag(table_name)
+    return cols
 
 
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
