@@ -838,34 +838,133 @@ class ScopeHintsOut(BaseModel):
     table_counts: Dict[str, Optional[int]] = {}
 
 
+async def _live_canonical_counts(proj) -> Dict[str, Optional[int]]:
+    """Live COUNT(*) for the project's canonical source tables.
+
+    The discovery scan inventories ALL_TABLES scoped to APPS, which MISSES the
+    EBS objects exposed to APPS as synonyms (MTL_UNITS_OF_MEASURE, HZ_PARTIES,
+    ...). A plain ``SELECT COUNT(*) FROM <table>`` resolves those synonyms, so
+    this confirms the canonical tables that the scan couldn't see. Returns
+    ``{}`` when there's no reachable (non-mock) EBS connection.
+    """
+    import re as _re3
+    from app.fusion_modules import MODULES
+    from app.models.v10 import SourceConnection
+
+    src = (getattr(proj, "source_system", None) or "oracle_ebs")
+    selected = set(getattr(proj, "selected_modules", None) or [])
+
+    # Derive the canonical source tables in scope (mirrors the frontend card).
+    tables: list[str] = []
+    seen: set[str] = set()
+    for mod in MODULES:
+        if selected and getattr(mod, "code", None) not in selected:
+            continue
+        for obj in getattr(mod, "objects", ()):  # noqa: B007
+            hint = (getattr(obj, "source_extracts", {}) or {}).get(src)
+            if not hint:
+                continue
+            table, _where = _parse_extract_hint(hint)
+            if table and table not in seen and _re3.match(r"^[A-Z0-9_$#]+$", table):
+                seen.add(table)
+                tables.append(table)
+    if not tables:
+        return {}
+
+    # Prefer the project's own EBS connection; fall back to any healthy one.
+    conn = await SourceConnection.find_one(
+        SourceConnection.project_id == proj.id,
+        SourceConnection.system_type == "oracle_ebs",
+    )
+    if conn is None:
+        conn = await SourceConnection.find_one(
+            SourceConnection.system_type == "oracle_ebs",
+            SourceConnection.last_test_ok == True,  # noqa: E712
+        ) or await SourceConnection.find_one(
+            SourceConnection.system_type == "oracle_ebs"
+        )
+    if conn is None or conn.encrypted_password == "__mock__" or not conn.encrypted_password:
+        return {}
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _run() -> Dict[str, Optional[int]]:
+        import jaydebeapi
+        password = conn.encrypted_password or ""
+        if password.startswith("PLAIN:"):
+            password = password[6:]
+        jdbc_url = _jdbc_url_from_conn(conn)
+        db = jaydebeapi.connect(
+            "oracle.jdbc.OracleDriver", jdbc_url,
+            [conn.username, password], "/app/ojdbc11.jar",
+        )
+        cur = db.cursor()
+        counts: Dict[str, Optional[int]] = {}
+        for t in tables:
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {t}")
+                row = cur.fetchone()
+                counts[t] = int(row[0]) if row else 0
+            except Exception:
+                pass  # table genuinely missing / not selectable → leave out
+        cur.close()
+        db.close()
+        return counts
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return await loop.run_in_executor(pool, _run)
+
+
 @project_router.get("/projects/{project_id}/discovery/scope-hints", response_model=ScopeHintsOut)
 async def discovery_scope_hints(
     project_id: str,
     _: User = Depends(get_current_user),
 ):
-    """Return {TABLE_NAME: row_count} from the latest completed discovery run."""
+    """Return {TABLE_NAME: row_count} confirming the project's canonical sources.
+
+    Starts from the latest completed discovery run's stored counts, then
+    augments with a LIVE COUNT(*) over the canonical tables so synonym-exposed
+    EBS objects (which the scan's ALL_TABLES query can't see) are confirmed too.
+    """
     try:
         pid = PydanticObjectId(project_id)
     except Exception:
         raise HTTPException(400, "Invalid project_id")
 
+    from app.models.project import Project
+    proj = await Project.get(pid)
+
+    table_counts: Dict[str, Optional[int]] = {}
+    run_id: Optional[str] = None
+    is_mock = False
+
     run = await DiscoveryRun.find(
         DiscoveryRun.project_id == pid,
         DiscoveryRun.status == "completed",
     ).sort("-created_at").first_or_none()
+    if run:
+        run_id = str(run.id)
+        conn0 = await SourceConnection.get(run.connection_id)
+        is_mock = (conn0 is None or conn0.encrypted_password == "__mock__"
+                   or not conn0.encrypted_password)
+        objects = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
+        table_counts = {o.object_name.upper(): o.row_count for o in objects}
 
-    if not run:
-        return ScopeHintsOut()
+    # Live-verify the canonical tables (resolves APPS synonyms the scan missed).
+    if proj is not None:
+        try:
+            live = await _live_canonical_counts(proj)
+            if live:
+                table_counts.update(live)
+                is_mock = False
+                run_id = run_id or "live"
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(f"scope-hints live count failed: {exc}")
 
-    conn = await SourceConnection.get(run.connection_id)
-    is_mock = (conn is None or conn.encrypted_password == "__mock__"
-               or not conn.encrypted_password)
-
-    objects = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
-    table_counts: Dict[str, Optional[int]] = {
-        o.object_name.upper(): o.row_count for o in objects
-    }
-    return ScopeHintsOut(is_mock=is_mock, run_id=str(run.id), table_counts=table_counts)
+    return ScopeHintsOut(is_mock=is_mock, run_id=run_id, table_counts=table_counts)
 
 
 # ── Quick live COUNT(*) endpoint (Setup Wizard scope step) ────────────────────
