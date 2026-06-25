@@ -1023,7 +1023,8 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   onSaved,
 }) => {
   const [type, setType] = useState<string>("VALUE_MAP");
-  const [targetFieldId, setTargetFieldId] = useState<number | null>(
+  // FBDI field ids are ObjectId hex strings, not numbers — keep them as-is.
+  const [targetFieldId, setTargetFieldId] = useState<string | number | null>(
     defaultTargetFieldId ?? null
   );
   const [sourceColumn, setSourceColumn] = useState<string>(
@@ -1170,7 +1171,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     setSaving(true);
     try {
       await MappingApi.addRule(conversionId, {
-        target_field_id: targetFieldId,
+        target_field_id: targetFieldId != null ? String(targetFieldId) : undefined,
         source_column: sourceColumn || undefined,
         rule_type: type,
         rule_config: activeCfg,
@@ -1337,9 +1338,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
               <select
                 className="input"
                 value={targetFieldId ?? ""}
-                onChange={(e) =>
-                  setTargetFieldId(e.target.value ? Number(e.target.value) : null)
-                }
+                onChange={(e) => setTargetFieldId(e.target.value || null)}
               >
                 <option value="">— pick a target field —</option>
                 {fields.map((f) => (

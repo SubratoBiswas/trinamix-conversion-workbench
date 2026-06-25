@@ -225,6 +225,61 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
     return cols
 
 
+async def ebs_sample_rows(table_name: str, limit: int = 5) -> list[dict]:
+    """Return up to *limit* sample rows from the live EBS object as plain dicts.
+
+    Powers transformation-rule preview in EBS mode (there is no uploaded file
+    to sample). Returns ``[]`` when EBS is unreachable or the table can't be
+    resolved — callers should degrade gracefully rather than error.
+    """
+    import logging
+    import re
+    try:
+        from app.models.v10 import SourceConnection
+        conn = await SourceConnection.find_one(
+            SourceConnection.system_type == "oracle_ebs",
+            SourceConnection.last_test_ok == True,
+        ) or await SourceConnection.find_one(
+            SourceConnection.system_type == "oracle_ebs"
+        )
+        if conn is None:
+            return []
+
+        tbl = (table_name or "").upper()
+        if not re.match(r"^[A-Z0-9_$#]+$", tbl):
+            return []
+        n = max(1, min(int(limit), 50))
+
+        import jaydebeapi
+        password = conn.encrypted_password or ""
+        if password.startswith("PLAIN:"):
+            password = password[6:]
+        from app.routers.discovery import _jdbc_url_from_conn
+        jdbc_url = _jdbc_url_from_conn(conn)
+
+        db = jaydebeapi.connect(
+            "oracle.jdbc.OracleDriver",
+            jdbc_url,
+            [conn.username, password],
+            "/app/ojdbc11.jar",
+        )
+        cur = db.cursor()
+        cur.execute(f"SELECT * FROM {tbl} WHERE ROWNUM <= {n}")
+        names = [d[0] for d in (cur.description or [])]
+        rows = cur.fetchall()
+        cur.close()
+        db.close()
+        return [
+            {names[i]: ("" if v is None else v) for i, v in enumerate(r)}
+            for r in rows
+        ]
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            f"ebs_sample_rows: failed for '{table_name}': {exc}"
+        )
+        return []
+
+
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
     template = await FBDITemplate.get(conversion.template_id)
 

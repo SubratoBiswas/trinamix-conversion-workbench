@@ -1,6 +1,9 @@
 """Mapping suggestion endpoints."""
+import logging
 from datetime import datetime
 from typing import Any, Optional
+
+log = logging.getLogger(__name__)
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -169,12 +172,34 @@ async def add_rule(
         TransformationRule.conversion_id == PydanticObjectId(conversion_id)
     ).count()
     data = payload.model_dump()
+    # target_field_id arrives as a string ObjectId (or, from a buggy older UI,
+    # possibly junk). Coerce safely — never let a bad id 500 the whole save.
     if data.get("target_field_id"):
-        data["target_field_id"] = PydanticObjectId(data["target_field_id"])
+        try:
+            data["target_field_id"] = PydanticObjectId(str(data["target_field_id"]))
+        except Exception:
+            data["target_field_id"] = None
     r = TransformationRule(conversion_id=conv.id, sequence=seq, **data)
     await r.insert()
-    await record_learning_from_rule(r, conv, captured_by=user.email)
-    return {"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id", "conversion_id")}}
+    # Learning capture is best-effort — a failure here must not fail the save
+    # (and previously surfaced as an opaque "Failed to save rule" with no CORS).
+    try:
+        await record_learning_from_rule(r, conv, captured_by=user.email)
+    except Exception as exc:
+        log.warning(f"add_rule: learning capture failed for rule {r.id}: {exc}")
+    # Serialize explicitly so ObjectId fields become strings (model_dump leaves
+    # target_field_id as an ObjectId, which fails TransformationRuleOut).
+    return {
+        "id": str(r.id),
+        "conversion_id": str(r.conversion_id),
+        "target_field_id": str(r.target_field_id) if r.target_field_id else None,
+        "source_column": r.source_column,
+        "rule_type": r.rule_type,
+        "rule_config": r.rule_config or {},
+        "description": r.description,
+        "sequence": r.sequence,
+        "created_at": r.created_at,
+    }
 
 
 class PreviewRule(BaseModel):
@@ -203,25 +228,44 @@ async def preview_rules(
     conversion_id: str, payload: PreviewRequest, user: User = Depends(get_current_user)
 ):
     conv = await Conversion.get(PydanticObjectId(conversion_id))
-    if not conv or not conv.dataset_id:
-        raise HTTPException(404, "Conversion or dataset not found")
-    ds = await Dataset.get(conv.dataset_id)
-    if not ds:
-        raise HTTPException(404, "Dataset not found")
-    df = parse_tabular(ds.file_path, file_type=ds.file_type)
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+
     cws = await Crosswalk.find(
         Crosswalk.conversion_id == PydanticObjectId(conversion_id)
     ).to_list()
     crosswalks: dict[str, dict[str, str]] = {}
     for cw in cws:
         crosswalks.setdefault(cw.name, {})[cw.source_value] = cw.target_value
+
     rules = [{"rule_type": r.rule_type, "config": r.config} for r in payload.rules]
-    out: list[PreviewSample] = []
     n = max(1, min(int(payload.sample_size), 20))
-    for idx, row in df.head(n).iterrows():
-        row_dict = {k: ("" if v is None else v) for k, v in row.to_dict().items()}
+
+    # Sample rows come from the uploaded file (dataset mode) or live Oracle EBS
+    # (EBS mode — no file). Either way we never 404: a rule preview should work
+    # the moment a source is bound.
+    sample_rows: list[dict[str, Any]] = []
+    if conv.dataset_id:
+        ds = await Dataset.get(conv.dataset_id)
+        if ds:
+            df = parse_tabular(ds.file_path, file_type=ds.file_type)
+            for _, row in df.head(n).iterrows():
+                sample_rows.append({k: ("" if v is None else v) for k, v in row.to_dict().items()})
+    else:
+        table = getattr(conv, "ebs_table_hint", "") or ""
+        if table:
+            from app.services.mapping_service import ebs_sample_rows
+            sample_rows = await ebs_sample_rows(table, n)
+
+    # Even with no rows (EBS unreachable, or CONSTANT/COMPUTED rules that need
+    # none) still emit one preview row so the user sees the rule's effect.
+    if not sample_rows:
+        sample_rows = [{}]
+
+    out: list[PreviewSample] = []
+    for idx, row_dict in enumerate(sample_rows):
         src_value = row_dict.get(payload.source_column) if payload.source_column else None
-        ctx = {"row_index": int(idx) + 1, "current_user": user.email, "now": datetime.utcnow(), "crosswalks": crosswalks}
+        ctx = {"row_index": idx + 1, "current_user": user.email, "now": datetime.utcnow(), "crosswalks": crosswalks}
         try:
             transformed = apply_pipeline(rules, src_value, row=row_dict, ctx=ctx)
             out.append(PreviewSample(source=src_value, output=transformed))
