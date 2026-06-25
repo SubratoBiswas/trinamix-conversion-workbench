@@ -206,7 +206,7 @@ async def switch_project_to_ebs_source(
     hint is derived from the fusion_modules catalog using the conversion's
     target_object. Mapping suggestions are re-triggered in the background.
     """
-    from app.fusion_modules import ALL_MODULES
+    from app.fusion_modules import MODULES
     import re
 
     def _first_table(extract_hint: str) -> str:
@@ -216,7 +216,7 @@ async def switch_project_to_ebs_source(
 
     # Build target_object -> EBS table map from the catalog
     obj_to_table: dict[str, str] = {}
-    for mod in ALL_MODULES:
+    for mod in MODULES:
         for obj in mod.objects:
             hint = (obj.source_extracts or {}).get("oracle_ebs", "")
             table = _first_table(hint)
