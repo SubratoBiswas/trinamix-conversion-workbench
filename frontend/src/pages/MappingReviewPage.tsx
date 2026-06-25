@@ -47,6 +47,9 @@ export const MappingReviewPage: React.FC = () => {
 
   const [project, setProject] = useState<Conversion | null>(null);
   const [loadingConversion, setLoadingConversion] = useState(true);
+  // Surfaced when the conversion context fails to load (e.g. backend cold-start
+  // or redeploy) so the page shows a retry affordance instead of spinning forever.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   // Unified source-column list for the canvas. In dataset mode these are the
   // uploaded file's profiled columns; in EBS live mode they come from
@@ -106,8 +109,23 @@ export const MappingReviewPage: React.FC = () => {
   const loadAll = async () => {
     if (!pid) return;
     setLoadingConversion(true);
+    setLoadError(null);
     setMappings([]);
-    const proj = await ConversionsApi.get(pid);
+    let proj: Conversion;
+    try {
+      proj = await ConversionsApi.get(pid);
+    } catch (e: any) {
+      // Most often a transient backend cold-start / redeploy. Don't strand the
+      // user on an infinite spinner — surface it with a Retry.
+      const code = e?.response?.status;
+      setLoadError(
+        code === 404
+          ? "This conversion could not be found. It may have been removed, or the backend is still starting up."
+          : `Couldn't load this conversion (${code || "network error"}). The backend may be waking up — retry in a moment.`
+      );
+      setLoadingConversion(false);
+      return;
+    }
     setProject(proj);
 
     const isEbs = !proj.dataset_id;
@@ -125,27 +143,33 @@ export const MappingReviewPage: React.FC = () => {
       return;
     }
 
-    const [fields, ms, std, src] = await Promise.all([
-      FbdiApi.fields(proj.template_id),
-      MappingApi.list(pid),
-      InheritedStandardsApi.forConversion(pid).catch(() => [] as InheritedStandard[]),
-      ConversionsApi.sourceColumns(pid).catch(() => ({ source_type: "", table: null, columns: [] as DatasetColumnProfile[] })),
-    ]);
+    try {
+      const [fields, ms, std, src] = await Promise.all([
+        FbdiApi.fields(proj.template_id),
+        MappingApi.list(pid),
+        InheritedStandardsApi.forConversion(pid).catch(() => [] as InheritedStandard[]),
+        ConversionsApi.sourceColumns(pid).catch(() => ({ source_type: "", table: null, columns: [] as DatasetColumnProfile[] })),
+      ]);
 
-    // Dataset detail still drives the Recommendations panel (column-level
-    // cleansing). EBS mode has no file, so recommendations are skipped.
-    let ds: DatasetDetail | null = null;
-    if (!isEbs && proj.dataset_id) {
-      ds = await DatasetsApi.get(proj.dataset_id).catch(() => null);
+      // Dataset detail still drives the Recommendations panel (column-level
+      // cleansing). EBS mode has no file, so recommendations are skipped.
+      let ds: DatasetDetail | null = null;
+      if (!isEbs && proj.dataset_id) {
+        ds = await DatasetsApi.get(proj.dataset_id).catch(() => null);
+      }
+
+      setDataset(ds);
+      setSourceColumns(src.columns || []);
+      setEbsTable(src.table ?? proj.ebs_table_hint ?? null);
+      setEbsDebug((src as any).debug ?? null);
+      setTargetFields(fields);
+      setMappings(ms);
+      setInherited(std);
+    } catch (e: any) {
+      setLoadError(`Couldn't load mapping data (${e?.response?.status || "network error"}). Retry in a moment.`);
+      setLoadingConversion(false);
+      return;
     }
-
-    setDataset(ds);
-    setSourceColumns(src.columns || []);
-    setEbsTable(src.table ?? proj.ebs_table_hint ?? null);
-    setEbsDebug((src as any).debug ?? null);
-    setTargetFields(fields);
-    setMappings(ms);
-    setInherited(std);
     setLoadingConversion(false);
 
     // Saved transformation rules → badge their target fields.
@@ -375,7 +399,22 @@ export const MappingReviewPage: React.FC = () => {
     }
   };
 
-  if (!pid || !project || loadingConversion) return <PageLoader />;
+  if (loadingConversion) return <PageLoader />;
+  if (loadError) return (
+    <div className="p-6">
+      <EmptyState
+        icon={<AlertTriangle className="h-5 w-5" />}
+        title="Couldn't load this conversion"
+        description={loadError}
+      />
+      <div className="mt-3 flex justify-center">
+        <Button variant="primary" onClick={() => loadAll()}>
+          <RefreshCw className="h-4 w-4" /> Retry
+        </Button>
+      </div>
+    </div>
+  );
+  if (!pid || !project) return <PageLoader />;
 
   const isEbs = !project.dataset_id;
 
