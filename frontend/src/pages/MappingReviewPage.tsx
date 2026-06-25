@@ -1,8 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
-  GraduationCap, Edit2, ArrowLeftRight, AlertTriangle, ChevronDown, Lock,
+  GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock,
 } from "lucide-react";
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
@@ -444,6 +444,14 @@ export const MappingReviewPage: React.FC = () => {
       {/* Top bar */}
       <header className="border-b border-line bg-white px-5 py-3">
         <div className="flex items-center gap-3">
+          <Link
+            to={`/projects/${project.project_id}`}
+            className="btn-ghost !h-8 shrink-0"
+            title="Back to this project's conversions"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span className="ml-1 text-xs">Conversions</span>
+          </Link>
           <ArrowLeftRight className="h-4 w-4 text-brand" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-ink">Mapping Review</div>
