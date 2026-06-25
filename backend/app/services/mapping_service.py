@@ -225,12 +225,14 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
     return cols
 
 
-async def ebs_sample_rows(table_name: str, limit: int = 5) -> list[dict]:
-    """Return up to *limit* sample rows from the live EBS object as plain dicts.
+async def ebs_fetch_rows(table_name: str, limit: int = 5000) -> list[dict]:
+    """Fetch up to *limit* full rows from the live EBS object as plain dicts.
 
-    Powers transformation-rule preview in EBS mode (there is no uploaded file
-    to sample). Returns ``[]`` when EBS is unreachable or the table can't be
-    resolved — callers should degrade gracefully rather than error.
+    Backs both transformation-rule preview (small limit) and Generate Output
+    (large limit) in EBS mode — there is no uploaded file to read. The DESCRIBE
+    via ``SELECT *`` follows APPS synonyms/views automatically. Returns ``[]``
+    when EBS is unreachable or the table can't be resolved so callers degrade
+    gracefully instead of erroring.
     """
     import logging
     import re
@@ -248,7 +250,8 @@ async def ebs_sample_rows(table_name: str, limit: int = 5) -> list[dict]:
         tbl = (table_name or "").upper()
         if not re.match(r"^[A-Z0-9_$#]+$", tbl):
             return []
-        n = max(1, min(int(limit), 50))
+        # Cap to protect the free-tier instance from very large EBS tables.
+        n = max(1, min(int(limit), 100000))
 
         import jaydebeapi
         password = conn.encrypted_password or ""
@@ -275,9 +278,14 @@ async def ebs_sample_rows(table_name: str, limit: int = 5) -> list[dict]:
         ]
     except Exception as exc:
         logging.getLogger(__name__).warning(
-            f"ebs_sample_rows: failed for '{table_name}': {exc}"
+            f"ebs_fetch_rows: failed for '{table_name}': {exc}"
         )
         return []
+
+
+async def ebs_sample_rows(table_name: str, limit: int = 5) -> list[dict]:
+    """Up to *limit* (≤50) sample rows for rule preview — thin wrapper."""
+    return await ebs_fetch_rows(table_name, min(int(limit), 50))
 
 
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:

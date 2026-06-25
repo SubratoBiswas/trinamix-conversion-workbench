@@ -341,9 +341,20 @@ export const ConversionDetailPage: React.FC = () => {
               >
                 <Play className="h-4 w-4" /> Simulate Load
               </Button>
-              <a href={OutputApi.downloadUrl(cid)} className="btn-ghost">
+              <button
+                className="btn-ghost"
+                onClick={async () => {
+                  try {
+                    const outs = await OutputApi.list(cid);
+                    if (!outs.length) { flash("No output yet — click Generate Output first"); return; }
+                    await OutputApi.download(cid, outs[0].output_file_name);
+                  } catch {
+                    flash("Download failed — generate output first");
+                  }
+                }}
+              >
                 <Download className="h-4 w-4" /> Download Output
-              </a>
+              </button>
             </div>
         </CardBody>
       </Card>

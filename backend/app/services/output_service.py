@@ -29,8 +29,17 @@ async def _get_reference_standards(target_object: str | None) -> dict:
 async def build_converted_dataframe(
     conversion: Conversion,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
-    dataset = await Dataset.get(conversion.dataset_id)
-    src = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+    # Source rows come from the uploaded file (dataset mode) or are streamed
+    # live from Oracle EBS (EBS mode — dataset_id is null). The column names in
+    # either DataFrame match the mappings' source_column values.
+    if conversion.dataset_id:
+        dataset = await Dataset.get(conversion.dataset_id)
+        src = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+    else:
+        from app.services.mapping_service import ebs_fetch_rows
+        table = getattr(conversion, "ebs_table_hint", "") or ""
+        rows = await ebs_fetch_rows(table) if table else []
+        src = pd.DataFrame(rows)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     mappings = await MappingSuggestion.find(MappingSuggestion.conversion_id == conversion.id).to_list()
