@@ -269,17 +269,24 @@ async def start_discovery_run(conn_id: str, body: StartRunBody):
     )
     await run.insert()
 
+    is_mock = (conn.encrypted_password == "__mock__" or not conn.encrypted_password)
+
     try:
-        objects = _simulate_discovery(conn, body.modules)
-        for obj_data in objects:
+        if is_mock:
+            objects_data = _mock_ebs_objects()
+        else:
+            objects_data, _ = await _live_oracle_discovery(conn)
+
+        for obj_data in objects_data:
             obj = DiscoveredObject(
                 run_id=run.id,
                 connection_id=conn.id,
                 project_id=conn.project_id,
-                **obj_data,
+                columns=[],
+                **{k: v for k, v in obj_data.items() if k != "columns"},
             )
             await obj.insert()
-        run.objects_found = len(objects)
+        run.objects_found = len(objects_data)
         run.status = "completed"
         run.completed_at = datetime.utcnow()
     except Exception as exc:
@@ -820,16 +827,12 @@ async def reprobe_object(obj_id: str, _: User = Depends(get_current_user)):
     return _obj_to_frontend(obj)
 
 
-# ── Scope-hints endpoint ───────────────────────────────────────────────────────
+
+
+# ── Scope-hints endpoint (last discovery run row counts) ──────────────────────
 
 class ScopeHintsOut(BaseModel):
-    """
-    Discovery enrichment for the Scope step.
-    Maps each canonical EBS source-table name (all caps) to the actual row
-    count found in the most recent discovery scan, plus a boolean indicating
-    whether the table was seen at all.  `is_mock` mirrors the run so the
-    frontend can badge mock counts accordingly.
-    """
+    """Row counts from last discovery run, keyed by TABLE_NAME (upper-case)."""
     is_mock: bool = True
     run_id: Optional[str] = None
     table_counts: Dict[str, Optional[int]] = {}
@@ -840,14 +843,7 @@ async def discovery_scope_hints(
     project_id: str,
     _: User = Depends(get_current_user),
 ):
-    """
-    Return a flat map of { TABLE_NAME: row_count } from the latest discovery
-    run.  Used by the Scope step preview (and the Project Overview scope card)
-    to enrich source-extract hints with real volume numbers.
-
-    If no run exists yet, returns an empty table_counts dict so the caller
-    can fall back to mock fixtures.
-    """
+    """Return {TABLE_NAME: row_count} from the latest completed discovery run."""
     try:
         pid = PydanticObjectId(project_id)
     except Exception:
@@ -861,19 +857,104 @@ async def discovery_scope_hints(
     if not run:
         return ScopeHintsOut()
 
-    # Determine mock vs live
     conn = await SourceConnection.get(run.connection_id)
-    is_mock = conn is None or conn.encrypted_password == "__mock__" or not conn.encrypted_password
+    is_mock = (conn is None or conn.encrypted_password == "__mock__"
+               or not conn.encrypted_password)
 
-    # Build table -> row_count lookup from discovered objects
     objects = await DiscoveredObject.find(DiscoveredObject.run_id == run.id).to_list()
     table_counts: Dict[str, Optional[int]] = {
-        o.object_name.upper(): o.row_count
-        for o in objects
+        o.object_name.upper(): o.row_count for o in objects
     }
+    return ScopeHintsOut(is_mock=is_mock, run_id=str(run.id), table_counts=table_counts)
 
-    return ScopeHintsOut(
-        is_mock=is_mock,
-        run_id=str(run.id),
-        table_counts=table_counts,
-    )
+
+# ── Quick live COUNT(*) endpoint (Setup Wizard scope step) ────────────────────
+
+import re as _re
+
+
+def _parse_extract_hint(hint: str) -> tuple:
+    """
+    Parse a source_extracts string into (table_name, where_clause_or_None).
+
+    "Extract from MTL_UNITS_OF_MEASURE"              -> ("MTL_UNITS_OF_MEASURE", None)
+    "Extract from HZ_PARTIES (party_type=Customer)"  -> ("HZ_PARTIES", "PARTY_TYPE='CUSTOMER'")
+    "Extract from BOM_BILL_OF_MATERIALS / BOM_COMP"  -> ("BOM_BILL_OF_MATERIALS", None)
+    """
+    text = _re.sub(r"(?i)^extract\s+from\s+", "", hint.strip())
+    text = text.split(" / ")[0].strip()
+    m = _re.match(r"^([A-Z0-9_]+)\s*\(([^)]+)\)\s*$", text, _re.IGNORECASE)
+    if m:
+        table = m.group(1).upper()
+        cm = _re.match(r"(\w+)\s*=\s*(\w+)", m.group(2).strip())
+        if cm:
+            col = cm.group(1).upper()
+            val = cm.group(2).upper()
+            val_map = {"CUSTOMER": "CUSTOMER", "SUPPLIER": "VENDOR", "OPEN": "OPEN"}
+            return table, f"{col}='{val_map.get(val, val)}'"
+        return table, None
+    m2 = _re.match(r"^([A-Z0-9_]+)", text, _re.IGNORECASE)
+    return (m2.group(1).upper() if m2 else text.upper()), None
+
+
+class QuickTableCountRequest(BaseModel):
+    host: str
+    port: int = 1521
+    service_name: str
+    username: str
+    password: str
+    source_extracts: List[str]
+
+
+class QuickTableCountResult(BaseModel):
+    counts: Dict[str, Optional[int]]
+    errors: Dict[str, str] = {}
+
+
+@router.post("/discovery/quick-table-counts", response_model=QuickTableCountResult)
+async def quick_table_counts(body: QuickTableCountRequest):
+    """
+    Connect to Oracle EBS via JDBC and COUNT(*) each table derived from the
+    supplied source_extract hint strings. Called by the Setup Wizard scope
+    step to replace 'pending scan' with real EBS record volumes before the
+    project is created.
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _run() -> tuple:
+        import jaydebeapi
+        jdbc = (f"jdbc:oracle:thin:@{body.host}:{body.port}"
+                f"/{body.service_name}")
+        db = jaydebeapi.connect(
+            "oracle.jdbc.OracleDriver",
+            jdbc,
+            [body.username, body.password],
+            "/app/ojdbc11.jar",
+        )
+        counts: Dict[str, Optional[int]] = {}
+        errors: Dict[str, str] = {}
+        cur = db.cursor()
+        for hint in body.source_extracts:
+            table, where = _parse_extract_hint(hint)
+            sql = f"SELECT COUNT(*) FROM {table}"
+            if where:
+                sql += f" WHERE {where}"
+            try:
+                cur.execute(sql)
+                row = cur.fetchone()
+                counts[table] = int(row[0]) if row else None
+            except Exception as exc:
+                counts[table] = None
+                errors[table] = str(exc)[:120]
+        cur.close()
+        db.close()
+        return counts, errors
+
+    try:
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            counts, errors = await loop.run_in_executor(pool, _run)
+        return QuickTableCountResult(counts=counts, errors=errors)
+    except Exception as exc:
+        raise HTTPException(500, f"EBS connection failed: {exc}")

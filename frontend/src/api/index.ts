@@ -397,7 +397,33 @@ export const FusionModulesApi = {
   list: () => api.get<any[]>("/fusion-modules").then(r => r.data),
 };
 
+export const DiscoveryApi = {
+  /**
+   * Quick live COUNT(*) per EBS table — used by Setup Wizard scope step
+   * to replace "pending scan" with real record volumes before project creation.
+   */
+  quickTableCounts: (body: {
+    host: string;
+    port: number;
+    service_name: string;
+    username: string;
+    password: string;
+    source_extracts: string[];
+  }) =>
+    api.post<{ counts: Record<string, number | null>; errors: Record<string, string> }>(
+      "/discovery/quick-table-counts",
+      body,
+    ).then(r => r.data),
+
+  /** Row counts from the most recent completed discovery run for a project. */
+  scopeHints: (projectId: string) =>
+    api.get<{ is_mock: boolean; run_id: string | null; table_counts: Record<string, number | null> }>(
+      `/projects/${projectId}/discovery/scope-hints`,
+    ).then(r => r.data),
+};
+
 export const SourceConnectionsApi = {
+  list: () => api.get<any[]>("/source-connections").then(r => r.data),
   create: (body: Record<string, unknown>) =>
     api.post<any>("/source-connections", body).then(r => r.data),
   get: (id: string) => api.get<any>(`/source-connections/${id}`).then(r => r.data),
@@ -406,6 +432,8 @@ export const SourceConnectionsApi = {
   test: (id: string) =>
     api.post<any>(`/source-connections/${id}/test`).then(r => r.data),
   remove: (id: string) => api.delete(`/source-connections/${id}`).then(r => r.data),
+  discoverScope: (id: string) =>
+    api.post<any>(`/source-connections/${id}/discover-scope`).then(r => r.data),
 };
 
 // === Copilot ===================================================================

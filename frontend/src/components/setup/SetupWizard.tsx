@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, ArrowRight, Building2, Cable, CheckCircle2, Database,
   ShieldCheck, Sparkles, Lock, AlertCircle, Workflow, Layers, Boxes,
 } from "lucide-react";
-import { FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
+import { DiscoveryApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, Pill,
 } from "@/components/ui/Primitives";
@@ -272,6 +272,17 @@ export const SetupWizard: React.FC = () => {
           modules={fusionModules}
           sourceCode={sourceCode}
           isMock={conn.mock_mode}
+          liveConn={
+            !conn.mock_mode && sourceCode === "oracle_ebs"
+              ? {
+                  host: conn.metadata.host || "",
+                  port: parseInt(conn.metadata.port || "1521", 10),
+                  service_name: conn.metadata.service_name || "",
+                  username: conn.credentials.username || "",
+                  password: conn.credentials.password || "",
+                }
+              : undefined
+          }
           selected={selectedModules}
           onChange={setSelectedModules}
         />
@@ -659,9 +670,11 @@ const Step4Scope: React.FC<{
   modules: FusionModule[];
   sourceCode: string;
   isMock: boolean;
+  /** Live EBS connection details — only present when isMock=false and sourceCode=oracle_ebs */
+  liveConn?: { host: string; port: number; service_name: string; username: string; password: string };
   selected: string[];
   onChange: (codes: string[]) => void;
-}> = ({ modules, sourceCode, isMock, selected, onChange }) => {
+}> = ({ modules, sourceCode, isMock, liveConn, selected, onChange }) => {
   const toggle = (code: string) => {
     if (selected.includes(code)) {
       onChange(selected.filter((c) => c !== code));
@@ -670,27 +683,62 @@ const Step4Scope: React.FC<{
     }
   };
 
+  // Live EBS row counts fetched on mount when liveConn is available
+  const [liveCounts, setLiveCounts] = useState<Record<string, number | null>>({});
+  const [scanState, setScanState] = useState<"idle" | "scanning" | "done" | "error">("idle");
+  const hasFetched = useRef(false);
+
   // Compute the de-duplicated set of conversions that will be created.
   const objectsToCreate = new Map<string, {
     label: string;
     planned: number;
     sourceHint: string;
     mockRowCount?: number;
+    ebsTable?: string;   // parsed table name (uppercase) from sourceHint
   }>();
   modules
     .filter((m) => selected.includes(m.code))
     .forEach((m) => {
       m.objects.forEach((o) => {
         if (!objectsToCreate.has(o.target_object)) {
+          const hint = o.source_extracts[sourceCode] || "—";
+          // Parse table name: strip "Extract from", take first token, strip conditions
+          const tableMatch = hint.replace(/^Extract from\s+/i, "").split(/[\s(/]/)[0].toUpperCase();
           objectsToCreate.set(o.target_object, {
             label: o.label,
             planned: o.planned_load_order,
-            sourceHint: o.source_extracts[sourceCode] || "—",
+            sourceHint: hint,
             mockRowCount: o.mock_row_counts?.[sourceCode],
+            ebsTable: tableMatch !== "—" ? tableMatch : undefined,
           });
         }
       });
     });
+
+  // Trigger one live scan when entering scope step with a live EBS connection
+  const fetchLiveCounts = useCallback(async () => {
+    if (!liveConn || isMock || hasFetched.current) return;
+    hasFetched.current = true;
+    setScanState("scanning");
+    const allHints = [...objectsToCreate.values()]
+      .map((o) => o.sourceHint)
+      .filter((h) => h !== "—");
+    if (allHints.length === 0) { setScanState("done"); return; }
+    try {
+      const result = await DiscoveryApi.quickTableCounts({
+        ...liveConn,
+        source_extracts: allHints,
+      });
+      setLiveCounts(result.counts);
+      setScanState("done");
+    } catch {
+      setScanState("error");
+    }
+  }, [liveConn, isMock, objectsToCreate.size]);
+
+  useEffect(() => {
+    fetchLiveCounts();
+  }, [fetchLiveCounts]);
 
   return (
     <Card>
@@ -753,7 +801,23 @@ const Step4Scope: React.FC<{
               <div className="text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
                 {objectsToCreate.size} conversion{objectsToCreate.size === 1 ? "" : "s"} will be auto-created
               </div>
-              {!isMock && (
+              {!isMock && scanState === "scanning" && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-brand animate-pulse">
+                  <Database className="h-3 w-3" />
+                  Scanning live EBS…
+                </span>
+              )}
+              {!isMock && scanState === "done" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                  <Database className="h-3 w-3" /> live EBS counts
+                </span>
+              )}
+              {!isMock && scanState === "error" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-medium text-rose-700">
+                  <Database className="h-3 w-3" /> EBS scan failed
+                </span>
+              )}
+              {!isMock && scanState === "idle" && (
                 <span className="inline-flex items-center gap-1 text-[10px] text-ink-muted">
                   <Database className="h-3 w-3" />
                   Row counts after first Discovery scan
@@ -797,6 +861,14 @@ const Step4Scope: React.FC<{
                           ) : (
                             <span className="text-[10px] text-ink-muted">—</span>
                           )
+                        ) : scanState === "scanning" ? (
+                          <span className="text-[10px] italic text-brand animate-pulse">scanning…</span>
+                        ) : scanState === "done" && info.ebsTable && liveCounts[info.ebsTable] != null ? (
+                          <span className="font-mono text-[10.5px] font-semibold text-emerald-700">
+                            {(liveCounts[info.ebsTable] as number).toLocaleString()}
+                          </span>
+                        ) : scanState === "done" && info.ebsTable && liveCounts[info.ebsTable] === null ? (
+                          <span className="text-[10px] text-rose-500" title="Table not accessible">—</span>
                         ) : (
                           <span className="text-[10px] italic text-ink-muted">pending scan</span>
                         )}
