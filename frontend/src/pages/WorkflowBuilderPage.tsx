@@ -39,7 +39,10 @@ const Inner: React.FC = () => {
 
   // ── Workflow + supporting catalogues ──
   const [wf, setWf] = useState<Workflow | null>(null);
-  const [projects, setProjects] = useState<ConversionProject[]>([]);
+  const [projects, setProjects] = useState<ConversionProject[]>([]);  // all conversions
+  // Engagement (project) selector scopes the conversion list below.
+  const [engagements, setEngagements] = useState<import("@/types").Project[]>([]);
+  const [engagementId, setEngagementId] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [templates, setTemplates] = useState<FBDITemplate[]>([]);
 
@@ -83,9 +86,18 @@ const Inner: React.FC = () => {
       setTimeout(() => fitView({ padding: 0.2, duration: 250 }), 100);
     });
     ConversionsApi.list().then(setProjects);
+    ProjectsApi.list().then(setEngagements).catch(() => setEngagements([]));
     DatasetsApi.list().then(setDatasets);
     FbdiApi.list().then(setTemplates);
   }, [wid]);
+
+  // Default the engagement selector to the bound conversion's project.
+  useEffect(() => {
+    if (wf?.conversion_id && projects.length) {
+      const c = projects.find((p) => String(p.id) === String(wf.conversion_id));
+      if (c && (c as any).project_id != null) setEngagementId(String((c as any).project_id));
+    }
+  }, [wf?.conversion_id, projects]);
 
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -198,14 +210,14 @@ const Inner: React.FC = () => {
     } finally { setRunning(false); }
   };
 
-  const updateProject = async (newPid: number | null) => {
+  const updateProject = async (newPid: string | null) => {
     const updated = await WorkflowApi.update(wid, { conversion_id: newPid });
     setWf(updated);
 
     if (newPid) {
       // Auto-populate any unconfigured Dataset / FBDI Target nodes with the
       // project's bindings so the canvas reflects what's actually wired.
-      const proj = projects.find((p) => p.id === newPid);
+      const proj = projects.find((p) => String(p.id) === newPid);
       if (proj) {
         setNodes((ns) => ns.map((n) => {
           if (n.data?.nodeType === "dataset" && !n.data?.datasetId) {
@@ -265,14 +277,27 @@ const Inner: React.FC = () => {
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-ink">{wf.name}</div>
           <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
-            <span>Project:</span>
+            <span>Engagement:</span>
             <select
-              value={wf.conversion_id ?? ""}
-              onChange={(e) => updateProject(e.target.value ? Number(e.target.value) : null)}
+              value={engagementId ?? ""}
+              onChange={(e) => setEngagementId(e.target.value || null)}
               className="rounded border border-line bg-white px-1.5 py-0.5 text-[11px] text-ink hover:border-brand"
+              title="Engagement"
+            >
+              <option value="">— all —</option>
+              {engagements.map((eng) => <option key={eng.id} value={eng.id}>{eng.name}</option>)}
+            </select>
+            <span>Conversion:</span>
+            <select
+              value={wf.conversion_id != null ? String(wf.conversion_id) : ""}
+              onChange={(e) => updateProject(e.target.value || null)}
+              className="rounded border border-line bg-white px-1.5 py-0.5 text-[11px] text-ink hover:border-brand"
+              title="Conversion"
             >
               <option value="">— none —</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {projects
+                .filter((p) => !engagementId || String((p as any).project_id) === engagementId)
+                .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
         </div>

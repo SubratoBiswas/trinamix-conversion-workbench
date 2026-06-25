@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Plus, Boxes, Calendar, Building2, ArrowRight, ArrowLeft,
-  CheckCircle2, AlertCircle, Clock, Database,
+  CheckCircle2, AlertCircle, Clock, Database, Trash2,
 } from "lucide-react";
 import { ProjectsApi } from "@/api";
 import {
@@ -39,6 +39,9 @@ export const ProjectsPage: React.FC = () => {
   const [items, setItems] = useState<Project[] | null>(null);
   useEffect(() => { ProjectsApi.list().then(setItems); }, []);
 
+  const handleDeleted = (id: string | number) =>
+    setItems((prev) => (prev ? prev.filter((p) => String(p.id) !== String(id)) : prev));
+
   return (
     <>
       <PageTitle
@@ -70,7 +73,7 @@ export const ProjectsPage: React.FC = () => {
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {items.map((p) => (
-              <ProjectCard key={p.id} project={p} />
+              <ProjectCard key={p.id} project={p} onDeleted={handleDeleted} />
             ))}
           </div>
         )
@@ -79,8 +82,26 @@ export const ProjectsPage: React.FC = () => {
   );
 };
 
-const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
+const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number) => void }> = ({ project, onDeleted }) => {
+  const [deleting, setDeleting] = useState(false);
   const total = project.conversion_count ?? 0;
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();   // don't follow the card's Link
+    e.stopPropagation();
+    const n = project.conversion_count ?? 0;
+    if (!window.confirm(
+      `Delete engagement "${project.name}"${n ? ` and its ${n} conversion(s)` : ""}? This cannot be undone.`
+    )) return;
+    setDeleting(true);
+    try {
+      await ProjectsApi.remove(String(project.id));
+      onDeleted(project.id);
+    } catch {
+      alert("Failed to delete engagement.");
+      setDeleting(false);
+    }
+  };
   const planning = project.planning_count ?? 0;
   const inProg = project.in_progress_count ?? 0;
   const loaded = project.loaded_count ?? 0;
@@ -114,7 +135,17 @@ const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
               )}
             </div>
           </div>
-          <Pill tone={STATUS_TONE[project.status] || "neutral"}>{project.status.replace("_", " ")}</Pill>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Pill tone={STATUS_TONE[project.status] || "neutral"}>{project.status.replace("_", " ")}</Pill>
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              title="Delete engagement"
+              className="rounded p-1 text-ink-subtle hover:bg-danger-subtle hover:text-danger disabled:opacity-50"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Progress bar */}

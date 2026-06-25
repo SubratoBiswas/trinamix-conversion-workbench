@@ -140,8 +140,31 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
     p = await Project.get(PydanticObjectId(project_id))
     if not p:
         raise HTTPException(404, "Project not found")
+
+    # Cascade so nothing is orphaned (orphaned conversions would still show up
+    # in the global conversion dropdowns and the 'N conversions' counter).
+    convs = await Conversion.find(Conversion.project_id == p.id).to_list()
+    conv_ids = [c.id for c in convs]
+    if conv_ids:
+        from app.models.mapping import MappingSuggestion
+        from app.models.transformation import TransformationRule, Crosswalk
+        from app.models.output import ConvertedOutput
+        from app.models.load import LoadRun, LoadError
+        await MappingSuggestion.find({"conversion_id": {"$in": conv_ids}}).delete()
+        await TransformationRule.find({"conversion_id": {"$in": conv_ids}}).delete()
+        await Crosswalk.find({"conversion_id": {"$in": conv_ids}}).delete()
+        await ConvertedOutput.find({"conversion_id": {"$in": conv_ids}}).delete()
+        runs = await LoadRun.find({"conversion_id": {"$in": conv_ids}}).to_list()
+        run_ids = [r.id for r in runs]
+        if run_ids:
+            await LoadError.find({"load_run_id": {"$in": run_ids}}).delete()
+        await LoadRun.find({"conversion_id": {"$in": conv_ids}}).delete()
+        await Conversion.find(Conversion.project_id == p.id).delete()
+
+    # NOTE: deliberately NOT deleting SourceConnection — the live Oracle EBS
+    # connection is shared infrastructure and other engagements rely on it.
     await p.delete()
-    return {"deleted": project_id}
+    return {"deleted": project_id, "conversions_deleted": len(conv_ids)}
 
 
 @router.get("/{project_id}/conversions", response_model=list[ConversionOut])
