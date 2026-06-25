@@ -78,6 +78,36 @@ async def delete_template(template_id: str, _: User = Depends(get_current_user))
     await tpl.delete()
 
 
+@router.get("/debug-parser")
+async def debug_parser(_: User = Depends(get_current_user)):
+    """Test parser with an in-memory xlsx. Call this after deploy to verify the parser works on Render."""
+    import io, tempfile, os
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "TEST_SHEET"
+    ws.append(["* FIELD_A", "FIELD_B", "* FIELD_C"])
+    ws.append(["value1", "value2", "value3"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+        f.write(buf.read())
+        tmp = f.name
+    try:
+        result = parse_fbdi_template(tmp)
+        return {
+            "parser_ok": len(result["fields"]) > 0,
+            "field_count": len(result["fields"]),
+            "fields": [{"name": f["field_name"], "required": f["required"]} for f in result["fields"]],
+            "sheets": result["sheets"],
+        }
+    except Exception as exc:
+        return {"parser_ok": False, "error": str(exc), "type": type(exc).__name__}
+    finally:
+        os.unlink(tmp)
+
+
 @router.post("/templates/{template_id}/reparse")
 async def reparse_template(template_id: str, _: User = Depends(get_current_user)):
     """Re-parse the stored file for a template and refresh its fields/sheets in DB."""

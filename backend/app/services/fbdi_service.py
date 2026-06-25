@@ -1,10 +1,12 @@
 """FBDI template upload, parse, and metadata correction service."""
 from __future__ import annotations
 
-import shutil
+import logging
 from pathlib import Path
 
 from fastapi import UploadFile
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField
@@ -14,10 +16,11 @@ from app.parsers import parse_fbdi_template
 ALLOWED_FBDI_EXTS = {".xlsx", ".xlsm", ".xls"}
 
 
-def _save_template_file(upload: UploadFile) -> tuple[Path, str]:
+def _save_bytes(filename: str, contents: bytes) -> tuple[Path, str]:
+    """Save raw bytes to upload dir, avoiding filename collisions."""
     target_dir = settings.upload_path / "fbdi"
     target_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(upload.filename or "template.xlsm").name
+    safe_name = Path(filename).name
     target = target_dir / safe_name
     counter = 1
     while target.exists():
@@ -25,9 +28,7 @@ def _save_template_file(upload: UploadFile) -> tuple[Path, str]:
         suffix = Path(safe_name).suffix
         target = target_dir / f"{stem}_{counter}{suffix}"
         counter += 1
-    with open(target, "wb") as f:
-        shutil.copyfileobj(upload.file, f)
-    upload.file.close()
+    target.write_bytes(contents)
     return target, target.name
 
 
@@ -40,8 +41,20 @@ async def create_template_from_upload(
     ext = Path(upload.filename or "").suffix.lower()
     if ext not in ALLOWED_FBDI_EXTS:
         raise ValueError(f"Unsupported FBDI file extension: {ext}")
-    file_path, stored_name = _save_template_file(upload)
-    parsed = parse_fbdi_template(file_path)
+
+    # Must use await upload.read() — shutil.copyfileobj on upload.file is
+    # unreliable in async FastAPI (buffer may already be consumed).
+    contents = await upload.read()
+    file_path, stored_name = _save_bytes(upload.filename or "template.xlsx", contents)
+    file_size = len(contents)
+    logger.info(f"FBDI upload saved: {file_path} size={file_size}")
+
+    try:
+        parsed = parse_fbdi_template(file_path)
+    except Exception as exc:
+        logger.exception(f"FBDI parse error for {file_path}: {exc}")
+        parsed = {"business_object": None, "description": None, "sheets": [], "fields": []}
+    logger.info(f"FBDI parse result: {len(parsed['fields'])} fields, {len(parsed['sheets'])} sheets")
 
     tpl = FBDITemplate(
         name=name or Path(upload.filename or stored_name).stem,
