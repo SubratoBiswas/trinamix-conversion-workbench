@@ -1003,6 +1003,93 @@ async def _seed_purchase_order_template() -> FBDITemplate | None:
 
     return tpl
 
+async def _repair_zero_field_templates() -> None:
+    """One-time repair: seed standard Oracle Fusion fields for any template that
+    was uploaded or manifested with 0 FBDIField records, then re-trigger mapping
+    for any conversion linked to that template.
+
+    Safe to call on every startup — auto_seed_if_empty is a no-op when fields
+    already exist, and run_mapping_suggestions only runs when suggestion count
+    is 0.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    from app.models.fbdi import FBDIField, FBDITemplate
+    from app.routers.fbdi_seed import auto_seed_if_empty
+
+    all_templates = await FBDITemplate.find_all().to_list()
+    repaired_ids = []
+
+    for tpl in all_templates:
+        count = await FBDIField.find(FBDIField.template_id == tpl.id).count()
+        if count == 0:
+            seeded = await auto_seed_if_empty(tpl)
+            if seeded:
+                log.info(f"Startup repair: seeded {seeded} fields for '{tpl.name}'")
+                repaired_ids.append(tpl.id)
+
+    if not repaired_ids:
+        return
+
+    # Re-trigger mapping for any conversion linked to a repaired template
+    from app.models.conversion import Conversion
+    from app.models.mapping import MappingSuggestion
+    from app.services.mapping_service import run_mapping_suggestions
+
+    for tpl_id in repaired_ids:
+        convs = await Conversion.find(Conversion.template_id == tpl_id).to_list()
+        for conv in convs:
+            if not conv.dataset_id:
+                continue
+            existing = await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == conv.id
+            ).count()
+            if existing == 0:
+                try:
+                    await run_mapping_suggestions(conv)
+                    log.info(
+                        f"Startup repair: ran mapping suggestions for conversion '{conv.name}'"
+                    )
+                except Exception as exc:
+                    log.warning(f"Startup repair: mapping failed for '{conv.name}': {exc}")
+
+
+async def _reseed_scm_om_templates() -> None:
+    """Force-reseed all SCM and OM FBDI templates with the latest Oracle Fusion
+    field schemas from STANDARD_FIELDS on every deploy.
+
+    This replaces any stale / zero-field records so that the Templates page
+    always reflects the current canonical field definitions after a redeploy.
+    Templates in other modules are left untouched.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    from app.models.fbdi import FBDIField, FBDITemplate
+    from app.routers.fbdi_seed import STANDARD_FIELDS, _schema_key_for, auto_seed_if_empty
+
+    TARGET_MODULES = {"SCM", "OM", "scm", "om"}
+
+    all_templates = await FBDITemplate.find_all().to_list()
+    reseeded = 0
+
+    for tpl in all_templates:
+        if tpl.module not in TARGET_MODULES:
+            continue
+        key = _schema_key_for(tpl.name, tpl.business_object)
+        if key is None:
+            log.debug(f"_reseed_scm_om: no schema for '{tpl.name}' — skipped")
+            continue
+        seeded = await auto_seed_if_empty(tpl, force=True)
+        if seeded:
+            log.info(f"_reseed_scm_om: reseeded {seeded} fields for '{tpl.name}' (schema={key})")
+            reseeded += 1
+
+    if reseeded:
+        log.info(f"_reseed_scm_om: refreshed {reseeded} SCM/OM templates with latest Oracle FBDI schemas")
+
+
 async def run_seed() -> None:
     await _seed_admin()
     await _seed_dependencies()
@@ -1013,6 +1100,8 @@ async def run_seed() -> None:
     from app.seed.fbdi_manifest import seed_fbdi_manifest
     await seed_fbdi_manifest()
     await _seed_demo_engagement(item_ds, so_ds, item_tpl, so_tpl)
+    await _repair_zero_field_templates()
+    await _reseed_scm_om_templates()
 
 
 if __name__ == "__main__":
