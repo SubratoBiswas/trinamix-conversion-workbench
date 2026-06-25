@@ -59,7 +59,8 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
     try:
         from app.models.v10 import SourceConnection
         conn = await SourceConnection.find_one(
-            {"source_type": "oracle_ebs", "status": "connected"}
+            SourceConnection.system_type == "oracle_ebs",
+            SourceConnection.last_test_ok == True,
         )
         if conn is None:
             log.debug("_source_columns_for_ebs: no connected EBS connection found")
@@ -70,10 +71,9 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
         if password.startswith("PLAIN:"):
             password = password[6:]
 
-        host = conn.host or "localhost"
-        port = conn.port or 1521
-        service = conn.service_name or conn.database or "EBSDB"
-        jdbc_url = f"jdbc:oracle:thin:@{host}:{port}/{service}"
+        # Use base_url as authoritative source (same logic as discovery.py)
+        from app.routers.discovery import _jdbc_url_from_conn
+        jdbc_url = _jdbc_url_from_conn(conn)
 
         db = jaydebeapi.connect(
             "oracle.jdbc.OracleDriver",
@@ -86,8 +86,9 @@ async def _source_columns_for_ebs(table_name: str) -> list[SourceColumn]:
             SELECT column_name, data_type, nullable, num_distinct
             FROM all_tab_columns
             WHERE table_name = UPPER(?)
+              AND owner = UPPER(?)
             ORDER BY column_id
-        """, [table_name.upper()])
+        """, [table_name.upper(), (conn.username or "APPS").upper()])
         rows = cur.fetchall()
         cur.close()
         db.close()
