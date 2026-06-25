@@ -66,6 +66,16 @@ async def list_template_fields(template_id: str, _: User = Depends(get_current_u
     return [_fld_out(f) for f in fields]
 
 
+@router.delete("/templates/{template_id}", status_code=204)
+async def delete_template(template_id: str, _: User = Depends(get_current_user)):
+    tpl = await FBDITemplate.get(PydanticObjectId(template_id))
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    await FBDIField.find(FBDIField.template_id == tpl.id).delete()
+    await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
+    await tpl.delete()
+
+
 @router.put("/fields/{field_id}", response_model=FBDIFieldOut)
 async def update_field(
     field_id: str, payload: FBDIFieldUpdate, _: User = Depends(get_current_user)

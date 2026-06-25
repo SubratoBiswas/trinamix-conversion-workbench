@@ -69,6 +69,7 @@ export const FbdiApi = {
     if (opts.business_object) fd.append("business_object", opts.business_object);
     return api.post<FBDITemplateDetail>("/fbdi/upload", fd).then(r => r.data);
   },
+  delete: (id: string) => api.delete(`/fbdi/templates/${id}`),
 };
 
 // ─── Engagement-level (Projects) ───

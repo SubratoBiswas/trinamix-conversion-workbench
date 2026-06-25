@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search,
+  Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search, Trash2,
 } from "lucide-react";
 import { FbdiApi } from "@/api";
 import {
@@ -37,6 +37,7 @@ const PHASE_TONE: Record<string, "info" | "warning" | "brand" | "success"> = {
 export const FbdiTemplatesPage: React.FC = () => {
   const [items, setItems] = useState<FBDITemplate[] | null>(null);
   const [open, setOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [module, setModule] = useState("SCM");
@@ -50,6 +51,12 @@ export const FbdiTemplatesPage: React.FC = () => {
   const [tierFilter, setTierFilter] = useState("All");
 
   const refresh = () => FbdiApi.list().then(setItems);
+
+  const handleDelete = async (id: string) => {
+    await FbdiApi.delete(id);
+    setDeletingId(null);
+    refresh();
+  };
   useEffect(() => { refresh(); }, []);
 
   const submit = async () => {
@@ -196,7 +203,16 @@ export const FbdiTemplatesPage: React.FC = () => {
                       </Pill>
                     </td>
                     <td className="text-right">
-                      <Link to={`/fbdi/${t.id}`} className="btn-ghost h-7 px-2 text-xs">Open</Link>
+                      <div className="flex items-center justify-end gap-1">
+                        <Link to={`/fbdi/${t.id}`} className="btn-ghost h-7 px-2 text-xs">Open</Link>
+                        <button
+                          onClick={() => setDeletingId(t.id)}
+                          className="btn-ghost h-7 px-2 text-xs text-danger hover:bg-danger-subtle"
+                          title="Delete template"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -205,6 +221,25 @@ export const FbdiTemplatesPage: React.FC = () => {
           )
         }
       </Card>
+
+      {/* Delete confirmation */}
+      <Modal
+        open={!!deletingId}
+        onClose={() => setDeletingId(null)}
+        title="Delete template?"
+        size="sm"
+        footer={<>
+          <Button variant="secondary" onClick={() => setDeletingId(null)}>Cancel</Button>
+          <Button variant="danger" onClick={() => deletingId && handleDelete(deletingId)}>
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </Button>
+        </>}
+      >
+        <p className="text-sm text-ink">
+          This will permanently delete the template and all its fields from the system.
+          Any conversion objects linked to it will lose their target mapping.
+        </p>
+      </Modal>
 
       <Modal
         open={open}
