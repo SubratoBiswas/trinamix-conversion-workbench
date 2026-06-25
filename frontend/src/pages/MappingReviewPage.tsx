@@ -56,6 +56,9 @@ export const MappingReviewPage: React.FC = () => {
   // Diagnostic returned by the source-columns endpoint in EBS mode — explains
   // why zero columns came back (no connection / JDBC error / table not found).
   const [ebsDebug, setEbsDebug] = useState<Record<string, any> | null>(null);
+  // Target-field ids that have at least one saved transformation rule, so the
+  // canvas can badge them (rules apply at Generate Output, not as map lines).
+  const [ruleTargetIds, setRuleTargetIds] = useState<Set<number>>(new Set());
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
   // Cascade visibility — when an upstream master has taught a rule
@@ -116,6 +119,7 @@ export const MappingReviewPage: React.FC = () => {
       setSourceColumns([]);
       setEbsTable(null);
       setEbsDebug(null);
+      setRuleTargetIds(new Set());
       setTargetFields([]);
       setLoadingConversion(false);
       return;
@@ -143,6 +147,11 @@ export const MappingReviewPage: React.FC = () => {
     setMappings(ms);
     setInherited(std);
     setLoadingConversion(false);
+
+    // Saved transformation rules → badge their target fields.
+    MappingApi.rules(pid)
+      .then((rs) => setRuleTargetIds(new Set(rs.filter((r) => r.target_field_id != null).map((r) => r.target_field_id as any))))
+      .catch(() => setRuleTargetIds(new Set()));
   };
   useEffect(() => { loadAll(); }, [pid]);
 
@@ -251,6 +260,25 @@ export const MappingReviewPage: React.FC = () => {
     await MappingApi.update(m.id, { source_column: newSourceColumn, status: "overridden" });
     flash("Override saved");
     loadAll();
+  };
+
+  // Drag-to-map: dropping a source column onto a target field binds it. We
+  // update that target's existing suggestion row (created by AI mapping) and
+  // mark it "overridden" so it reads as a deliberate manual mapping.
+  const mapDrop = async (targetFieldId: number, sourceColumn: string) => {
+    const m = mappings.find((x) => x.target_field_id === targetFieldId);
+    if (!m) {
+      flash("Run AI Mapping first so the field is ready to map");
+      return;
+    }
+    if (m.source_column === sourceColumn) return;
+    try {
+      await MappingApi.update(m.id, { source_column: sourceColumn, status: "overridden" });
+      flash(`Mapped ${sourceColumn} → ${m.target_field_name || "field"}`);
+      loadAll();
+    } catch (e: any) {
+      flash(`Could not map: ${e?.response?.data?.detail || e?.message || "failed"}`);
+    }
   };
 
   // ── Apply & (optionally) Learn a recommendation ──
@@ -530,6 +558,8 @@ export const MappingReviewPage: React.FC = () => {
           setHoveredSource={setHoveredSource}
           hoveredTarget={hoveredTarget}
           setHoveredTarget={setHoveredTarget}
+          ruleTargetIds={ruleTargetIds}
+          onMapDrop={mapDrop}
           loading={running}
         />
 
@@ -613,14 +643,21 @@ interface CanvasProps {
   setHoveredSource: (s: string | null) => void;
   hoveredTarget: number | null;
   setHoveredTarget: (t: number | null) => void;
+  ruleTargetIds?: Set<number>;
+  onMapDrop?: (targetFieldId: number, sourceColumn: string) => void;
   loading?: boolean;
 }
 
 const MappingCanvas: React.FC<CanvasProps> = ({
   sourceColumns, targetFields, mappings, visibleTargetIds,
   selectedMappingId, setSelectedMappingId,
-  hoveredSource, setHoveredSource, hoveredTarget, setHoveredTarget, loading,
+  hoveredSource, setHoveredSource, hoveredTarget, setHoveredTarget,
+  ruleTargetIds, onMapDrop, loading,
 }) => {
+  // Which source column is being dragged, and which target is hovered during a
+  // drag — drives the drop-zone highlight for the drag-to-map gesture.
+  const [dragSource, setDragSource] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<number | null>(null);
   // Refs to source/target cards keyed by name/id so we can read their DOM positions
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const targetRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -740,7 +777,10 @@ const MappingCanvas: React.FC<CanvasProps> = ({
       {/* Source columns */}
       <div className="flex w-[320px] flex-col border-r border-line bg-white">
         <div className="flex items-center justify-between border-b border-line bg-canvas px-3 py-2">
-          <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">Source · {sortedSources.length}</div>
+          <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+            Source · {sortedSources.length}
+            <span className="ml-1.5 normal-case font-normal text-ink-subtle">· drag onto a target to map</span>
+          </div>
           {loading && <Spinner />}
         </div>
         <div className="flex-1 overflow-y-auto p-2" onScroll={onScroll}>
@@ -754,11 +794,20 @@ const MappingCanvas: React.FC<CanvasProps> = ({
               <div
                 key={c.id}
                 ref={(el) => { if (el) sourceRefs.current.set(c.column_name, el); }}
+                draggable
+                onDragStart={(e) => {
+                  setDragSource(c.column_name);
+                  e.dataTransfer.setData("text/plain", c.column_name);
+                  e.dataTransfer.effectAllowed = "link";
+                }}
+                onDragEnd={() => { setDragSource(null); setDropTargetId(null); }}
                 onClick={() => mapping && setSelectedMappingId(mapping.id)}
                 onMouseEnter={() => setHoveredSource(c.column_name)}
                 onMouseLeave={() => setHoveredSource(null)}
+                title="Drag onto a target field to map it"
                 className={cn(
-                  "mb-1 cursor-pointer rounded-md border bg-white px-2.5 py-2 transition",
+                  "mb-1 cursor-grab rounded-md border bg-white px-2.5 py-2 transition active:cursor-grabbing",
+                  dragSource === c.column_name ? "border-brand ring-2 ring-brand/30 opacity-60" :
                   hoveredSource === c.column_name ? "border-brand bg-brand-subtle/40 shadow-soft" :
                   isMapped ? "border-line" : "border-line/60 opacity-80",
                 )}
@@ -822,9 +871,24 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                 onClick={() => mapping && setSelectedMappingId(mapping.id)}
                 onMouseEnter={() => setHoveredTarget(f.id)}
                 onMouseLeave={() => setHoveredTarget(null)}
+                onDragOver={(e) => {
+                  if (!onMapDrop) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "link";
+                  if (dropTargetId !== f.id) setDropTargetId(f.id);
+                }}
+                onDragLeave={() => setDropTargetId((cur) => (cur === f.id ? null : cur))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const col = e.dataTransfer.getData("text/plain");
+                  setDropTargetId(null);
+                  setDragSource(null);
+                  if (col && onMapDrop) onMapDrop(f.id, col);
+                }}
                 className={cn(
                   "mb-1 cursor-pointer rounded-md border bg-white px-2.5 py-2 transition",
                   !visible && "opacity-30",
+                  dropTargetId === f.id ? "border-emerald-500 ring-2 ring-emerald-300 bg-emerald-50" :
                   hoveredTarget === f.id ? "border-brand bg-brand-subtle/40 shadow-soft" :
                   mapping?.status === "approved" ? "border-success/50 bg-success-subtle/30" :
                   mapping?.source_column ? "border-line" : "border-dashed border-line",
@@ -843,6 +907,14 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                           title={`Pre-filled from ${KB_SOURCE_DISPLAY[mapping.kb_source] || mapping.kb_source} Knowledge Bank · ${(mapping.kb_times_reused ?? 0)} prior reuse${(mapping.kb_times_reused ?? 0) === 1 ? "" : "s"}`}
                         >
                           🧠 KB
+                        </span>
+                      )}
+                      {ruleTargetIds?.has(f.id) && (
+                        <span
+                          className="inline-flex items-center gap-0.5 rounded bg-violet-100 px-1 py-0.5 font-mono text-[9px] font-bold text-violet-700"
+                          title="A transformation rule is attached to this field — it applies during Generate Output"
+                        >
+                          ƒ rule
                         </span>
                       )}
                     </div>

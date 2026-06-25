@@ -48,8 +48,12 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 def _tokenize(text: str) -> list[str]:
     if not text:
         return []
-    # split snake_case, camelCase, spaces, hyphens
-    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    # split snake_case, camelCase, AND acronym→word boundaries.
+    # Acronym boundary first so "UOMCode" -> "UOM Code", "BaseUOMFlag" ->
+    # "Base UOM Flag" — otherwise an acronym+Word target name collapses to a
+    # single token and never matches "UOM_CODE"/"BASE_UOM_FLAG" sources.
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
     s = s.replace("_", " ").replace("-", " ").replace("/", " ")
     return [t.lower() for t in _TOKEN_RE.findall(s) if t]
 
