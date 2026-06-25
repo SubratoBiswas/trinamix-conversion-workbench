@@ -15,10 +15,12 @@ from app.services.auth_service import get_current_user
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-async def _hydrate(p: Project) -> ProjectOut:
-    convs = await Conversion.find(Conversion.project_id == p.id).to_list()
-    # Definitions kept identical to ProjectOverviewPage so the card and the
-    # detail page always show the same numbers.
+def _project_out(p: Project, convs: list) -> ProjectOut:
+    """Build a ProjectOut with conversion roll-ups (no DB access).
+
+    Status definitions are kept identical to ProjectOverviewPage so the project
+    card and the detail page always show the same numbers.
+    """
     planning = sum(1 for c in convs if c.status == "planning")
     in_progress = sum(1 for c in convs if c.status in (
         "draft","mapping_suggested","awaiting_approval","validated","output_generated"))
@@ -34,10 +36,21 @@ async def _hydrate(p: Project) -> ProjectOut:
     return ProjectOut(**data)
 
 
+async def _hydrate(p: Project) -> ProjectOut:
+    convs = await Conversion.find(Conversion.project_id == p.id).to_list()
+    return _project_out(p, convs)
+
+
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(_: User = Depends(get_current_user)):
+    # Fetch all conversions ONCE and group in memory, instead of one rollup
+    # query per project (was 1 + N queries → slow with many engagements).
     projects = await Project.find_all().sort("-_id").to_list()
-    return [await _hydrate(p) for p in projects]
+    all_convs = await Conversion.find_all().to_list()
+    by_proj: dict = {}
+    for c in all_convs:
+        by_proj.setdefault(c.project_id, []).append(c)
+    return [_project_out(p, by_proj.get(p.id, [])) for p in projects]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)

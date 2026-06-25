@@ -7,7 +7,7 @@ import {
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
 const PiiLockGlyph: React.FC = () => <Lock className="h-2 w-2" />;
-import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi, ProjectsApi } from "@/api";
 import type { InheritedStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import {
@@ -42,8 +42,12 @@ export const MappingReviewPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const projParam = params.get("conversion");
 
-  const [projects, setProjects] = useState<Conversion[]>([]);
+  const [projects, setProjects] = useState<Conversion[]>([]);  // all conversions
   const [pid, setPid] = useState<string | null>(projParam ?? null);
+  // Engagement (project) selector — scopes the conversion dropdown so the same
+  // conversion names across 22 engagements are no longer ambiguous.
+  const [engagements, setEngagements] = useState<import("@/types").Project[]>([]);
+  const [engagementId, setEngagementId] = useState<string | null>(null);
 
   const [project, setProject] = useState<Conversion | null>(null);
   const [loadingConversion, setLoadingConversion] = useState(true);
@@ -90,7 +94,7 @@ export const MappingReviewPage: React.FC = () => {
   const [ruleAuthorOpen, setRuleAuthorOpen] = useState(false);
   const [ruleAuthorMapping, setRuleAuthorMapping] = useState<MappingSuggestion | null>(null);
 
-  // Load projects on mount
+  // Load all conversions + engagements on mount.
   useEffect(() => {
     ConversionsApi.list().then((ps) => {
       setProjects(ps);
@@ -99,6 +103,7 @@ export const MappingReviewPage: React.FC = () => {
         setParams({ conversion: String(ps[0].id) });
       }
     });
+    ProjectsApi.list().then(setEngagements).catch(() => setEngagements([]));
   }, []);
 
   // Load project context. Supports both source modes:
@@ -127,6 +132,7 @@ export const MappingReviewPage: React.FC = () => {
       return;
     }
     setProject(proj);
+    if (proj.project_id != null) setEngagementId(String(proj.project_id));
 
     const isEbs = !proj.dataset_id;
 
@@ -471,12 +477,32 @@ export const MappingReviewPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Engagement (project) selector — scopes the conversion list below. */}
+          <select
+            className="input !h-8 !w-auto !text-xs"
+            value={engagementId ?? ""}
+            onChange={(e) => {
+              const eid = e.target.value;
+              setEngagementId(eid);
+              // Jump to that engagement's first conversion.
+              const first = projects.find((c) => String(c.project_id) === eid);
+              if (first) { setPid(first.id); setParams({ conversion: String(first.id) }); }
+            }}
+            title="Engagement"
+          >
+            <option value="" disabled>— engagement —</option>
+            {engagements.map((eng) => <option key={eng.id} value={eng.id}>{eng.name}</option>)}
+          </select>
+          {/* Conversion selector — scoped to the chosen engagement. */}
           <select
             className="input !h-8 !w-auto !text-xs"
             value={pid ?? ""}
             onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}
+            title="Conversion"
           >
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {projects
+              .filter((c) => !engagementId || String(c.project_id) === engagementId)
+              .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
 
           <button
