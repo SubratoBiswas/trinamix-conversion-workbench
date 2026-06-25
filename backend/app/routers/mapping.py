@@ -51,6 +51,76 @@ async def list_mappings(conversion_id: str, _: User = Depends(get_current_user))
     return await enrich_mapping_with_samples(conv, items)
 
 
+@router.get("/conversions/{conversion_id}/source-columns")
+async def source_columns(conversion_id: str, _: User = Depends(get_current_user)):
+    """Unified source-column list for the Mapping Review canvas.
+
+    Works for both source modes:
+      * dataset mode (``dataset_id`` set) → profiled columns from the upload
+      * EBS live mode (``dataset_id`` is null) → live ``ALL_TAB_COLUMNS``
+        metadata for the conversion's ``ebs_table_hint``.
+
+    Returns column dicts shaped like the frontend ``DatasetColumnProfile`` so
+    the canvas can render identically regardless of source.
+    """
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+
+    # UI rule (mirrors ConversionDetailPage): dataset_id presence — not
+    # source_type — decides which source the canvas shows.
+    is_ebs = not conv.dataset_id
+    columns: list[dict[str, Any]] = []
+
+    if is_ebs:
+        from app.services.mapping_service import _source_columns_for_ebs
+        table = getattr(conv, "ebs_table_hint", "") or ""
+        srcs = await _source_columns_for_ebs(table) if table else []
+        for i, s in enumerate(srcs):
+            columns.append({
+                "id": i + 1,
+                "column_name": s.name,
+                "position": i,
+                "inferred_type": s.inferred_type,
+                "null_count": 0,
+                "null_percent": s.null_percent,
+                "distinct_count": s.distinct_count,
+                "sample_values": s.sample_values,
+                "min_value": None,
+                "max_value": None,
+                "pattern_summary": s.pattern_summary,
+                "contains_pii": None,
+                "pii_category": None,
+            })
+    else:
+        from app.models.dataset import DatasetColumnProfile
+        profs = await DatasetColumnProfile.find(
+            DatasetColumnProfile.dataset_id == conv.dataset_id
+        ).sort(+DatasetColumnProfile.position).to_list()
+        for p in profs:
+            columns.append({
+                "id": int(str(p.id)[-8:], 16) if not isinstance(p.id, int) else p.id,
+                "column_name": p.column_name,
+                "position": p.position,
+                "inferred_type": p.inferred_type,
+                "null_count": getattr(p, "null_count", 0) or 0,
+                "null_percent": p.null_percent or 0.0,
+                "distinct_count": p.distinct_count or 0,
+                "sample_values": p.sample_values or [],
+                "min_value": getattr(p, "min_value", None),
+                "max_value": getattr(p, "max_value", None),
+                "pattern_summary": p.pattern_summary,
+                "contains_pii": getattr(p, "contains_pii", None),
+                "pii_category": getattr(p, "pii_category", None),
+            })
+
+    return {
+        "source_type": "ebs" if is_ebs else "dataset",
+        "table": getattr(conv, "ebs_table_hint", None) if is_ebs else None,
+        "columns": columns,
+    }
+
+
 @router.put("/mappings/{mapping_id}", response_model=MappingOut)
 async def update_mapping(
     mapping_id: str, payload: MappingUpdate, user: User = Depends(get_current_user)
