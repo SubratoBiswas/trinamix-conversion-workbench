@@ -46,9 +46,11 @@ export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, o
   const [defaultVal, setDefaultVal] = useState<string>(rec.ruleConfig?.value ?? "");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiUsed, setAiUsed] = useState(false);
+  const [aiError, setAiError] = useState<string>("");
 
   const handleSuggestAI = async () => {
     setAiLoading(true);
+    setAiError("");
     try {
       const res = await CopilotApi.suggestDefault({
         column_name: rec.column,
@@ -59,9 +61,13 @@ export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, o
       if (res.suggestion) {
         setDefaultVal(res.suggestion);
         setAiUsed(true);
+      } else if (!res.available) {
+        setAiError(res.reason ?? "AI unavailable");
+      } else {
+        setAiError("No suggestion — type a value manually");
       }
-    } catch {
-      // silently ignore — user can type manually
+    } catch (err: any) {
+      setAiError(err?.response?.data?.detail ?? err?.message ?? "Request failed");
     } finally {
       setAiLoading(false);
     }
@@ -138,6 +144,9 @@ export const RecommendationCard: React.FC<Props> = ({ rec, onApply, onDismiss, o
                 <p className="text-[10px] text-brand">
                   ✦ AI suggested — edit if needed
                 </p>
+              )}
+              {aiError && (
+                <p className="text-[10px] text-danger">{aiError}</p>
               )}
             </div>
           )}
