@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search, Trash2,
+  Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search, Trash2, RefreshCw,
 } from "lucide-react";
 import { FbdiApi } from "@/api";
 import {
@@ -38,6 +38,9 @@ export const FbdiTemplatesPage: React.FC = () => {
   const [items, setItems] = useState<FBDITemplate[] | null>(null);
   const [open, setOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [reparsingId, setReparsingId] = useState<string | null>(null);
+  const [reparsingAll, setReparsingAll] = useState(false);
+  const [reparseResult, setReparseResult] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [module, setModule] = useState("SCM");
@@ -56,6 +59,27 @@ export const FbdiTemplatesPage: React.FC = () => {
     await FbdiApi.delete(id);
     setDeletingId(null);
     refresh();
+  };
+
+  const handleReparse = async (id: string) => {
+    setReparsingId(id);
+    try {
+      await FbdiApi.reparse(id);
+      refresh();
+    } finally { setReparsingId(null); }
+  };
+
+  const handleReparseAll = async () => {
+    setReparsingAll(true);
+    setReparseResult(null);
+    try {
+      const res = await FbdiApi.reparseAll();
+      const ok = res.results.filter(r => r.fields > 0).length;
+      setReparseResult(`Reparsed ${res.reparsed} templates — ${ok} with fields extracted.`);
+      refresh();
+    } catch (e: any) {
+      setReparseResult("Reparse failed: " + (e?.response?.data?.detail || e?.message));
+    } finally { setReparsingAll(false); }
   };
   useEffect(() => { refresh(); }, []);
 
@@ -96,8 +120,21 @@ export const FbdiTemplatesPage: React.FC = () => {
             ? `v2.0 · ${items.length} templates across ${countModules(items)} modules`
             : undefined
         }
-        right={<Button onClick={() => setOpen(true)}><Upload className="h-4 w-4" /> Upload Template</Button>}
+        right={
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={handleReparseAll} loading={reparsingAll}>
+              <RefreshCw className="h-4 w-4" /> Reparse All
+            </Button>
+            <Button onClick={() => setOpen(true)}><Upload className="h-4 w-4" /> Upload Template</Button>
+          </div>
+        }
       />
+
+      {reparseResult && (
+        <div className="mb-3 rounded-md bg-success-subtle px-3 py-2 text-xs text-success">
+          {reparseResult}
+        </div>
+      )}
 
       <Card>
         {/* Filter bar */}
@@ -205,6 +242,14 @@ export const FbdiTemplatesPage: React.FC = () => {
                     <td className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/fbdi/${t.id}`} className="btn-ghost h-7 px-2 text-xs">Open</Link>
+                        <button
+                          onClick={() => handleReparse(t.id)}
+                          disabled={reparsingId === t.id}
+                          className="btn-ghost h-7 px-2 text-xs text-brand hover:bg-brand-subtle"
+                          title="Re-parse stored file"
+                        >
+                          <RefreshCw className={cn("h-3.5 w-3.5", reparsingId === t.id && "animate-spin")} />
+                        </button>
                         <button
                           onClick={() => setDeletingId(t.id)}
                           className="btn-ghost h-7 px-2 text-xs text-danger hover:bg-danger-subtle"

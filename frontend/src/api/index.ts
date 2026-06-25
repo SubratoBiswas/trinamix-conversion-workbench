@@ -70,6 +70,8 @@ export const FbdiApi = {
     return api.post<FBDITemplateDetail>("/fbdi/upload", fd).then(r => r.data);
   },
   delete: (id: string) => api.delete(`/fbdi/templates/${id}`),
+  reparse: (id: string) => api.post<FBDITemplateDetail>(`/fbdi/templates/${id}/reparse`).then(r => r.data),
+  reparseAll: () => api.post<{ reparsed: number; results: Array<{ id: string; name: string; status: string; fields: number }> }>("/fbdi/reparse-all").then(r => r.data),
 };
 
 // ─── Engagement-level (Projects) ───

@@ -1,9 +1,11 @@
 """FBDI template endpoints."""
+from pathlib import Path
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate
 from app.models.user import User
+from app.parsers.fbdi_parser import parse_fbdi_template
 from app.schemas.fbdi import FBDIFieldOut, FBDIFieldUpdate, FBDISheetOut, FBDITemplateDetailOut, FBDITemplateOut
 from app.services.auth_service import get_current_user
 from app.services.fbdi_service import create_template_from_upload
@@ -74,6 +76,73 @@ async def delete_template(template_id: str, _: User = Depends(get_current_user))
     await FBDIField.find(FBDIField.template_id == tpl.id).delete()
     await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
     await tpl.delete()
+
+
+@router.post("/templates/{template_id}/reparse")
+async def reparse_template(template_id: str, _: User = Depends(get_current_user)):
+    """Re-parse the stored file for a template and refresh its fields/sheets in DB."""
+    tpl = await FBDITemplate.get(PydanticObjectId(template_id))
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    if not tpl.file_path or not Path(tpl.file_path).exists():
+        raise HTTPException(422, "Stored file not found; please delete and re-upload this template")
+    # Delete existing fields and sheets
+    await FBDIField.find(FBDIField.template_id == tpl.id).delete()
+    await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
+    # Re-parse
+    parsed = parse_fbdi_template(tpl.file_path)
+    sheet_id_by_name: dict[str, object] = {}
+    for s in parsed["sheets"]:
+        sheet = FBDISheet(
+            template_id=tpl.id,
+            sheet_name=s["sheet_name"],
+            sequence=s["sequence"],
+            field_count=s["field_count"],
+        )
+        await sheet.insert()
+        sheet_id_by_name[s["sheet_name"]] = sheet.id
+    for f in parsed["fields"]:
+        sheet_name = f.pop("sheet_name", None)
+        sheet_id = sheet_id_by_name.get(sheet_name)
+        if sheet_id is None:
+            continue
+        await FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f).insert()
+    await tpl.set({"status": "parsed" if parsed["fields"] else "manual"})
+    return await _detail_payload(tpl)
+
+
+@router.post("/reparse-all")
+async def reparse_all_templates(_: User = Depends(get_current_user)):
+    """Re-parse all templates that have a stored file on disk."""
+    templates = await FBDITemplate.find_all().to_list()
+    results = []
+    for tpl in templates:
+        if not tpl.file_path or not Path(tpl.file_path).exists():
+            results.append({"id": str(tpl.id), "name": tpl.name, "status": "skipped_no_file", "fields": 0})
+            continue
+        await FBDIField.find(FBDIField.template_id == tpl.id).delete()
+        await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
+        parsed = parse_fbdi_template(tpl.file_path)
+        sheet_id_by_name: dict[str, object] = {}
+        for s in parsed["sheets"]:
+            sheet = FBDISheet(
+                template_id=tpl.id,
+                sheet_name=s["sheet_name"],
+                sequence=s["sequence"],
+                field_count=s["field_count"],
+            )
+            await sheet.insert()
+            sheet_id_by_name[s["sheet_name"]] = sheet.id
+        for f in parsed["fields"]:
+            sheet_name = f.pop("sheet_name", None)
+            sheet_id = sheet_id_by_name.get(sheet_name)
+            if sheet_id is None:
+                continue
+            await FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f).insert()
+        new_status = "parsed" if parsed["fields"] else "manual"
+        await tpl.set({"status": new_status})
+        results.append({"id": str(tpl.id), "name": tpl.name, "status": new_status, "fields": len(parsed["fields"])})
+    return {"reparsed": len(results), "results": results}
 
 
 @router.put("/fields/{field_id}", response_model=FBDIFieldOut)
