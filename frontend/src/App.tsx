@@ -146,7 +146,12 @@ const OutputPreviewLanding: React.FC = () => {
   };
 
   const project = projects.find((p) => String(p.id) === String(projectId));
-  const ready = conversions.filter((c) => c.dataset_id && c.template_id);
+  // A conversion is previewable once it has a target template AND a bound
+  // source — either an uploaded dataset OR a live Oracle EBS source (EBS mode
+  // has no dataset_id; source_type === "ebs" / an ebs_table_hint marks it).
+  const ready = conversions.filter(
+    (c) => c.template_id && (c.dataset_id || c.source_type === "ebs" || c.ebs_table_hint)
+  );
 
   return (
     <>
@@ -199,7 +204,9 @@ const OutputPreviewLanding: React.FC = () => {
             // React Router Link — soft navigation, no full-page reload
             <Link key={c.id} to={`/conversions/${c.id}/output`} className="card flex flex-col gap-2 p-4 hover:border-brand">
               <div className="text-sm font-semibold text-ink">{c.name}</div>
-              <div className="text-xs text-ink-muted">{c.dataset_name} → {c.template_name}</div>
+              <div className="text-xs text-ink-muted">
+                {c.dataset_name || (c.ebs_table_hint ? `EBS · ${c.ebs_table_hint}` : "Oracle EBS")} → {c.template_name}
+              </div>
               <div className="text-[11px] text-ink-muted">{c.status}</div>
             </Link>
           ))}

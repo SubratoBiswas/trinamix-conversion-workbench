@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Sparkles, Wand2 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, MappingApi, LearningApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, MappingApi, LearningApi, ProjectsApi } from "@/api";
 import {
   Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -12,6 +12,7 @@ import type {
   Conversion,
   DatasetDetail,
   FBDIField,
+  Project,
 } from "@/types";
 
 interface ProjectRecs {
@@ -27,6 +28,8 @@ interface ProjectRecs {
  * and shows the consolidated feed.
  */
 export const RecommendationsHubPage: React.FC = () => {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(null);
   const [items, setItems] = useState<ProjectRecs[] | null>(null);
   const [authoring, setAuthoring] = useState<ProjectRecs | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -64,34 +67,55 @@ export const RecommendationsHubPage: React.FC = () => {
     }
   };
 
+  // Load the engagement list once and pick an initial project (URL ?project= wins).
   useEffect(() => {
+    ProjectsApi.list().then((ps) => {
+      setProjects(ps);
+      const qs = new URLSearchParams(window.location.search).get("project");
+      setProjectId(qs || (ps[0] ? String(ps[0].id) : null));
+    }).catch(() => setProjects([]));
+  }, []);
+
+  // Build recommendations for every conversion in the SELECTED project. Works
+  // for dataset-backed conversions and EBS conversions (columns come from the
+  // live source-columns endpoint rather than an uploaded file).
+  useEffect(() => {
+    if (!projectId) { setItems([]); return; }
+    setItems(null);
     (async () => {
       try {
-        const projects = await ConversionsApi.list();
+        const convs = await ProjectsApi.conversions(String(projectId));
         const out: ProjectRecs[] = [];
-        for (const p of projects) {
-          if (!p.dataset_id || !p.template_id) continue;  // planning-only — skip
+        for (const c of convs) {
+          if (!c.template_id) continue;  // no target template — nothing to suggest against
           try {
-            const [ds, fields] = await Promise.all([
-              DatasetsApi.get(p.dataset_id),
-              FbdiApi.fields(p.template_id),
-            ]);
+            const fields = await FbdiApi.fields(c.template_id);
+            let dsLike: DatasetDetail;
+            if (c.dataset_id) {
+              dsLike = await DatasetsApi.get(c.dataset_id);
+            } else {
+              // EBS mode — synthesize a dataset-shaped object from live columns
+              const sc = await ConversionsApi.sourceColumns(c.id);
+              dsLike = { columns: sc.columns } as DatasetDetail;
+            }
             out.push({
-              project: p,
-              dataset: ds,
+              project: c,
+              dataset: dsLike,
               fields,
-              recs: buildRecommendations({ dataset: ds, targetFields: fields }),
+              recs: buildRecommendations({ dataset: dsLike, targetFields: fields }),
             });
-          } catch { /* skip individual project errors */ }
+          } catch { /* skip individual conversion errors */ }
         }
         setItems(out);
       } catch {
-        setItems([]); // ensure we exit PageLoader even on total failure
+        setItems([]);
       }
     })();
-  }, []);
+  }, [projectId]);
 
   if (items === null) return <PageLoader />;
+
+  const selectedProject = projects.find((p) => String(p.id) === String(projectId));
 
   const totalRecs = items.reduce((s, p) => s + p.recs.length, 0);
 
@@ -99,7 +123,25 @@ export const RecommendationsHubPage: React.FC = () => {
     <>
       <PageTitle
         title="Recommendations"
-        subtitle="Cross-project AI suggestions tied to source data + FBDI target metadata"
+        subtitle="AI suggestions tied to source data + FBDI target metadata, per engagement"
+        right={
+          <div>
+            <label className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+              Engagement
+            </label>
+            <select
+              className="input !h-9 !text-sm min-w-[260px]"
+              value={projectId ?? ""}
+              onChange={(e) => setProjectId(e.target.value)}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}{p.client ? ` · ${p.client}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
       />
 
       {totalRecs === 0 ? (
@@ -107,8 +149,10 @@ export const RecommendationsHubPage: React.FC = () => {
           <CardBody>
             <EmptyState
               icon={<Sparkles className="h-5 w-5" />}
-              title="No recommendations to action"
-              description="Profile a dataset and bind it to an FBDI template — the AI engine will surface suggestions here."
+              title="No recommendations for this engagement"
+              description={selectedProject
+                ? `No suggestions for ${selectedProject.name} right now — pick another engagement above, or its conversions may already be clean and bound.`
+                : "Pick an engagement above to surface AI suggestions for its conversions."}
             />
           </CardBody>
         </Card>
@@ -153,7 +197,9 @@ export const RecommendationsHubPage: React.FC = () => {
                   {recs.length > 6 && (
                     <div className="mt-3 text-center">
                       <Link
-                        to={`/datasets/${project.dataset_id}/prepare`}
+                        to={project.dataset_id
+                          ? `/datasets/${project.dataset_id}/prepare`
+                          : `/mappings?conversion=${project.id}`}
                         className="text-xs font-medium text-brand-dark hover:underline"
                       >
                         View all {recs.length} recommendations →
