@@ -25,7 +25,8 @@ async def _require_conversion(conversion_id: str) -> Conversion:
     c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
-    if not c.dataset_id or not c.template_id:
+    is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+    if not c.template_id or (not is_ebs and not c.dataset_id):
         raise HTTPException(400, "Conversion needs both dataset and template bound first.")
     return c
 

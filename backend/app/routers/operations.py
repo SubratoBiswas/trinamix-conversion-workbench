@@ -42,7 +42,8 @@ async def generate_output(
     _: User = Depends(get_current_user),
 ):
     c = await _require_conversion(conversion_id)
-    if not c.dataset_id or not c.template_id:
+    is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+    if not c.template_id or (not is_ebs and not c.dataset_id):
         raise HTTPException(400, "Conversion is not fully bound")
     out = await generate_output_artifact(c, fmt=fmt)
     return {**out.model_dump(), "id": str(out.id), "conversion_id": str(out.conversion_id)}
@@ -55,7 +56,8 @@ async def output_preview(
     _: User = Depends(get_current_user),
 ):
     c = await _require_conversion(conversion_id)
-    if not c.dataset_id or not c.template_id:
+    is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+    if not c.template_id or (not is_ebs and not c.dataset_id):
         raise HTTPException(400, "Conversion is not fully bound")
     return await get_output_preview(c, limit=limit)
 
@@ -239,7 +241,8 @@ async def run_workflow(
                 continue
             try:
                 if ntype == "ai_auto_map":
-                    if not conv.dataset_id or not conv.template_id:
+                    _ebs = getattr(conv, "source_type", "dataset") == "ebs"
+                    if not conv.template_id or (not _ebs and not conv.dataset_id):
                         raise RuntimeError("conversion not fully bound")
                     from app.services.mapping_service import run_mapping_suggestions
                     res = await run_mapping_suggestions(conv)

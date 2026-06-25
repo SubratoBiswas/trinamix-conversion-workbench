@@ -24,7 +24,7 @@ async def profile_cleansing(conversion_id: str, _: User = Depends(get_current_us
     c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
-    if not c.dataset_id:
+    if not c.dataset_id and getattr(c, "source_type", "dataset") != "ebs":
         raise HTTPException(400, "Conversion has no source dataset bound")
     issues = await run_cleansing(c)
     return [_issue_out(i) for i in issues]
