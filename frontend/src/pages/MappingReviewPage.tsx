@@ -281,6 +281,18 @@ export const MappingReviewPage: React.FC = () => {
     }
   };
 
+  // Delete a mapping arrow — clears the source binding and returns the row to
+  // an unmapped "suggested" state (the field can then be re-mapped by drag).
+  const unmap = async (m: MappingSuggestion) => {
+    try {
+      await MappingApi.update(m.id, { source_column: null as any, status: "suggested" });
+      flash(`Cleared mapping for ${m.target_field_name || "field"}`);
+      loadAll();
+    } catch (e: any) {
+      flash(`Could not clear: ${e?.response?.data?.detail || e?.message || "failed"}`);
+    }
+  };
+
   // ── Apply & (optionally) Learn a recommendation ──
   const applyRecommendation = async (rec: Recommendation, learn: boolean) => {
     if (!pid || !rec.ruleType) {
@@ -560,6 +572,7 @@ export const MappingReviewPage: React.FC = () => {
           setHoveredTarget={setHoveredTarget}
           ruleTargetIds={ruleTargetIds}
           onMapDrop={mapDrop}
+          onUnmap={unmap}
           loading={running}
         />
 
@@ -645,6 +658,7 @@ interface CanvasProps {
   setHoveredTarget: (t: number | null) => void;
   ruleTargetIds?: Set<number>;
   onMapDrop?: (targetFieldId: number, sourceColumn: string) => void;
+  onUnmap?: (m: MappingSuggestion) => void;
   loading?: boolean;
 }
 
@@ -652,7 +666,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   sourceColumns, targetFields, mappings, visibleTargetIds,
   selectedMappingId, setSelectedMappingId,
   hoveredSource, setHoveredSource, hoveredTarget, setHoveredTarget,
-  ruleTargetIds, onMapDrop, loading,
+  ruleTargetIds, onMapDrop, onUnmap, loading,
 }) => {
   // Which source column is being dragged, and which target is hovered during a
   // drag — drives the drop-zone highlight for the drag-to-map gesture.
@@ -928,6 +942,15 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                       {mapping.status === "suggested" ? `${Math.round(mapping.confidence * 100)}%` :
                        mapping.status}
                     </Pill>
+                  )}
+                  {mapping?.source_column && onUnmap && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onUnmap(mapping); }}
+                      title={`Clear mapping (${mapping.source_column})`}
+                      className="shrink-0 rounded p-0.5 text-ink-subtle hover:bg-danger-subtle hover:text-danger"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   )}
                 </div>
                 {f.required && !mapping?.source_column && (

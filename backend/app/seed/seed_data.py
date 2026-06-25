@@ -1056,12 +1056,20 @@ async def _repair_zero_field_templates() -> None:
 
 
 async def _reseed_scm_om_templates() -> None:
-    """Force-reseed all SCM and OM FBDI templates with the latest Oracle Fusion
-    field schemas from STANDARD_FIELDS on every deploy.
+    """Keep SCM/OM FBDI templates in sync with STANDARD_FIELDS WITHOUT needlessly
+    churning FBDIField ObjectIds.
 
-    This replaces any stale / zero-field records so that the Templates page
-    always reflects the current canonical field definitions after a redeploy.
-    Templates in other modules are left untouched.
+    IMPORTANT: the previous version force-reseeded (delete + reinsert) on EVERY
+    startup, which gave every field a brand-new ObjectId each time the backend
+    restarted. Saved MappingSuggestions reference target_field_id, so after each
+    restart every mapping was orphaned — the canvas showed nothing and users had
+    to re-run AI mapping. Render's free tier restarts often (idle spin-down),
+    so this happened constantly.
+
+    Now field ids are STABLE across restarts:
+      * empty templates  → seed (force=False)
+      * field set differs from the canonical schema → reseed (rare, real change)
+      * field set already matches → leave ids untouched, only refresh counts
     """
     import logging
     log = logging.getLogger(__name__)
@@ -1081,13 +1089,33 @@ async def _reseed_scm_om_templates() -> None:
         if key is None:
             log.debug(f"_reseed_scm_om: no schema for '{tpl.name}' — skipped")
             continue
-        seeded = await auto_seed_if_empty(tpl, force=True)
-        if seeded:
-            log.info(f"_reseed_scm_om: reseeded {seeded} fields for '{tpl.name}' (schema={key})")
-            reseeded += 1
+
+        existing = await FBDIField.find(
+            FBDIField.template_id == tpl.id
+        ).sort("sequence").to_list()
+        canonical_names = [fd["field_name"] for fd in STANDARD_FIELDS[key]]
+
+        if not existing:
+            # No fields yet — safe to seed (no mappings can reference them).
+            if await auto_seed_if_empty(tpl, force=False):
+                reseeded += 1
+            continue
+
+        existing_names = [f.field_name for f in existing]
+        if existing_names != canonical_names:
+            # Schema genuinely changed — reseed. Id churn is unavoidable here,
+            # but this is rare (only when STANDARD_FIELDS is edited).
+            log.info(f"_reseed_scm_om: schema changed for '{tpl.name}' — reseeding")
+            if await auto_seed_if_empty(tpl, force=True):
+                reseeded += 1
+        else:
+            # Identical — DO NOT touch fields (keep ids so mappings stay valid).
+            req = sum(1 for fd in STANDARD_FIELDS[key] if fd.get("required"))
+            if tpl.required_field_count != req:
+                await tpl.set({"required_field_count": req})
 
     if reseeded:
-        log.info(f"_reseed_scm_om: refreshed {reseeded} SCM/OM templates with latest Oracle FBDI schemas")
+        log.info(f"_reseed_scm_om: refreshed {reseeded} SCM/OM templates (ids preserved where unchanged)")
 
 
 async def run_seed() -> None:
