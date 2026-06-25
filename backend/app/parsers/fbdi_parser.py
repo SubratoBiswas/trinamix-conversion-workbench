@@ -79,57 +79,62 @@ def parse_fbdi_template(file_path: Path | str) -> dict[str, Any]:
         if "instruction" in sname.lower():
             continue
         ws = wb[sname]
-        if ws.max_row < 3 or ws.max_column < 2:
+        if ws.max_row < 1 or ws.max_column < 1:
             continue
 
-        # Discover metadata-row labels in column 1
-        meta_rows: list[tuple[int, str]] = []
+        # ── Detect format ──────────────────────────────────────────────────
+        # Oracle FBDI format: column A contains row-labels ("Name",
+        # "Description", "Data Type") and fields span columns B→.
+        # Standard tabular format: row 1 contains field names starting at
+        # column A (headers across columns, data down rows).
+        col_a_labels = []
         for r in range(1, min(15, ws.max_row + 1)):
             v = ws.cell(r, 1).value
             if v:
-                meta_rows.append((r, str(v).strip()))
+                col_a_labels.append((r, str(v).strip()))
 
-        # Required header rows: Name (1), Description (2), Data Type (3)
-        # Module rows: any subsequent row whose label looks like a module.
-        name_row = next((r for r, lbl in meta_rows if lbl.lower() == "name"), 1)
-        desc_row = next((r for r, lbl in meta_rows if "description" in lbl.lower()), 2)
-        type_row = next(
-            (r for r, lbl in meta_rows if "data type" in lbl.lower() or lbl.lower() == "type"), 3
-        )
-        module_rows = [
-            (r, lbl) for r, lbl in meta_rows
-            if r > type_row and _looks_like_module_label(lbl)
-        ]
+        is_oracle_fbdi = any(lbl.lower() == "name" for _, lbl in col_a_labels)
 
         sheet_field_count = 0
-        for col in range(2, ws.max_column + 1):
-            raw_name = ws.cell(name_row, col).value
-            if not raw_name:
-                continue
-            name = str(raw_name).strip()
-            if not name:
-                continue
 
-            is_required_marker = name.startswith("*")
-            field_name_clean = name.lstrip("*").strip()
-            description_val = ws.cell(desc_row, col).value
-            description_text = str(description_val).strip() if description_val else None
+        if is_oracle_fbdi:
+            # ── Oracle FBDI transposed format ──────────────────────────────
+            meta_rows = col_a_labels
+            name_row = next((r for r, lbl in meta_rows if lbl.lower() == "name"), 1)
+            desc_row = next((r for r, lbl in meta_rows if "description" in lbl.lower()), 2)
+            type_row = next(
+                (r for r, lbl in meta_rows if "data type" in lbl.lower() or lbl.lower() == "type"), 3
+            )
+            module_rows = [
+                (r, lbl) for r, lbl in meta_rows
+                if r > type_row and _looks_like_module_label(lbl)
+            ]
 
-            dtype_raw = ws.cell(type_row, col).value
-            data_type, max_length = _parse_data_type(dtype_raw)
+            for col in range(2, ws.max_column + 1):
+                raw_name = ws.cell(name_row, col).value
+                if not raw_name:
+                    continue
+                name = str(raw_name).strip()
+                if not name:
+                    continue
 
-            required_modules: list[str] = []
-            for r, lbl in module_rows:
-                cell_val = ws.cell(r, col).value
-                if cell_val and "required" in str(cell_val).strip().lower():
-                    required_modules.append(lbl)
+                is_required_marker = name.startswith("*")
+                field_name_clean = name.lstrip("*").strip()
+                description_val = ws.cell(desc_row, col).value
+                description_text = str(description_val).strip() if description_val else None
+                dtype_raw = ws.cell(type_row, col).value
+                data_type, max_length = _parse_data_type(dtype_raw)
 
-            required = is_required_marker or bool(required_modules)
-            seq += 1
-            sheet_field_count += 1
+                required_modules: list[str] = []
+                for r, lbl in module_rows:
+                    cell_val = ws.cell(r, col).value
+                    if cell_val and "required" in str(cell_val).strip().lower():
+                        required_modules.append(lbl)
 
-            fields_out.append(
-                {
+                required = is_required_marker or bool(required_modules)
+                seq += 1
+                sheet_field_count += 1
+                fields_out.append({
                     "field_name": field_name_clean,
                     "display_name": field_name_clean,
                     "description": description_text,
@@ -143,8 +148,55 @@ def parse_fbdi_template(file_path: Path | str) -> dict[str, Any]:
                     "sequence": seq,
                     "sheet_name": sname,
                     "required_modules": required_modules,
-                }
-            )
+                })
+
+        else:
+            # ── Standard tabular format ────────────────────────────────────
+            # Row 1 = column headers (field names), starting from column 1.
+            # Headers prefixed with "* " indicate required fields.
+            # Sample values come from row 2 (if present).
+            for col in range(1, ws.max_column + 1):
+                raw_name = ws.cell(1, col).value
+                if not raw_name:
+                    continue
+                name = str(raw_name).strip()
+                if not name:
+                    continue
+
+                is_required_marker = name.startswith("*")
+                field_name_clean = name.lstrip("* ").strip()
+                if not field_name_clean:
+                    continue
+
+                # Sample value from row 2 if available
+                sample_val = ws.cell(2, col).value
+                sample_text = str(sample_val).strip() if sample_val is not None else None
+
+                # Infer data type from sample value
+                if sample_val is None:
+                    data_type, max_length = "Character", None
+                elif isinstance(sample_val, (int, float)):
+                    data_type, max_length = "Number", None
+                else:
+                    data_type, max_length = "Character", None
+
+                seq += 1
+                sheet_field_count += 1
+                fields_out.append({
+                    "field_name": field_name_clean,
+                    "display_name": field_name_clean,
+                    "description": None,
+                    "required": is_required_marker,
+                    "data_type": data_type,
+                    "max_length": max_length,
+                    "format_mask": None,
+                    "sample_value": sample_text,
+                    "lookup_type": None,
+                    "validation_notes": None,
+                    "sequence": seq,
+                    "sheet_name": sname,
+                    "required_modules": [],
+                })
 
         sheets_out.append({"sheet_name": sname, "sequence": len(sheets_out), "field_count": sheet_field_count})
 
