@@ -106,15 +106,22 @@ async def _ebs_columns_with_diag(table_name: str) -> tuple[list[SourceColumn], d
             [conn.username, password],
             "/app/ojdbc11.jar",
         )
+        import re
         cur = db.cursor()
         owner = (conn.username or "APPS").upper()
         tbl = table_name.upper()
+        # ebs_table_hint is system-set, but guard the f-string DESCRIBE path
+        # against anything that isn't a bare Oracle identifier.
+        safe_tbl = bool(re.match(r"^[A-Z0-9_$#]+$", tbl))
+        diag["safe_table_name"] = safe_tbl
 
         def _fetch(sql: str, params: list) -> list:
             cur.execute(sql, params)
             return cur.fetchall()
 
-        # 1) owner-scoped (login schema owns the table)
+        # rows: list of (column_name, data_type, nullable, num_distinct)
+        # 1) owner-scoped ALL_TAB_COLUMNS — richest metadata when the login
+        #    schema actually owns a table/view with this exact name.
         rows = _fetch(
             """
             SELECT column_name, data_type, nullable, num_distinct
@@ -126,11 +133,13 @@ async def _ebs_columns_with_diag(table_name: str) -> tuple[list[SourceColumn], d
         )
         diag["owner_scoped_rows"] = len(rows)
 
-        # 2) resolve an APPS/PUBLIC synonym to the real base-table owner
+        # 2) resolve an APPS/PUBLIC synonym to its REAL target owner+name, then
+        #    read that object's columns (EBS exposes base tables/views through
+        #    APPS synonyms whose target name often differs, e.g. *_VL / *_B).
         if not rows:
             syn = _fetch(
                 """
-                SELECT table_owner FROM all_synonyms
+                SELECT table_owner, table_name FROM all_synonyms
                 WHERE synonym_name = ? AND owner IN (?, 'PUBLIC')
                 ORDER BY DECODE(owner, ?, 0, 1)
                 FETCH FIRST 1 ROWS ONLY
@@ -138,8 +147,9 @@ async def _ebs_columns_with_diag(table_name: str) -> tuple[list[SourceColumn], d
                 [tbl, owner, owner],
             )
             if syn:
-                real_owner = syn[0][0]
-                diag["synonym_owner"] = real_owner
+                syn_owner, syn_name = syn[0][0], syn[0][1]
+                diag["synonym_owner"] = syn_owner
+                diag["synonym_target"] = syn_name
                 rows = _fetch(
                     """
                     SELECT column_name, data_type, nullable, num_distinct
@@ -147,11 +157,11 @@ async def _ebs_columns_with_diag(table_name: str) -> tuple[list[SourceColumn], d
                     WHERE table_name = ? AND owner = ?
                     ORDER BY column_id
                     """,
-                    [tbl, real_owner],
+                    [syn_name, syn_owner],
                 )
                 diag["synonym_scoped_rows"] = len(rows)
 
-        # 3) last resort — any owner with that table name
+        # 3) any owner that has a table/view with this name
         if not rows:
             rows = _fetch(
                 """
@@ -163,6 +173,22 @@ async def _ebs_columns_with_diag(table_name: str) -> tuple[list[SourceColumn], d
                 [tbl],
             )
             diag["any_owner_rows"] = len(rows)
+
+        # 4) most robust — DESCRIBE the object by selecting zero rows. Oracle
+        #    resolves synonyms/views automatically using the login schema's
+        #    name resolution, so this returns columns even when the metadata
+        #    views hide them. Yields names + nullability (no distinct counts).
+        if not rows and safe_tbl:
+            try:
+                cur.execute(f"SELECT * FROM {tbl} WHERE 1 = 0")
+                desc = cur.description or []
+                rows = [
+                    (d[0], None, ("N" if (len(d) > 6 and d[6] == 0) else "Y"), 0)
+                    for d in desc
+                ]
+                diag["describe_rows"] = len(rows)
+            except Exception as de:
+                diag["describe_error"] = f"{type(de).__name__}: {de}"
 
         cur.close()
         db.close()
