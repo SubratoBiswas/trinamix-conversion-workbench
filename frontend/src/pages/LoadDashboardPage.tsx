@@ -277,8 +277,20 @@ export const LoadDashboardPage: React.FC = () => {
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-muted">Fusion URL</label>
-            <input className="input" placeholder="https://your-pod.fa.us2.oraclecloud.com"
+            <input className="input" placeholder="https://your-pod.oraclepdemos.com"
               value={fBaseUrl} onChange={(e) => setFBaseUrl(e.target.value)} />
+            {/* Guard against pasting the launchpad / SSO link instead of the REST host. */}
+            {/(fa-launchpad|\?params=)/i.test(fBaseUrl) ? (
+              <p className="mt-1 text-[11px] text-warning-dark">
+                That looks like the Fusion <strong>launchpad / SSO link</strong>, not the application host.
+                Log in through it, then copy the base URL from your browser (e.g.
+                <span className="font-mono"> https://&lt;pod&gt;.oraclepdemos.com</span>) — drop any <span className="font-mono">/?params=…</span>.
+              </p>
+            ) : (
+              <p className="mt-1 text-[11px] text-ink-muted">
+                The Fusion Apps host the loader calls (<span className="font-mono">/fscmRestApi</span>, <span className="font-mono">/erpintegrations</span>) — the address bar after you sign in, not the launchpad link.
+              </p>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-muted">Service username</label>
