@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Plug, Database, Loader2 } from "lucide-react";
+import { Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Plug, Database, Loader2, ExternalLink, Activity } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -149,6 +149,22 @@ export const LoadDashboardPage: React.FC = () => {
     }
   };
 
+  // Per-run live Fusion status (keyed by load-run id).
+  type RunStatus = { loading: boolean; state?: string; message?: string; raw?: string | null };
+  const [statusByRun, setStatusByRun] = useState<Record<string, RunStatus>>({});
+
+  const checkStatus = async (runId: string) => {
+    setStatusByRun((m) => ({ ...m, [runId]: { ...m[runId], loading: true } }));
+    try {
+      const r = await FusionApi.loadStatus(runId);
+      setStatusByRun((m) => ({ ...m, [runId]: { loading: false, state: r.state, message: r.message, raw: r.raw } }));
+      // A polled terminal state can flip the run's status — refresh KPIs.
+      if (r.state === "succeeded" || r.state === "warning" || r.state === "error") refresh();
+    } catch (e: any) {
+      setStatusByRun((m) => ({ ...m, [runId]: { loading: false, state: "unknown", message: e?.response?.data?.detail || "Status check failed" } }));
+    }
+  };
+
   const project = projects.find((p) => p.id === projectId) || null;
   const conversion = conversions.find((c) => c.id === pid) || null;
 
@@ -160,6 +176,7 @@ export const LoadDashboardPage: React.FC = () => {
 
   return (
     <>
+      <ProcessingOverlay show={running} label="Submitting to Oracle Fusion…" />
       <PageTitle
         title="Load Management"
         subtitle="Run Fusion loads per engagement and inspect failures by category & root cause"
@@ -245,7 +262,23 @@ export const LoadDashboardPage: React.FC = () => {
               {!targets.loadable && (
                 <span className="ml-1 text-[11px] text-warning">· no import job mapped yet — can't load this object</span>
               )}
+              {targets.pod_url && (
+                <a
+                  href={targets.pod_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-auto inline-flex items-center gap-1 rounded border border-line bg-white px-2 py-0.5 text-[11px] font-medium text-brand hover:bg-brand-subtle"
+                  title={targets.work_area ? `Verify in Fusion: ${targets.work_area}` : "Open Oracle Fusion"}
+                >
+                  <ExternalLink className="h-3 w-3" /> View in Fusion
+                </a>
+              )}
             </div>
+            {targets.work_area && (
+              <div className="mt-1.5 pl-6 text-[11px] text-ink-muted">
+                After loading, verify the records in Fusion under <span className="font-medium text-ink">{targets.work_area}</span> — and check the import job in <span className="font-medium text-ink">Tools → Scheduled Processes</span>.
+              </div>
+            )}
           </CardBody>
         </Card>
       )}
@@ -417,6 +450,58 @@ export const LoadDashboardPage: React.FC = () => {
             </Card>
           </div>
 
+          {/* Fusion load runs + live import status */}
+          <Card className="mb-4">
+            <CardHeader title="Load Runs" subtitle="Submitted Fusion loads — poll Oracle for the live import status" />
+            <div className="overflow-x-auto">
+              <table className="table-shell">
+                <thead>
+                  <tr>
+                    <th>When</th><th>Type</th><th className="text-right">Records</th>
+                    <th>Submission</th><th>Fusion job status</th><th>Request ID</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.map((r) => {
+                    const isFusion = (r as any).run_type === "fusion";
+                    const reqId = (r as any).fusion_request_id as string | undefined;
+                    const live = statusByRun[r.id];
+                    const polled = live?.state || (r as any).fusion_state;
+                    return (
+                      <tr key={r.id}>
+                        <td className="text-ink-muted">{formatDate(r.started_at)}</td>
+                        <td><Pill tone={isFusion ? "info" : "neutral"}>{(r as any).run_type || "simulate"}</Pill></td>
+                        <td className="text-right tabular-nums">{r.total_records}</td>
+                        <td><Pill tone={r.status === "completed" ? "success" : r.status === "failed" ? "danger" : "warning"}>{r.status}</Pill></td>
+                        <td>
+                          {polled ? <StatePill state={polled} /> : <span className="text-[11px] text-ink-subtle">—</span>}
+                          {live?.message && (
+                            <div className="max-w-[260px] truncate text-[10.5px] text-ink-muted" title={live.message}>{live.message}</div>
+                          )}
+                        </td>
+                        <td className="font-mono text-[11px] text-ink-muted">{reqId || "—"}</td>
+                        <td className="text-right">
+                          {isFusion && reqId ? (
+                            <button
+                              onClick={() => checkStatus(r.id)}
+                              disabled={live?.loading}
+                              className="inline-flex items-center gap-1 rounded border border-line bg-white px-2 py-1 text-[11px] font-medium hover:bg-canvas disabled:opacity-50"
+                            >
+                              {live?.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Activity className="h-3 w-3" />}
+                              Check status
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-ink-subtle">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
           {/* Error grid */}
           <Card>
             <CardHeader title="Latest Run Errors" subtitle={runs[0] ? `Run #${runs[0].id} · ${formatDate(runs[0].started_at)}` : "—"} />
@@ -451,6 +536,35 @@ export const LoadDashboardPage: React.FC = () => {
       )}
     </>
   );
+};
+
+// Full-screen "the tool is working" indicator — a spinning ring shown while a
+// load is being submitted to Oracle Fusion (and any other long async action).
+const ProcessingOverlay: React.FC<{ show: boolean; label?: string }> = ({ show, label }) =>
+  !show ? null : (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-4 rounded-2xl bg-white px-10 py-8 shadow-xl">
+        <div className="relative h-14 w-14">
+          <div className="absolute inset-0 rounded-full border-4 border-brand/15" />
+          <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-brand border-r-brand" />
+        </div>
+        <div className="text-sm font-semibold text-ink">{label || "Processing…"}</div>
+        <div className="text-[11px] text-ink-muted">Please wait — talking to Oracle Fusion</div>
+      </div>
+    </div>
+  );
+
+// Normalized Fusion ESS phase → coloured pill.
+const StatePill: React.FC<{ state: string }> = ({ state }) => {
+  const map: Record<string, { tone: "success" | "warning" | "danger" | "info" | "neutral"; label: string }> = {
+    succeeded: { tone: "success", label: "Succeeded" },
+    warning: { tone: "warning", label: "Warning" },
+    error: { tone: "danger", label: "Error" },
+    running: { tone: "info", label: "Running" },
+    unknown: { tone: "neutral", label: "Unknown" },
+  };
+  const m = map[state] || map.unknown;
+  return <Pill tone={m.tone}>{m.label}</Pill>;
 };
 
 const KpiBadge: React.FC<{ label: string; value: number; icon?: React.ElementType; tone?: "success" | "danger" | "warning" }> =

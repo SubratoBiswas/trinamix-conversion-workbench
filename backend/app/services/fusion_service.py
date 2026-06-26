@@ -122,6 +122,62 @@ def load_meta_for(business_object: Optional[str]) -> dict[str, str]:
     return FBDI_LOAD_META.get(resolve_object_key(business_object) or "", {})
 
 
+# ── object → Fusion work area where the loaded records can be verified ────────
+FUSION_WORK_AREAS: dict[str, str] = {
+    "UOM":              "Setup and Maintenance → Manage Units of Measure",
+    "UOM Class":        "Setup and Maintenance → Manage Unit of Measure Classes",
+    "Inventory Org":    "Setup and Maintenance → Manage Inventory Organizations",
+    "Subinventory":     "Setup and Maintenance → Manage Subinventories",
+    "Locator":          "Setup and Maintenance → Manage Item Locators",
+    "Item Class":       "Product Information Management → Manage Item Classes",
+    "Item":             "Product Information Management → Manage Items",
+    "Customer":         "Receivables → Billing → Manage Customers",
+    "Customer Site":    "Receivables → Billing → Manage Customers (Sites)",
+    "Supplier":         "Procurement → Suppliers → Manage Suppliers",
+    "Supplier Site":    "Procurement → Suppliers → Manage Suppliers (Sites)",
+    "Price List":       "Pricing Administration → Manage Price Lists",
+    "On-Hand Balance":  "Inventory Management → Manage Item Quantities",
+    "Lot Number":       "Inventory Management → Manage Item Quantities (Lots)",
+    "Serial Number":    "Inventory Management → Manage Item Quantities (Serials)",
+    "Sales Order":      "Order Management → Manage Orders",
+    "Sales Order Line": "Order Management → Manage Orders",
+    "BOM":              "Product Information Management → Manage Bills of Material",
+    "Purchase Order":   "Procurement → Purchase Orders → Manage Orders",
+}
+
+
+def work_area_for(business_object: Optional[str]) -> Optional[str]:
+    return FUSION_WORK_AREAS.get(resolve_object_key(business_object) or "")
+
+
+# Oracle ESS job phases → a small normalized state vocabulary for the UI.
+_STATE_MAP: dict[str, str] = {
+    "SUCCEEDED": "succeeded", "COMPLETED": "succeeded", "FINISHED": "succeeded",
+    "WARNING": "warning",
+    "ERROR": "error", "ERROR_AUTO_RETRY": "error", "VALIDATION_FAILED": "error",
+    "CANCELLED": "error", "EXPIRED": "error",
+    "RUNNING": "running", "READY": "running", "WAIT": "running", "WAITING": "running",
+    "BLOCKED": "running", "PAUSED": "running", "HOLD": "running", "SCHEDULE_READY": "running",
+}
+
+
+def _normalize_ess_state(raw: str) -> str:
+    """Map an Oracle ESS phase string to succeeded/warning/error/running/unknown."""
+    key = (raw or "").strip().upper().split(":")[0].strip()
+    if key in _STATE_MAP:
+        return _STATE_MAP[key]
+    up = (raw or "").upper()
+    if "SUCC" in up:
+        return "succeeded"
+    if "WARN" in up:
+        return "warning"
+    if "ERROR" in up or "FAIL" in up:
+        return "error"
+    if "RUN" in up or "WAIT" in up or "READY" in up or "PROGRESS" in up:
+        return "running"
+    return "unknown"
+
+
 def _password(conn) -> str:
     pw = conn.encrypted_password or ""
     return pw[6:] if pw.startswith("PLAIN:") else pw
@@ -193,3 +249,50 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
     except Exception as exc:  # noqa: BLE001
         log.warning(f"load_to_fusion failed: {exc}")
         return {"ok": False, "status": None, "message": f"Could not reach Fusion: {exc}", "request_id": None}
+
+
+async def get_load_status(conn, request_id: str) -> dict[str, Any]:
+    """Poll Oracle ERP Integration `getESSJobStatus` for a submitted request.
+
+    Returns a normalized state (succeeded / warning / error / running / unknown)
+    plus the raw phase string Fusion reported, so the UI can show progress and
+    the final outcome without the user opening Scheduled Processes by hand.
+    """
+    if not request_id:
+        return {"ok": False, "state": "unknown", "raw": None,
+                "message": "No Fusion request id recorded for this run."}
+
+    url = conn.base_url.rstrip("/") + _FUSION_REST + "/erpintegrations"
+    # Different pods accept slightly different param casings — send both.
+    body = {
+        "OperationName": "getESSJobStatus",
+        "ReqstId": str(request_id),
+        "requestId": str(request_id),
+        "JobType": "ESS",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            r = await client.post(url, json=body, auth=(conn.username, _password(conn)))
+        raw = ""
+        try:
+            data = r.json()
+            if isinstance(data, dict):
+                raw = (data.get("result") or data.get("Result")
+                       or data.get("Status") or data.get("status") or r.text)
+            else:
+                raw = str(data)
+        except Exception:  # noqa: BLE001
+            raw = r.text
+        raw_str = (str(raw) or "").strip()
+        state = _normalize_ess_state(raw_str)
+        ok = r.status_code in (200, 201)
+        if not ok and state == "unknown":
+            msg = f"Fusion returned HTTP {r.status_code} while checking status."
+        else:
+            msg = f"Job {request_id}: {raw_str[:120] or state}"
+        return {"ok": ok, "http_status": r.status_code, "state": state,
+                "raw": raw_str[:300], "message": msg}
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"get_load_status failed: {exc}")
+        return {"ok": False, "state": "unknown", "raw": None,
+                "message": f"Could not reach Fusion: {exc}"}

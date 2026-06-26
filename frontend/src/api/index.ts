@@ -454,9 +454,11 @@ export const FusionApi = {
   testConnection: (body?: { base_url?: string; username?: string; password?: string }) =>
     api.post<{ ok: boolean; status: number | null; message: string }>("/fusion/connection/test", body ?? {}).then(r => r.data),
   targets: (conversionId: string) =>
-    api.get<{ business_object: string | null; interface_tables: string[]; loadable: boolean }>(`/conversions/${conversionId}/fusion-targets`).then(r => r.data),
+    api.get<{ business_object: string | null; interface_tables: string[]; loadable: boolean; work_area: string | null; pod_url: string | null }>(`/conversions/${conversionId}/fusion-targets`).then(r => r.data),
   load: (conversionId: string) =>
     api.post<{ ok: boolean; status: number | null; message: string; request_id: string | null; rows: number; load_run_id: string }>(`/conversions/${conversionId}/load-to-fusion`).then(r => r.data),
+  loadStatus: (runId: string) =>
+    api.get<{ ok: boolean; state: string; raw: string | null; request_id: string | null; message: string; http_status?: number }>(`/fusion/load-runs/${runId}/status`).then(r => r.data),
 };
 
 // === Copilot ===================================================================

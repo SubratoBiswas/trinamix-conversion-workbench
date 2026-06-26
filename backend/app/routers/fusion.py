@@ -11,7 +11,8 @@ from app.models.user import User
 from app.models.v10 import SourceConnection
 from app.services.auth_service import get_current_user
 from app.services.fusion_service import (
-    interface_tables_for, load_meta_for, load_to_fusion, test_fusion_connection,
+    get_load_status, interface_tables_for, load_meta_for, load_to_fusion,
+    test_fusion_connection, work_area_for,
 )
 
 router = APIRouter(prefix="/api/fusion", tags=["fusion"])
@@ -117,11 +118,37 @@ async def fusion_targets(conversion_id: str, _: User = Depends(get_current_user)
     if not conv:
         raise HTTPException(404, "Conversion not found")
     bo = await _business_object(conv)
+    conn = await _get_conn()
     return {
         "business_object": bo,
         "interface_tables": interface_tables_for(bo),
         "loadable": bool(load_meta_for(bo)),
+        "work_area": work_area_for(bo),
+        "pod_url": (conn.base_url if conn else None),
     }
+
+
+@router.get("/load-runs/{run_id}/status")
+async def fusion_load_status(run_id: str, _: User = Depends(get_current_user)):
+    """Poll Oracle for the live status of a previously-submitted Fusion load."""
+    from app.models.load import LoadRun
+    run = await LoadRun.get(PydanticObjectId(run_id))
+    if not run:
+        raise HTTPException(404, "Load run not found")
+    if not run.fusion_request_id:
+        return {"ok": False, "state": "unknown", "request_id": None,
+                "message": "This run has no Fusion request id — it was a simulate run or predates status tracking."}
+    conn = await _get_conn()
+    if conn is None or not conn.base_url or not conn.encrypted_password:
+        raise HTTPException(400, "Configure the Oracle Fusion connection first.")
+    res = await get_load_status(conn, run.fusion_request_id)
+    upd: dict[str, Any] = {"fusion_state": res.get("state")}
+    if res.get("state") == "error":
+        upd["status"] = "failed"
+    elif res.get("state") in ("succeeded", "warning"):
+        upd["status"] = "completed"
+    await run.set(upd)
+    return {**res, "request_id": run.fusion_request_id}
 
 
 @conv_router.post("/{conversion_id}/load-to-fusion")
@@ -164,6 +191,9 @@ async def load_to_fusion_endpoint(conversion_id: str, _: User = Depends(get_curr
         failed_count=0 if res["ok"] else n,
         warning_count=0, error_count=0 if res["ok"] else 1,
         started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        fusion_request_id=(res.get("request_id") or None),
+        # submitted but not yet imported — Check status will poll the real phase
+        fusion_state=("running" if res["ok"] else "error"),
     )
     await run.insert()
     if res["ok"]:

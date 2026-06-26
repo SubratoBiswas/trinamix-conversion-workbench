@@ -18,6 +18,10 @@ class LoadRun(Document):
     error_count: int = 0
     started_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
+    # Oracle ERP Integration request id returned by importBulkData, and the
+    # latest polled ESS phase (succeeded/warning/error/running/unknown).
+    fusion_request_id: Optional[str] = None
+    fusion_state: Optional[str] = None
 
     class Settings:
         name = "load_runs"
