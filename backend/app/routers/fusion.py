@@ -11,7 +11,7 @@ from app.models.user import User
 from app.models.v10 import SourceConnection
 from app.services.auth_service import get_current_user
 from app.services.fusion_service import (
-    FBDI_LOAD_META, interface_tables_for, load_to_fusion, test_fusion_connection,
+    interface_tables_for, load_meta_for, load_to_fusion, test_fusion_connection,
 )
 
 router = APIRouter(prefix="/api/fusion", tags=["fusion"])
@@ -120,7 +120,7 @@ async def fusion_targets(conversion_id: str, _: User = Depends(get_current_user)
     return {
         "business_object": bo,
         "interface_tables": interface_tables_for(bo),
-        "loadable": bo in FBDI_LOAD_META,
+        "loadable": bool(load_meta_for(bo)),
     }
 
 

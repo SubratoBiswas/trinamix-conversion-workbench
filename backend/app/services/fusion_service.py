@@ -53,9 +53,39 @@ FBDI_LOAD_META: dict[str, dict[str, str]] = {
 
 _FUSION_REST = "/fscmRestApi/resources/11.13.18.05"
 
+# A conversion's object can arrive as the template's display name ("Unit of
+# Measure") OR the conversion target_object ("UOM"). Resolve both to the
+# canonical key used by the maps above.
+_OBJECT_ALIASES: dict[str, str] = {
+    "uom": "UOM", "unit of measure": "UOM", "units of measure": "UOM",
+    "inventory org": "Inventory Org", "inventory organization": "Inventory Org",
+    "item class": "Item Class", "item catalog / class": "Item Class", "item class setup": "Item Class",
+    "item": "Item", "item master": "Item", "item master conversion": "Item",
+    "customer": "Customer", "customer master": "Customer",
+    "supplier": "Supplier", "supplier master": "Supplier",
+    "bom": "BOM", "bills of material": "BOM", "bill of materials": "BOM", "bom conversion": "BOM",
+    "on-hand balance": "On-Hand Balance", "on hand balance": "On-Hand Balance",
+    "on-hand inventory balances": "On-Hand Balance", "on-hand balance load": "On-Hand Balance",
+    "sales order": "Sales Order", "open sales orders": "Sales Order", "sales order backlog": "Sales Order",
+    "purchase order": "Purchase Order", "open purchase orders": "Purchase Order",
+}
+
+
+def resolve_object_key(business_object: Optional[str]) -> Optional[str]:
+    """Map any of the object's names to the canonical map key (or None)."""
+    if not business_object:
+        return None
+    if business_object in FBDI_INTERFACE_TABLES:
+        return business_object
+    return _OBJECT_ALIASES.get(business_object.strip().lower())
+
 
 def interface_tables_for(business_object: Optional[str]) -> list[str]:
-    return FBDI_INTERFACE_TABLES.get(business_object or "", [])
+    return FBDI_INTERFACE_TABLES.get(resolve_object_key(business_object) or "", [])
+
+
+def load_meta_for(business_object: Optional[str]) -> dict[str, str]:
+    return FBDI_LOAD_META.get(resolve_object_key(business_object) or "", {})
 
 
 def _password(conn) -> str:
@@ -90,7 +120,7 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
         zf.writestr(base_filename, csv_bytes)
     content_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
-    meta = FBDI_LOAD_META.get(business_object or "", {})
+    meta = load_meta_for(business_object)
     if not meta:
         return {"ok": False, "status": None,
                 "message": f"No Fusion import job is mapped for object '{business_object}'. "
