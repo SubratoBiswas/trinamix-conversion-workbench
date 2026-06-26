@@ -59,11 +59,27 @@ export const LoadDashboardPage: React.FC = () => {
       setFUser(c.username || "");
     }).catch(() => {});
 
+  // Pre-flight: probe whether this pod/user can actually run the import, so we
+  // can warn before a load comes back as -1.
+  const [preflight, setPreflight] = useState<Awaited<ReturnType<typeof FusionApi.preflight>> | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+
   useEffect(() => { refreshFusionConn(); }, []);
   useEffect(() => {
-    if (!pid) { setTargets(null); return; }
+    if (!pid) { setTargets(null); setPreflight(null); return; }
     FusionApi.targets(pid).then(setTargets).catch(() => setTargets(null));
   }, [pid]);
+
+  // Run the pod check whenever the conversion or the connection changes.
+  useEffect(() => {
+    setPreflight(null);
+    if (!pid || !fusionConn?.has_credentials || !fusionConn?.base_url) return;
+    setPreflightLoading(true);
+    FusionApi.preflight(pid)
+      .then(setPreflight)
+      .catch(() => setPreflight(null))
+      .finally(() => setPreflightLoading(false));
+  }, [pid, fusionConn?.has_credentials, fusionConn?.base_url]);
 
   const testFusion = async () => {
     setFTesting(true); setFTestMsg(null);
@@ -131,6 +147,13 @@ export const LoadDashboardPage: React.FC = () => {
     if (!fusionConn?.has_credentials || !fusionConn?.base_url) {
       setFusionOpen(true);
       return;
+    }
+    // Soft-gate on the pod pre-flight — warn before a load that will return -1.
+    if (preflight && preflight.level !== "ready") {
+      const proceed = window.confirm(
+        `Pod check warning:\n\n${preflight.message}\n\nLoad anyway?`,
+      );
+      if (!proceed) return;
     }
     setRunning(true);
     setLoadError(null);
@@ -280,6 +303,24 @@ export const LoadDashboardPage: React.FC = () => {
             {targets.work_area && (
               <div className="mt-1.5 pl-6 text-[11px] text-ink-muted">
                 After loading, verify the records in Fusion under <span className="font-medium text-ink">{targets.work_area}</span> — and check the import job in <span className="font-medium text-ink">Tools → Scheduled Processes</span>.
+              </div>
+            )}
+            {(preflightLoading || preflight) && (
+              <div className="mt-2 flex items-start gap-2 pl-6 text-[11px]">
+                {preflightLoading ? (
+                  <span className="inline-flex items-center gap-1 text-ink-muted"><Loader2 className="h-3 w-3 animate-spin" /> Checking this pod…</span>
+                ) : preflight ? (
+                  <>
+                    <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 ${
+                      preflight.level === "ready" ? "bg-success-subtle text-success"
+                      : (preflight.level === "no_privilege" || preflight.level === "module_missing") ? "bg-danger-subtle text-danger"
+                      : "bg-warning-subtle text-warning-dark"}`}>
+                      {preflight.level === "ready" ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                      Pod check: {preflight.level === "ready" ? "ready" : preflight.level.replace(/_/g, " ")}
+                    </span>
+                    <span className="text-ink-muted">{preflight.message}</span>
+                  </>
+                ) : null}
               </div>
             )}
           </CardBody>

@@ -459,6 +459,8 @@ export const FusionApi = {
     api.post<{ ok: boolean; status: number | null; message: string; request_id: string | null; rows: number; load_run_id: string }>(`/conversions/${conversionId}/load-to-fusion`).then(r => r.data),
   loadStatus: (runId: string) =>
     api.get<{ ok: boolean; state: string; raw: string | null; request_id: string | null; message: string; http_status?: number }>(`/fusion/load-runs/${runId}/status`).then(r => r.data),
+  preflight: (conversionId: string) =>
+    api.get<{ ok: boolean; level: string; resource: string; http_status: number | null; message: string; business_object: string | null }>(`/conversions/${conversionId}/fusion-preflight`).then(r => r.data),
 };
 
 // === Copilot ===================================================================

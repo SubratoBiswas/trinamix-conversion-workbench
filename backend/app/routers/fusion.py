@@ -12,7 +12,7 @@ from app.models.v10 import SourceConnection
 from app.services.auth_service import get_current_user
 from app.services.fusion_service import (
     get_load_status, interface_tables_for, load_meta_for, load_to_fusion,
-    test_fusion_connection, work_area_for,
+    preflight_fusion, test_fusion_connection, work_area_for,
 )
 
 router = APIRouter(prefix="/api/fusion", tags=["fusion"])
@@ -149,6 +149,20 @@ async def fusion_load_status(run_id: str, _: User = Depends(get_current_user)):
         upd["status"] = "completed"
     await run.set(upd)
     return {**res, "request_id": run.fusion_request_id}
+
+
+@conv_router.get("/{conversion_id}/fusion-preflight")
+async def fusion_preflight(conversion_id: str, _: User = Depends(get_current_user)):
+    """Check whether this pod/user can run an import for the conversion's object."""
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    conn = await _get_conn()
+    if conn is None or not conn.base_url or not conn.encrypted_password:
+        raise HTTPException(400, "Configure the Oracle Fusion connection first.")
+    bo = await _business_object(conv)
+    res = await preflight_fusion(conn, bo)
+    return {**res, "business_object": bo}
 
 
 @conv_router.post("/{conversion_id}/load-to-fusion")

@@ -329,3 +329,52 @@ async def get_load_status(conn, request_id: str) -> dict[str, Any]:
         log.warning(f"get_load_status failed: {exc}")
         return {"ok": False, "state": "unknown", "raw": None,
                 "message": f"Could not reach Fusion: {exc}"}
+
+
+# A representative SCM REST resource per object — if the pod/user can read it,
+# the module is provisioned and an FBDI import for that object can be attempted.
+_PROBE_RESOURCE: dict[str, str] = {
+    "Item": "items", "Item Class": "itemClasses",
+    "UOM": "items", "UOM Class": "items",
+    "Inventory Org": "inventoryOrganizations",
+    "Subinventory": "inventoryOrganizations", "Locator": "inventoryOrganizations",
+    "On-Hand Balance": "inventoryOrganizations",
+    "Lot Number": "items", "Serial Number": "items",
+    "Customer": "items", "Customer Site": "items",
+    "Supplier": "suppliers", "Supplier Site": "suppliers",
+    "Price List": "priceLists",
+    "Sales Order": "salesOrdersForOrderHub", "Sales Order Line": "salesOrdersForOrderHub",
+    "BOM": "items", "Purchase Order": "draftPurchaseOrders",
+}
+
+
+async def preflight_fusion(conn, business_object: Optional[str]) -> dict[str, Any]:
+    """Probe whether this pod/user can actually run an import for the object.
+
+    Reads a representative SCM REST resource. 200 = module provisioned and the
+    user can read it (load can be attempted); 401/403 = authenticated but not
+    authorized; 404 = the module isn't on this pod (import would return -1).
+    This catches the common 'demo pod has no SCM' / 'wrong role' cases before a
+    load wastes a round-trip and comes back as -1.
+    """
+    key = resolve_object_key(business_object)
+    resource = _PROBE_RESOURCE.get(key or "", "items")
+    url = conn.base_url.rstrip("/") + _FUSION_REST + f"/{resource}?limit=1"
+    try:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            r = await client.get(url, auth=(conn.username, _password(conn)))
+        sc = r.status_code
+        if sc == 200:
+            return {"ok": True, "level": "ready", "resource": resource, "http_status": sc,
+                    "message": f"Pod check passed — the '{resource}' resource is reachable, so this module is provisioned and the user can read it. The import can be attempted."}
+        if sc in (401, 403):
+            return {"ok": False, "level": "no_privilege", "resource": resource, "http_status": sc,
+                    "message": f"Authenticated, but not authorized for '{resource}' (HTTP {sc}). The import will likely return -1 — grant this user the matching SCM / ERP Integration role."}
+        if sc == 404:
+            return {"ok": False, "level": "module_missing", "resource": resource, "http_status": sc,
+                    "message": f"The '{resource}' resource was not found on this pod (HTTP 404) — this module isn't provisioned here, so an FBDI import for {business_object or 'this object'} will return -1. Point the connection at an SCM-provisioned pod."}
+        return {"ok": False, "level": "unknown", "resource": resource, "http_status": sc,
+                "message": f"Pod check returned HTTP {sc} for '{resource}'. The import may still work — proceed with caution."}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "level": "unreachable", "resource": resource, "http_status": None,
+                "message": f"Could not reach the pod for the pre-flight check: {exc}"}
