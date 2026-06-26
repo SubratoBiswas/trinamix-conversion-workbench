@@ -1,6 +1,7 @@
 """Project-level orchestration: module auto-population, load-order derivation."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -8,6 +9,20 @@ from app.models.conversion import Conversion
 from app.models.dependency import Dependency
 from app.models.fbdi import FBDITemplate
 from app.models.project import Project
+
+
+def _norm_obj(s: str | None) -> str:
+    """Normalize an object name for duplicate detection (case/space/punct-insensitive)."""
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _ebs_table_from_extract(hint: str | None) -> str | None:
+    """First ALL_CAPS table token from a source-extract hint.
+    'Extract from MTL_UOM_CLASSES' -> 'MTL_UOM_CLASSES'."""
+    if not hint:
+        return None
+    m = re.search(r"\b([A-Z][A-Z0-9_]{3,})\b", hint)
+    return m.group(1) if m else None
 
 
 # ─── Module → (business_object, tier, planned_load_order) ────────────────────
@@ -73,6 +88,10 @@ async def auto_populate_conversions(
         Conversion.project_id == project.id
     ).to_list()
     existing_objects = {c.target_object for c in existing_convs if c.target_object}
+    # Normalized set so 'Unit of Measure' / 'units_of_measure' / 'UOM' never
+    # produce a duplicate of an object the project already has.
+    existing_norm = {_norm_obj(c.target_object) for c in existing_convs if c.target_object}
+    src_key = (getattr(project, "source_system", None) or "oracle_ebs")
 
     # Index templates by business_object
     templates = await FBDITemplate.find_all().to_list()
@@ -101,10 +120,14 @@ async def auto_populate_conversions(
 
     # Insert from catalog
     for obj in catalog_objects:
-        if obj.target_object in existing_objects:
+        if _norm_obj(obj.target_object) in existing_norm:
             continue
         existing_objects.add(obj.target_object)
+        existing_norm.add(_norm_obj(obj.target_object))
         tpl = tpl_by_obj.get(obj.target_object)
+        # Bind the live source table (EBS table hint) from the catalog extract so
+        # new conversions are ready to map without a separate 'Use EBS Source'.
+        ebs_table = _ebs_table_from_extract((obj.source_extracts or {}).get(src_key))
         conv = Conversion(
             project_id=project.id,
             name=obj.label,
@@ -112,6 +135,8 @@ async def auto_populate_conversions(
             template_id=tpl.id if tpl else None,
             planned_load_order=obj.planned_load_order,
             status="planning",
+            source_type="ebs",
+            ebs_table_hint=ebs_table,
             created_by=created_by,
         )
         await conv.insert()
@@ -125,9 +150,10 @@ async def auto_populate_conversions(
         seen_legacy.add(module)
         for obj_def in MODULE_OBJECT_MAP.get(module, []):
             obj_name = obj_def["business_object"]
-            if obj_name in existing_objects:
+            if _norm_obj(obj_name) in existing_norm:
                 continue
             existing_objects.add(obj_name)
+            existing_norm.add(_norm_obj(obj_name))
             tpl = tpl_by_obj.get(obj_name)
             conv = Conversion(
                 project_id=project.id,
@@ -136,6 +162,7 @@ async def auto_populate_conversions(
                 template_id=tpl.id if tpl else None,
                 planned_load_order=obj_def["order"],
                 status="planning",
+                source_type="ebs",
                 created_by=created_by,
             )
             await conv.insert()
