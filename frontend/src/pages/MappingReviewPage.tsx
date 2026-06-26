@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
   GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock,
@@ -50,7 +50,9 @@ export const MappingReviewPage: React.FC = () => {
   const [engagementId, setEngagementId] = useState<string | null>(null);
 
   const [project, setProject] = useState<Conversion | null>(null);
-  const [loadingConversion, setLoadingConversion] = useState(true);
+  const [loadingConversion, setLoadingConversion] = useState(false);
+  // Initial load of the conversion list + engagements (drives the landing view).
+  const [loadingList, setLoadingList] = useState(true);
   // Surfaced when the conversion context fails to load (e.g. backend cold-start
   // or redeploy) so the page shows a retry affordance instead of spinning forever.
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -94,8 +96,10 @@ export const MappingReviewPage: React.FC = () => {
   const [ruleAuthorOpen, setRuleAuthorOpen] = useState(false);
   const [ruleAuthorMapping, setRuleAuthorMapping] = useState<MappingSuggestion | null>(null);
 
-  // Load all conversions + engagements on mount. Resilient: a slow/timed-out
-  // backend shows an error + Retry instead of an infinite spinner / uncaught.
+  // Load all conversions + engagements on mount. We deliberately do NOT
+  // auto-select a conversion: with none selected the page shows a project-wise
+  // landing (engagement dropdown + that project's conversion cards). A conversion
+  // is only opened when the user picks one (or a ?conversion= param is present).
   useEffect(() => {
     Promise.all([
       ConversionsApi.list().catch(() => null),
@@ -104,14 +108,19 @@ export const MappingReviewPage: React.FC = () => {
       setEngagements(engs || []);
       if (!ps) {
         setLoadError("Couldn't load the conversion list — the backend may be busy running live Oracle EBS queries. Retry in a moment.");
-        setLoadingConversion(false);
+        setLoadingList(false);
         return;
       }
       setProjects(ps);
-      if (!pid && ps[0]) {
-        setPid(ps[0].id);
-        setParams({ conversion: String(ps[0].id) });
+      // Default the engagement selector to the first project that actually has
+      // conversions, so the landing list is populated immediately.
+      if (!engagementId && !pid) {
+        const withConv = (engs || []).find((e: any) =>
+          ps.some((c: any) => String(c.project_id) === String(e.id)));
+        const def = withConv?.id ?? (engs && engs[0]?.id) ?? (ps[0] ? String(ps[0].project_id) : null);
+        if (def) setEngagementId(String(def));
       }
+      setLoadingList(false);
     });
   }, []);
 
@@ -414,6 +423,113 @@ export const MappingReviewPage: React.FC = () => {
     }
   };
 
+  // ── Landing: project-wise conversion list (no conversion selected) ──────────
+  if (!pid) {
+    if (loadingList) return <PageLoader />;
+    if (loadError) return (
+      <div className="p-6">
+        <EmptyState
+          icon={<AlertTriangle className="h-5 w-5" />}
+          title="Couldn't load mapping review"
+          description={loadError}
+        />
+        <div className="mt-3 flex justify-center">
+          <Button variant="primary" onClick={() => window.location.reload()}>
+            <RefreshCw className="h-4 w-4" /> Retry
+          </Button>
+        </div>
+      </div>
+    );
+
+    const scoped = projects.filter(
+      (c) => !engagementId || String(c.project_id) === engagementId
+    );
+    const tone = (s?: string) => statusTone(s || "draft");
+
+    return (
+      <div className="space-y-4 p-6">
+        <PageTitle
+          title="Mapping Review"
+          subtitle="Pick an engagement to review the mapping status of its conversions, then open one to map fields."
+        />
+
+        <div className="flex flex-wrap items-center gap-3">
+          <ArrowLeftRight className="h-4 w-4 text-brand" />
+          <label className="text-xs font-medium text-ink-muted">Engagement</label>
+          <select
+            className="input !h-9 !w-auto"
+            value={engagementId ?? ""}
+            onChange={(e) => setEngagementId(e.target.value || null)}
+          >
+            <option value="" disabled>— select engagement —</option>
+            {engagements.map((eng) => (
+              <option key={eng.id} value={eng.id}>{eng.name}</option>
+            ))}
+          </select>
+          <span className="text-xs text-ink-subtle">
+            {scoped.length} conversion{scoped.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {!engagementId ? (
+          <EmptyState
+            icon={<ArrowLeftRight className="h-5 w-5" />}
+            title="Select an engagement"
+            description="Choose a project from the dropdown to see its conversions and mapping status."
+          />
+        ) : scoped.length === 0 ? (
+          <EmptyState
+            icon={<ArrowLeftRight className="h-5 w-5" />}
+            title="No conversions in this engagement"
+            description="This project has no conversion objects yet."
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {scoped.map((c) => {
+              const src = (c as any).ebs_table_hint || (c as any).dataset_name;
+              const hasTpl = !!c.template_id;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => { setPid(c.id); setParams({ conversion: String(c.id) }); }}
+                  className="group flex flex-col gap-2 rounded-lg border border-line bg-white p-4 text-left transition hover:border-brand hover:shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-ink">{c.name}</div>
+                      {c.target_object && (
+                        <div className="truncate text-[11px] text-ink-subtle">{c.target_object}</div>
+                      )}
+                    </div>
+                    <Pill tone={tone(c.status)}>{c.status}</Pill>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
+                    {src ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        <span className="font-mono text-emerald-800">{src}</span>
+                      </span>
+                    ) : (
+                      <span className="text-ink-subtle">No source linked</span>
+                    )}
+                    <span className="mx-0.5">→</span>
+                    <span className={cn(hasTpl ? "text-ink" : "text-danger")}>
+                      {c.template_name || "No FBDI template"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[11px] font-medium text-brand opacity-0 transition group-hover:opacity-100">
+                    Open mapping →
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Canvas: a single conversion's field mapping ────────────────────────────
   if (loadingConversion) return <PageLoader />;
   if (loadError) return (
     <div className="p-6">
@@ -429,7 +545,7 @@ export const MappingReviewPage: React.FC = () => {
       </div>
     </div>
   );
-  if (!pid || !project) return <PageLoader />;
+  if (!project) return <PageLoader />;
 
   const isEbs = !project.dataset_id;
 
@@ -459,14 +575,14 @@ export const MappingReviewPage: React.FC = () => {
       {/* Top bar */}
       <header className="border-b border-line bg-white px-5 py-3">
         <div className="flex items-center gap-3">
-          <Link
-            to={`/projects/${project.project_id}`}
+          <button
+            onClick={() => { setPid(null); setProject(null); setParams({}); }}
             className="btn-ghost !h-8 shrink-0"
-            title="Back to this project's conversions"
+            title="Back to the project mapping list"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            <span className="ml-1 text-xs">Conversions</span>
-          </Link>
+            <span className="ml-1 text-xs">Mapping list</span>
+          </button>
           <ArrowLeftRight className="h-4 w-4 text-brand" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-ink">Mapping Review</div>
