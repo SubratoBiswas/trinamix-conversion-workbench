@@ -80,6 +80,44 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
         _f("EffectiveEndDate",    _DATE,  req=False),
     ],
 
+    # ── 1b. UOM Class ─────────────────────────────────────────────────────────
+    "uomclassimport": [
+        _f("UOMClassCode",        _VC30,  req=True,  desc="Unique UOM class code (e.g. WEIGHT, VOLUME, QUANTITY)"),
+        _f("UOMClassName",        _VC80,  req=True,  desc="Display name of the unit-of-measure class"),
+        _f("Description",         _VC240, req=False),
+        _f("BaseUOMCode",         _VC25,  req=True,  desc="Base unit of measure for this class"),
+        _f("BaseUOMName",         _VC80,  req=False, desc="Name of the base unit of measure"),
+        _f("EffectiveStartDate",  _DATE,  req=False),
+        _f("EffectiveEndDate",    _DATE,  req=False),
+    ],
+
+    # ── 1c. Lot Numbers ───────────────────────────────────────────────────────
+    "lotnumberimport": [
+        _f("OrganizationCode",    _VC30,  req=True,  desc="Inventory organization code"),
+        _f("ItemNumber",          _VC100, req=True,  desc="Item the lot belongs to"),
+        _f("LotNumber",           _VC80,  req=True,  desc="Lot number"),
+        _f("ParentLotNumber",     _VC80,  req=False),
+        _f("ExpirationDate",      _DATE,  req=False, desc="Lot expiration date"),
+        _f("OriginationDate",     _DATE,  req=False, desc="Lot origination date"),
+        _f("StatusCode",          _VC30,  req=False, desc="Material status of the lot"),
+        _f("SupplierLotNumber",   _VC80,  req=False),
+        _f("Grade",               _VC30,  req=False),
+        _f("HoldDate",            _DATE,  req=False),
+    ],
+
+    # ── 1d. Serial Numbers ────────────────────────────────────────────────────
+    "serialnumberimport": [
+        _f("OrganizationCode",    _VC30,  req=True,  desc="Inventory organization code"),
+        _f("ItemNumber",          _VC100, req=True,  desc="Item the serial belongs to"),
+        _f("SerialNumber",        _VC80,  req=True,  desc="Serial number"),
+        _f("StatusCode",          _VC30,  req=False, desc="Serial status (Defined / In Stores / Issued)"),
+        _f("LotNumber",           _VC80,  req=False, desc="Lot number when lot+serial controlled"),
+        _f("SupplierSerialNumber",_VC80,  req=False),
+        _f("Subinventory",        _VC30,  req=False),
+        _f("Locator",             _VC100, req=False),
+        _f("ReceiptDate",         _DATE,  req=False),
+    ],
+
     # ── 2. Inventory Organization ─────────────────────────────────────────────
     "inventoryorgimport": [
         _f("OrganizationCode",           _VC30,  req=True,  desc="Unique short code for the inventory organization"),

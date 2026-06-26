@@ -79,6 +79,9 @@ MANIFEST: list[tuple[str, str, str, str, int, str]] = [
     ("LocatorImport",            "SCM","T0", "Locator",             3, "Inventory locators"),
     ("LotSerialImport",          "SCM","T3", "Lot/Serial",          3, "Open lot and serial numbers"),
     ("CountTypesImport",         "SCM","T0", "Count Type",          2, "Cycle count types"),
+    ("UomClassImport",           "SCM","T0", "UOM Class",           4, "Units of measure classes"),
+    ("LotNumberImport",          "SCM","T3", "Lot Number",          3, "Open lot numbers"),
+    ("SerialNumberImport",       "SCM","T3", "Serial Number",       3, "Open serial numbers"),
 
     # ─── HCM (Human Capital) ───
     ("HcmPersonImport",          "HCM","T1", "Person",              3, "People records"),
