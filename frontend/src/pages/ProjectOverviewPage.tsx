@@ -7,7 +7,7 @@ import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
@@ -109,6 +109,18 @@ export const ProjectOverviewPage: React.FC = () => {
   const [hasConnection, setHasConnection] = useState(false);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
+
+  const deleteConversion = async (c: { id: string; name: string }) => {
+    if (!window.confirm(`Delete conversion "${c.name}"? This also removes its mappings, rules and outputs. This cannot be undone.`)) return;
+    try {
+      await ConversionsApi.remove(c.id);
+      flash(`Deleted ${c.name}`);
+      refresh();
+      window.dispatchEvent(new Event("workbench:refresh"));
+    } catch {
+      flash("Failed to delete conversion");
+    }
+  };
 
   const refresh = () => {
     ProjectsApi.get(pid).then(setProject);
@@ -318,9 +330,18 @@ export const ProjectOverviewPage: React.FC = () => {
                     </td>
                     <td><Pill tone={STATUS_TONE(c.status)}>{c.status.replace("_", " ")}</Pill></td>
                     <td className="text-right">
-                      <Link to={`/conversions/${c.id}`} className="btn-ghost h-7 px-2 text-xs">
-                        Open <ArrowRight className="h-3 w-3" />
-                      </Link>
+                      <div className="inline-flex items-center gap-1">
+                        <Link to={`/conversions/${c.id}`} className="btn-ghost h-7 px-2 text-xs">
+                          Open <ArrowRight className="h-3 w-3" />
+                        </Link>
+                        <button
+                          onClick={() => deleteConversion({ id: String(c.id), name: c.name })}
+                          title="Delete conversion"
+                          className="rounded p-1 text-ink-subtle hover:bg-danger-subtle hover:text-danger"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

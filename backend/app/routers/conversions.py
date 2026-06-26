@@ -190,6 +190,19 @@ async def delete_conversion(conversion_id: str, _: User = Depends(get_current_us
     c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
         raise HTTPException(404, "Conversion not found")
+    # Cascade so nothing is orphaned (mappings/rules/outputs/load runs).
+    from app.models.mapping import MappingSuggestion
+    from app.models.transformation import TransformationRule, Crosswalk
+    from app.models.output import ConvertedOutput
+    from app.models.load import LoadRun, LoadError
+    await MappingSuggestion.find(MappingSuggestion.conversion_id == c.id).delete()
+    await TransformationRule.find(TransformationRule.conversion_id == c.id).delete()
+    await Crosswalk.find(Crosswalk.conversion_id == c.id).delete()
+    await ConvertedOutput.find(ConvertedOutput.conversion_id == c.id).delete()
+    runs = await LoadRun.find(LoadRun.conversion_id == c.id).to_list()
+    if runs:
+        await LoadError.find({"load_run_id": {"$in": [r.id for r in runs]}}).delete()
+    await LoadRun.find(LoadRun.conversion_id == c.id).delete()
     await c.delete()
     return {"deleted": conversion_id}
 
