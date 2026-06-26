@@ -199,20 +199,7 @@ export const ProjectOverviewPage: React.FC = () => {
             </Button>
             <Button
               variant="secondary"
-              loading={busy === "auto_pop"}
-              onClick={async () => {
-                const mods = (project as any).selected_modules as string[] | undefined;
-                if (mods && mods.length > 0) {
-                  setBusy("auto_pop");
-                  try {
-                    const r = await ProjectsApi.autoPopulate(pid, mods);
-                    flash(`Auto-populated ${r.created?.length ?? 0} conversion(s)`);
-                    refresh();
-                  } finally { setBusy(null); }
-                } else {
-                  setShowModuleModal(true);
-                }
-              }}
+              onClick={() => setShowModuleModal(true)}
             >
               <Wand2 className="h-4 w-4" /> Auto-populate
             </Button>
@@ -755,19 +742,33 @@ const ScopeHintsCard: React.FC<{
 };
 
 // ─── Auto-populate Modal ─────────────────────────────────────────────────────
-
-const AVAILABLE_MODULES = ["SCM", "OM", "PO", "HCM", "GL", "Planning", "SCM + OM", "SCM + OM + PO"];
+// Uses the real Fusion module CATALOG (codes like "scm") so the backend resolves
+// the full canonical object set (e.g. 17 for Supply Chain) — the old hardcoded
+// legacy codes ("SCM") only mapped to a 6-object legacy table.
 
 const AutoPopulateModal: React.FC<{
   projectId: string;
   onClose: () => void;
   onDone: (r: any) => void;
 }> = ({ projectId, onClose, onDone }) => {
+  const [modules, setModules] = React.useState<FusionModule[]>([]);
   const [selected, setSelected] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
 
-  const toggle = (m: string) =>
-    setSelected(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  React.useEffect(() => { FusionModulesApi.list().then(setModules).catch(() => {}); }, []);
+
+  const toggle = (code: string) =>
+    setSelected(prev => prev.includes(code) ? prev.filter(x => x !== code) : [...prev, code]);
+
+  // Preview: unique canonical objects across the selected modules.
+  const objCount = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const m of modules) {
+      if (!selected.includes(m.code)) continue;
+      for (const o of (m.objects || [])) seen.add(o.target_object);
+    }
+    return seen.size;
+  }, [modules, selected]);
 
   const submit = async () => {
     if (!selected.length) return;
@@ -778,27 +779,34 @@ const AutoPopulateModal: React.FC<{
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-ink">Auto-populate Conversions</h2>
-            <p className="mt-0.5 text-xs text-ink-muted">Select Oracle Cloud modules to create conversion objects automatically.</p>
+            <p className="mt-0.5 text-xs text-ink-muted">Select Oracle Fusion modules — a conversion is created for every canonical object (existing ones are skipped).</p>
           </div>
           <button onClick={onClose} className="text-ink-subtle hover:text-ink text-lg leading-none">&times;</button>
         </div>
-        <div className="flex flex-wrap gap-2 mb-5">
-          {AVAILABLE_MODULES.map(m => (
-            <button key={m} onClick={() => toggle(m)}
+        <div className="mb-4 flex flex-wrap gap-2">
+          {modules.map(m => (
+            <button key={m.code} onClick={() => toggle(m.code)} title={m.description}
               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                selected.includes(m) ? "border-brand bg-brand-subtle text-brand-dark" : "border-line bg-canvas text-ink-muted hover:border-brand"
-              }`}>{m}</button>
+                selected.includes(m.code) ? "border-brand bg-brand-subtle text-brand-dark" : "border-line bg-canvas text-ink-muted hover:border-brand"
+              }`}>
+              {m.name}{Array.isArray(m.objects) ? ` (${m.objects.length})` : ""}
+            </button>
           ))}
         </div>
+        {objCount > 0 && (
+          <p className="mb-3 text-[11.5px] text-ink-muted">
+            {objCount} canonical object{objCount === 1 ? "" : "s"} in scope — any already in this project are skipped.
+          </p>
+        )}
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="btn-ghost">Cancel</button>
           <button onClick={submit} disabled={!selected.length || busy} className="btn-primary disabled:opacity-50">
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            {busy ? "Populating..." : `Populate (${selected.length} module${selected.length !== 1 ? "s" : ""})`}
+            {busy ? "Populating..." : `Populate (${objCount} object${objCount !== 1 ? "s" : ""})`}
           </button>
         </div>
       </div>
