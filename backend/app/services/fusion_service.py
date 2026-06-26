@@ -34,6 +34,17 @@ FBDI_INTERFACE_TABLES: dict[str, list[str]] = {
     "On-Hand Balance":  ["INV_TRANSACTIONS_INTERFACE", "MTL_TRANSACTIONS_INTERFACE"],
     "Sales Order":      ["DOO_ORDER_HEADERS_ALL_INT", "DOO_ORDER_LINES_ALL_INT"],
     "Purchase Order":   ["PO_HEADERS_INTERFACE", "PO_LINES_INTERFACE", "PO_DISTRIBUTIONS_INTERFACE"],
+    # ── SCM children that load through a parent object's import job ───────────
+    "UOM Class":        ["MTL_UOM_CLASS_INTERFACE"],
+    "Customer Site":    ["HZ_IMP_ACCT_SITES_T", "HZ_IMP_CONTACTPTS_T"],
+    "Supplier Site":    ["POZ_SUP_ADDRESSES_INT", "POZ_SUP_SITES_INT"],
+    "Sales Order Line": ["DOO_ORDER_LINES_ALL_INT"],
+    # ── SCM objects with their own import job ────────────────────────────────
+    "Subinventory":     ["INV_SUBINVENTORIES_INTERFACE"],
+    "Locator":          ["INV_LOCATORS_INTERFACE"],
+    "Price List":       ["QP_INTERFACE_LIST_HEADERS", "QP_INTERFACE_LIST_LINES"],
+    "Lot Number":       ["INV_LOT_NUMBERS_INTERFACE"],
+    "Serial Number":    ["INV_SERIAL_NUMBERS_INTERFACE"],
 }
 
 # ── business object → ERP Integration import job metadata ────────────────────
@@ -49,6 +60,17 @@ FBDI_LOAD_META: dict[str, dict[str, str]] = {
     "On-Hand Balance":{"document_account": "scm$/inventory$/import$", "job_name": "/oracle/apps/ess/scm/inventory/transactions/,OnHandQuantityImport"},
     "Sales Order":    {"document_account": "scm$/order$/import$",     "job_name": "/oracle/apps/ess/scm/doo/import/,ImportSalesOrders"},
     "Purchase Order": {"document_account": "prc$/po$/import$",        "job_name": "/oracle/apps/ess/prc/po/import/,ImportPurchaseOrders"},
+    # ── children: submitted through the parent object's ESS import job ────────
+    "UOM Class":      {"document_account": "scm$/item$/import$",      "job_name": "/oracle/apps/ess/scm/productHub/items/uom/,UnitOfMeasureImport"},
+    "Customer Site":  {"document_account": "hz$/customer$/import$",   "job_name": "/oracle/apps/ess/cdm/hz/dataImport/,CustomerImport"},
+    "Supplier Site":  {"document_account": "prc$/supplier$/import$",  "job_name": "/oracle/apps/ess/prc/poz/supplierImport/,SupplierImport"},
+    "Sales Order Line":{"document_account": "scm$/order$/import$",    "job_name": "/oracle/apps/ess/scm/doo/import/,ImportSalesOrders"},
+    # ── objects with their own ESS import job (job paths may need per-pod tuning)
+    "Subinventory":   {"document_account": "scm$/inventory$/import$", "job_name": "/oracle/apps/ess/scm/inventory/setup/,SubinventoryImport"},
+    "Locator":        {"document_account": "scm$/inventory$/import$", "job_name": "/oracle/apps/ess/scm/inventory/setup/,LocatorImport"},
+    "Price List":     {"document_account": "scm$/pricing$/import$",   "job_name": "/oracle/apps/ess/scm/pricing/priceList/,PriceListImport"},
+    "Lot Number":     {"document_account": "scm$/inventory$/import$", "job_name": "/oracle/apps/ess/scm/inventory/setup/,LotNumberImport"},
+    "Serial Number":  {"document_account": "scm$/inventory$/import$", "job_name": "/oracle/apps/ess/scm/inventory/setup/,SerialNumberImport"},
 }
 
 _FUSION_REST = "/fscmRestApi/resources/11.13.18.05"
@@ -68,6 +90,18 @@ _OBJECT_ALIASES: dict[str, str] = {
     "on-hand inventory balances": "On-Hand Balance", "on-hand balance load": "On-Hand Balance",
     "sales order": "Sales Order", "open sales orders": "Sales Order", "sales order backlog": "Sales Order",
     "purchase order": "Purchase Order", "open purchase orders": "Purchase Order",
+    # newly-wired SCM objects (children + own-job)
+    "uom class": "UOM Class", "units of measure classes": "UOM Class", "unit of measure class": "UOM Class",
+    "customer site": "Customer Site", "customer sites": "Customer Site",
+    "customer sites (bill-to / ship-to)": "Customer Site",
+    "supplier site": "Supplier Site", "supplier sites": "Supplier Site",
+    "sales order line": "Sales Order Line", "open sales order lines": "Sales Order Line",
+    "subinventory": "Subinventory", "subinventories": "Subinventory",
+    "subinventories (storage locations)": "Subinventory",
+    "locator": "Locator", "locators": "Locator", "locators (bin / rack / row)": "Locator",
+    "price list": "Price List", "price lists": "Price List",
+    "lot number": "Lot Number", "lot numbers": "Lot Number",
+    "serial number": "Serial Number", "serial numbers": "Serial Number",
 }
 
 
