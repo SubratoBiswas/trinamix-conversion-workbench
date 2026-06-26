@@ -247,10 +247,29 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
             req_id = data
         if req_id is not None:
             req_id = str(req_id).strip() or None
+        # importBulkData returns -1 (sometimes 0) when Oracle ACCEPTS the REST call
+        # (HTTP 200) but could NOT queue the import job — typically the UCM document
+        # account or ESS job isn't provisioned for this user/pod, or the user lacks
+        # ERP Integration privileges. Treat that as a real failure, not "submitted".
+        queued = ok and (req_id not in (None, "-1", "0"))
+        if ok and not queued:
+            return {
+                "ok": False,
+                "status": r.status_code,
+                "message": (
+                    f"Oracle accepted the call but returned request id {req_id or 'none'} — "
+                    "the import job was not queued. Usually the UCM document account or the ESS "
+                    "import job isn't available to this user/pod, or the user lacks ERP Integration "
+                    "privileges (e.g. SCM not provisioned on this demo pod)."
+                ),
+                "request_id": req_id,
+                "response": data,
+                "file_name": zip_name,
+            }
         return {
-            "ok": ok,
+            "ok": queued,
             "status": r.status_code,
-            "message": "Submitted to Fusion ERP Integration." if ok else f"Fusion rejected the load (HTTP {r.status_code}).",
+            "message": "Submitted to Fusion ERP Integration." if queued else f"Fusion rejected the load (HTTP {r.status_code}).",
             "request_id": req_id,
             "response": data,
             "file_name": zip_name,
@@ -270,6 +289,11 @@ async def get_load_status(conn, request_id: str) -> dict[str, Any]:
     if not request_id:
         return {"ok": False, "state": "unknown", "raw": None,
                 "message": "No Fusion request id recorded for this run."}
+    if str(request_id).strip() in ("-1", "0"):
+        return {"ok": False, "state": "error", "raw": str(request_id),
+                "message": ("Request id -1 means Oracle never queued the import job, so there is no "
+                            "ESS process to poll. The load did not run — check the document account, "
+                            "import job, and that the user has ERP Integration / SCM privileges on this pod.")}
 
     url = conn.base_url.rstrip("/") + _FUSION_REST + "/erpintegrations"
     # Different pods accept slightly different param casings — send both.

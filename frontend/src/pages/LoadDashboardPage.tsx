@@ -294,11 +294,15 @@ export const LoadDashboardPage: React.FC = () => {
 
       {/* Load success / result summary — what was loaded, where to verify it. */}
       {latestFusion && (() => {
-        const ok = latestFusion.status === "completed";
         const bo = latestFusion.business_object || targets?.business_object;
         const tables: string[] = (latestFusion.fusion_tables && latestFusion.fusion_tables.length)
           ? latestFusion.fusion_tables : (targets?.interface_tables || []);
         const reqId: string | undefined = latestFusion.fusion_request_id;
+        const validReq = !!reqId && reqId !== "-1" && reqId !== "0";
+        // A -1 request id means the job was never queued — show it as failed even
+        // if an older run stored status "completed" from the HTTP-200 response.
+        const ok = latestFusion.status === "completed" && reqId !== "-1" && reqId !== "0";
+        const rawResp: string | undefined = latestFusion.fusion_response || undefined;
         const workArea: string | undefined = latestFusion.fusion_work_area || targets?.work_area || undefined;
         const podUrl: string | undefined = targets?.pod_url || fusionConn?.base_url || undefined;
         const live = statusByRun[latestFusion.id];
@@ -319,12 +323,18 @@ export const LoadDashboardPage: React.FC = () => {
                       <span key={t} className="rounded border border-line bg-canvas px-2 py-0.5 font-mono text-ink-muted">{t}</span>
                     )) : <span className="italic text-ink-muted">—</span>}
                   </div>
-                  <div className="mt-1.5 text-[11px] text-ink-muted">
-                    {reqId
-                      ? <>Request ID <span className="font-mono text-ink">{reqId}</span> · </>
-                      : <>Submitted{ok ? " (Oracle returned no request id — older run or pod-specific response)" : ""} · </>}
-                    Verify the records under <span className="font-medium text-ink">{workArea || "the object's work area"}</span>, and the import job in <span className="font-medium text-ink">Tools → Scheduled Processes</span>.
-                  </div>
+                  {validReq ? (
+                    <div className="mt-1.5 text-[11px] text-ink-muted">
+                      Request ID <span className="font-mono text-ink">{reqId}</span> · Verify the records under <span className="font-medium text-ink">{workArea || "the object's work area"}</span>, and the import job in <span className="font-medium text-ink">Tools → Scheduled Processes</span>.
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 rounded-md border border-warning/40 bg-warning-subtle/50 px-2.5 py-1.5 text-[11px] text-warning-dark">
+                      Oracle returned request id <span className="font-mono">{reqId || "none"}</span> — the import job was <strong>not queued</strong>, so nothing was loaded. Usually the UCM document account or ESS import job isn't available to this user/pod, or the user lacks ERP Integration / SCM privileges.
+                    </div>
+                  )}
+                  {rawResp && (
+                    <div className="mt-1 break-all font-mono text-[10.5px] text-ink-subtle" title={rawResp}>Oracle response: {rawResp.slice(0, 180)}</div>
+                  )}
                   {live?.state && (
                     <div className="mt-2 flex items-center gap-2 text-[12px]">
                       <span className="text-ink-muted">Live Fusion job status:</span>
