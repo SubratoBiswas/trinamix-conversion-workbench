@@ -194,6 +194,10 @@ async def load_to_fusion_endpoint(conversion_id: str, _: User = Depends(get_curr
         fusion_request_id=(res.get("request_id") or None),
         # submitted but not yet imported — Check status will poll the real phase
         fusion_state=("running" if res["ok"] else "error"),
+        business_object=bo,
+        fusion_tables=interface_tables_for(bo),
+        fusion_work_area=work_area_for(bo),
+        fusion_response=(str(res.get("response"))[:500] if res.get("response") is not None else None),
     )
     await run.insert()
     if res["ok"]:

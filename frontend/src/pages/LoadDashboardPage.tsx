@@ -168,6 +168,9 @@ export const LoadDashboardPage: React.FC = () => {
   const project = projects.find((p) => p.id === projectId) || null;
   const conversion = conversions.find((c) => c.id === pid) || null;
 
+  // Most recent Fusion submission for this conversion — drives the success summary.
+  const latestFusion = (runs.find((r) => (r as any).run_type === "fusion") as any) || null;
+
   const passFailData = useMemo(() => summary ? [
     { name: "Passed", value: summary.passed_count, color: "#10B981" },
     { name: "Warnings", value: summary.warning_count, color: "#F59E0B" },
@@ -288,6 +291,65 @@ export const LoadDashboardPage: React.FC = () => {
           <strong>Load failed:</strong> {loadError}
         </div>
       )}
+
+      {/* Load success / result summary — what was loaded, where to verify it. */}
+      {latestFusion && (() => {
+        const ok = latestFusion.status === "completed";
+        const bo = latestFusion.business_object || targets?.business_object;
+        const tables: string[] = (latestFusion.fusion_tables && latestFusion.fusion_tables.length)
+          ? latestFusion.fusion_tables : (targets?.interface_tables || []);
+        const reqId: string | undefined = latestFusion.fusion_request_id;
+        const workArea: string | undefined = latestFusion.fusion_work_area || targets?.work_area || undefined;
+        const podUrl: string | undefined = targets?.pod_url || fusionConn?.base_url || undefined;
+        const live = statusByRun[latestFusion.id];
+        return (
+          <Card className={`mb-4 ${ok ? "border-success/40" : "border-danger/40"}`}>
+            <CardBody className="!py-3">
+              <div className="flex items-start gap-3">
+                {ok ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+                    : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-danger" />}
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-ink">
+                    {ok ? "Submitted to Oracle Fusion" : "Last Fusion load failed"} · {latestFusion.total_records} record{latestFusion.total_records === 1 ? "" : "s"}{bo ? ` of ${bo}` : ""}
+                    <span className="ml-2 text-[11px] font-normal text-ink-muted">{formatDate(latestFusion.started_at)}</span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="text-ink-muted">Interface tables updated:</span>
+                    {tables.length ? tables.map((t) => (
+                      <span key={t} className="rounded border border-line bg-canvas px-2 py-0.5 font-mono text-ink-muted">{t}</span>
+                    )) : <span className="italic text-ink-muted">—</span>}
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-ink-muted">
+                    {reqId
+                      ? <>Request ID <span className="font-mono text-ink">{reqId}</span> · </>
+                      : <>Submitted{ok ? " (Oracle returned no request id — older run or pod-specific response)" : ""} · </>}
+                    Verify the records under <span className="font-medium text-ink">{workArea || "the object's work area"}</span>, and the import job in <span className="font-medium text-ink">Tools → Scheduled Processes</span>.
+                  </div>
+                  {live?.state && (
+                    <div className="mt-2 flex items-center gap-2 text-[12px]">
+                      <span className="text-ink-muted">Live Fusion job status:</span>
+                      <StatePill state={live.state} />
+                      {live.message && <span className="truncate text-[11px] text-ink-muted" title={live.message}>{live.message}</span>}
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                  {podUrl && (
+                    <a href={podUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost" title={workArea ? `Verify in Fusion: ${workArea}` : "Open Oracle Fusion"}>
+                      <ExternalLink className="h-3.5 w-3.5" /> Open Fusion
+                    </a>
+                  )}
+                  {reqId && (
+                    <Button variant="secondary" onClick={() => checkStatus(latestFusion.id)} loading={live?.loading}>
+                      <Activity className="h-3.5 w-3.5" /> Check status
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+        );
+      })()}
 
       {/* Oracle Fusion connection modal */}
       <Modal

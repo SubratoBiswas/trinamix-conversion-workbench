@@ -237,7 +237,16 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
             data = r.json()
         except Exception:  # noqa: BLE001
             data = {"raw": r.text[:500]}
-        req_id = (data.get("ReqstId") or data.get("RequestId") or data.get("DocumentId")) if isinstance(data, dict) else None
+        req_id = None
+        if isinstance(data, dict):
+            req_id = (data.get("ReqstId") or data.get("RequestId") or data.get("ReqstID")
+                      or data.get("requestId") or data.get("DocumentId") or data.get("result")
+                      or data.get("Result"))
+        elif isinstance(data, (str, int)):
+            # Some pods return the request id as a bare numeric/string body.
+            req_id = data
+        if req_id is not None:
+            req_id = str(req_id).strip() or None
         return {
             "ok": ok,
             "status": r.status_code,

@@ -71,6 +71,12 @@ class LoadRunOut(BaseModel):
     error_count: int
     started_at: datetime
     completed_at: datetime | None = None
+    fusion_request_id: str | None = None
+    fusion_state: str | None = None
+    business_object: str | None = None
+    fusion_tables: list[str] | None = None
+    fusion_work_area: str | None = None
+    fusion_response: str | None = None
 
     class Config:
         from_attributes = True

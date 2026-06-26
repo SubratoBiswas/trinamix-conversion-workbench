@@ -22,6 +22,12 @@ class LoadRun(Document):
     # latest polled ESS phase (succeeded/warning/error/running/unknown).
     fusion_request_id: Optional[str] = None
     fusion_state: Optional[str] = None
+    # Snapshot of what this load targeted, so the run row/summary can show it
+    # without re-deriving (and works for the View-in-Fusion verification hint).
+    business_object: Optional[str] = None
+    fusion_tables: Optional[list[str]] = None
+    fusion_work_area: Optional[str] = None
+    fusion_response: Optional[str] = None  # raw Oracle response snippet (debug)
 
     class Settings:
         name = "load_runs"
