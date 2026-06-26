@@ -253,14 +253,17 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
         # ERP Integration privileges. Treat that as a real failure, not "submitted".
         queued = ok and (req_id not in (None, "-1", "0"))
         if ok and not queued:
+            doc_id = data.get("DocumentId") if isinstance(data, dict) else None
+            ucm = (" The file was not staged to UCM (DocumentId is null), which points to a missing "
+                   "ERP Integration / UCM-upload privilege rather than a bad mapping.") if doc_id in (None, "", "null") else ""
             return {
                 "ok": False,
                 "status": r.status_code,
                 "message": (
-                    f"Oracle accepted the call but returned request id {req_id or 'none'} — "
-                    "the import job was not queued. Usually the UCM document account or the ESS "
-                    "import job isn't available to this user/pod, or the user lacks ERP Integration "
-                    "privileges (e.g. SCM not provisioned on this demo pod)."
+                    f"Oracle accepted the call but returned request id {req_id or 'none'} — the import job was "
+                    f"not queued.{ucm} Use a Fusion user with an ERP Integration role (e.g. Supply Chain "
+                    "Application Administrator) and a valid document account; a read-only / demo 'student' user "
+                    "can read data but cannot run imports."
                 ),
                 "request_id": req_id,
                 "response": data,
@@ -351,30 +354,55 @@ _PROBE_RESOURCE: dict[str, str] = {
 async def preflight_fusion(conn, business_object: Optional[str]) -> dict[str, Any]:
     """Probe whether this pod/user can actually run an import for the object.
 
-    Reads a representative SCM REST resource. 200 = module provisioned and the
-    user can read it (load can be attempted); 401/403 = authenticated but not
-    authorized; 404 = the module isn't on this pod (import would return -1).
-    This catches the common 'demo pod has no SCM' / 'wrong role' cases before a
-    load wastes a round-trip and comes back as -1.
+    Two independent checks:
+      1. read a representative SCM data resource — proves the module is provisioned
+         and readable on this pod;
+      2. reach the ERP Integration endpoint — proves the user is authorized for
+         integration (the privilege that actually uploads to UCM + submits the job).
+
+    A read-only / demo 'student' user can pass (1) and fail (2) — which is exactly
+    the case that returns request id -1. So we only report a confident 'ready' when
+    BOTH pass, and otherwise say 'data readable, but integration not verified'.
     """
     key = resolve_object_key(business_object)
     resource = _PROBE_RESOURCE.get(key or "", "items")
-    url = conn.base_url.rstrip("/") + _FUSION_REST + f"/{resource}?limit=1"
+    base = conn.base_url.rstrip("/") + _FUSION_REST
+    auth = (conn.username, _password(conn))
     try:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-            r = await client.get(url, auth=(conn.username, _password(conn)))
-        sc = r.status_code
-        if sc == 200:
-            return {"ok": True, "level": "ready", "resource": resource, "http_status": sc,
-                    "message": f"Pod check passed — the '{resource}' resource is reachable, so this module is provisioned and the user can read it. The import can be attempted."}
-        if sc in (401, 403):
-            return {"ok": False, "level": "no_privilege", "resource": resource, "http_status": sc,
-                    "message": f"Authenticated, but not authorized for '{resource}' (HTTP {sc}). The import will likely return -1 — grant this user the matching SCM / ERP Integration role."}
-        if sc == 404:
-            return {"ok": False, "level": "module_missing", "resource": resource, "http_status": sc,
-                    "message": f"The '{resource}' resource was not found on this pod (HTTP 404) — this module isn't provisioned here, so an FBDI import for {business_object or 'this object'} will return -1. Point the connection at an SCM-provisioned pod."}
-        return {"ok": False, "level": "unknown", "resource": resource, "http_status": sc,
-                "message": f"Pod check returned HTTP {sc} for '{resource}'. The import may still work — proceed with caution."}
+            rd = await client.get(f"{base}/{resource}?limit=1", auth=auth)
+            dsc = rd.status_code
+            esc: Optional[int] = None
+            if dsc == 200:
+                try:
+                    re_ = await client.get(f"{base}/erpintegrations?limit=1", auth=auth)
+                    esc = re_.status_code
+                except Exception:  # noqa: BLE001
+                    esc = None
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "level": "unreachable", "resource": resource, "http_status": None,
                 "message": f"Could not reach the pod for the pre-flight check: {exc}"}
+
+    if dsc in (401, 403):
+        return {"ok": False, "level": "no_privilege", "resource": resource, "http_status": dsc,
+                "message": f"Authenticated, but not authorized to read '{resource}' (HTTP {dsc}). The import will return -1 — grant this user the matching SCM / ERP Integration role."}
+    if dsc == 404:
+        return {"ok": False, "level": "module_missing", "resource": resource, "http_status": dsc,
+                "message": f"The '{resource}' resource was not found on this pod (HTTP 404) — this module isn't provisioned here, so an import for {business_object or 'this object'} will return -1. Point the connection at an SCM-provisioned pod."}
+    if dsc != 200:
+        return {"ok": False, "level": "unknown", "resource": resource, "http_status": dsc,
+                "message": f"Pod check returned HTTP {dsc} for '{resource}'. The import may still work — proceed with caution."}
+
+    # Data is readable — interpret the ERP Integration probe (the real gate).
+    if esc in (200, 405):
+        return {"ok": True, "level": "ready", "resource": resource, "http_status": esc,
+                "message": "Pod check passed — SCM data is readable and the ERP Integration endpoint is reachable for this user, so the import can be attempted."}
+    if esc in (401, 403):
+        return {"ok": False, "level": "no_erp_integration", "resource": resource, "http_status": esc,
+                "message": (f"SCM data is readable, but this user is NOT authorized for ERP Integration (HTTP {esc}) — "
+                            "imports cannot upload to UCM or submit the job and will return request id -1. Use a user "
+                            "with an ERP Integration role (e.g. Supply Chain Application Administrator).")}
+    return {"ok": False, "level": "data_readable", "resource": resource, "http_status": esc,
+            "message": ("SCM data is readable, but the ERP Integration privilege (upload to UCM + submit import) could "
+                        "not be verified — a read-only / demo user can still get request id -1. The only definitive "
+                        "test is an actual load.")}

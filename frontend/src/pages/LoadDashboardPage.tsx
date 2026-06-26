@@ -316,7 +316,15 @@ export const LoadDashboardPage: React.FC = () => {
                       : (preflight.level === "no_privilege" || preflight.level === "module_missing") ? "bg-danger-subtle text-danger"
                       : "bg-warning-subtle text-warning-dark"}`}>
                       {preflight.level === "ready" ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                      Pod check: {preflight.level === "ready" ? "ready" : preflight.level.replace(/_/g, " ")}
+                      Pod check: {({
+                        ready: "ready",
+                        no_privilege: "not authorized",
+                        module_missing: "module not provisioned",
+                        no_erp_integration: "integration not authorized",
+                        data_readable: "data readable only",
+                        unreachable: "unreachable",
+                        unknown: "inconclusive",
+                      } as Record<string, string>)[preflight.level] || preflight.level.replace(/_/g, " ")}
                     </span>
                     <span className="text-ink-muted">{preflight.message}</span>
                   </>
