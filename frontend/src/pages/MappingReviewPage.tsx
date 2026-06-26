@@ -94,16 +94,25 @@ export const MappingReviewPage: React.FC = () => {
   const [ruleAuthorOpen, setRuleAuthorOpen] = useState(false);
   const [ruleAuthorMapping, setRuleAuthorMapping] = useState<MappingSuggestion | null>(null);
 
-  // Load all conversions + engagements on mount.
+  // Load all conversions + engagements on mount. Resilient: a slow/timed-out
+  // backend shows an error + Retry instead of an infinite spinner / uncaught.
   useEffect(() => {
-    ConversionsApi.list().then((ps) => {
+    Promise.all([
+      ConversionsApi.list().catch(() => null),
+      ProjectsApi.list().catch(() => []),
+    ]).then(([ps, engs]: [any, any]) => {
+      setEngagements(engs || []);
+      if (!ps) {
+        setLoadError("Couldn't load the conversion list — the backend may be busy running live Oracle EBS queries. Retry in a moment.");
+        setLoadingConversion(false);
+        return;
+      }
       setProjects(ps);
       if (!pid && ps[0]) {
         setPid(ps[0].id);
         setParams({ conversion: String(ps[0].id) });
       }
     });
-    ProjectsApi.list().then(setEngagements).catch(() => setEngagements([]));
   }, []);
 
   // Load project context. Supports both source modes:
@@ -414,7 +423,7 @@ export const MappingReviewPage: React.FC = () => {
         description={loadError}
       />
       <div className="mt-3 flex justify-center">
-        <Button variant="primary" onClick={() => loadAll()}>
+        <Button variant="primary" onClick={() => (pid ? loadAll() : window.location.reload())}>
           <RefreshCw className="h-4 w-4" /> Retry
         </Button>
       </div>
