@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { GlobalActivityBar } from "@/components/GlobalActivityBar";
 import { useAuth } from "@/store/authStore";
 
 import { LoginPage } from "@/pages/LoginPage";
@@ -48,6 +49,8 @@ const App: React.FC = () => {
   useEffect(() => { hydrate(); }, [hydrate]);
 
   return (
+    <>
+    <GlobalActivityBar />
     <Routes>
       <Route path="/login" element={<LoginPage />} />
 
@@ -107,6 +110,7 @@ const App: React.FC = () => {
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </>
   );
 };
 
