@@ -36,6 +36,27 @@ export const CrosswalkLibraryPage: React.FC = () => {
     return out;
   }, [items]);
 
+  // Reach: how many distinct object/field placements share the same value
+  // translation (legacy -> Fusion) — i.e. how widely a crosswalk is reused.
+  const usage = useMemo(() => {
+    const m: Record<string, Set<string>> = {};
+    for (const i of items || []) {
+      const key = `${i.original_value}→${i.resolved_value}`;
+      (m[key] = m[key] || new Set<string>()).add(`${i.target_object || "-"}::${i.target_field || "-"}`);
+    }
+    return m;
+  }, [items]);
+  const usedBy = (i: LearnedMapping) => usage[`${i.original_value}→${i.resolved_value}`]?.size || 1;
+  const coverage = (rows: LearnedMapping[]) => {
+    const o = new Set<string>(), f = new Set<string>();
+    for (const r of rows) {
+      if (r.target_object) o.add(r.target_object.toLowerCase());
+      if (r.target_field) f.add(r.target_field.toLowerCase());
+    }
+    return { objects: o.size, fields: f.size };
+  };
+  const totals = coverage(items || []);
+
   if (items === null) return <PageLoader />;
 
   return (
@@ -45,6 +66,20 @@ export const CrosswalkLibraryPage: React.FC = () => {
         subtitle="Value-translation tables maintained from approvals — or added manually"
         right={<Button onClick={openAdd}><Plus className="h-4 w-4" /> Add crosswalk</Button>}
       />
+
+      {items.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="rounded-full bg-brand-subtle px-2.5 py-1 font-medium text-brand-dark">
+            {items.length} value mapping{items.length === 1 ? "" : "s"}
+          </span>
+          <span className="rounded-full border border-line bg-white px-2.5 py-1 text-ink-muted">
+            used across {totals.objects} object{totals.objects === 1 ? "" : "s"}
+          </span>
+          <span className="rounded-full border border-line bg-white px-2.5 py-1 text-ink-muted">
+            {totals.fields} field{totals.fields === 1 ? "" : "s"}
+          </span>
+        </div>
+      )}
 
       {items.length === 0 ? (
         <Card>
@@ -63,14 +98,14 @@ export const CrosswalkLibraryPage: React.FC = () => {
             <Card key={cat}>
               <CardHeader
                 title={cat}
-                subtitle={`${rows.length} value mapping(s)`}
+                subtitle={(() => { const c = coverage(rows); return `${rows.length} value mapping(s) · ${c.objects} object(s) · ${c.fields} field(s)`; })()}
                 actions={<Pill tone="brand">crosswalk</Pill>}
               />
               <table className="table-shell">
                 <thead>
                   <tr>
                     <th>Original (legacy)</th><th>Resolved (Fusion)</th>
-                    <th>Target object</th><th>Captured</th><th></th>
+                    <th>Target object</th><th>Used by</th><th>Captured</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -79,6 +114,7 @@ export const CrosswalkLibraryPage: React.FC = () => {
                       <td className="font-mono text-danger">{m.original_value}</td>
                       <td className="font-mono text-success">{m.resolved_value}</td>
                       <td className="text-ink-muted">{m.target_object || "—"}</td>
+                      <td>{(() => { const n = usedBy(m); return <Pill tone={n > 1 ? "brand" : "neutral"}>{n} {n === 1 ? "field" : "fields"}</Pill>; })()}</td>
                       <td className="text-[11px] text-ink-muted">{formatDate(m.captured_at)}</td>
                       <td className="text-right">
                         <div className="flex items-center justify-end gap-1">
