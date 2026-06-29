@@ -779,6 +779,7 @@ export const MappingReviewPage: React.FC = () => {
           <MappingInspector
             mapping={selectedMapping}
             sourceColumns={sourceColumns}
+            targetObject={project?.target_object}
             onClose={() => setSelectedMappingId(null)}
             onApprove={(m) => approve(m)}
             onReject={(m) => reject(m)}
@@ -1165,6 +1166,80 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   );
 };
 
+// ─────── Inline value-mapping (crosswalk) editor for the selected field ───────
+const ValueMappingsPanel: React.FC<{ targetObject?: string | null; targetField?: string | null }> = ({ targetObject, targetField }) => {
+  const [rows, setRows] = useState<any[]>([]);
+  const [orig, setOrig] = useState("");
+  const [res, setRes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = () => {
+    LearningApi.list({ kind: "crosswalk" })
+      .then((all: any[]) => setRows(all.filter((c) =>
+        (!targetObject || (c.target_object || "").toLowerCase() === String(targetObject).toLowerCase()) &&
+        (!c.target_field || !targetField || String(c.target_field).toLowerCase() === String(targetField).toLowerCase())
+      )))
+      .catch(() => setRows([]));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [targetObject, targetField]);
+
+  const add = async () => {
+    if (!orig.trim() || !res.trim()) return;
+    setSaving(true);
+    try {
+      await LearningApi.capture({
+        kind: "crosswalk",
+        category: `Value Mapping — ${targetField || targetObject || "field"}`,
+        original_value: orig.trim(),
+        resolved_value: res.trim(),
+        target_object: targetObject || undefined,
+        target_field: targetField || undefined,
+      } as any);
+      setOrig(""); setRes(""); load();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="mt-4 rounded-md border border-line bg-canvas/60 p-2.5">
+      <div className="flex items-center justify-between">
+        <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+          <ArrowLeftRight className="h-3 w-3" /> Value mappings (crosswalk)
+        </span>
+        <span className="text-[10px] text-ink-subtle">{rows.length}</span>
+      </div>
+      <div className="mt-0.5 text-[10.5px] leading-snug text-ink-subtle">
+        Translate legacy values into Fusion values for this field. Saved to the Crosswalk Library and reused at output generation.
+      </div>
+
+      {rows.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {rows.map((c) => (
+            <div key={c.id} className="flex items-center gap-1.5 rounded border border-line bg-white px-2 py-1 text-[11px]">
+              <span className="font-mono text-danger">{c.original_value}</span>
+              <span className="text-ink-subtle">→</span>
+              <span className="font-mono text-success">{c.resolved_value}</span>
+              <button
+                onClick={async () => { await LearningApi.delete(c.id); load(); }}
+                className="ml-auto rounded p-0.5 text-ink-subtle hover:bg-canvas hover:text-danger"
+                title="Remove value mapping"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-1.5">
+        <input className="input !h-7 !text-[11px]" placeholder="legacy" value={orig} onChange={(e) => setOrig(e.target.value)} />
+        <span className="text-ink-subtle">→</span>
+        <input className="input !h-7 !text-[11px]" placeholder="Fusion" value={res} onChange={(e) => setRes(e.target.value)} />
+        <Button onClick={add} loading={saving} disabled={!orig.trim() || !res.trim()} className="!h-7 shrink-0 !px-2 !text-[11px]">Add</Button>
+      </div>
+    </div>
+  );
+};
+
 // ─────── Side inspector for a selected mapping ───────
 
 const MappingInspector: React.FC<{
@@ -1175,7 +1250,8 @@ const MappingInspector: React.FC<{
   onReject: (m: MappingSuggestion) => void;
   onOverride: (m: MappingSuggestion, src: string) => void;
   onAddCustomRule: (m: MappingSuggestion) => void;
-}> = ({ mapping, sourceColumns, onClose, onApprove, onReject, onOverride, onAddCustomRule }) => {
+  targetObject?: string | null;
+}> = ({ mapping, sourceColumns, onClose, onApprove, onReject, onOverride, onAddCustomRule, targetObject }) => {
   const [editingOverride, setEditingOverride] = useState(false);
   const [override, setOverride] = useState(mapping.source_column || "");
 
@@ -1297,6 +1373,9 @@ const MappingInspector: React.FC<{
             </div>
           </div>
         )}
+
+        {/* Value mappings (crosswalk) for this field */}
+        <ValueMappingsPanel targetObject={targetObject} targetField={mapping.target_field_name} />
 
         {/* Override editor */}
         <div className="mt-5 space-y-2">
