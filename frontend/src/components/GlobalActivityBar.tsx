@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { apiActivity } from "@/api/client";
 
 /**
  * App-wide processing indicator. Subscribes to the axios activity tracker, so it
  * lights up for ANY API call — AI mapping, live EBS column/row fetches, Fusion
  * loads, status polls, etc. A short delay avoids flicker on instant requests.
+ *
+ * Visual: a glowing indigo "comet" progress bar across the top, plus a frosted
+ * glass pill with a smooth conic-gradient spinner and a soft breathing glow.
  */
 export const GlobalActivityBar: React.FC = () => {
   const [busy, setBusy] = useState(false);
@@ -34,19 +36,54 @@ export const GlobalActivityBar: React.FC = () => {
 
   return (
     <>
-      {/* Indeterminate progress bar pinned to the very top of the viewport */}
-      <div className="pointer-events-none fixed inset-x-0 top-0 z-[200] h-0.5 overflow-hidden">
-        <div
-          className="h-full w-1/3 rounded-full bg-brand"
-          style={{ animation: "txActivity 1.1s ease-in-out infinite" }}
-        />
+      <style>{`
+        @keyframes txgSweep{0%{left:-42%}100%{left:100%}}
+        @keyframes txgSpin{to{transform:rotate(1turn)}}
+        @keyframes txgPop{0%{opacity:0;transform:translateY(10px) scale(.94)}100%{opacity:1;transform:translateY(0) scale(1)}}
+        @keyframes txgGlow{0%,100%{box-shadow:0 8px 28px -8px rgba(15,23,42,.22),0 0 0 0 rgba(99,102,241,0)}50%{box-shadow:0 10px 30px -8px rgba(79,70,229,.30),0 0 0 5px rgba(99,102,241,.08)}}
+        @keyframes txgDot{0%,70%,100%{opacity:.2;transform:translateY(0)}35%{opacity:1;transform:translateY(-1px)}}
+        @keyframes txgPulse{0%,100%{opacity:.55;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+        .txg-track{position:fixed;top:0;left:0;right:0;height:3px;z-index:9999;overflow:hidden;
+          background:linear-gradient(90deg,rgba(99,102,241,.10),rgba(99,102,241,.16),rgba(99,102,241,.10));pointer-events:none}
+        .txg-comet{position:absolute;top:0;height:100%;width:42%;border-radius:999px;
+          background:linear-gradient(90deg,rgba(129,140,248,0) 0%,#818CF8 30%,#6366F1 68%,#4F46E5 100%);
+          box-shadow:0 0 12px 1px rgba(99,102,241,.6),0 0 4px 0 rgba(79,70,229,.8);
+          animation:txgSweep 1.15s cubic-bezier(.45,.05,.3,1) infinite}
+        .txg-badge{position:fixed;bottom:22px;right:22px;z-index:9999;display:flex;align-items:center;gap:11px;
+          padding:10px 16px 10px 13px;border-radius:999px;pointer-events:none;
+          background:rgba(255,255,255,.78);backdrop-filter:blur(12px) saturate(1.4);-webkit-backdrop-filter:blur(12px) saturate(1.4);
+          border:1px solid rgba(226,232,240,.85);
+          animation:txgPop .3s cubic-bezier(.2,.8,.2,1) both,txgGlow 2.4s ease-in-out infinite .3s;
+          font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+        .txg-spin{position:relative;width:20px;height:20px;flex:0 0 auto}
+        .txg-ring{position:absolute;inset:0;border-radius:50%;
+          background:conic-gradient(from 90deg,rgba(99,102,241,0) 8%,#818CF8 52%,#4F46E5 100%);
+          -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));
+          mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));
+          animation:txgSpin .8s linear infinite}
+        .txg-core{position:absolute;top:50%;left:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;
+          background:#6366F1;animation:txgPulse 1.4s ease-in-out infinite}
+        .txg-text{font-size:13px;font-weight:500;color:#0F172A;letter-spacing:.1px;white-space:nowrap}
+        .txg-dots{display:inline-block;width:14px;text-align:left}
+        .txg-dot{display:inline-block;animation:txgDot 1.4s infinite}
+        .txg-dot:nth-child(2){animation-delay:.18s}
+        .txg-dot:nth-child(3){animation-delay:.36s}
+        @media (prefers-reduced-motion: reduce){
+          .txg-comet,.txg-ring,.txg-core,.txg-dot,.txg-badge{animation-duration:0s !important}
+        }
+      `}</style>
+
+      <div className="txg-track"><div className="txg-comet" /></div>
+
+      <div className="txg-badge" role="status" aria-live="polite" aria-label="Processing">
+        <span className="txg-spin" aria-hidden="true">
+          <span className="txg-ring" />
+          <span className="txg-core" />
+        </span>
+        <span className="txg-text">
+          Working<span className="txg-dots"><span className="txg-dot">.</span><span className="txg-dot">.</span><span className="txg-dot">.</span></span>
+        </span>
       </div>
-      {/* Small "Working…" badge so the user always sees the tool is busy */}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[200] flex items-center gap-2 rounded-full border border-line bg-white px-3 py-1.5 text-xs font-medium text-ink shadow-soft">
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-brand" />
-        Working…
-      </div>
-      <style>{`@keyframes txActivity{0%{transform:translateX(-110%)}60%{transform:translateX(220%)}100%{transform:translateX(320%)}}`}</style>
     </>
   );
 };
