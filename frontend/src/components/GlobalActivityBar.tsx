@@ -12,21 +12,37 @@ import { apiActivity } from "@/api/client";
 export const GlobalActivityBar: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const showTimer = useRef<number | null>(null);
+  const maxTimer = useRef<number | null>(null);
+  const shown = useRef(false);
+  const capped = useRef(false); // suppress re-show until activity fully settles
 
   useEffect(() => {
+    const clearTimers = () => {
+      if (showTimer.current != null) { clearTimeout(showTimer.current); showTimer.current = null; }
+      if (maxTimer.current != null) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    };
     return apiActivity.subscribe((n) => {
       if (n > 0) {
-        if (showTimer.current == null) {
-          showTimer.current = window.setTimeout(() => {
-            showTimer.current = null;
-            setBusy(true);
-          }, 130);
-        }
-      } else {
-        if (showTimer.current != null) {
-          clearTimeout(showTimer.current);
+        // Already showing, capped this cycle, or a show is pending — do nothing.
+        if (shown.current || capped.current || showTimer.current != null) return;
+        showTimer.current = window.setTimeout(() => {
           showTimer.current = null;
-        }
+          shown.current = true;
+          setBusy(true);
+          // Never let the indicator linger on a single slow request: auto-hide
+          // after a cap, then stay hidden until all requests settle.
+          maxTimer.current = window.setTimeout(() => {
+            maxTimer.current = null;
+            shown.current = false;
+            capped.current = true;
+            setBusy(false);
+          }, 12000);
+        }, 130);
+      } else {
+        // Everything settled — reset and hide.
+        clearTimers();
+        shown.current = false;
+        capped.current = false;
         setBusy(false);
       }
     });

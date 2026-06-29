@@ -8,7 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.models.conversion import Conversion
 from app.models.learned import LearnedMapping
 from app.models.user import User
-from app.schemas.learned import LearnedMappingCreate, LearnedMappingOut, LearningStats
+from app.schemas.learned import (
+    LearnedMappingCreate, LearnedMappingOut, LearnedMappingUpdate, LearningStats,
+)
 from app.services.auth_service import get_current_user
 
 router = APIRouter(prefix="/api/learned-mappings", tags=["learning"])
@@ -148,6 +150,22 @@ async def backfill_project_ids(_: User = Depends(get_current_user)):
         "updated": updated,
         "skipped_no_match": skipped,
     }
+
+
+@router.patch("/{learned_id}", response_model=LearnedMappingOut)
+async def update_learned(
+    learned_id: str,
+    payload: LearnedMappingUpdate,
+    _: User = Depends(get_current_user),
+):
+    item = await LearnedMapping.get(PydanticObjectId(learned_id))
+    if not item:
+        raise HTTPException(404, "Not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if updates:
+        await item.set(updates)
+        item = await LearnedMapping.get(PydanticObjectId(learned_id))
+    return _serialize(item)
 
 
 @router.delete("/{learned_id}")

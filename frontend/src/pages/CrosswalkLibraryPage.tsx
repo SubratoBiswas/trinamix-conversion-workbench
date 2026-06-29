@@ -1,32 +1,38 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, Plus, Trash2, Sparkles } from "lucide-react";
+import { ArrowLeftRight, Plus, Pencil, Trash2 } from "lucide-react";
 import { LearningApi } from "@/api";
 import {
-  Card, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
+  Card, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Button,
 } from "@/components/ui/Primitives";
-import { cn, formatDate } from "@/lib/utils";
+import { LearnedEntryModal } from "@/components/LearnedEntryModal";
+import { formatDate } from "@/lib/utils";
 import type { LearnedMapping } from "@/types";
 
 /**
- * Crosswalks — value-translation tables. Examples: status A/I → Active/Inactive,
- * UOM EA → Each, country US → United States.
+ * Crosswalks — value-translation tables. Captured automatically when an analyst
+ * approves a value-mapping (e.g. status A -> Active), and editable/creatable here.
  */
 export const CrosswalkLibraryPage: React.FC = () => {
   const [items, setItems] = useState<LearnedMapping[] | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<LearnedMapping | null>(null);
 
-  useEffect(() => {
-    LearningApi.list({ kind: "crosswalk" })
-      .then(setItems)
-      .catch(() => setItems([]));
-  }, []);
+  const refresh = () =>
+    LearningApi.list({ kind: "crosswalk" }).then(setItems).catch(() => setItems([]));
 
-  // Group by category — UOM, Status, Currency, etc.
+  useEffect(() => { refresh(); }, []);
+
+  const openAdd = () => { setEditing(null); setModalOpen(true); };
+  const openEdit = (m: LearnedMapping) => { setEditing(m); setModalOpen(true); };
+  const remove = async (m: LearnedMapping) => {
+    if (!window.confirm(`Delete crosswalk "${m.original_value} -> ${m.resolved_value}"?`)) return;
+    await LearningApi.delete(m.id);
+    refresh();
+  };
+
   const byCategory = useMemo(() => {
-    if (!items) return {};
     const out: Record<string, LearnedMapping[]> = {};
-    for (const i of items) {
-      out[i.category] = [...(out[i.category] || []), i];
-    }
+    for (const i of items || []) out[i.category] = [...(out[i.category] || []), i];
     return out;
   }, [items]);
 
@@ -36,7 +42,8 @@ export const CrosswalkLibraryPage: React.FC = () => {
     <>
       <PageTitle
         title="Crosswalk Library"
-        subtitle="Value-translation tables maintained from approval history"
+        subtitle="Value-translation tables maintained from approvals — or added manually"
+        right={<Button onClick={openAdd}><Plus className="h-4 w-4" /> Add crosswalk</Button>}
       />
 
       {items.length === 0 ? (
@@ -45,7 +52,8 @@ export const CrosswalkLibraryPage: React.FC = () => {
             <EmptyState
               icon={<ArrowLeftRight className="h-5 w-5" />}
               title="No crosswalks captured yet"
-              description="When an analyst approves a value-mapping recommendation (e.g. A → Active), the resolved values are stored here as a reusable crosswalk."
+              description="Crosswalks are stored automatically when an analyst approves a value-mapping (e.g. A -> Active). None have been approved yet — add one manually to get started."
+              action={<Button onClick={openAdd}><Plus className="h-4 w-4" /> Add crosswalk</Button>}
             />
           </div>
         </Card>
@@ -61,11 +69,8 @@ export const CrosswalkLibraryPage: React.FC = () => {
               <table className="table-shell">
                 <thead>
                   <tr>
-                    <th>Original (legacy)</th>
-                    <th>Resolved (Fusion)</th>
-                    <th>Target object</th>
-                    <th>Captured</th>
-                    <th></th>
+                    <th>Original (legacy)</th><th>Resolved (Fusion)</th>
+                    <th>Target object</th><th>Captured</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -76,12 +81,16 @@ export const CrosswalkLibraryPage: React.FC = () => {
                       <td className="text-ink-muted">{m.target_object || "—"}</td>
                       <td className="text-[11px] text-ink-muted">{formatDate(m.captured_at)}</td>
                       <td className="text-right">
-                        <button onClick={async () => {
-                          await LearningApi.delete(m.id);
-                          LearningApi.list({ kind: "crosswalk" }).then(setItems);
-                        }} className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => openEdit(m)} title="Edit crosswalk"
+                            className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-brand">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => remove(m)} title="Delete crosswalk"
+                            className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -91,6 +100,11 @@ export const CrosswalkLibraryPage: React.FC = () => {
           ))}
         </div>
       )}
+
+      <LearnedEntryModal
+        open={modalOpen} kind="crosswalk" initial={editing}
+        onClose={() => setModalOpen(false)} onSaved={refresh}
+      />
     </>
   );
 };

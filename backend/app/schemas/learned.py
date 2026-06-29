@@ -24,6 +24,16 @@ class LearnedMappingCreate(LearnedMappingBase):
     pass
 
 
+class LearnedMappingUpdate(BaseModel):
+    category: Optional[str] = None
+    original_value: Optional[str] = None
+    resolved_value: Optional[str] = None
+    target_object: Optional[str] = None
+    target_field: Optional[str] = None
+    rule_type: Optional[str] = None
+    rule_config: Optional[Any] = None
+
+
 class LearnedMappingOut(LearnedMappingBase):
     model_config = ConfigDict(from_attributes=True)
     id: str

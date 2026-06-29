@@ -226,6 +226,8 @@ export const LearningApi = {
     api.get<LearningStats>("/learned-mappings/stats", { params }).then(r => r.data),
   capture: (body: Partial<LearnedMapping>) =>
     api.post<LearnedMapping>("/learned-mappings", body).then(r => r.data),
+  update: (id: string, body: Partial<LearnedMapping>) =>
+    api.patch<LearnedMapping>(`/learned-mappings/${id}`, body).then(r => r.data),
   delete: (id: string) => api.delete(`/learned-mappings/${id}`).then(r => r.data),
   backfillProjects: () =>
     api.post("/learned-mappings/backfill-projects").then(r => r.data),

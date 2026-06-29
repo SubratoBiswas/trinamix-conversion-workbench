@@ -1,26 +1,34 @@
 import React, { useEffect, useState } from "react";
-import { Library, Plus, Wand2, Trash2, Sparkles, GitMerge } from "lucide-react";
-import { LearningApi, MappingApi } from "@/api";
+import { Library, Plus, Pencil, Trash2 } from "lucide-react";
+import { LearningApi } from "@/api";
 import {
-  Card, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
-  Button,
+  Card, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Button,
 } from "@/components/ui/Primitives";
+import { LearnedEntryModal } from "@/components/LearnedEntryModal";
 import { formatDate } from "@/lib/utils";
-import type { LearnedMapping, TransformationRule } from "@/types";
+import type { LearnedMapping } from "@/types";
 
 /**
- * Rule Library — combines learned rules (from `Approve & Learn` actions) with
- * project-level transformation rules. The Rule Library is the *re-usable*
- * superset; Transformation Studio is per-project.
+ * Rule Library — reusable transformation rules. Captured automatically from
+ * "Apply & Learn" approvals, and editable/creatable manually here.
  */
 export const RuleLibraryPage: React.FC = () => {
   const [items, setItems] = useState<LearnedMapping[] | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<LearnedMapping | null>(null);
 
-  useEffect(() => {
-    LearningApi.list({ kind: "rule" })
-      .then((rs) => setItems(rs))
-      .catch(() => setItems([]));
-  }, []);
+  const refresh = () =>
+    LearningApi.list({ kind: "rule" }).then(setItems).catch(() => setItems([]));
+
+  useEffect(() => { refresh(); }, []);
+
+  const openAdd = () => { setEditing(null); setModalOpen(true); };
+  const openEdit = (m: LearnedMapping) => { setEditing(m); setModalOpen(true); };
+  const remove = async (m: LearnedMapping) => {
+    if (!window.confirm(`Delete rule "${m.category}"?`)) return;
+    await LearningApi.delete(m.id);
+    refresh();
+  };
 
   if (items === null) return <PageLoader />;
 
@@ -28,30 +36,27 @@ export const RuleLibraryPage: React.FC = () => {
     <>
       <PageTitle
         title="Rule Library"
-        subtitle="Reusable transformation rules captured from human approvals"
+        subtitle="Reusable transformation rules captured from approvals — or added manually"
+        right={<Button onClick={openAdd}><Plus className="h-4 w-4" /> Add rule</Button>}
       />
 
       <Card>
-        <CardHeader title="Rules" subtitle={`${items.length} captured rule(s)`} />
+        <CardHeader title="Rules" subtitle={`${items.length} rule(s)`} />
         {items.length === 0 ? (
           <div className="p-6">
             <EmptyState
               icon={<Library className="h-5 w-5" />}
-              title="No reusable rules captured yet"
-              description="Approve a transformation recommendation in the Dataset Preparation or Mapping Review screen with the 'Apply & Learn' action — it lands here as a reusable rule."
+              title="No rules yet"
+              description="Approve a transformation with 'Apply & Learn', or add one manually."
+              action={<Button onClick={openAdd}><Plus className="h-4 w-4" /> Add rule</Button>}
             />
           </div>
         ) : (
           <table className="table-shell">
             <thead>
               <tr>
-                <th>Rule</th>
-                <th>Type</th>
-                <th>Original</th>
-                <th>Resolved</th>
-                <th>Object</th>
-                <th>Captured</th>
-                <th></th>
+                <th>Rule</th><th>Type</th><th>Original</th><th>Resolved</th>
+                <th>Object</th><th>Captured</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -64,10 +69,16 @@ export const RuleLibraryPage: React.FC = () => {
                   <td className="text-ink-muted">{m.target_object || "—"}</td>
                   <td className="text-[11px] text-ink-muted">{formatDate(m.captured_at)}</td>
                   <td className="text-right">
-                    <button onClick={async () => { await LearningApi.delete(m.id); LearningApi.list({ kind: "rule" }).then(setItems); }}
-                      className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => openEdit(m)} title="Edit rule"
+                        className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-brand">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => remove(m)} title="Delete rule"
+                        className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -75,6 +86,11 @@ export const RuleLibraryPage: React.FC = () => {
           </table>
         )}
       </Card>
+
+      <LearnedEntryModal
+        open={modalOpen} kind="rule" initial={editing}
+        onClose={() => setModalOpen(false)} onSaved={refresh}
+      />
     </>
   );
 };
