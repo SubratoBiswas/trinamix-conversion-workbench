@@ -149,7 +149,8 @@ export const LoadDashboardPage: React.FC = () => {
       return;
     }
     // Soft-gate on the pod pre-flight — warn before a load that will return -1.
-    if (preflight && preflight.level !== "ready") {
+    // "ready"/"reachable" proceed silently; only problem levels prompt.
+    if (preflight && preflight.level !== "ready" && preflight.level !== "reachable") {
       const proceed = window.confirm(
         `Pod check warning:\n\n${preflight.message}\n\nLoad anyway?`,
       );
@@ -313,11 +314,13 @@ export const LoadDashboardPage: React.FC = () => {
                   <>
                     <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 ${
                       preflight.level === "ready" ? "bg-success-subtle text-success"
+                      : preflight.level === "reachable" ? "bg-info-subtle text-info"
                       : (preflight.level === "no_privilege" || preflight.level === "module_missing") ? "bg-danger-subtle text-danger"
                       : "bg-warning-subtle text-warning-dark"}`}>
                       {preflight.level === "ready" ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
                       Pod check: {({
                         ready: "ready",
+                        reachable: "reachable — submit not verified",
                         no_privilege: "not authorized",
                         module_missing: "module not provisioned",
                         no_erp_integration: "integration not authorized",
@@ -382,7 +385,10 @@ export const LoadDashboardPage: React.FC = () => {
                     </div>
                   )}
                   {rawResp && (
-                    <div className="mt-1 break-all font-mono text-[10.5px] text-ink-subtle" title={rawResp}>Oracle response: {rawResp.slice(0, 180)}</div>
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-[11px] font-medium text-ink-muted">Oracle response</summary>
+                      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-canvas px-2 py-1.5 font-mono text-[10.5px] text-ink-subtle">{rawResp}</pre>
+                    </details>
                   )}
                   {live?.state && (
                     <div className="mt-2 flex items-center gap-2 text-[12px]">

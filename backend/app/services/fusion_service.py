@@ -247,6 +247,12 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
             req_id = data
         if req_id is not None:
             req_id = str(req_id).strip() or None
+        # Strip the echoed base64 file content so the stored/displayed response keeps
+        # the diagnostically useful fields (DocumentId, ReqstId, error text) readable.
+        display = data
+        if isinstance(data, dict):
+            display = {k: ("<base64 omitted>" if k in ("DocumentContent", "Content") else v)
+                       for k, v in data.items()}
         # importBulkData returns -1 (sometimes 0) when Oracle ACCEPTS the REST call
         # (HTTP 200) but could NOT queue the import job — typically the UCM document
         # account or ESS job isn't provisioned for this user/pod, or the user lacks
@@ -266,7 +272,7 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
                     "can read data but cannot run imports."
                 ),
                 "request_id": req_id,
-                "response": data,
+                "response": display,
                 "file_name": zip_name,
             }
         return {
@@ -274,7 +280,7 @@ async def load_to_fusion(conn, business_object: Optional[str], csv_bytes: bytes,
             "status": r.status_code,
             "message": "Submitted to Fusion ERP Integration." if queued else f"Fusion rejected the load (HTTP {r.status_code}).",
             "request_id": req_id,
-            "response": data,
+            "response": display,
             "file_name": zip_name,
         }
     except Exception as exc:  # noqa: BLE001
@@ -395,8 +401,10 @@ async def preflight_fusion(conn, business_object: Optional[str]) -> dict[str, An
 
     # Data is readable — interpret the ERP Integration probe (the real gate).
     if esc in (200, 405):
-        return {"ok": True, "level": "ready", "resource": resource, "http_status": esc,
-                "message": "Pod check passed — SCM data is readable and the ERP Integration endpoint is reachable for this user, so the import can be attempted."}
+        return {"ok": True, "level": "reachable", "resource": resource, "http_status": esc,
+                "message": ("SCM data is readable and the ERP Integration endpoint is reachable. Note: this does "
+                            "NOT confirm the UCM-upload / submit privilege — if a load returns request id -1 with "
+                            "DocumentId null, the user lacks the ERP Integration role (read access is not enough).")}
     if esc in (401, 403):
         return {"ok": False, "level": "no_erp_integration", "resource": resource, "http_status": esc,
                 "message": (f"SCM data is readable, but this user is NOT authorized for ERP Integration (HTTP {esc}) — "
