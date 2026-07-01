@@ -47,6 +47,18 @@ type ConnectionDetails = {
   credentials: Record<string, string>;
 };
 
+// A source file uploaded during setup. Uploaded + AI-classified immediately on
+// selection so parse errors surface right away (not silently at finish).
+type WizFile = {
+  key: string;
+  file: File;
+  status: "uploading" | "ready" | "error";
+  datasetId?: string;
+  templateId?: string;
+  targetObject?: string;
+  error?: string;
+};
+
 const PHASE_OPTIONS: { code: string; label: string; help: string }[] = [
   { code: "blueprint", label: "Blueprint", help: "Discovery + scoping + design sign-off" },
   { code: "own",       label: "Own",       help: "Build + SIT (mapping, transforms, validation)" },
@@ -147,7 +159,7 @@ export const SetupWizard: React.FC = () => {
   const [sourceCode, setSourceCode] = useState<string>("");
   // File-based source: extract files uploaded during setup. When present, the
   // engagement's conversions are created from these files (not the module catalog).
-  const [files, setFiles] = useState<File[]>([]);
+  const [fileItems, setFileItems] = useState<WizFile[]>([]);
   const [conn, setConn] = useState<ConnectionDetails>({
     display_name: "", endpoint: "", auth_type: "mock", mock_mode: true,
     metadata: {}, credentials: {},
@@ -238,27 +250,18 @@ export const SetupWizard: React.FC = () => {
         selected_modules: selectedModules,
       };
       const p = await ProjectsApi.create(payload as any);
-      // File-based engagement: upload each extract, AI-classify it, and create
-      // one conversion per file — so the conversion list reflects exactly the
-      // files uploaded here. Files take precedence over module auto-populate.
-      if (files.length > 0) {
-        for (const f of files) {
-          try {
-            const ds: any = await DatasetsApi.upload(f, f.name.replace(/\.[^.]+$/, ""));
-            const cls = await DatasetsApi.classify(ds.id).catch(() => null);
-            const templateId = cls?.target?.detected_template_id || undefined;
-            const targetObject = cls?.target?.suggestions?.[0]?.business_object || undefined;
-            if (templateId) {
-              await DatasetsApi.classifyLearn(ds.id, {
-                source_system: sourceCode, template_id: templateId, target_object: targetObject,
-              }).catch(() => {});
-            }
-            await ConversionsApi.create({
-              project_id: p.id, name: f.name.replace(/\.[^.]+$/, ""),
-              dataset_id: ds.id, template_id: templateId, target_object: targetObject,
-              source_type: "dataset", status: "draft",
-            } as any);
-          } catch { /* skip this file, continue with the rest */ }
+      // File-based engagement: files were already uploaded + AI-classified on the
+      // Connection step. Create one conversion per successfully-parsed file — so
+      // the conversion list reflects exactly the files uploaded here. Files take
+      // precedence over module auto-populate.
+      const readyFiles = fileItems.filter((it) => it.status === "ready" && it.datasetId);
+      if (readyFiles.length > 0) {
+        for (const it of readyFiles) {
+          await ConversionsApi.create({
+            project_id: p.id, name: it.file.name.replace(/\.[^.]+$/, ""),
+            dataset_id: it.datasetId, template_id: it.templateId, target_object: it.targetObject,
+            source_type: "dataset", status: "draft",
+          } as any).catch(() => {});
         }
       } else if (selectedModules.length > 0) {
         // Catalog-based engagement: auto-create planned conversions per module.
@@ -293,13 +296,13 @@ export const SetupWizard: React.FC = () => {
             conn={conn}
             setConn={setConn}
           />
-          <FileUploadCard files={files} setFiles={setFiles} />
+          <FileUploadCard items={fileItems} setItems={setFileItems} sourceCode={sourceCode} />
         </>
       )}
-      {step === 4 && files.length > 0 && (
+      {step === 4 && fileItems.length > 0 && (
         <div className="mb-3 rounded-md border border-brand/30 bg-brand-subtle/40 px-3 py-2 text-[12px] text-brand-dark">
           <Sparkles className="mr-1 inline h-3.5 w-3.5" />
-          You've uploaded <strong>{files.length}</strong> source file{files.length === 1 ? "" : "s"} — conversions will be created from them (one per file), auto-detected to their FBDI targets. Module selection below is optional.
+          You've uploaded <strong>{fileItems.filter((f) => f.status === "ready").length}</strong> source file(s) — conversions will be created from them (one per file), auto-detected to their FBDI targets. Module selection below is optional.
         </div>
       )}
       {step === 4 && (
@@ -704,41 +707,81 @@ function extractTableName(hint: string): string | null {
   return m ? m[1] : null;
 }
 
-// Optional source-file upload on the Connection step. Files here drive the
-// engagement's conversions (one per file), auto-classified to FBDI targets.
-const FileUploadCard: React.FC<{ files: File[]; setFiles: (f: File[]) => void }> = ({ files, setFiles }) => (
-  <Card className="mt-4">
-    <CardBody className="space-y-3">
-      <div className="flex items-center gap-2">
-        <UploadCloud className="h-4 w-4 text-brand" />
-        <span className="text-sm font-semibold text-ink">Upload source files (optional)</span>
-      </div>
-      <p className="text-[12px] text-ink-muted">
-        Working from file exports instead of (or in addition to) a live connection? Upload your source extracts. On finish, the workbench auto-detects each file&rsquo;s source and target FBDI object and creates one conversion per file — ready to map and export as an FBDI template.
-      </p>
-      <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-line bg-canvas px-4 py-4 hover:border-brand">
-        <UploadCloud className="h-5 w-5 text-brand" />
-        <span className="text-sm text-ink">Choose one or more CSV / XLSX files</span>
-        <input type="file" multiple accept=".csv,.xlsx,.xls" className="hidden"
-          onChange={(e) => setFiles([...files, ...Array.from(e.target.files || [])])} />
-      </label>
-      {files.length > 0 && (
-        <div className="space-y-1">
-          {files.map((f, i) => (
-            <div key={i} className="flex items-center gap-2 rounded border border-line bg-white px-2.5 py-1.5 text-[12px]">
-              <Database className="h-3.5 w-3.5 text-ink-subtle" />
-              <span className="flex-1 truncate text-ink">{f.name}</span>
-              <span className="text-ink-subtle">{Math.round(f.size / 1024)} KB</span>
-              <button onClick={() => setFiles(files.filter((_, j) => j !== i))} className="rounded p-0.5 text-ink-subtle hover:text-danger">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
+// Optional source-file upload on the Connection step. Files are uploaded and
+// AI-classified immediately on selection (so parse errors surface right away),
+// and drive the engagement's conversions (one per file) on finish.
+const FileUploadCard: React.FC<{
+  items: WizFile[];
+  setItems: React.Dispatch<React.SetStateAction<WizFile[]>>;
+  sourceCode: string;
+}> = ({ items, setItems, sourceCode }) => {
+  const patch = (key: string, p: Partial<WizFile>) =>
+    setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...p } : it)));
+
+  const add = async (fl: FileList | null) => {
+    const news: WizFile[] = Array.from(fl || []).map((file) => ({
+      key: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 7)}`,
+      file, status: "uploading",
+    }));
+    if (!news.length) return;
+    setItems((prev) => [...prev, ...news]);
+    for (const it of news) {
+      try {
+        const ds: any = await DatasetsApi.upload(it.file, it.file.name.replace(/\.[^.]+$/, ""));
+        const cls = await DatasetsApi.classify(ds.id).catch(() => null);
+        const templateId = cls?.target?.detected_template_id || undefined;
+        const targetObject = cls?.target?.suggestions?.[0]?.business_object || undefined;
+        if (templateId) {
+          DatasetsApi.classifyLearn(ds.id, { source_system: sourceCode, template_id: templateId, target_object: targetObject }).catch(() => {});
+        }
+        patch(it.key, { status: "ready", datasetId: ds.id, templateId, targetObject });
+      } catch (e: any) {
+        patch(it.key, { status: "error", error: e?.response?.data?.detail || "Could not read this file — use a CSV or XLSX export." });
+      }
+    }
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardBody className="space-y-3">
+        <div className="flex items-center gap-2">
+          <UploadCloud className="h-4 w-4 text-brand" />
+          <span className="text-sm font-semibold text-ink">Upload source files (optional)</span>
         </div>
-      )}
-    </CardBody>
-  </Card>
-);
+        <p className="text-[12px] text-ink-muted">
+          Working from file exports instead of (or in addition to) a live connection? Upload your source extracts (CSV / XLSX). Each file is auto-detected to its source and target FBDI object; on finish, the workbench creates one conversion per file — ready to map and export as an FBDI template.
+        </p>
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-line bg-canvas px-4 py-4 hover:border-brand">
+          <UploadCloud className="h-5 w-5 text-brand" />
+          <span className="text-sm text-ink">Choose one or more CSV / XLSX files</span>
+          <input type="file" multiple accept=".csv,.xlsx,.xls" className="hidden"
+            onChange={(e) => { add(e.target.files); e.currentTarget.value = ""; }} />
+        </label>
+        {items.length > 0 && (
+          <div className="space-y-1">
+            {items.map((it) => (
+              <div key={it.key} className="flex items-center gap-2 rounded border border-line bg-white px-2.5 py-1.5 text-[12px]">
+                <Database className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+                <span className="min-w-0 flex-1 truncate text-ink">{it.file.name}</span>
+                {it.status === "uploading" && <Pill tone="neutral">analyzing…</Pill>}
+                {it.status === "ready" && <Pill tone="success">ready</Pill>}
+                {it.status === "error" && <Pill tone="danger">error</Pill>}
+                <button onClick={() => setItems((prev) => prev.filter((x) => x.key !== it.key))} className="rounded p-0.5 text-ink-subtle hover:text-danger">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+            {items.some((it) => it.status === "error") && (
+              <p className="text-[11px] text-danger">
+                {items.filter((it) => it.status === "error").map((it) => `${it.file.name}: ${it.error}`).join(" · ")}
+              </p>
+            )}
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+};
 
 const Step4Scope: React.FC<{
   modules: FusionModule[];

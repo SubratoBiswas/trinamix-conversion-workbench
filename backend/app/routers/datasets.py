@@ -34,6 +34,8 @@ async def upload_dataset(
         ds, columns = await create_dataset_from_upload(file, name, description)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001 — surface a clear parse reason, not a 500
+        raise HTTPException(400, f"Could not read '{file.filename}': {exc}")
     return _ds_out(ds, columns)
 
 

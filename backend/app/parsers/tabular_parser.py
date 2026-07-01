@@ -18,15 +18,28 @@ def parse_tabular(file_path: Path | str, file_type: str | None = None) -> pd.Dat
     file_path = Path(file_path)
     ftype = (file_type or file_path.suffix.lstrip(".")).lower()
     if ftype == "csv":
-        # Try common encodings
+        # Try common encodings; tolerate ragged rows and auto-sniff the delimiter
+        # (comma / semicolon / tab) so more real-world exports parse cleanly.
         for enc in ("utf-8", "utf-8-sig", "latin-1"):
             try:
-                return pd.read_csv(file_path, dtype=str, keep_default_na=False, encoding=enc)
+                return pd.read_csv(
+                    file_path, dtype=str, keep_default_na=False, encoding=enc,
+                    engine="python", sep=None, on_bad_lines="skip",
+                )
             except UnicodeDecodeError:
                 continue
-        return pd.read_csv(file_path, dtype=str, keep_default_na=False, encoding="latin-1")
+        return pd.read_csv(
+            file_path, dtype=str, keep_default_na=False, encoding="latin-1",
+            engine="python", on_bad_lines="skip",
+        )
     elif ftype in ("xlsx", "xls", "xlsm"):
-        return pd.read_excel(file_path, dtype=str, keep_default_na=False)
+        try:
+            return pd.read_excel(file_path, dtype=str, keep_default_na=False)
+        except ImportError as e:
+            # Old .xls needs xlrd; guide the user to a supported format.
+            raise ValueError(
+                f"Couldn't read this Excel file ({e}). Please save it as .xlsx or .csv and re-upload."
+            )
     raise ValueError(f"Unsupported file type: {ftype}")
 
 
