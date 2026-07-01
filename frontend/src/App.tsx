@@ -7,6 +7,7 @@ import { useAuth } from "@/store/authStore";
 import { LoginPage } from "@/pages/LoginPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DatasetsPage } from "@/pages/DatasetsPage";
+import { ConvertFilePage } from "@/pages/ConvertFilePage";
 import { DatasetDetailPage } from "@/pages/DatasetDetailPage";
 import { DatasetPreparationPage } from "@/pages/DatasetPreparationPage";
 import { FbdiTemplatesPage, FbdiTemplateDetailPage } from "@/pages/FbdiTemplatesPage";
@@ -59,6 +60,7 @@ const App: React.FC = () => {
         <Route index element={<DashboardPage />} />
 
         {/* Data */}
+        <Route path="convert"                element={<ConvertFilePage />} />
         <Route path="datasets"               element={<DatasetsPage />} />
         <Route path="datasets/:id"           element={<DatasetDetailPage />} />
         <Route path="datasets/:id/prepare"   element={<DatasetPreparationPage />} />

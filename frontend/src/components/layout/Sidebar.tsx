@@ -4,7 +4,7 @@ import {
   Home, Database, FileSpreadsheet, Boxes, Workflow as WfIcon,
   Sparkles, ListChecks, ShieldCheck, Cloud, Network, BookOpen,
   Library, ArrowLeftRight, BadgeCheck, Eye, AlertTriangle, Layers,
-  CircleDot, Activity,
+  CircleDot, Activity, UploadCloud,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversionsApi, ProjectsApi } from "@/api";
@@ -22,6 +22,7 @@ const GROUPS: NavGroup[] = [
   {
     label: "Datasets",
     items: [
+      { to: "/convert", label: "Convert a File", icon: UploadCloud },
       { to: "/datasets", label: "All Datasets", icon: Database },
     ],
   },

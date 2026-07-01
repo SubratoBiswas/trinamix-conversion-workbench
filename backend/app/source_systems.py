@@ -40,6 +40,8 @@ class SourceSystemSpec:
 SOURCE_SYSTEMS: tuple[SourceSystemSpec, ...] = (
     SourceSystemSpec("netsuite",   "NetSuite",        "erp",    True),
     SourceSystemSpec("oracle_ebs", "Oracle EBS",      "erp",    True),
+    SourceSystemSpec("syteline",   "Infor SyteLine",  "erp",    False),
+    SourceSystemSpec("arena",      "Arena PLM",       "plm",    False),
     SourceSystemSpec("sap_ecc",    "SAP ECC",         "erp",    False),
     SourceSystemSpec("sap_s4",     "SAP S/4 HANA",    "erp",    False),
     SourceSystemSpec("workday",    "Workday",         "hcm",    False),

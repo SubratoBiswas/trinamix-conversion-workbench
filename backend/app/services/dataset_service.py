@@ -182,3 +182,75 @@ def detect_dataset_type(filename: str, column_names: list[str], templates: list)
         })
     results.sort(key=lambda x: -x["confidence"])
     return results[:3]
+
+
+# ── Source-system detection ──────────────────────────────────────────────────
+# Per-source signature keywords. We score the file name + column names against
+# each source's tell-tale vocabulary. Signals are intentionally distinctive.
+_SOURCE_HINTS: dict[str, tuple[list[str], list[str]]] = {
+    # Oracle EBS — UPPER_SNAKE columns, *_ID surrogate keys, SEGMENT/ATTRIBUTE
+    # flexfields, WHO columns, and canonical table names in the file name.
+    "oracle_ebs": (
+        ["mtl", "hz", "po", "oe", "ap", "ar", "gl", "ebs", "apps", "_all", "_b", "_tl"],
+        ["organization_id", "inventory_item_id", "segment1", "attribute1",
+         "last_update_date", "last_updated_by", "created_by", "creation_date",
+         "org_id", "set_of_books_id", "party_id", "vendor_id", "person_id"],
+    ),
+    # NetSuite — saved-search / CSV exports lead with Internal/External ID.
+    "netsuite": (
+        ["netsuite", "ns", "savedsearch", "saved_search"],
+        ["internal_id", "external_id", "internalid", "externalid", "nsinternal",
+         "subsidiary", "netsuite_id", "name", "isinactive", "custentity", "custitem"],
+    ),
+    # Infor SyteLine (CloudSuite Industrial) — short lower/mixed names, site_ref,
+    # cust_num / vend_num, u_m, stat.
+    "syteline": (
+        ["syteline", "infor", "csi", "sl_"],
+        ["item", "cust_num", "vend_num", "site_ref", "u_m", "stat",
+         "description", "product_code", "unit_cost", "matl_type", "whse"],
+    ),
+    # Arena PLM — item-centric PLM export: Item Number, Rev, Lifecycle Phase,
+    # Category, Supplier Item.
+    "arena": (
+        ["arena", "plm", "bom_export"],
+        ["item_number", "rev", "revision", "lifecycle_phase", "category",
+         "supplier_item", "manufacturer_part", "mfr_part", "guid", "effectivity"],
+    ),
+}
+
+_SOURCE_DISPLAY = {
+    "oracle_ebs": "Oracle EBS", "netsuite": "NetSuite",
+    "syteline": "Infor SyteLine", "arena": "Arena PLM", "custom": "Custom / Other",
+}
+
+
+def detect_source_system(filename: str, column_names: list[str]) -> list[dict]:
+    """Rank likely source systems for an uploaded file by filename + columns."""
+    fname_tokens = [_norm(t) for t in _re.split(r"[\W_]+", filename) if t]
+    col_tokens = [_norm(c) for c in column_names]
+    out: list[dict] = []
+    for code, (fname_kws, col_kws) in _SOURCE_HINTS.items():
+        fs = _kw_score(fname_tokens, fname_kws)
+        cs = _kw_score(col_tokens, col_kws)
+        conf = round(min(1.0, fs * 0.35 + cs * 0.75), 3)
+        reasons = []
+        if fs >= 0.15:
+            reasons.append("file name matches its naming convention")
+        if cs >= 0.15:
+            reasons.append(f"{int(cs * 100)}% signature-column match")
+        out.append({
+            "code": code,
+            "display": _SOURCE_DISPLAY.get(code, code),
+            "confidence": conf,
+            "reason": "; ".join(reasons) if reasons else "weak signal",
+        })
+    out.sort(key=lambda x: -x["confidence"])
+    return out
+
+
+def column_signature(column_names: list[str]) -> str:
+    """Stable signature of a file's column set — the learning key. Order- and
+    case-insensitive, so re-exports of the 'same' file hit the learned record."""
+    import hashlib
+    norm = sorted({_norm(c) for c in column_names if c})
+    return hashlib.sha1("|".join(norm).encode("utf-8")).hexdigest()[:16]

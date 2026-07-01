@@ -16,6 +16,10 @@ class Dataset(Document):
     detected_object_type: Optional[str] = None
     detection_confidence: float = 0.0
     detection_suggestions: list = Field(default_factory=list)
+    # AI-detected (or user-confirmed) source system for this file, e.g.
+    # oracle_ebs / netsuite / syteline / arena.
+    source_system: Optional[str] = None
+    source_confidence: float = 0.0
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:

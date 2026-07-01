@@ -46,6 +46,14 @@ export const DatasetsApi = {
     api.get<DatasetPreview>(`/datasets/${id}/preview`, { params: { limit } }).then(r => r.data),
   suggestTemplate: (id: string) =>
     api.get<{ dataset_id: string; suggestions: TemplateSuggestion[] }>(`/datasets/${id}/suggest-template`).then(r => r.data),
+  classify: (id: string) =>
+    api.get<{
+      dataset_id: string; signature: string; learned: boolean;
+      source: { detected: string; candidates: { code: string; display: string; confidence: number; reason: string }[] };
+      target: { detected_template_id: string | null; suggestions: TemplateSuggestion[] };
+    }>(`/datasets/${id}/classify`).then(r => r.data),
+  classifyLearn: (id: string, body: { source_system?: string; template_id?: string; target_object?: string }) =>
+    api.post<{ learned: boolean; signature: string; id: string }>(`/datasets/${id}/classify-learn`, body).then(r => r.data),
   upload: (file: File, name?: string, description?: string) => {
     const fd = new FormData();
     fd.append("file", file);
