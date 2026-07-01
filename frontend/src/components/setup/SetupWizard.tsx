@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, ArrowRight, Building2, Cable, CheckCircle2, Database,
   ShieldCheck, Sparkles, Lock, AlertCircle, Workflow, Layers, Boxes,
+  UploadCloud, X,
 } from "lucide-react";
-import { DiscoveryApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, DiscoveryApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, Pill,
 } from "@/components/ui/Primitives";
@@ -144,6 +145,9 @@ export const SetupWizard: React.FC = () => {
     status: "planning", phase: "blueprint",
   });
   const [sourceCode, setSourceCode] = useState<string>("");
+  // File-based source: extract files uploaded during setup. When present, the
+  // engagement's conversions are created from these files (not the module catalog).
+  const [files, setFiles] = useState<File[]>([]);
   const [conn, setConn] = useState<ConnectionDetails>({
     display_name: "", endpoint: "", auth_type: "mock", mock_mode: true,
     metadata: {}, credentials: {},
@@ -234,8 +238,30 @@ export const SetupWizard: React.FC = () => {
         selected_modules: selectedModules,
       };
       const p = await ProjectsApi.create(payload as any);
-      // Auto-create planned conversions for selected Fusion modules
-      if (selectedModules.length > 0) {
+      // File-based engagement: upload each extract, AI-classify it, and create
+      // one conversion per file — so the conversion list reflects exactly the
+      // files uploaded here. Files take precedence over module auto-populate.
+      if (files.length > 0) {
+        for (const f of files) {
+          try {
+            const ds: any = await DatasetsApi.upload(f, f.name.replace(/\.[^.]+$/, ""));
+            const cls = await DatasetsApi.classify(ds.id).catch(() => null);
+            const templateId = cls?.target?.detected_template_id || undefined;
+            const targetObject = cls?.target?.suggestions?.[0]?.business_object || undefined;
+            if (templateId) {
+              await DatasetsApi.classifyLearn(ds.id, {
+                source_system: sourceCode, template_id: templateId, target_object: targetObject,
+              }).catch(() => {});
+            }
+            await ConversionsApi.create({
+              project_id: p.id, name: f.name.replace(/\.[^.]+$/, ""),
+              dataset_id: ds.id, template_id: templateId, target_object: targetObject,
+              source_type: "dataset", status: "draft",
+            } as any);
+          } catch { /* skip this file, continue with the rest */ }
+        }
+      } else if (selectedModules.length > 0) {
+        // Catalog-based engagement: auto-create planned conversions per module.
         await ProjectsApi.autoPopulate(p.id, selectedModules);
       }
       nav(`/projects/${p.id}`);
@@ -261,11 +287,20 @@ export const SetupWizard: React.FC = () => {
         />
       )}
       {step === 3 && (
-        <Step3Connection
-          sourceCode={sourceCode}
-          conn={conn}
-          setConn={setConn}
-        />
+        <>
+          <Step3Connection
+            sourceCode={sourceCode}
+            conn={conn}
+            setConn={setConn}
+          />
+          <FileUploadCard files={files} setFiles={setFiles} />
+        </>
+      )}
+      {step === 4 && files.length > 0 && (
+        <div className="mb-3 rounded-md border border-brand/30 bg-brand-subtle/40 px-3 py-2 text-[12px] text-brand-dark">
+          <Sparkles className="mr-1 inline h-3.5 w-3.5" />
+          You've uploaded <strong>{files.length}</strong> source file{files.length === 1 ? "" : "s"} — conversions will be created from them (one per file), auto-detected to their FBDI targets. Module selection below is optional.
+        </div>
       )}
       {step === 4 && (
         <Step4Scope
@@ -404,11 +439,14 @@ const Step1Details: React.FC<{
             />
           </Field>
           <Field label="Target environment">
-            <input
-              className="input" placeholder="Oracle Fusion SCM Cloud"
+            <select
+              className="input"
               value={details.target_environment}
               onChange={(e) => setDetails({ ...details, target_environment: e.target.value })}
-            />
+            >
+              <option value="Oracle Fusion SCM Cloud">Oracle Fusion SCM Cloud</option>
+              <option value="FBDI Template (manual upload)">FBDI Template (manual upload)</option>
+            </select>
           </Field>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -665,6 +703,42 @@ function extractTableName(hint: string): string | null {
   const m = hint.match(/\b([A-Z][A-Z0-9_]{3,})\b/);
   return m ? m[1] : null;
 }
+
+// Optional source-file upload on the Connection step. Files here drive the
+// engagement's conversions (one per file), auto-classified to FBDI targets.
+const FileUploadCard: React.FC<{ files: File[]; setFiles: (f: File[]) => void }> = ({ files, setFiles }) => (
+  <Card className="mt-4">
+    <CardBody className="space-y-3">
+      <div className="flex items-center gap-2">
+        <UploadCloud className="h-4 w-4 text-brand" />
+        <span className="text-sm font-semibold text-ink">Upload source files (optional)</span>
+      </div>
+      <p className="text-[12px] text-ink-muted">
+        Working from file exports instead of (or in addition to) a live connection? Upload your source extracts. On finish, the workbench auto-detects each file&rsquo;s source and target FBDI object and creates one conversion per file — ready to map and export as an FBDI template.
+      </p>
+      <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-line bg-canvas px-4 py-4 hover:border-brand">
+        <UploadCloud className="h-5 w-5 text-brand" />
+        <span className="text-sm text-ink">Choose one or more CSV / XLSX files</span>
+        <input type="file" multiple accept=".csv,.xlsx,.xls" className="hidden"
+          onChange={(e) => setFiles([...files, ...Array.from(e.target.files || [])])} />
+      </label>
+      {files.length > 0 && (
+        <div className="space-y-1">
+          {files.map((f, i) => (
+            <div key={i} className="flex items-center gap-2 rounded border border-line bg-white px-2.5 py-1.5 text-[12px]">
+              <Database className="h-3.5 w-3.5 text-ink-subtle" />
+              <span className="flex-1 truncate text-ink">{f.name}</span>
+              <span className="text-ink-subtle">{Math.round(f.size / 1024)} KB</span>
+              <button onClick={() => setFiles(files.filter((_, j) => j !== i))} className="rounded p-0.5 text-ink-subtle hover:text-danger">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </CardBody>
+  </Card>
+);
 
 const Step4Scope: React.FC<{
   modules: FusionModule[];
