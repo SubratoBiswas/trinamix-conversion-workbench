@@ -301,10 +301,35 @@ export const SetupWizard: React.FC = () => {
         </>
       )}
       {step === 4 && fileItems.length > 0 && (
-        <div className="mb-3 rounded-md border border-brand/30 bg-brand-subtle/40 px-3 py-2 text-[12px] text-brand-dark">
-          <Sparkles className="mr-1 inline h-3.5 w-3.5" />
-          You've uploaded <strong>{fileItems.filter((f) => f.status === "ready").length}</strong> source file(s) — conversions will be created from them (one per file), auto-detected to their FBDI targets. Module selection below is optional.
-        </div>
+        <Card className="mb-4">
+          <CardBody>
+            <div className="mb-1 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-brand" />
+              <span className="text-sm font-semibold text-ink">
+                Conversions from your files ({fileItems.filter((f) => f.status === "ready").length})
+              </span>
+            </div>
+            <p className="mb-2 text-[12px] text-ink-muted">
+              One conversion is created per file on finish, each mapped to the AI-detected Fusion FBDI target below. You can change the target later on any conversion.
+            </p>
+            <div className="space-y-1">
+              {fileItems.map((it) => (
+                <div key={it.key} className="flex items-center gap-2 rounded border border-line bg-white px-2.5 py-1.5 text-[12px]">
+                  <Database className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+                  <span className="min-w-0 flex-1 truncate text-ink">{it.file.name}</span>
+                  <ArrowRight className="h-3 w-3 shrink-0 text-ink-subtle" />
+                  <span className="font-medium text-ink">{it.targetObject || "—"}</span>
+                  {it.status === "ready" ? <Pill tone="success">FBDI</Pill>
+                    : it.status === "error" ? <Pill tone="danger">error</Pill>
+                    : <Pill tone="neutral">analyzing…</Pill>}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-ink-subtle">
+              These files are your conversions. The Fusion module catalog below is optional for a file-based engagement.
+            </p>
+          </CardBody>
+        </Card>
       )}
       {step === 4 && (
         <Step4Scope
