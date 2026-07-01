@@ -7,9 +7,9 @@ import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, ProjectsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, OutputApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
 import type { Dataset, FBDITemplate, FusionModule, ScopeHints } from "@/types";
 import {
@@ -120,6 +120,22 @@ export const ProjectOverviewPage: React.FC = () => {
     } catch {
       flash("Failed to delete conversion");
     }
+  };
+
+  // Output delivery type per conversion (manual FBDI download vs live Fusion load).
+  const setOutputMode = async (c: Conversion, mode: string) => {
+    try { await ConversionsApi.update(String(c.id), { output_mode: mode } as any); refresh(); }
+    catch { flash("Couldn't update output type"); }
+  };
+  const [dl, setDl] = useState<string | null>(null);
+  const downloadFbdi = async (c: Conversion) => {
+    setDl(String(c.id));
+    try {
+      await OutputApi.generate(String(c.id), "csv");
+      await OutputApi.download(String(c.id), `${(c as any).template_name || c.name}.csv`);
+    } catch {
+      flash("Approve this conversion's mapping first, then download the FBDI file.");
+    } finally { setDl(null); }
   };
 
   const refresh = () => {
@@ -298,6 +314,7 @@ export const ProjectOverviewPage: React.FC = () => {
                   <th>Target</th>
                   <th>Source</th>
                   <th>Status</th>
+                  <th>Output</th>
                   <th></th>
                 </tr>
               </thead>
@@ -329,8 +346,29 @@ export const ProjectOverviewPage: React.FC = () => {
                           : <span className="text-ink-subtle italic">awaiting file</span>}
                     </td>
                     <td><Pill tone={STATUS_TONE(c.status)}>{c.status.replace("_", " ")}</Pill></td>
+                    <td>
+                      <select
+                        className="input !h-7 !w-auto !py-0 !text-[11px]"
+                        value={(c as any).output_mode || "fusion_load"}
+                        onChange={(e) => setOutputMode(c, e.target.value)}
+                        title="How this conversion is delivered"
+                      >
+                        <option value="fbdi_download">FBDI download</option>
+                        <option value="fusion_load">Load to Fusion</option>
+                      </select>
+                    </td>
                     <td className="text-right">
                       <div className="inline-flex items-center gap-1">
+                        {((c as any).output_mode === "fbdi_download") && (
+                          <button
+                            onClick={() => downloadFbdi(c)}
+                            disabled={dl === String(c.id)}
+                            title="Generate & download the FBDI file"
+                            className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
+                          >
+                            <Download className="h-3 w-3" /> FBDI
+                          </button>
+                        )}
                         <Link to={`/conversions/${c.id}`} className="btn-ghost h-7 px-2 text-xs">
                           Open <ArrowRight className="h-3 w-3" />
                         </Link>

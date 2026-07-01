@@ -13,6 +13,9 @@ class ConversionCreate(BaseModel):
     template_id: Optional[str] = None
     planned_load_order: Optional[int] = 100
     status: Optional[str] = None
+    source_type: Optional[str] = None       # "dataset" | "ebs"
+    ebs_table_hint: Optional[str] = None
+    output_mode: Optional[str] = None       # "fbdi_download" | "fusion_load"
 
 
 class ConversionUpdate(BaseModel):
@@ -25,6 +28,7 @@ class ConversionUpdate(BaseModel):
     status: Optional[str] = None
     source_type: Optional[str] = None       # "dataset" | "ebs"
     ebs_table_hint: Optional[str] = None    # e.g. "MTL_SYSTEM_ITEMS_B"
+    output_mode: Optional[str] = None       # "fbdi_download" | "fusion_load"
 
 
 class ConversionOut(BaseModel):
@@ -41,6 +45,7 @@ class ConversionOut(BaseModel):
     status: str
     source_type: str = "dataset"
     ebs_table_hint: Optional[str] = None
+    output_mode: str = "fusion_load"
     created_by: str
     created_at: datetime
     updated_at: datetime

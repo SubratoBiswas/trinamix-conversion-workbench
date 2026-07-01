@@ -82,6 +82,8 @@ export const ConvertFilePage: React.FC = () => {
     const ready = items.filter((it) => it.status === "ready" && it.templateId && it.datasetId);
     if (!projectId || ready.length === 0) return;
     setCreating(true); setError(null);
+    const proj = projects.find((p) => p.id === projectId);
+    const outputMode = /fbdi/i.test((proj as any)?.target_environment || "") ? "fbdi_download" : "fusion_load";
     try {
       for (const it of ready) {
         const tpl = templates.find((t) => t.id === it.templateId);
@@ -93,7 +95,8 @@ export const ConvertFilePage: React.FC = () => {
           project_id: projectId,
           name: it.file.name.replace(/\.[^.]+$/, ""),
           dataset_id: it.datasetId, template_id: it.templateId,
-          target_object: targetObject, source_type: "dataset", status: "draft",
+          target_object: targetObject, source_type: "dataset",
+          output_mode: outputMode, status: "draft",
         } as any);
       }
       nav(`/projects/${projectId}`);

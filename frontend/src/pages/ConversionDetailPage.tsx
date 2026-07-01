@@ -83,8 +83,21 @@ export const ConversionDetailPage: React.FC = () => {
     if (!templateId) return;
     setBusy("link_template");
     try {
-      await ConversionsApi.update(cid, { template_id: templateId });
-      flash("Target FBDI updated");
+      const tpl = fbdiTemplates.find((t) => t.id === templateId);
+      await ConversionsApi.update(cid, {
+        template_id: templateId,
+        target_object: tpl?.business_object || tpl?.name,
+      });
+      // Learn the choice: for a file-based conversion, remember this file's
+      // column signature → chosen FBDI template so future similar files
+      // auto-recommend it (the tool learns from the user's override).
+      if (conv?.dataset_id) {
+        DatasetsApi.classifyLearn(conv.dataset_id, {
+          template_id: templateId,
+          target_object: tpl?.business_object || tpl?.name,
+        }).catch(() => {});
+      }
+      flash("Target FBDI updated — the tool will remember this for similar files");
       loadAll();
     } catch (err: any) {
       flash(`Failed: ${err?.response?.data?.detail || err?.message}`);

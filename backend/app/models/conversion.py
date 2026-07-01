@@ -21,6 +21,10 @@ class Conversion(Document):
     # Source mode: "ebs" = live Oracle EBS query (default), "dataset" = uploaded file
     source_type: str = "ebs"
     ebs_table_hint: Optional[str] = None   # e.g. "MTL_SYSTEM_ITEMS_B"
+    # Output mode: how this conversion is delivered.
+    #   "fbdi_download" = generate an FBDI file the user uploads to Fusion manually
+    #   "fusion_load"   = load directly via ERP Integration (default)
+    output_mode: str = "fusion_load"
     created_by: str = "admin"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

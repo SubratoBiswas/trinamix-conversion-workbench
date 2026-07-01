@@ -256,11 +256,12 @@ export const SetupWizard: React.FC = () => {
       // precedence over module auto-populate.
       const readyFiles = fileItems.filter((it) => it.status === "ready" && it.datasetId);
       if (readyFiles.length > 0) {
+        const outputMode = /fbdi/i.test(details.target_environment) ? "fbdi_download" : "fusion_load";
         for (const it of readyFiles) {
           await ConversionsApi.create({
             project_id: p.id, name: it.file.name.replace(/\.[^.]+$/, ""),
             dataset_id: it.datasetId, template_id: it.templateId, target_object: it.targetObject,
-            source_type: "dataset", status: "draft",
+            source_type: "dataset", output_mode: outputMode, status: "draft",
           } as any).catch(() => {});
         }
       } else if (selectedModules.length > 0) {
