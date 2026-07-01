@@ -44,6 +44,12 @@ class FBDIField(Document):
     sample_value: Optional[str] = None
     lookup_type: Optional[str] = None
     validation_notes: Optional[str] = None
+    # List of values the destination accepts, e.g.
+    # [{"code": "1", "meaning": "Not planned"}, {"code": "3", "meaning": "MRP planned"}].
+    # Used for value-aware mapping and crosswalk (value-pair) recommendations.
+    allowed_values: list[dict] = Field(default_factory=list)
+    # What Fusion defaults this field to when left blank (FBDI behaviour).
+    default_if_blank: Optional[str] = None
     sequence: int = 0
     required_modules: list[str] = Field(default_factory=list)
 

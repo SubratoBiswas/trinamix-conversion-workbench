@@ -130,6 +130,37 @@ def _value_affinity(source: SourceColumn, target: TargetField) -> tuple[float, s
     return 0.0, None
 
 
+def _lov_affinity(source: SourceColumn, target: TargetField) -> tuple[float, str | None]:
+    """Score how well the source column's VALUES fit the target's list of values.
+
+    This is the VRS requirement: don't map on column-name similarity alone —
+    check whether the data inside the column actually resolves against what
+    the destination accepts (exact / meaning / synonym / fuzzy).
+    Returns (score −0.35..1.0, rationale).
+    """
+    lov = target.allowed_values or []
+    vals = source.distinct_values or []
+    if not lov:
+        return 0.0, None
+    if not vals:
+        # Target is LOV-constrained but source looks identifier-like /
+        # high-cardinality — mild penalty, it's probably not this column.
+        if source.distinct_count and source.distinct_count > 200:
+            return -0.15, "high-cardinality source vs LOV-constrained target"
+        return 0.0, None
+    from app.services.value_mapping_service import lov_coverage
+    frac, hits = lov_coverage(vals, lov)
+    if frac >= 0.8:
+        return 1.0, f"{hits}/{len(vals)} source values resolve to the target list of values"
+    if frac >= 0.5:
+        return 0.6, f"{hits}/{len(vals)} source values resolve to the target list of values"
+    if frac > 0.0:
+        return 0.2, f"only {hits}/{len(vals)} source values resolve to the target list of values"
+    # Same-looking column name but incompatible values — the NetSuite-vs-Fusion
+    # "UOM code means different things" trap. Penalise and force review.
+    return -0.35, "source values do NOT fit the target list of values"
+
+
 def _type_compatibility(source: SourceColumn, target: TargetField) -> float:
     src = (source.inferred_type or "").lower()
     tgt = (target.data_type or "").lower()
@@ -151,6 +182,36 @@ def _suggest_transformation(
 ) -> dict | None:
     target_name = (target.field_name or "").lower()
     samples = [s for s in (source.sample_values or [])[:8] if isinstance(s, str)]
+
+    # LOV translation: if the target field has a list of values and the source
+    # distinct values resolve against it (exact/meaning/synonym/fuzzy), propose
+    # the full value map — e.g. Retire→Inactive, "MRP Planned"→3. Non-identity
+    # pairs only; identity values pass through untouched.
+    if target.allowed_values and source.distinct_values:
+        from app.services.value_mapping_service import resolve_value, _norm
+        pairs: dict[str, str] = {}
+        resolved = 0
+        for v in source.distinct_values:
+            code, method, conf = resolve_value(v, target.allowed_values)
+            if code is not None:
+                resolved += 1
+                if str(v) != str(code):  # exact match only — FBDI needs exact code casing
+                    pairs[v] = code
+        coverage = resolved / len(source.distinct_values)
+        if pairs and coverage >= 0.5:
+            config: dict = dict(pairs)
+            config["case_insensitive"] = True
+            if target.default_if_blank not in (None, ""):
+                config["default"] = target.default_if_blank
+            return {
+                "rule_type": "VALUE_MAP",
+                "config": config,
+                "description": (
+                    f"Translate legacy values to the {target.field_name} list of values "
+                    f"({len(pairs)} pair{'s' if len(pairs) != 1 else ''}, "
+                    f"{int(coverage * 100)}% of values resolve)"
+                ),
+            }
 
     # UOM / short code → uppercase
     if any(k in target_name for k in ("uom", "currency", "code")):
@@ -225,17 +286,21 @@ class RuleBasedMapper:
                 type_score = _type_compatibility(src, tgt)
                 # 5. value affinity
                 val_score, val_reason = _value_affinity(src, tgt)
+                # 5b. LOV affinity — do the source VALUES resolve against the
+                # target's list of values? (value-aware mapping, not name-only)
+                lov_score, lov_reason = _lov_affinity(src, tgt)
                 # 6. required priority bonus when type/name overlap exists
                 bonus = 0.05 if (tgt.required and (name_score or sem_score)) else 0.0
 
                 # weighted combination capped at 1.0
                 composite = min(
                     1.0,
-                    name_score * 0.40
-                    + sem_score * 0.30
+                    name_score * 0.35
+                    + sem_score * 0.25
                     + desc_score * 0.10
                     + type_score * 0.10
-                    + val_score * 0.10
+                    + val_score * 0.05
+                    + lov_score * 0.15
                     + bonus,
                 )
 
@@ -248,6 +313,8 @@ class RuleBasedMapper:
                     reasons.append(f"type compatible ({src.inferred_type} → {tgt.data_type})")
                 if val_reason:
                     reasons.append(val_reason)
+                if lov_reason:
+                    reasons.append(lov_reason)
 
                 if composite > best[0]:
                     best = (composite, src, reasons)

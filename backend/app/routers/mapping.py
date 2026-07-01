@@ -147,6 +147,60 @@ async def update_mapping(
     return (await enrich_mapping_with_samples(conv, [m]))[0]
 
 
+class ValueMapPair(BaseModel):
+    source_value: str
+    target_value: str
+
+
+class ValueMapAccept(BaseModel):
+    pairs: list[ValueMapPair]
+    default_value: Optional[str] = None
+
+
+@router.get("/mappings/{mapping_id}/value-map-recommendations")
+async def value_map_recommendations(mapping_id: str, _: User = Depends(get_current_user)):
+    """AI-recommended source→target value pairs (crosswalk) for one mapping.
+
+    Compares the distinct values in the mapped source column against the
+    target FBDI field's list of values using exact / meaning / synonym /
+    fuzzy resolution plus previously learned crosswalks. Unresolved source
+    values are returned as exceptions for manual mapping.
+    """
+    m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
+    if not m:
+        raise HTTPException(404, "Mapping not found")
+    conv = await Conversion.get(m.conversion_id)
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    from app.services.value_mapping_service import recommend_value_map
+    return await recommend_value_map(conv, m)
+
+
+@router.post("/mappings/{mapping_id}/value-map-accept")
+async def value_map_accept(
+    mapping_id: str, body: ValueMapAccept, user: User = Depends(get_current_user)
+):
+    """Persist accepted value pairs: creates/merges a VALUE_MAP transformation
+    rule on the target field (applied at output generation) and learns each
+    pair into the Crosswalk Library for reuse on future conversions."""
+    m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
+    if not m:
+        raise HTTPException(404, "Mapping not found")
+    conv = await Conversion.get(m.conversion_id)
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    from app.services.value_mapping_service import accept_value_map
+    result = await accept_value_map(
+        conv, m,
+        pairs=[p.model_dump() for p in body.pairs],
+        default_value=body.default_value,
+        user_email=user.email,
+    )
+    if "error" in result:
+        raise HTTPException(422, result["error"])
+    return result
+
+
 @router.put("/mappings/{mapping_id}/approve", response_model=MappingOut)
 async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user)):
     m = await MappingSuggestion.get(PydanticObjectId(mapping_id))

@@ -44,6 +44,9 @@ async def _target_fields_for(template: FBDITemplate) -> list[TargetField]:
             data_type=f.data_type,
             max_length=f.max_length,
             required=bool(f.required),
+            allowed_values=getattr(f, "allowed_values", None) or [],
+            lookup_type=getattr(f, "lookup_type", None),
+            default_if_blank=getattr(f, "default_if_blank", None),
         )
         for f in fields
     ]
@@ -308,6 +311,23 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
             return []
         dataset = await Dataset.get(conversion.dataset_id)
         sources = await _source_columns_for(dataset)
+        # Value-aware mapping: attach full distinct-value lists for
+        # low-cardinality columns so the matcher can score against target LOVs.
+        try:
+            df = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+            for sc in sources:
+                if sc.name not in df.columns:
+                    continue
+                # Skip obvious identifiers to keep this cheap
+                if sc.distinct_count and sc.distinct_count > 200:
+                    continue
+                ser = df[sc.name].dropna().astype(str).str.strip()
+                vals = [v for v in ser.unique().tolist()
+                        if v and v.lower() not in ("nan", "none", "null")]
+                if 0 < len(vals) <= 200:
+                    sc.distinct_values = vals
+        except Exception:
+            pass  # value-awareness is best-effort; name-based mapping still runs
 
     targets = await _target_fields_for(template)
     provider = get_mapping_provider()
@@ -377,6 +397,8 @@ async def enrich_mapping_with_samples(
             "target_required": bool(tgt.required) if tgt else False,
             "target_data_type": tgt.data_type if tgt else None,
             "target_max_length": tgt.max_length if tgt else None,
+            "target_lov": (getattr(tgt, "allowed_values", None) or []) if tgt else [],
+            "target_default_if_blank": getattr(tgt, "default_if_blank", None) if tgt else None,
             "source_column": m.source_column, "confidence": m.confidence,
             "reason": m.reason, "suggested_transformation": m.suggested_transformation,
             "review_required": m.review_required, "status": m.status,

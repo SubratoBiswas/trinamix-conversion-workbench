@@ -44,7 +44,23 @@ _VC360 = "Character(360)"
 _VC2000 = "Character(2000)"
 
 
-def _f(name: str, dtype: str = _VC60, *, req: bool = False, desc: str = "") -> dict[str, Any]:
+def _lov(*entries: tuple[str, str] | str) -> list[dict[str, str]]:
+    """Build an allowed-values list: _lov(("1","Not planned"), "Active")."""
+    out = []
+    for e in entries:
+        if isinstance(e, tuple):
+            out.append({"code": e[0], "meaning": e[1]})
+        else:
+            out.append({"code": e, "meaning": e})
+    return out
+
+
+# Y/N flag LOV reused by every *Flag field
+_YN = _lov(("Y", "Yes"), ("N", "No"))
+
+
+def _f(name: str, dtype: str = _VC60, *, req: bool = False, desc: str = "",
+       lov: list[dict[str, str]] | None = None, default: str | None = None) -> dict[str, Any]:
     return {
         "field_name": name,
         "display_name": name,
@@ -56,6 +72,9 @@ def _f(name: str, dtype: str = _VC60, *, req: bool = False, desc: str = "") -> d
         "sample_value": None,
         "lookup_type": None,
         "validation_notes": None,
+        "allowed_values": (lov if lov is not None
+                           else (_YN if dtype == _BOOL else [])),
+        "default_if_blank": default,
         "required_modules": [],
     }
 
@@ -73,7 +92,8 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
         _f("UOMName",             _VC80,  req=True,  desc="Display name of the unit of measure"),
         _f("Description",         _VC240, req=False),
         _f("BaseUOMFlag",         _BOOL,  req=False, desc="Y if this is the base UOM for its class"),
-        _f("ConversionType",      _VC30,  req=False, desc="Standard / Fixed / Variable"),
+        _f("ConversionType",      _VC30,  req=False, desc="Standard / Fixed / Variable",
+           lov=_lov("Standard", "Fixed", "Variable"), default="Standard"),
         _f("ConversionRate",      _NUM,   req=False, desc="Conversion factor to base UOM"),
         _f("BaseUOMCode",         _VC25,  req=False, desc="Base UOM of the class for conversions"),
         _f("EffectiveStartDate",  _DATE,  req=False),
@@ -159,22 +179,56 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
         _f("Description",                 _VC240,  req=True,  desc="Item description"),
         _f("PrimaryUOM",                  _VC25,   req=True,  desc="Primary unit of measure code"),
         _f("ItemClass",                   _VC60,   req=False, desc="Item class / catalog category"),
-        _f("ItemType",                    _VC30,   req=False, desc="Standard, ATO, PTO, Kit, etc."),
-        _f("InventoryItemFlag",           _BOOL,   req=False, desc="Y if stocked in inventory"),
+        _f("ItemType",                    _VC30,   req=False, desc="Standard, ATO, PTO, Kit, etc.",
+           lov=_lov(("FG", "Finished good"), ("P", "Purchased item"), ("SA", "Subassembly"),
+                    ("ATO", "Assemble to order"), ("PTO", "Pick to order"), ("K", "Kit"),
+                    ("REF", "Reference item"))),
+        _f("InventoryItemFlag",           _BOOL,   req=False, desc="Y if stocked in inventory", default="Y"),
         _f("PurchasedFlag",               _BOOL,   req=False),
         _f("SalesOrderIssuesEnabledFlag", _BOOL,   req=False),
         _f("BOMEnabledFlag",              _BOOL,   req=False),
         _f("AssetItemFlag",               _BOOL,   req=False),
-        _f("EnabledFlag",                 _BOOL,   req=False),
-        _f("ItemStatus",                  _VC30,   req=False, desc="Active / Inactive / Obsolete"),
+        _f("EnabledFlag",                 _BOOL,   req=False, default="Y"),
+        _f("ItemStatus",                  _VC30,   req=False, desc="Active / Inactive / Obsolete",
+           lov=_lov(("Active", "Item is active / enabled / released"),
+                    ("Inactive", "Item is inactive / disabled / retired / obsolete")),
+           default="Active"),
+        _f("PlanningMethodCode",          _VC30,   req=False,
+           desc="MRP planning code — Not planned / MRP / MPS / MPS-MRP",
+           lov=_lov(("6", "Not planned"), ("3", "MRP planning"),
+                    ("4", "MPS planning"), ("7", "MPS/MRP planning")),
+           default="6"),
+        _f("MakeOrBuyCode",               _VC30,   req=False, desc="Make or Buy",
+           lov=_lov(("1", "Make"), ("2", "Buy")), default="2"),
+        _f("SafetyStockPlanningMethodCode", _VC30, req=False,
+           desc="How safety stock is planned",
+           lov=_lov(("NOT_PLANNED", "Not planned"),
+                    ("DAYS_OF_COVER", "Days of cover / days of supply"),
+                    ("USER_SPECIFIED", "User specified quantity")),
+           default="NOT_PLANNED"),
+        _f("ReleaseTimeFenceCode",        _VC30,   req=False,
+           desc="Planning release time fence",
+           lov=_lov(("1", "Cumulative manufacturing lead time"),
+                    ("2", "Cumulative total lead time"),
+                    ("3", "Total lead time"),
+                    ("4", "User-defined time fence"),
+                    ("5", "Do not auto-release"),
+                    ("6", "Do not release (Kanban)"))),
         _f("ListPrice",                   _NUM,    req=False),
         _f("StdCost",                     _NUM,    req=False),
         _f("Weight",                      _NUM,    req=False),
         _f("WeightUOM",                   _VC25,   req=False),
         _f("Volume",                      _NUM,    req=False),
         _f("VolumeUOM",                   _VC25,   req=False),
-        _f("LotControlCode",              _VC30,   req=False),
-        _f("SerialControlCode",           _VC30,   req=False),
+        _f("LotControlCode",              _VC30,   req=False,
+           lov=_lov(("NO_CONTROL", "No lot control"), ("FULL", "Full lot control")),
+           default="NO_CONTROL"),
+        _f("SerialControlCode",           _VC30,   req=False,
+           lov=_lov(("NO_CONTROL", "No serial control"),
+                    ("PREDEFINED", "Predefined serial numbers"),
+                    ("DYNAMIC_ENTRY", "Serial entry at inventory receipt"),
+                    ("AT_SALES_ORDER_ISSUE", "Serial entry at sales order issue")),
+           default="NO_CONTROL"),
         _f("LongDescription",             _VC2000, req=False),
     ],
 
@@ -182,12 +236,15 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
     "customerimport": [
         _f("PartyNumber",           _VC30,  req=False, desc="Unique party number (auto-assigned if blank)"),
         _f("PartyName",             _VC360, req=True,  desc="Customer / organisation name"),
-        _f("PartyType",             _VC30,  req=True,  desc="ORGANIZATION or PERSON"),
+        _f("PartyType",             _VC30,  req=True,  desc="ORGANIZATION or PERSON",
+           lov=_lov(("ORGANIZATION", "Organization / company"), ("PERSON", "Individual person"))),
         _f("CustomerAccountNumber", _VC30,  req=False, desc="Unique account number"),
         _f("CustomerAccountName",   _VC360, req=True,  desc="Trading / account name"),
-        _f("CustomerType",          _VC30,  req=False, desc="R (External) or I (Internal)"),
+        _f("CustomerType",          _VC30,  req=False, desc="R (External) or I (Internal)",
+           lov=_lov(("R", "External customer"), ("I", "Internal customer")), default="R"),
         _f("CustomerClass",         _VC30,  req=False, desc="Customer classification code"),
-        _f("AccountStatus",         _VC30,  req=False, desc="Active / Inactive"),
+        _f("AccountStatus",         _VC30,  req=False, desc="Active / Inactive",
+           lov=_lov(("A", "Active"), ("I", "Inactive")), default="A"),
         _f("CurrencyCode",          _VC15,  req=False, desc="Default transaction currency (ISO-4217)"),
         _f("PaymentTerms",          _VC30,  req=False),
         _f("CreditLimit",           _NUM,   req=False),
@@ -270,7 +327,8 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
         _f("OrderNumber",         _VC60,  req=True,  desc="Source order number"),
         _f("OrderType",           _VC30,  req=True,  desc="Order transaction type (e.g. STANDARD)"),
         _f("OrderDate",           _DATE,  req=True,  desc="Order header date"),
-        _f("OrderStatus",         _VC30,  req=False, desc="BOOKED / ENTERED"),
+        _f("OrderStatus",         _VC30,  req=False, desc="BOOKED / ENTERED",
+           lov=_lov(("ENTERED", "Entered / draft"), ("BOOKED", "Booked / confirmed"))),
         _f("CustomerNumber",      _VC50,  req=True,  desc="Sold-to customer party number"),
         _f("CustomerName",        _VC240, req=False),
         _f("InventoryItemNumber", _VC100, req=True,  desc="Item number being ordered"),
@@ -952,4 +1010,58 @@ async def seed_standard_fields(
         "seeded": seeded,
         "schema_matched": key,
         "message": f"Seeded {seeded} Oracle Fusion fields for '{tpl.name}'",
+    }
+
+
+@router.post("/templates/{template_id}/backfill-lovs", status_code=200)
+async def backfill_lovs(
+    template_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Copy allowed_values / default_if_blank from the standard schema onto an
+    already-seeded template's fields, matched by field name.
+
+    Non-destructive: existing field ids (and therefore mapping suggestions that
+    reference them) are preserved — unlike a force re-seed. New planning fields
+    that exist in the schema but not on the template are added at the end.
+    """
+    tpl = await FBDITemplate.get(PydanticObjectId(template_id))
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    key = _schema_key_for(tpl.name, tpl.business_object)
+    if key is None:
+        raise HTTPException(422, f"No standard schema found for template '{tpl.name}'.")
+
+    schema_by_name = {f["field_name"].lower(): f for f in STANDARD_FIELDS[key]}
+    fields = await FBDIField.find(FBDIField.template_id == tpl.id).to_list()
+    updated = 0
+    existing_names = set()
+    max_seq = 0
+    sheet_id = None
+    for f in fields:
+        existing_names.add(f.field_name.lower())
+        max_seq = max(max_seq, f.sequence or 0)
+        sheet_id = sheet_id or f.sheet_id
+        sdef = schema_by_name.get(f.field_name.lower())
+        if not sdef:
+            continue
+        lov = sdef.get("allowed_values") or []
+        dflt = sdef.get("default_if_blank")
+        if lov or dflt:
+            await f.set({"allowed_values": lov, "default_if_blank": dflt})
+            updated += 1
+
+    added = 0
+    for name, sdef in schema_by_name.items():
+        if name in existing_names or sheet_id is None:
+            continue
+        max_seq += 1
+        await FBDIField(template_id=tpl.id, sheet_id=sheet_id, sequence=max_seq, **sdef).insert()
+        added += 1
+
+    return {
+        "schema_matched": key,
+        "lovs_backfilled": updated,
+        "fields_added": added,
+        "message": f"Backfilled LOVs on {updated} fields, added {added} new fields for '{tpl.name}'",
     }

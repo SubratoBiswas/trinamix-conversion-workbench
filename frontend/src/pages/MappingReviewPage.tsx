@@ -1166,6 +1166,157 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   );
 };
 
+// ─────── AI value-map (LOV crosswalk) recommendations for the selected field ───────
+// The VRS requirement: don't map on column names alone — compare the DATA in
+// the source column against the destination's list of values and recommend the
+// translation pairs (Retire→Inactive, "MRP Planned"→3, Days of Supply→Days of
+// cover ...). Unresolved values surface as exceptions needing manual mapping.
+const methodLabel: Record<string, string> = {
+  exact_code: "exact", exact_meaning: "meaning", synonym: "synonym",
+  fuzzy: "fuzzy", learned: "learned",
+};
+
+const ValueMapRecommendationsPanel: React.FC<{
+  mapping: MappingSuggestion;
+  onApplied?: () => void;
+}> = ({ mapping, onApplied }) => {
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [recs, setRecs] = useState<any | null>(null);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [appliedMsg, setAppliedMsg] = useState<string | null>(null);
+
+  useEffect(() => { setRecs(null); setSelected({}); setAppliedMsg(null); }, [mapping.id]);
+
+  const lov = mapping.target_lov || [];
+  if (!lov.length) return null;
+
+  const load = async () => {
+    setLoading(true); setAppliedMsg(null);
+    try {
+      const r = await MappingApi.valueMapRecommendations(String(mapping.id));
+      setRecs(r);
+      // Pre-select every non-identity translation pair
+      const sel: Record<string, boolean> = {};
+      (r.recommendations || []).forEach((p: any) => { if (!p.already_valid) sel[p.source_value] = true; });
+      setSelected(sel);
+    } catch (e: any) {
+      setRecs({ error: e?.response?.data?.detail || "Failed to load recommendations" });
+    } finally { setLoading(false); }
+  };
+
+  const apply = async () => {
+    if (!recs) return;
+    const pairs = (recs.recommendations || [])
+      .filter((p: any) => selected[p.source_value])
+      .map((p: any) => ({ source_value: p.source_value, target_value: p.target_value }));
+    if (!pairs.length) return;
+    setApplying(true);
+    try {
+      const res = await MappingApi.acceptValueMap(String(mapping.id), { pairs });
+      setAppliedMsg(`Applied ${res.pairs_applied} value pair${res.pairs_applied !== 1 ? "s" : ""} — saved as a VALUE_MAP rule and learned to the Crosswalk Library.`);
+      setRecs(null); setSelected({});
+      onApplied?.();
+    } catch (e: any) {
+      setAppliedMsg(e?.response?.data?.detail || "Failed to apply value map");
+    } finally { setApplying(false); }
+  };
+
+  const selCount = Object.values(selected).filter(Boolean).length;
+
+  return (
+    <div className="mt-4 rounded-md border border-brand/30 bg-brand/5 p-2.5">
+      <div className="flex items-center justify-between">
+        <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+          <Sparkles className="h-3 w-3" /> Target list of values
+        </span>
+        {mapping.target_default_if_blank && (
+          <span className="text-[10px] text-ink-subtle">blank → {mapping.target_default_if_blank}</span>
+        )}
+      </div>
+      {/* LOV chips — what the destination actually accepts */}
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {lov.map((e) => (
+          <span key={e.code} title={e.meaning || e.code}
+            className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10.5px] text-ink">
+            {e.code}{e.meaning && e.meaning !== e.code ? ` · ${e.meaning}` : ""}
+          </span>
+        ))}
+      </div>
+
+      {!recs && !appliedMsg && (
+        <button onClick={load} disabled={loading}
+          className="mt-2 inline-flex items-center gap-1 rounded-md border border-brand/40 bg-white px-2 py-1 text-[11px] font-medium text-brand-dark hover:bg-brand/10 disabled:opacity-50">
+          {loading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+          Recommend value mappings
+        </button>
+      )}
+
+      {recs?.error && (
+        <div className="mt-2 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-ink">
+          {recs.error}
+        </div>
+      )}
+
+      {recs && !recs.error && (
+        <div className="mt-2">
+          <div className="text-[10.5px] text-ink-subtle">
+            {recs.distinct_values.length} distinct source value{recs.distinct_values.length !== 1 ? "s" : ""} ·{" "}
+            {Math.round((recs.coverage || 0) * 100)}% resolve to the target LOV
+          </div>
+          <div className="mt-1.5 max-h-52 space-y-1 overflow-y-auto pr-0.5">
+            {(recs.recommendations || []).map((p: any) => (
+              <label key={p.source_value}
+                className="flex cursor-pointer items-center gap-1.5 rounded border border-line bg-white px-2 py-1 text-[11px]">
+                <input type="checkbox" className="h-3 w-3 accent-brand"
+                  checked={!!selected[p.source_value]} disabled={p.already_valid}
+                  onChange={(e) => setSelected((s) => ({ ...s, [p.source_value]: e.target.checked }))} />
+                <span className="font-mono text-danger">{p.source_value}</span>
+                <span className="text-ink-subtle">→</span>
+                <span className="font-mono text-success">{p.target_value}</span>
+                <span className="ml-auto flex items-center gap-1">
+                  {p.already_valid ? (
+                    <span className="rounded bg-success/10 px-1 py-0.5 text-[9.5px] font-medium text-success">already valid</span>
+                  ) : (
+                    <span className="rounded bg-canvas px-1 py-0.5 text-[9.5px] text-ink-muted">
+                      {methodLabel[p.method] || p.method} · {Math.round(p.confidence * 100)}%
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
+          {(recs.unmatched || []).length > 0 && (
+            <div className="mt-1.5 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-ink">
+              <span className="inline-flex items-center gap-1 font-medium">
+                <AlertTriangle className="h-3 w-3 text-warning" /> Needs manual mapping:
+              </span>{" "}
+              {(recs.unmatched || []).map((v: string) => (
+                <span key={v} className="mr-1 font-mono">{v}</span>
+              ))}
+              <div className="mt-0.5 text-[10px] text-ink-subtle">Add these below in Value mappings, or they pass through unchanged.</div>
+            </div>
+          )}
+          <div className="mt-2 flex items-center gap-2">
+            <Button onClick={apply} loading={applying} disabled={selCount === 0} className="!h-7 !px-2.5 !text-[11px]">
+              Apply {selCount} selected
+            </Button>
+            <button onClick={() => { setRecs(null); setSelected({}); }} className="text-[11px] text-ink-subtle hover:underline">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {appliedMsg && (
+        <div className="mt-2 flex items-start gap-1.5 rounded border border-success/40 bg-success/10 px-2 py-1 text-[11px] text-ink">
+          <Check className="mt-0.5 h-3 w-3 shrink-0 text-success" /> {appliedMsg}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─────── Inline value-mapping (crosswalk) editor for the selected field ───────
 const ValueMappingsPanel: React.FC<{ targetObject?: string | null; targetField?: string | null }> = ({ targetObject, targetField }) => {
   const [rows, setRows] = useState<any[]>([]);
@@ -1254,6 +1405,7 @@ const MappingInspector: React.FC<{
 }> = ({ mapping, sourceColumns, onClose, onApprove, onReject, onOverride, onAddCustomRule, targetObject }) => {
   const [editingOverride, setEditingOverride] = useState(false);
   const [override, setOverride] = useState(mapping.source_column || "");
+  const [vmRefresh, setVmRefresh] = useState(0);
 
   useEffect(() => { setOverride(mapping.source_column || ""); setEditingOverride(false); }, [mapping.id]);
 
@@ -1374,8 +1526,11 @@ const MappingInspector: React.FC<{
           </div>
         )}
 
+        {/* AI value-map recommendations against the target LOV */}
+        <ValueMapRecommendationsPanel mapping={mapping} onApplied={() => setVmRefresh((n) => n + 1)} />
+
         {/* Value mappings (crosswalk) for this field */}
-        <ValueMappingsPanel targetObject={targetObject} targetField={mapping.target_field_name} />
+        <ValueMappingsPanel key={vmRefresh} targetObject={targetObject} targetField={mapping.target_field_name} />
 
         {/* Override editor */}
         <div className="mt-5 space-y-2">

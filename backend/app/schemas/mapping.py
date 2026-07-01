@@ -12,6 +12,8 @@ class MappingOut(BaseModel):
     target_required: bool = False
     target_data_type: Optional[str] = None
     target_max_length: Optional[int] = None
+    target_lov: list[dict[str, Any]] = []
+    target_default_if_blank: Optional[str] = None
     source_column: Optional[str] = None
     confidence: float = 0.0
     reason: Optional[str] = None

@@ -13,6 +13,9 @@ class SourceColumn:
     null_percent: float = 0.0
     distinct_count: int = 0
     pattern_summary: str | None = None
+    # Full distinct-value list for low-cardinality columns (empty when the
+    # column is identifier-like). Enables value-aware matching against LOVs.
+    distinct_values: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -23,6 +26,10 @@ class TargetField:
     data_type: str | None
     max_length: int | None
     required: bool
+    # Destination list of values: [{"code": ..., "meaning": ...}, ...]
+    allowed_values: list[dict] = field(default_factory=list)
+    lookup_type: str | None = None
+    default_if_blank: str | None = None
 
 
 @dataclass

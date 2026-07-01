@@ -563,6 +563,10 @@ export interface MappingSuggestion {
   target_required: boolean;
   target_data_type: string | null;
   target_max_length: number | null;
+  /** Destination list of values: [{code, meaning}]. Non-empty means the
+   *  field is LOV-constrained and value-map recommendations are available. */
+  target_lov?: { code: string; meaning?: string }[];
+  target_default_if_blank?: string | null;
   source_column: string | null;
   confidence: number;
   reason: string | null;

@@ -125,9 +125,38 @@ export const ConversionsApi = {
     ).then(r => r.data),
 };
 
+export interface ValueMapRecommendation {
+  source_value: string;
+  target_value: string;
+  method: "exact_code" | "exact_meaning" | "synonym" | "fuzzy" | "learned";
+  confidence: number;
+  already_valid?: boolean;
+}
+
+export interface ValueMapRecommendations {
+  target_field: string;
+  lov: { code: string; meaning?: string }[];
+  default_if_blank?: string | null;
+  source_column: string | null;
+  distinct_values: string[];
+  recommendations: ValueMapRecommendation[];
+  unmatched: string[];
+  coverage: number;
+  error?: string;
+}
+
 export const MappingApi = {
   propagate: (mappingId: string) =>
     api.post<PropagationResult>(`/mappings/${mappingId}/propagate`).then(r => r.data),
+  valueMapRecommendations: (mappingId: string) =>
+    api.get<ValueMapRecommendations>(`/mappings/${mappingId}/value-map-recommendations`).then(r => r.data),
+  acceptValueMap: (mappingId: string, body: {
+    pairs: { source_value: string; target_value: string }[];
+    default_value?: string | null;
+  }) =>
+    api.post<{ rule_id: string; pairs_applied: number; learned: number }>(
+      `/mappings/${mappingId}/value-map-accept`, body
+    ).then(r => r.data),
   propagationCandidates: (conversionId: string) =>
     api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
   suggest: (conversionId: string) =>
