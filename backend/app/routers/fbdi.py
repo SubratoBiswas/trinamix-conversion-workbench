@@ -137,7 +137,11 @@ async def reparse_template(template_id: str, _: User = Depends(get_current_user)
         if sheet_id is None:
             continue
         await FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f).insert()
-    await tpl.set({"status": "parsed" if parsed["fields"] else "manual"})
+    req_count = sum(1 for f in parsed["fields"] if f.get("required"))
+    await tpl.set({
+        "status": "parsed" if parsed["fields"] else "manual",
+        "required_field_count": req_count,
+    })
     return await _detail_payload(tpl)
 
 
@@ -170,7 +174,8 @@ async def reparse_all_templates(_: User = Depends(get_current_user)):
                 continue
             await FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f).insert()
         new_status = "parsed" if parsed["fields"] else "manual"
-        await tpl.set({"status": new_status})
+        req_count = sum(1 for f in parsed["fields"] if f.get("required"))
+        await tpl.set({"status": new_status, "required_field_count": req_count})
         results.append({"id": str(tpl.id), "name": tpl.name, "status": new_status, "fields": len(parsed["fields"])})
     return {"reparsed": len(results), "results": results}
 

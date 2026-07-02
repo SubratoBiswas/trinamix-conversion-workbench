@@ -56,11 +56,13 @@ async def create_template_from_upload(
         parsed = {"business_object": None, "description": None, "sheets": [], "fields": []}
     logger.info(f"FBDI parse result: {len(parsed['fields'])} fields, {len(parsed['sheets'])} sheets")
 
+    required_field_count = sum(1 for f in parsed["fields"] if f.get("required"))
     tpl = FBDITemplate(
         name=name or Path(upload.filename or stored_name).stem,
         module=module,
         business_object=business_object or parsed.get("business_object"),
         version="1.0",
+        required_field_count=required_field_count,
         file_name=stored_name,
         file_path=str(file_path),
         status="parsed" if parsed["fields"] else "manual",
