@@ -32,20 +32,27 @@ def _looks_like_module_label(value):
     return any(k in s.lower() for k in keywords) and len(s) < 80
 
 
-def _read_sheet_rows(ws):
-    """Read all rows from a worksheet using iter_rows (avoids max_row/max_col None issues)."""
+def _read_sheet_rows(ws, max_rows: int = 40):
+    """Read only the first ``max_rows`` rows (enough for header detection + a
+    sample row). FBDI interface sheets can carry tens of thousands of sample rows;
+    reading them all is slow and can exhaust memory on small instances."""
     rows = []
     for row in ws.iter_rows(values_only=True):
         rows.append(row)
-    # Strip trailing all-None rows
+        if len(rows) >= max_rows:
+            break
     while rows and all(v is None for v in rows[-1]):
         rows.pop()
     return rows
 
 
+def _nonempty_count(row) -> int:
+    return sum(1 for v in row if v is not None and str(v).strip() != "")
+
+
 def parse_fbdi_template(file_path):
     file_path = Path(file_path)
-    wb = load_workbook(filename=file_path, data_only=True, keep_vba=False, read_only=False)
+    wb = load_workbook(filename=file_path, data_only=True, read_only=True)
 
     business_object = None
     description = None
@@ -142,18 +149,34 @@ def parse_fbdi_template(file_path):
                 })
 
         else:
-            # Standard tabular: row 1 = headers, optional row 2 = sample
-            header_row = all_rows[0] if all_rows else []
-            sample_row = all_rows[1] if len(all_rows) > 1 else []
+            # Standard tabular, but the header row isn't always row 1. Real Oracle
+            # FBDI CSV-generation templates put field names on ~row 4 (blank row 1,
+            # a title row, a "* Required" legend row, then the headers). Detect the
+            # header row as the one with the most non-empty cells in the first 15
+            # rows (earliest on ties); the sample row is the next non-empty row.
+            scan = min(15, len(all_rows))
+            header_idx, best_cnt = 0, -1
+            for i in range(scan):
+                cnt = _nonempty_count(all_rows[i])
+                if cnt > best_cnt:
+                    best_cnt, header_idx = cnt, i
+            header_row = all_rows[header_idx] if all_rows else []
+            sample_row = []
+            for j in range(header_idx + 1, len(all_rows)):
+                if _nonempty_count(all_rows[j]) > 0:
+                    sample_row = all_rows[j]
+                    break
 
             for col_idx, raw_name in enumerate(header_row):
-                if not raw_name:
+                if raw_name is None:
                     continue
                 name = str(raw_name).strip()
                 if not name:
                     continue
-                is_req = name.startswith("*")
-                field_name = name.lstrip("* ").strip()
+                # Required is marked by a leading OR trailing "*" (e.g. "Supplier
+                # Name*", "Import Action *", "*Batch ID").
+                is_req = name.startswith("*") or name.endswith("*")
+                field_name = name.strip("*").strip()
                 if not field_name:
                     continue
                 sample_val = sample_row[col_idx] if col_idx < len(sample_row) else None
