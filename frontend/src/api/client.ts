@@ -51,7 +51,10 @@ api.interceptors.response.use(
     // backoff so pages self-heal instead of crashing — the first request wakes the
     // server and a later retry succeeds. Writes are NOT retried (avoids duplicates).
     const transient = !err.response || status === 502 || status === 503 || status === 504;
-    if (transient && method === "get" && (cfg.__retry || 0) < 3) {
+    // Retry idempotent GETs, plus login (safe to re-issue — it only returns a token),
+    // so a cold-start timeout on the very first request doesn't fail sign-in.
+    const retryable = method === "get" || (cfg.url || "").includes("/auth/login");
+    if (transient && retryable && (cfg.__retry || 0) < 3) {
       cfg.__retry = (cfg.__retry || 0) + 1;
       _settle();
       await new Promise((res) => setTimeout(res, 2500 * cfg.__retry));
@@ -66,3 +69,8 @@ api.interceptors.response.use(
     return Promise.reject(err);
   }
 );
+
+// Warm the free-tier backend the moment the app loads, so the first real request
+// (usually sign-in) doesn't hit a cold-start timeout. Fire-and-forget — the GET
+// retry logic above keeps pinging until the server wakes.
+api.get("/health").catch(() => {});
