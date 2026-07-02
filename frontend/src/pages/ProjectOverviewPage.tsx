@@ -172,6 +172,12 @@ export const ProjectOverviewPage: React.FC = () => {
 
   if (!project || !conversions) return <PageLoader />;
 
+  // A file-based / FBDI-download engagement doesn't use a live EBS source
+  // connection, so we hide the EBS/Discovery controls for it.
+  const fileBased =
+    /fbdi/i.test((project as any)?.target_environment || "") ||
+    (conversions.length > 0 && conversions.every((c) => (c as any).source_type === "dataset"));
+
   const totals = {
     total:      conversions.length,
     planning:   conversions.filter(c => c.status === "planning").length,
@@ -275,7 +281,7 @@ export const ProjectOverviewPage: React.FC = () => {
           <CardHeader
             title="Conversion Objects"
             subtitle={`${totals.total} object${totals.total === 1 ? "" : "s"} ordered by planned load sequence`}
-            actions={
+            actions={!fileBased && (
               <button
                 onClick={async () => {
                   setEbsBusy(true);
@@ -295,7 +301,7 @@ export const ProjectOverviewPage: React.FC = () => {
                 <Zap className="h-3 w-3" />
                 {ebsBusy ? "Switching…" : "Use EBS Source"}
               </button>
-            }
+            )}
           />
           {conversions.length === 0 ? (
             <CardBody>
@@ -390,10 +396,12 @@ export const ProjectOverviewPage: React.FC = () => {
 
         {/* Right sidebar: Source Connection + Load Order */}
         <div className="flex flex-col gap-4">
-          <SourceConnectionCard
-            projectId={pid}
-            projectSourceSystem={(project as any).source_system}
-          />
+          {!fileBased && (
+            <SourceConnectionCard
+              projectId={pid}
+              projectSourceSystem={(project as any).source_system}
+            />
+          )}
           <Card>
             <CardHeader
               title={<><Network className="mr-2 inline h-4 w-4 text-brand" />Load Order</>}
@@ -406,10 +414,12 @@ export const ProjectOverviewPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Discovery */}
-      <div className="mt-4">
-        <DiscoveryPanel projectId={pid} hasConnection={hasConnection} />
-      </div>
+      {/* Discovery — only relevant for live-source (EBS) engagements */}
+      {!fileBased && (
+        <div className="mt-4">
+          <DiscoveryPanel projectId={pid} hasConnection={hasConnection} />
+        </div>
+      )}
 
       {/* Source coverage — only rendered when a discovery scan exists */}
       <div className="mt-4">
