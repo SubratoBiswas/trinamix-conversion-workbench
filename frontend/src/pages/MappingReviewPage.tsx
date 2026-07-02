@@ -871,6 +871,8 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   // drag — drives the drop-zone highlight for the drag-to-map gesture.
   const [dragSource, setDragSource] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<number | null>(null);
+  // Live text filter for the source-column list.
+  const [srcQuery, setSrcQuery] = useState("");
   // Refs to source/target cards keyed by name/id so we can read their DOM positions
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const targetRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -903,7 +905,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
     setLines(next);
   };
 
-  useLayoutEffect(() => { recalc(); }, [mappings, visibleTargetIds, sourceColumns, targetFields]);
+  useLayoutEffect(() => { recalc(); }, [mappings, visibleTargetIds, sourceColumns, targetFields, srcQuery]);
 
   // Recalc on scroll/resize — both the source and target lists scroll independently
   const onScroll = () => recalc();
@@ -925,6 +927,17 @@ const MappingCanvas: React.FC<CanvasProps> = ({
       return a.position - b.position;
     });
   }, [sourceColumns, mappings]);
+
+  // Apply the live source filter (name, type, or sample value match).
+  const shownSources = useMemo(() => {
+    const q = srcQuery.trim().toLowerCase();
+    if (!q) return sortedSources;
+    return sortedSources.filter((c) =>
+      c.column_name.toLowerCase().includes(q) ||
+      (c.inferred_type || "").toLowerCase().includes(q) ||
+      (c.sample_values || []).some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [sortedSources, srcQuery]);
 
   // Sort target fields: required first, then by sequence
   const sortedTargets = useMemo(() => [...targetFields].sort((a, b) => {
@@ -991,13 +1004,24 @@ const MappingCanvas: React.FC<CanvasProps> = ({
       <div className="flex w-[320px] flex-col border-r border-line bg-white">
         <div className="flex items-center justify-between border-b border-line bg-canvas px-3 py-2">
           <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-            Source · {sortedSources.length}
+            Source · {shownSources.length}{srcQuery && <span className="text-ink-subtle"> / {sortedSources.length}</span>}
             <span className="ml-1.5 normal-case font-normal text-ink-subtle">· drag onto a target to map</span>
           </div>
           {loading && <Spinner />}
         </div>
+        <div className="border-b border-line bg-white px-2 py-1.5">
+          <input
+            value={srcQuery}
+            onChange={(e) => setSrcQuery(e.target.value)}
+            placeholder="Filter source columns…"
+            className="w-full rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+          />
+        </div>
         <div className="flex-1 overflow-y-auto p-2" onScroll={onScroll}>
-          {sortedSources.map((c) => {
+          {shownSources.length === 0 && (
+            <div className="px-2 py-6 text-center text-[11px] text-ink-subtle">No source columns match “{srcQuery}”.</div>
+          )}
+          {shownSources.map((c) => {
             const mapping = mappings.find((m) => m.source_column === c.column_name);
             const isMapped = !!mapping;
             const tone = mapping ?
@@ -1006,7 +1030,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
             return (
               <div
                 key={c.id}
-                ref={(el) => { if (el) sourceRefs.current.set(c.column_name, el); }}
+                ref={(el) => { if (el) sourceRefs.current.set(c.column_name, el); else sourceRefs.current.delete(c.column_name); }}
                 draggable
                 onDragStart={(e) => {
                   setDragSource(c.column_name);
