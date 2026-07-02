@@ -17,6 +17,56 @@ from app.parsers import parse_tabular, profile_dataframe
 
 ALLOWED_DATASET_EXTS = {".csv", ".xlsx", ".xls"}
 
+# Profile/classify on a bounded sample so uploads of multi-MB / multi-hundred-k
+# row files stay fast. The FULL file is still read later for FBDI generation.
+PROFILE_SAMPLE_ROWS = 3000
+
+
+def count_data_rows(file_path: str | Path, file_type: str | None = None) -> int | None:
+    """Count data rows (excluding the header) cheaply, without materializing the
+    whole file as a profiled DataFrame. Returns None if it can't be determined."""
+    import io
+    p = Path(file_path)
+    try:
+        raw = p.read_bytes()
+    except Exception:  # noqa: BLE001
+        return None
+    if raw[:4] == b"PK\x03\x04":  # xlsx — use stored sheet dimensions (instant)
+        import openpyxl
+        from app.parsers.tabular_parser import _repair_xlsx
+        try:
+            try:
+                wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True)
+            except Exception:  # noqa: BLE001
+                wb = openpyxl.load_workbook(io.BytesIO(_repair_xlsx(raw)), read_only=True)
+            best = max((ws.max_row or 0) for ws in wb.worksheets) if wb.worksheets else 0
+            wb.close()
+            return max(0, best - 1)
+        except Exception:  # noqa: BLE001
+            return None
+    # Delimited text — count with the C parser reading a single column. This is
+    # fast (<1s even at 40 MB) and, unlike counting newline bytes, is correct when
+    # fields contain embedded newlines (quoted multi-line values).
+    import pandas as pd
+    from app.parsers.tabular_parser import _csv_encodings, _sniff_delimiter
+    for enc in _csv_encodings(raw):
+        try:
+            head = raw[:65536].decode(enc, errors="strict")
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+        sep = _sniff_delimiter(head.split("\n", 1)[0] + "\n" + head[:8192])
+        try:
+            n = len(pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False,
+                                encoding=enc, sep=sep, usecols=[0],
+                                on_bad_lines="skip", low_memory=False))
+            return int(n)
+        except Exception:  # noqa: BLE001
+            continue
+    try:  # last-resort byte count
+        return max(0, raw.count(b"\n") - 1)
+    except Exception:  # noqa: BLE001
+        return None
+
 
 def save_upload(upload: UploadFile, subdir: str = "datasets") -> tuple[Path, str]:
     target_dir = settings.upload_path / subdir
@@ -43,8 +93,11 @@ async def create_dataset_from_upload(
         raise ValueError(f"Unsupported file extension: {ext}")
     file_path, stored_name = save_upload(upload)
 
-    df = parse_tabular(file_path, file_type=ext.lstrip("."))
+    # Profile on a bounded sample (fast even for 20-40 MB / 100k+ row files);
+    # the true row count is read separately without materializing the whole frame.
+    df = parse_tabular(file_path, file_type=ext.lstrip("."), nrows=PROFILE_SAMPLE_ROWS)
     profiles = profile_dataframe(df)
+    total_rows = count_data_rows(file_path, ext.lstrip(".")) or int(len(df))
 
     # ── Auto-detect object type from filename + column headers ──────────────
     column_names = [p["column_name"] for p in profiles]
@@ -58,7 +111,7 @@ async def create_dataset_from_upload(
         file_name=stored_name,
         file_path=str(file_path),
         file_type=ext.lstrip("."),
-        row_count=int(len(df)),
+        row_count=int(total_rows),
         column_count=int(len(df.columns)),
         status="profiled",
         detected_object_type=top["business_object"] if top else None,
@@ -67,11 +120,14 @@ async def create_dataset_from_upload(
     )
     await ds.insert()
 
-    col_docs = []
-    for prof in profiles:
-        col = DatasetColumnProfile(dataset_id=ds.id, **prof)
-        await col.insert()
-        col_docs.append(col)
+    # Bulk-insert column profiles in one round-trip instead of one per column
+    # (200+ sequential inserts was a major upload-latency source at scale).
+    col_docs = [
+        DatasetColumnProfile(id=PydanticObjectId(), dataset_id=ds.id, **prof)
+        for prof in profiles
+    ]
+    if col_docs:
+        await DatasetColumnProfile.insert_many(col_docs)
 
     return ds, col_docs
 
@@ -81,12 +137,12 @@ def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
     if not os.path.exists(ds.file_path):
         # File wiped on redeploy — return empty preview so UI doesn't hang
         return {"columns": [], "rows": [], "total_rows": 0, "missing_file": True}
-    df = parse_tabular(ds.file_path, file_type=ds.file_type)
-    head = df.head(limit)
+    head = parse_tabular(ds.file_path, file_type=ds.file_type, nrows=limit)
+    total = ds.row_count or count_data_rows(ds.file_path, ds.file_type) or int(len(head))
     return {
         "columns": list(head.columns.astype(str)),
         "rows": head.fillna("").to_dict(orient="records"),
-        "total_rows": int(len(df)),
+        "total_rows": int(total),
     }
 
 
@@ -94,9 +150,11 @@ def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
 
 _OBJECT_HINTS: dict[str, tuple[list[str], list[str]]] = {
     "Item": (
-        ["item", "sku", "product", "material", "article"],
-        ["item_num", "item_number", "uom", "item_description",
-         "item_class", "primary_uom", "lifecycle_phase", "inventory_item"],
+        ["item", "sku", "product", "material", "article", "part"],
+        ["item_num", "item_number", "itemid", "uom", "u_m", "item_description",
+         "item_class", "primary_uom", "product_code", "matl_type", "part_number",
+         "part_type", "part_description", "product_family", "commodity",
+         "revision", "lifecycle_phase", "inventory_item"],
     ),
     "Customer": (
         ["customer", "cust", "client", "buyer", "account"],
@@ -205,7 +263,7 @@ _SOURCE_HINTS: dict[str, tuple[list[str], list[str]]] = {
     # Infor SyteLine (CloudSuite Industrial) — short lower/mixed names, site_ref,
     # cust_num / vend_num, u_m, stat.
     "syteline": (
-        ["syteline", "infor", "csi", "sl_"],
+        ["syteline", "infor", "csi", "sl_", "ebos"],
         ["item", "cust_num", "vend_num", "site_ref", "u_m", "stat",
          "description", "product_code", "unit_cost", "matl_type", "whse"],
     ),
@@ -232,7 +290,7 @@ def detect_source_system(filename: str, column_names: list[str]) -> list[dict]:
     for code, (fname_kws, col_kws) in _SOURCE_HINTS.items():
         fs = _kw_score(fname_tokens, fname_kws)
         cs = _kw_score(col_tokens, col_kws)
-        conf = round(min(1.0, fs * 0.35 + cs * 0.75), 3)
+        conf = round(min(1.0, fs * 0.55 + cs * 0.75), 3)
         reasons = []
         if fs >= 0.15:
             reasons.append("file name matches its naming convention")

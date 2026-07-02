@@ -84,79 +84,165 @@ def _read_html_table(file_path: Path) -> pd.DataFrame:
     return max(tables, key=lambda d: d.shape[0] * max(1, d.shape[1])).astype(str)
 
 
-def _read_excel_robust(file_path: Path, raw: bytes) -> pd.DataFrame:
+def _load_xlsx_readonly(raw: bytes):
+    """Open an xlsx read-only (fast, low-memory streaming), repairing a corrupt
+    stylesheet on the fly if openpyxl chokes on it."""
     import io
+    import openpyxl
     try:
-        xl = pd.ExcelFile(io.BytesIO(raw), engine="openpyxl")
+        return openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     except Exception:
-        xl = pd.ExcelFile(io.BytesIO(_repair_xlsx(raw)), engine="openpyxl")
-    best_df, best_cells = None, -1
-    for name in xl.sheet_names:
-        try:
-            d = xl.parse(name, header=None, dtype=str)
-        except Exception:
-            continue
-        cells = int(d.notna().to_numpy().sum())
-        if cells > best_cells:
-            best_cells, best_df = cells, d
-    if best_df is None:
-        raise ValueError("Workbook has no readable sheets")
-    return _promote_header(best_df)
+        return openpyxl.load_workbook(io.BytesIO(_repair_xlsx(raw)), read_only=True,
+                                      data_only=True)
 
 
-def _read_csv_robust(file_path: Path, raw: bytes) -> pd.DataFrame:
+def _stream_sheet(ws, limit: int | None) -> list[list]:
+    rows: list[list] = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append(list(row))
+        if limit is not None and len(rows) >= limit:
+            break
+    return rows
+
+
+def _read_sheet_calamine(raw: bytes, sheet_title: str) -> pd.DataFrame:
+    """Read one sheet with the calamine engine (Rust-based, ~5x faster than
+    openpyxl on large workbooks). keep_default_na=False preserves literal source
+    tokens like 'NULL'/'NA' as text so FBDI output stays faithful to the source."""
     import io
-    encs = []
+    return pd.read_excel(io.BytesIO(raw), sheet_name=sheet_title, engine="calamine",
+                         header=None, dtype=str, keep_default_na=False)
+
+
+def _read_excel_robust(file_path: Path, raw: bytes, nrows: int | None = None) -> pd.DataFrame:
+    """Read only the largest sheet of a workbook. For a full read (no row cap) use
+    the fast calamine engine; for a bounded sample stream with openpyxl read-only
+    (stops early). Both avoid loading every sheet in full — the multi-sheet /
+    multi-MB workbook slowdown. Falls back to openpyxl streaming if calamine is
+    unavailable or errors."""
+    wb = _load_xlsx_readonly(raw)
+    try:
+        sheets = list(wb.worksheets)
+        if not sheets:
+            raise ValueError("Workbook has no sheets")
+        limit = (nrows + 1) if nrows else None  # +1 for the header row
+        # Rank sheets by stored dimensions (cheap).
+        ranked = sorted(sheets, key=lambda w: (w.max_row or 0) * (w.max_column or 0),
+                        reverse=True)
+        best = ranked[0]
+        has_dims = (best.max_row or 0) * (best.max_column or 0) > 0
+        raw_df = None
+        # Fast path: full read via calamine (uncapped output generation).
+        if nrows is None and has_dims:
+            try:
+                raw_df = _read_sheet_calamine(raw, best.title)
+            except Exception:  # noqa: BLE001 — engine missing / read error → stream
+                raw_df = None
+        if raw_df is None:  # sampled read, or calamine fallback: openpyxl streaming
+            rows: list[list] = []
+            if has_dims:
+                rows = _stream_sheet(best, limit)
+            if not rows:  # dimensions unreliable — probe each sheet, keep the biggest
+                best_cells = -1
+                for ws in sheets:
+                    r = _stream_sheet(ws, limit)
+                    cells = sum(1 for row in r for c in row if c is not None)
+                    if cells > best_cells:
+                        best_cells, rows = cells, r
+            if not rows:
+                raise ValueError("Workbook has no readable rows")
+            width = max((len(r) for r in rows), default=0)
+            norm = [r + [None] * (width - len(r)) for r in rows]
+            raw_df = pd.DataFrame(norm)
+    finally:
+        try:
+            wb.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return _promote_header(raw_df)
+
+
+def _csv_encodings(raw: bytes) -> list[str]:
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        encs = ["utf-16"]
-    elif raw[:3] == b"\xef\xbb\xbf":
-        encs = ["utf-8-sig"]
-    encs += ["utf-8", "cp1252", "latin-1"]
+        return ["utf-16"]
+    if raw[:3] == b"\xef\xbb\xbf":
+        return ["utf-8-sig", "utf-8"]
+    return ["utf-8", "cp1252", "latin-1"]
+
+
+def _sniff_delimiter(sample: str) -> str:
+    import csv as _csv
+    try:
+        return _csv.Sniffer().sniff(sample, delimiters=",\t;|").delimiter
+    except Exception:  # noqa: BLE001
+        counts = {d: sample.count(d) for d in (",", "\t", ";", "|")}
+        best = max(counts, key=counts.get)
+        return best if counts[best] > 0 else ","
+
+
+def _read_csv_robust(file_path: Path, raw: bytes, nrows: int | None = None) -> pd.DataFrame:
+    """Fast delimited-text reader: sniff encoding + delimiter, then use pandas'
+    C engine (10-50x faster than the python engine on large files). Falls back to
+    the python engine with delimiter auto-detection only if the C parse fails or
+    collapses to a single column."""
+    import io
     last_err = None
-    for enc in encs:
+    for enc in _csv_encodings(raw):
+        try:
+            head = raw[:65536].decode(enc, errors="strict")
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+        first_line = head.split("\n", 1)[0]
+        sep = _sniff_delimiter(first_line + "\n" + head[:8192])
+        # Fast path — C engine with an explicit delimiter.
         try:
             df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False,
-                             encoding=enc, engine="python", sep=None, on_bad_lines="skip")
+                             encoding=enc, sep=sep, nrows=nrows,
+                             on_bad_lines="skip", low_memory=False)
+            if df.shape[1] > 1 or sep == ",":
+                return df.astype(str)
         except (UnicodeDecodeError, UnicodeError):
             continue
         except Exception as e:  # noqa: BLE001
             last_err = e
+        # Fallback — python engine sniffs the delimiter itself (slower, robust).
+        try:
+            df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False,
+                             encoding=enc, engine="python", sep=None,
+                             nrows=nrows, on_bad_lines="skip")
+            return df.astype(str)
+        except (UnicodeDecodeError, UnicodeError):
             continue
-        if df.shape[1] <= 1:  # sniffing collapsed columns — try explicit delimiters
-            for sep in ("\t", ";", "|", ","):
-                try:
-                    d2 = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False,
-                                     encoding=enc, sep=sep, engine="python", on_bad_lines="skip")
-                    if d2.shape[1] > df.shape[1]:
-                        df = d2
-                except Exception:  # noqa: BLE001
-                    pass
-        return df.astype(str)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
     raise ValueError(f"Could not read this file as CSV/text ({last_err or 'unknown encoding'}).")
 
 
-def parse_tabular(file_path: Path | str, file_type: str | None = None) -> pd.DataFrame:
+def parse_tabular(file_path: Path | str, file_type: str | None = None,
+                  nrows: int | None = None) -> pd.DataFrame:
     """Robust CSV / XLSX / HTML parser. Detects the real format by magic bytes
     (the extension can lie), repairs corrupt xlsx stylesheets, unwraps HTML tables
     exported as .xls(x)/.csv, sniffs CSV encoding (incl. UTF-16 / BOM) and
-    delimiter, picks the largest sheet, and detects the header row below titles."""
+    delimiter, streams only the largest sheet, and detects the header row below
+    titles. Pass ``nrows`` to read only the first N data rows (fast profiling)."""
     file_path = Path(file_path)
     raw = file_path.read_bytes()
     head = raw[:1024]
     if raw[:4] == b"PK\x03\x04":               # real OOXML/xlsx (zip signature)
-        return _read_excel_robust(file_path, raw)
+        return _read_excel_robust(file_path, raw, nrows=nrows)
     if _looks_html(head):                        # HTML masquerading as a spreadsheet
         try:
-            return _read_html_table(file_path)
+            df = _read_html_table(file_path)
+            return df.head(nrows) if nrows else df
         except Exception:  # noqa: BLE001 — fall through to text parsing
             pass
     ftype = (file_type or file_path.suffix.lstrip(".")).lower()
     if ftype in ("xlsx", "xls", "xlsm"):
         try:
-            return _read_excel_robust(file_path, raw)
+            return _read_excel_robust(file_path, raw, nrows=nrows)
         except Exception:  # noqa: BLE001 — last resort: try as delimited text
-            return _read_csv_robust(file_path, raw)
-    return _read_csv_robust(file_path, raw)
+            return _read_csv_robust(file_path, raw, nrows=nrows)
+    return _read_csv_robust(file_path, raw, nrows=nrows)
 
 
 _DATE_PATTERNS = [
@@ -192,7 +278,8 @@ def _infer_column_type(values: list[str]) -> str:
         return "string"
     seen: dict[str, int] = {}
     for v in values:
-        seen[_classify_value(v)] = seen.get(_classify_value(v), 0) + 1
+        k = _classify_value(v)
+        seen[k] = seen.get(k, 0) + 1
     seen.pop("null", None)
     if not seen:
         return "string"

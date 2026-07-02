@@ -59,7 +59,8 @@ export const DatasetsApi = {
     fd.append("file", file);
     if (name) fd.append("name", name);
     if (description) fd.append("description", description);
-    return api.post<DatasetDetail>("/datasets/upload", fd).then(r => r.data);
+    // Large (20-40 MB) files need well beyond the default 60s to upload + parse.
+    return api.post<DatasetDetail>("/datasets/upload", fd, { timeout: 300_000 }).then(r => r.data);
   },
 };
 
@@ -75,7 +76,7 @@ export const FbdiApi = {
     if (opts.name) fd.append("name", opts.name);
     if (opts.module) fd.append("module", opts.module);
     if (opts.business_object) fd.append("business_object", opts.business_object);
-    return api.post<FBDITemplateDetail>("/fbdi/upload", fd).then(r => r.data);
+    return api.post<FBDITemplateDetail>("/fbdi/upload", fd, { timeout: 300_000 }).then(r => r.data);
   },
   delete: (id: string) => api.delete(`/fbdi/templates/${id}`),
   reparse: (id: string) => api.post<FBDITemplateDetail>(`/fbdi/templates/${id}/reparse`).then(r => r.data),
