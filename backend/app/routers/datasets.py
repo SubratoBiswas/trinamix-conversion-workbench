@@ -41,25 +41,46 @@ async def upload_dataset(
 
 @router.get("", response_model=list[DatasetOut])
 async def list_datasets(_: User = Depends(get_current_user)):
+    from app.models.conversion import Conversion
     datasets = await Dataset.find_all().sort("-uploaded_at").to_list()
-    return [_ds_out(ds) for ds in datasets]
+    # Map dataset_id -> [conversion names] so each card can show what uses it.
+    convs = await Conversion.find_all().to_list()
+    by_ds: dict[str, list[str]] = {}
+    for c in convs:
+        if c.dataset_id:
+            by_ds.setdefault(str(c.dataset_id), []).append(c.name)
+    out = []
+    for ds in datasets:
+        d = _ds_out(ds)
+        names = by_ds.get(str(ds.id), [])
+        d["conversion_names"] = names
+        d["conversion_count"] = len(names)
+        out.append(d)
+    return out
 
 
 @router.delete("/{dataset_id}")
-async def delete_dataset(dataset_id: str, _: User = Depends(get_current_user)):
-    """Delete a dataset, its column profiles, and its stored file. Blocked if a
-    conversion still references it (delete those conversions first)."""
+async def delete_dataset(
+    dataset_id: str, cascade: bool = False, _: User = Depends(get_current_user)
+):
+    """Delete a dataset, its column profiles, and its stored file. If a conversion
+    references it, blocked with 409 unless ?cascade=true, which also deletes those
+    conversions."""
     from app.models.conversion import Conversion
     ds = await Dataset.get(PydanticObjectId(dataset_id))
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    used = await Conversion.find(Conversion.dataset_id == ds.id).count()
-    if used:
+    convs = await Conversion.find(Conversion.dataset_id == ds.id).to_list()
+    if convs and not cascade:
         raise HTTPException(
             409,
-            f"Can't delete — {used} conversion(s) still use this dataset. "
-            "Remove those conversions first.",
+            f"Can't delete — {len(convs)} conversion(s) still use this dataset. "
+            "Delete with cascade, or remove those conversions first.",
         )
+    deleted_convs = 0
+    for c in convs:  # cascade == True here
+        await c.delete()
+        deleted_convs += 1
     await DatasetColumnProfile.find(DatasetColumnProfile.dataset_id == ds.id).delete()
     try:
         import os
@@ -68,7 +89,7 @@ async def delete_dataset(dataset_id: str, _: User = Depends(get_current_user)):
     except Exception:  # noqa: BLE001 — file cleanup is best-effort
         pass
     await ds.delete()
-    return {"deleted": True, "id": dataset_id}
+    return {"deleted": True, "id": dataset_id, "conversions_deleted": deleted_convs}
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetailOut)

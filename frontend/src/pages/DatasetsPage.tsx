@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Database, Plus, Eye, Sparkles, Search, Grid3x3, List as ListIcon, Wand2, Trash2 } from "lucide-react";
+import { Database, Plus, Eye, Sparkles, Search, Grid3x3, List as ListIcon, Wand2, Trash2, Loader2 } from "lucide-react";
 import { DatasetsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
@@ -17,20 +17,44 @@ export const DatasetsPage: React.FC = () => {
   const nav = useNavigate();
 
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [wiping, setWiping] = useState(false);
 
   const refresh = () => DatasetsApi.list().then(setItems);
   useEffect(() => { refresh(); }, []);
 
   const handleDelete = async (d: Dataset) => {
-    if (!window.confirm(`Delete "${d.name}"?\n\nThis permanently removes the dataset and its profile. This can't be undone.`)) return;
-    setDeleting(d.id);
+    const cc = d.conversion_count || 0;
+    const names = (d.conversion_names || []).join(", ");
+    const msg = cc > 0
+      ? `Delete "${d.name}" AND its ${cc} conversion${cc === 1 ? "" : "s"}?\n\n${names}\n\nThis can't be undone.`
+      : `Delete "${d.name}"?\n\nThis permanently removes the dataset and its profile. This can't be undone.`;
+    if (!window.confirm(msg)) return;
+    setDeleting(String(d.id));
     try {
-      await DatasetsApi.delete(d.id);
+      await DatasetsApi.delete(String(d.id), cc > 0);
       setItems((prev) => (prev ? prev.filter((x) => x.id !== d.id) : prev));
     } catch (err: any) {
       alert(err?.response?.data?.detail || "Could not delete this dataset.");
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const deleteAll = async () => {
+    if (!items || items.length === 0) return;
+    const total = items.length;
+    const convTotal = items.reduce((n, d) => n + (d.conversion_count || 0), 0);
+    if (!window.confirm(
+      `Delete ALL ${total} dataset${total === 1 ? "" : "s"} and every conversion that uses them (${convTotal} conversion${convTotal === 1 ? "" : "s"})?\n\nThis cannot be undone.`
+    )) return;
+    setWiping(true);
+    try {
+      for (const d of [...items]) {
+        await DatasetsApi.delete(String(d.id), true).catch(() => {});
+      }
+      await refresh();
+    } finally {
+      setWiping(false);
     }
   };
 
@@ -69,6 +93,17 @@ export const DatasetsPage: React.FC = () => {
             <ListIcon className="h-3.5 w-3.5" />
           </button>
         </div>
+        {items && items.length > 0 && (
+          <button
+            onClick={deleteAll}
+            disabled={wiping}
+            title="Delete every dataset and the conversions that use them"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+          >
+            {wiping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            {wiping ? "Deleting…" : "Delete all"}
+          </button>
+        )}
       </div>
 
       {items === null ? <PageLoader /> :
@@ -102,7 +137,7 @@ export const DatasetsPage: React.FC = () => {
                     <Pill tone="success">{d.status}</Pill>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDelete(d); }}
-                      disabled={deleting === d.id}
+                      disabled={deleting === String(d.id)}
                       title="Delete dataset"
                       className="rounded p-1 text-ink-subtle opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 disabled:opacity-50"
                     >
@@ -112,6 +147,11 @@ export const DatasetsPage: React.FC = () => {
                 </div>
                 <div className="mt-3 line-clamp-2 text-sm font-semibold text-ink">{d.name}</div>
                 <div className="mt-1 line-clamp-1 font-mono text-[11px] text-ink-muted">{d.file_name}</div>
+                {d.conversion_names && d.conversion_names.length > 0 && (
+                  <div className="mt-1 line-clamp-1 text-[11px] text-brand-dark" title={d.conversion_names.join(", ")}>
+                    ↳ {d.conversion_names.join(", ")}
+                  </div>
+                )}
                 <div className="mt-3 flex items-center gap-3 text-[11px] text-ink-muted">
                   <span><span className="font-semibold text-ink">{d.row_count.toLocaleString()}</span> rows</span>
                   <span>·</span>
@@ -141,7 +181,14 @@ export const DatasetsPage: React.FC = () => {
               <tbody>
                 {filtered.map((d) => (
                   <tr key={d.id} onClick={() => nav(`/datasets/${d.id}/prepare`)} className="cursor-pointer">
-                    <td className="font-medium text-ink">{d.name}</td>
+                    <td className="font-medium text-ink">
+                      {d.name}
+                      {d.conversion_names && d.conversion_names.length > 0 && (
+                        <div className="font-normal text-[11px] text-brand-dark" title={d.conversion_names.join(", ")}>
+                          ↳ {d.conversion_names.join(", ")}
+                        </div>
+                      )}
+                    </td>
                     <td className="font-mono text-[11px] text-ink-muted">{d.file_name}</td>
                     <td><Pill tone="neutral">{d.file_type.toUpperCase()}</Pill></td>
                     <td className="text-right tabular-nums">{d.row_count.toLocaleString()}</td>
@@ -155,7 +202,7 @@ export const DatasetsPage: React.FC = () => {
                         </button>
                         <button
                           className="btn-ghost h-7 px-2 text-xs text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
-                          disabled={deleting === d.id}
+                          disabled={deleting === String(d.id)}
                           title="Delete dataset"
                           onClick={(e) => { e.stopPropagation(); handleDelete(d); }}
                         >

@@ -34,6 +34,8 @@ class DatasetOut(BaseModel):
     detection_confidence: float = 0.0
     detection_suggestions: list = []
     uploaded_at: datetime
+    conversion_count: int = 0
+    conversion_names: list[str] = []
 
     class Config:
         from_attributes = True

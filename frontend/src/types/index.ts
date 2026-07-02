@@ -12,6 +12,8 @@ export interface Dataset {
   column_count: number;
   status: string;
   uploaded_at: string;
+  conversion_count?: number;
+  conversion_names?: string[];
 }
 
 export interface DatasetColumnProfile {
