@@ -33,7 +33,7 @@ services:
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
-        value: https://trinamix-backend.onrender.com
+        value: https://trinamix-conversion-backend.onrender.com
     routes:
       - type: rewrite
         source: /*
