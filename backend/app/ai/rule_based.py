@@ -270,6 +270,87 @@ def _suggest_transformation(
     return None
 
 
+def score_pair(
+    src: SourceColumn,
+    tgt: TargetField,
+    tgt_tokens: list[str] | None = None,
+    tgt_desc_tokens: list[str] | None = None,
+) -> tuple[float, list[str]]:
+    """Score a single (source, target) pair. Returns (composite 0..1, reasons).
+
+    Factored out so both the greedy best-pick mapper and the "alternative
+    candidates" ranking use identical scoring.
+    """
+    if tgt_tokens is None:
+        tgt_tokens = _tokenize(tgt.field_name)
+    if tgt_desc_tokens is None:
+        tgt_desc_tokens = _tokenize(tgt.description or "")
+    src_tokens = _tokenize(src.name)
+    # 1. column name similarity
+    name_score = _jaccard(src_tokens, tgt_tokens)
+    # 2. semantic synonym hits
+    sem_score = _semantic_score(src_tokens, tgt_tokens)
+    # 3. description tokens
+    desc_score = _jaccard(src_tokens, tgt_desc_tokens) if tgt_desc_tokens else 0.0
+    # 4. type compatibility
+    type_score = _type_compatibility(src, tgt)
+    # 5. value affinity
+    val_score, val_reason = _value_affinity(src, tgt)
+    # 5b. LOV affinity — do the source VALUES resolve against the target's list
+    # of values? (value-aware mapping, not name-only)
+    lov_score, lov_reason = _lov_affinity(src, tgt)
+    # 6. required priority bonus when type/name overlap exists
+    bonus = 0.05 if (tgt.required and (name_score or sem_score)) else 0.0
+    # 7. fill rate — a well-populated source column produces real output; a
+    # near-empty one yields blank cells.
+    fill = max(0.0, min(1.0, 1.0 - (src.null_percent or 0.0) / 100.0))
+    fill_penalty = 0.15 if (src.null_percent or 0.0) >= 98.0 else 0.0
+
+    composite = min(
+        1.0,
+        name_score * 0.30
+        + sem_score * 0.22
+        + desc_score * 0.08
+        + type_score * 0.08
+        + val_score * 0.05
+        + lov_score * 0.13
+        + fill * 0.14
+        + bonus
+        - fill_penalty,
+    )
+
+    reasons: list[str] = []
+    if name_score >= 0.5:
+        reasons.append(f"column name overlap ({int(name_score * 100)}%)")
+    if sem_score >= 0.5:
+        reasons.append("semantic keyword match")
+    if type_score >= 0.5:
+        reasons.append(f"type compatible ({src.inferred_type} → {tgt.data_type})")
+    if val_reason:
+        reasons.append(val_reason)
+    if lov_reason:
+        reasons.append(lov_reason)
+    return composite, reasons
+
+
+def rank_candidates(
+    source_columns: list[SourceColumn],
+    target: TargetField,
+    top_n: int = 5,
+) -> list[tuple[float, SourceColumn, list[str]]]:
+    """Return the top-N source-column candidates for one target field, ranked by
+    composite score (best first). Used to offer the user alternatives to the
+    auto-picked mapping."""
+    tgt_tokens = _tokenize(target.field_name)
+    tgt_desc_tokens = _tokenize(target.description or "")
+    scored: list[tuple[float, SourceColumn, list[str]]] = []
+    for src in source_columns:
+        composite, reasons = score_pair(src, target, tgt_tokens, tgt_desc_tokens)
+        scored.append((round(composite, 3), src, reasons))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[:top_n]
+
+
 class RuleBasedMapper:
     name = "rule-based"
 
@@ -293,55 +374,7 @@ class RuleBasedMapper:
             for src in source_columns:
                 if src.name in used_sources:
                     continue
-                src_tokens = _tokenize(src.name)
-                # 1. column name similarity
-                name_score = _jaccard(src_tokens, tgt_tokens)
-                # 2. semantic synonym hits
-                sem_score = _semantic_score(src_tokens, tgt_tokens)
-                # 3. description tokens
-                desc_score = _jaccard(src_tokens, tgt_desc_tokens) if tgt_desc_tokens else 0.0
-                # 4. type compatibility
-                type_score = _type_compatibility(src, tgt)
-                # 5. value affinity
-                val_score, val_reason = _value_affinity(src, tgt)
-                # 5b. LOV affinity — do the source VALUES resolve against the
-                # target's list of values? (value-aware mapping, not name-only)
-                lov_score, lov_reason = _lov_affinity(src, tgt)
-                # 6. required priority bonus when type/name overlap exists
-                bonus = 0.05 if (tgt.required and (name_score or sem_score)) else 0.0
-                # 7. fill rate — a well-populated source column produces real output;
-                # a near-empty one yields blank cells. Reward populated columns so
-                # they beat sparse look-alikes (e.g. companyname over a 100%-null
-                # custentity_* column), and demote essentially-empty columns.
-                fill = max(0.0, min(1.0, 1.0 - (src.null_percent or 0.0) / 100.0))
-                fill_penalty = 0.15 if (src.null_percent or 0.0) >= 98.0 else 0.0
-
-                # weighted combination capped at 1.0
-                composite = min(
-                    1.0,
-                    name_score * 0.30
-                    + sem_score * 0.22
-                    + desc_score * 0.08
-                    + type_score * 0.08
-                    + val_score * 0.05
-                    + lov_score * 0.13
-                    + fill * 0.14
-                    + bonus
-                    - fill_penalty,
-                )
-
-                reasons: list[str] = []
-                if name_score >= 0.5:
-                    reasons.append(f"column name overlap ({int(name_score * 100)}%)")
-                if sem_score >= 0.5:
-                    reasons.append("semantic keyword match")
-                if type_score >= 0.5:
-                    reasons.append(f"type compatible ({src.inferred_type} → {tgt.data_type})")
-                if val_reason:
-                    reasons.append(val_reason)
-                if lov_reason:
-                    reasons.append(lov_reason)
-
+                composite, reasons = score_pair(src, tgt, tgt_tokens, tgt_desc_tokens)
                 if composite > best[0]:
                     best = (composite, src, reasons)
 

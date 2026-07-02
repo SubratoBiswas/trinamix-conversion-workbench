@@ -21,6 +21,7 @@ import type {
   DatasetColumnProfile,
   DatasetDetail,
   FBDIField,
+  MappingCandidate,
   MappingSuggestion,
 } from "@/types";
 
@@ -779,6 +780,7 @@ export const MappingReviewPage: React.FC = () => {
           <MappingInspector
             mapping={selectedMapping}
             sourceColumns={sourceColumns}
+            conversionId={pid ?? ""}
             targetObject={project?.target_object}
             onClose={() => setSelectedMappingId(null)}
             onApprove={(m) => approve(m)}
@@ -1415,18 +1417,121 @@ const ValueMappingsPanel: React.FC<{ targetObject?: string | null; targetField?:
   );
 };
 
+// ─────── Alternative source-column candidates for a target field ───────
+// Shows the ranked source columns the AI could map this target to, so the
+// reviewer can pick a different one for flexibility. The top pick is the
+// current auto-mapping; the rest are alternatives.
+const AlternativeCandidatesPanel: React.FC<{
+  conversionId: string;
+  targetFieldId: number | string;
+  currentSource: string | null;
+  onPick: (sourceColumn: string) => void;
+}> = ({ conversionId, targetFieldId, currentSource, onPick }) => {
+  const [cands, setCands] = useState<MappingCandidate[] | null>(null);
+  const [open, setOpen] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setCands(null);
+    MappingApi.candidates(conversionId, { targetFieldId: String(targetFieldId), topN: 6 })
+      .then((groups) => {
+        if (!alive) return;
+        setCands(groups[0]?.candidates ?? []);
+      })
+      .catch(() => { if (alive) setCands([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [conversionId, targetFieldId]);
+
+  return (
+    <div className="mt-4 rounded-md border border-line bg-canvas/60">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-3 py-2 text-left"
+      >
+        <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+          <ArrowLeftRight className="h-3 w-3" /> Alternative source columns
+        </span>
+        <ChevronDown className={cn("h-3.5 w-3.5 text-ink-muted transition", open ? "" : "-rotate-90")} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3">
+          {loading ? (
+            <div className="flex items-center gap-2 py-2 text-[11px] text-ink-muted">
+              <Spinner /> Ranking candidates…
+            </div>
+          ) : (cands || []).length === 0 ? (
+            <div className="py-1 text-[11px] text-ink-subtle">No alternative source columns scored above zero.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {(cands || []).map((c) => {
+                const isCurrent = currentSource && c.source_column === currentSource;
+                const pct = Math.round((c.confidence || 0) * 100);
+                return (
+                  <div
+                    key={c.source_column}
+                    className={cn(
+                      "rounded-md border px-2.5 py-1.5",
+                      isCurrent ? "border-brand/50 bg-brand-subtle/40" : "border-line bg-white",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <code className="truncate rounded bg-canvas px-1.5 py-0.5 text-[11px] text-ink">{c.source_column}</code>
+                          {isCurrent && <Pill tone="brand">current</Pill>}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-ink-subtle">
+                          <span className="font-mono tabular-nums">{pct}%</span>
+                          {c.inferred_type && <span>· {c.inferred_type}</span>}
+                          <span>· {Math.round(100 - (c.null_percent || 0))}% filled</span>
+                        </div>
+                      </div>
+                      {!isCurrent && (
+                        <button
+                          onClick={() => onPick(c.source_column)}
+                          className="shrink-0 rounded border border-brand/40 px-2 py-0.5 text-[11px] font-medium text-brand-dark hover:bg-brand-subtle"
+                        >
+                          Use
+                        </button>
+                      )}
+                    </div>
+                    {c.reasons?.length > 0 && (
+                      <div className="mt-1 text-[10px] leading-snug text-ink-muted">{c.reasons.join(" · ")}</div>
+                    )}
+                    {c.sample_values?.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {c.sample_values.slice(0, 3).map((v, i) => (
+                          <span key={i} className="rounded bg-canvas px-1.5 py-0.5 font-mono text-[10px] text-ink-muted">{String(v)}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─────── Side inspector for a selected mapping ───────
 
 const MappingInspector: React.FC<{
   mapping: MappingSuggestion;
   sourceColumns: DatasetDetail["columns"];
+  conversionId: string;
   onClose: () => void;
   onApprove: (m: MappingSuggestion) => void;
   onReject: (m: MappingSuggestion) => void;
   onOverride: (m: MappingSuggestion, src: string) => void;
   onAddCustomRule: (m: MappingSuggestion) => void;
   targetObject?: string | null;
-}> = ({ mapping, sourceColumns, onClose, onApprove, onReject, onOverride, onAddCustomRule, targetObject }) => {
+}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, targetObject }) => {
   const [editingOverride, setEditingOverride] = useState(false);
   const [override, setOverride] = useState(mapping.source_column || "");
   const [vmRefresh, setVmRefresh] = useState(0);
@@ -1555,6 +1660,14 @@ const MappingInspector: React.FC<{
 
         {/* Value mappings (crosswalk) for this field */}
         <ValueMappingsPanel key={vmRefresh} targetObject={targetObject} targetField={mapping.target_field_name} />
+
+        {/* Alternative source-column candidates (for flexibility) */}
+        <AlternativeCandidatesPanel
+          conversionId={conversionId}
+          targetFieldId={mapping.target_field_id}
+          currentSource={mapping.source_column}
+          onPick={(src) => onOverride(mapping, src)}
+        />
 
         {/* Override editor */}
         <div className="mt-5 space-y-2">

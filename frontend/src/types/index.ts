@@ -557,6 +557,23 @@ export interface Conversion {
  * Will be removed once every page is on the new model. */
 export type ConversionProject = Conversion;
 
+/** One ranked alternative source-column candidate for a target field. */
+export interface MappingCandidate {
+  source_column: string;
+  confidence: number;
+  inferred_type: string | null;
+  null_percent: number;
+  sample_values: string[];
+  reasons: string[];
+}
+
+/** Alternative candidates for a single target field. */
+export interface MappingCandidateGroup {
+  target_field_id: string;
+  target_field_name: string | null;
+  candidates: MappingCandidate[];
+}
+
 export interface MappingSuggestion {
   id: number;
   conversion_id: number;

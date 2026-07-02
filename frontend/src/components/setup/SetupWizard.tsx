@@ -165,6 +165,10 @@ export const SetupWizard: React.FC = () => {
     metadata: {}, credentials: {},
   });
   const [selectedModules, setSelectedModules] = useState<string[]>([]);
+  // Source-kind chooser: on a brand-new engagement the user first picks how
+  // source data comes in — a live DB connection (this wizard) or file upload
+  // (the /convert flow). `null` = chooser not yet answered → show the modal.
+  const [sourceKind, setSourceKind] = useState<null | "db" | "file">(null);
 
   useEffect(() => {
     SourceSystemsApi.list().then(setSourceSystems).catch(() => setSourceSystems([]));
@@ -275,6 +279,52 @@ export const SetupWizard: React.FC = () => {
       setBusy(false);
     }
   };
+
+  if (sourceKind === null) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-xl rounded-xl bg-white p-6 shadow-lg">
+          <div className="mb-1 flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-brand" />
+            <h3 className="text-base font-semibold text-ink">New engagement</h3>
+          </div>
+          <p className="mb-4 text-[12.5px] text-ink-muted">
+            How will you bring in source data for this engagement?
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              onClick={() => setSourceKind("db")}
+              className="flex flex-col items-start gap-1.5 rounded-lg border border-line bg-white p-4 text-left transition hover:border-brand hover:shadow-soft"
+            >
+              <Cable className="h-5 w-5 text-brand" />
+              <span className="text-sm font-semibold text-ink">DB connection</span>
+              <span className="text-[11.5px] leading-snug text-ink-muted">
+                Connect a live source system (Oracle EBS, NetSuite, …) and let Discovery scan it for objects to convert.
+              </span>
+            </button>
+            <button
+              onClick={() => nav("/convert")}
+              className="flex flex-col items-start gap-1.5 rounded-lg border border-line bg-white p-4 text-left transition hover:border-brand hover:shadow-soft"
+            >
+              <UploadCloud className="h-5 w-5 text-brand" />
+              <span className="text-sm font-semibold text-ink">File upload</span>
+              <span className="text-[11.5px] leading-snug text-ink-muted">
+                Upload CSV/XLSX extracts — the AI detects source &amp; target and maps each file to its Fusion FBDI template.
+              </span>
+            </button>
+          </div>
+          <div className="mt-4 text-right">
+            <button
+              onClick={() => nav("/projects")}
+              className="text-[12px] font-medium text-ink-subtle hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-4xl">

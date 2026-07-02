@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Download, FileOutput } from "lucide-react";
+import { ArrowLeft, Download, FileOutput, FolderDown } from "lucide-react";
 import { ConversionsApi, OutputApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Tabs,
@@ -19,6 +19,7 @@ export const OutputPreviewPage: React.FC = () => {
   const [tab, setTab] = useState("data");
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -28,6 +29,27 @@ export const OutputPreviewPage: React.FC = () => {
       alert("No output file found — please generate output first.");
     } finally {
       setDownloading(false);
+    }
+  };
+
+  // Download every relevant FBDI file for this engagement in one zip, generated
+  // fresh from the current mappings and named/ordered by the load sequence.
+  const handleDownloadAll = async () => {
+    if (!project?.project_id) return;
+    setDownloadingAll(true);
+    try {
+      await OutputApi.downloadAll(
+        String(project.project_id),
+        `${(project.project_name ?? "engagement").replace(/[^\w.-]+/g, "_")}_FBDI.zip`,
+      );
+    } catch (e: any) {
+      alert(
+        e?.response?.status === 400
+          ? "No conversions are ready to generate FBDI output yet (each needs a source file and a bound template)."
+          : "Could not build the FBDI bundle. Please try again.",
+      );
+    } finally {
+      setDownloadingAll(false);
     }
   };
 
@@ -62,8 +84,11 @@ export const OutputPreviewPage: React.FC = () => {
           <Button variant="secondary" onClick={generate} loading={generating}>
             <FileOutput className="h-4 w-4" /> Re-generate
           </Button>
-          <Button variant="primary" onClick={handleDownload} loading={downloading}>
-            <Download className="h-4 w-4" /> Download CSV
+          <Button variant="secondary" onClick={handleDownload} loading={downloading}>
+            <Download className="h-4 w-4" /> This file (.csv)
+          </Button>
+          <Button variant="primary" onClick={handleDownloadAll} loading={downloadingAll}>
+            <FolderDown className="h-4 w-4" /> Download all FBDI (.zip)
           </Button>
         </>}
       />

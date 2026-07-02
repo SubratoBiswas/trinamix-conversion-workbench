@@ -41,6 +41,21 @@ async def suggest_mapping(conversion_id: str, _: User = Depends(get_current_user
     return await enrich_mapping_with_samples(conv, saved)
 
 
+@router.get("/conversions/{conversion_id}/mapping-candidates")
+async def mapping_candidates_endpoint(
+    conversion_id: str,
+    top_n: int = 5,
+    target_field_id: str | None = None,
+    _: User = Depends(get_current_user),
+):
+    """Alternative source-column candidates per target field (ranked), so the
+    reviewer can see other columns the AI could map each target to, and swap."""
+    from app.services.mapping_service import mapping_candidates
+    conv = await _require_conversion(conversion_id)
+    top_n = max(1, min(top_n, 10))
+    return await mapping_candidates(conv, top_n=top_n, target_field_id=target_field_id)
+
+
 @router.get("/conversions/{conversion_id}/mappings", response_model=list[MappingOut])
 async def list_mappings(conversion_id: str, _: User = Depends(get_current_user)):
     conv = await Conversion.get(PydanticObjectId(conversion_id))

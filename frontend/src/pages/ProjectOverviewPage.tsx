@@ -7,7 +7,7 @@ import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download, FolderDown,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, OutputApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
@@ -137,6 +137,24 @@ export const ProjectOverviewPage: React.FC = () => {
       flash("Approve this conversion's mapping first, then download the FBDI file.");
     } finally { setDl(null); }
   };
+  // Generate + download every bound conversion's FBDI file for this engagement
+  // as one zip (named/ordered by the supplier load sequence).
+  const [dlAll, setDlAll] = useState(false);
+  const downloadAllFbdi = async () => {
+    setDlAll(true);
+    try {
+      await OutputApi.downloadAll(
+        pid,
+        `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_FBDI.zip`,
+      );
+    } catch (e: any) {
+      flash(
+        e?.response?.status === 400
+          ? "No conversions are ready yet — each needs a source file and a bound FBDI template."
+          : "Couldn't build the FBDI bundle. Please try again.",
+      );
+    } finally { setDlAll(false); }
+  };
 
   const refresh = () => {
     ProjectsApi.get(pid).then(setProject);
@@ -233,9 +251,32 @@ export const ProjectOverviewPage: React.FC = () => {
             </Button>
             <Button
               variant="secondary"
+              loading={busy === "chain"}
+              onClick={async () => {
+                setBusy("chain");
+                try {
+                  const r = await ProjectsApi.chainLoadOrder(pid);
+                  flash(
+                    r.created.length
+                      ? `Mapped ${r.created.length} dependency link(s) across the load sequence`
+                      : "Load sequence already mapped",
+                  );
+                  refresh();
+                } catch {
+                  flash("Couldn't map the load sequence");
+                } finally { setBusy(null); }
+              }}
+            >
+              <Network className="h-4 w-4" /> Map Load Sequence
+            </Button>
+            <Button
+              variant="secondary"
               onClick={() => setShowModuleModal(true)}
             >
               <Wand2 className="h-4 w-4" /> Auto-populate
+            </Button>
+            <Button variant="secondary" loading={dlAll} onClick={downloadAllFbdi}>
+              <FolderDown className="h-4 w-4" /> Download all FBDI
             </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion

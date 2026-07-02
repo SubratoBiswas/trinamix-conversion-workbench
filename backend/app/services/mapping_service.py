@@ -291,6 +291,68 @@ async def ebs_sample_rows(table_name: str, limit: int = 5) -> list[dict]:
     return await ebs_fetch_rows(table_name, min(int(limit), 50))
 
 
+async def _sources_for_conversion(conversion: Conversion) -> list[SourceColumn]:
+    """Build SourceColumn objects for a conversion (EBS live or dataset file),
+    enriched with distinct values for low-cardinality columns. Shared by the
+    suggestion run and the alternative-candidate ranking."""
+    if getattr(conversion, "source_type", "dataset") == "ebs":
+        table = getattr(conversion, "ebs_table_hint", "") or ""
+        return await _source_columns_for_ebs(table) if table else []
+    if not conversion.dataset_id:
+        return []
+    dataset = await Dataset.get(conversion.dataset_id)
+    sources = await _source_columns_for(dataset)
+    try:
+        df = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+        for sc in sources:
+            if sc.name not in df.columns:
+                continue
+            if sc.distinct_count and sc.distinct_count > 200:
+                continue
+            ser = df[sc.name].dropna().astype(str).str.strip()
+            vals = [v for v in ser.unique().tolist()
+                    if v and v.lower() not in ("nan", "none", "null")]
+            if 0 < len(vals) <= 200:
+                sc.distinct_values = vals
+    except Exception:
+        pass
+    return sources
+
+
+async def mapping_candidates(
+    conversion: Conversion, top_n: int = 5, target_field_id: str | None = None,
+) -> list[dict]:
+    """For each target field, return the top-N ranked source-column candidates
+    (deterministic scorer), so the UI can offer alternatives to the auto-pick."""
+    from app.ai.rule_based import rank_candidates
+    template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+    if not template:
+        return []
+    sources = await _sources_for_conversion(conversion)
+    targets = await _target_fields_for(template)
+    if target_field_id:
+        targets = [t for t in targets if str(t.id) == str(target_field_id)]
+    out: list[dict] = []
+    for tgt in targets:
+        ranked = rank_candidates(sources, tgt, top_n=top_n)
+        out.append({
+            "target_field_id": str(tgt.id),
+            "target_field_name": tgt.field_name,
+            "candidates": [
+                {
+                    "source_column": src.name,
+                    "confidence": score,
+                    "inferred_type": src.inferred_type,
+                    "null_percent": round(src.null_percent or 0.0, 1),
+                    "sample_values": [str(v) for v in (src.sample_values or [])[:3]],
+                    "reasons": reasons,
+                }
+                for score, src, reasons in ranked if score > 0
+            ],
+        })
+    return out
+
+
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
     template = await FBDITemplate.get(conversion.template_id)
 

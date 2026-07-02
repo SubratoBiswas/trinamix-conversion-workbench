@@ -21,6 +21,7 @@ import type {
   LoadOrderResult,
   LoadRun,
   LoadSummary,
+  MappingCandidateGroup,
   MappingSuggestion,
   OutputPreview,
   Project,
@@ -103,6 +104,12 @@ export const ProjectsApi = {
     api.post<AutoPopulateResult>(`/projects/${id}/auto-populate-conversions`, { modules }).then(r => r.data),
   deriveLoadOrder: (id: string) =>
     api.post<LoadOrderResult>(`/projects/${id}/derive-load-order`).then(r => r.data),
+  /** Materialize prerequisite edges from the current load sequence so the
+   * dependency map shows what runs after what. */
+  chainLoadOrder: (id: string) =>
+    api.post<{ project_id: string; created: { source_object: string; target_object: string }[]; sequence: string[] }>(
+      `/projects/${id}/chain-load-order`,
+    ).then(r => r.data),
 };
 
 // ─── Conversion-object-level (Conversions) ───
@@ -166,6 +173,11 @@ export const MappingApi = {
     api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
   suggest: (conversionId: string) =>
     api.post<MappingSuggestion[]>(`/conversions/${conversionId}/suggest-mapping`).then(r => r.data),
+  /** Ranked alternative source-column candidates per target field. */
+  candidates: (conversionId: string, opts?: { topN?: number; targetFieldId?: string }) =>
+    api.get<MappingCandidateGroup[]>(`/conversions/${conversionId}/mapping-candidates`, {
+      params: { top_n: opts?.topN ?? 5, target_field_id: opts?.targetFieldId },
+    }).then(r => r.data),
   list: (conversionId: string) =>
     api.get<MappingSuggestion[]>(`/conversions/${conversionId}/mappings`).then(r => r.data),
   update: (mappingId: string, body: Partial<MappingSuggestion>) =>
@@ -219,6 +231,23 @@ export const OutputApi = {
       responseType: "blob",
     });
     const url = window.URL.createObjectURL(new Blob([response.data]));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+  /** Generate + download every bound conversion's FBDI output for a project as
+   * a single zip (files named/ordered by the supplier load sequence). */
+  downloadAll: async (projectId: string, filename = "FBDI.zip", fmt: "csv" | "xlsx" = "csv") => {
+    const response = await api.get(`/conversions/project/${projectId}/download-all`, {
+      responseType: "blob",
+      params: { fmt },
+      timeout: 300000,
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: "application/zip" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;

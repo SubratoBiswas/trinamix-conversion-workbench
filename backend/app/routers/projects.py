@@ -239,3 +239,58 @@ async def derive_load_order(project_id: str, _: User = Depends(get_current_user)
         raise HTTPException(404, "Project not found")
     result = await _do(p)
     return {"project_id": project_id, "load_order": result}
+
+
+@router.post("/{project_id}/chain-load-order")
+async def chain_load_order(project_id: str, _: User = Depends(get_current_user)):
+    """Materialize prerequisite dependency edges from the project's current load
+    sequence, so the dependency map shows what must run after what.
+
+    Orders the project's conversions by ``planned_load_order`` and creates a
+    prerequisite Dependency between each consecutive pair (earlier → later).
+    This is what turns the supplier load sequence (1 Import, 2 Address, 3 Site,
+    4 Site Assignment, 5 Contacts, 6 Contact Addresses, 7 Banks) into a visible
+    chain on the Load Order graph. Idempotent — skips edges that already exist.
+    """
+    from app.models.dependency import Dependency
+
+    p = await Project.get(PydanticObjectId(project_id))
+    if not p:
+        raise HTTPException(404, "Project not found")
+
+    convs = await Conversion.find(
+        Conversion.project_id == p.id
+    ).sort(+Conversion.planned_load_order).to_list()
+    # Keep only conversions that have a target object and dedupe by object,
+    # preserving load-order sequence (first occurrence wins).
+    seq: list[str] = []
+    seen: set[str] = set()
+    for c in convs:
+        obj = (c.target_object or "").strip()
+        if not obj or obj.lower() in seen:
+            continue
+        seen.add(obj.lower())
+        seq.append(obj)
+
+    if len(seq) < 2:
+        return {"project_id": project_id, "created": [], "sequence": seq,
+                "detail": "Need at least two conversions with distinct target objects."}
+
+    existing = await Dependency.find(Dependency.relationship_type == "prerequisite").to_list()
+    existing_pairs = {(d.source_object.lower(), d.target_object.lower()) for d in existing}
+
+    created: list[dict] = []
+    for src, tgt in zip(seq, seq[1:]):
+        if (src.lower(), tgt.lower()) in existing_pairs:
+            continue
+        dep = Dependency(
+            source_object=src,
+            target_object=tgt,
+            relationship_type="prerequisite",
+            description=f"Load sequence: {src} → {tgt}",
+        )
+        await dep.insert()
+        existing_pairs.add((src.lower(), tgt.lower()))
+        created.append({"source_object": src, "target_object": tgt})
+
+    return {"project_id": project_id, "created": created, "sequence": seq}

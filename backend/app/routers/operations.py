@@ -1,10 +1,13 @@
 """Output, load, workflow, dependency, and dashboard endpoints."""
+import io
+import re
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.models.conversion import Conversion
 from app.models.dependency import Dependency
@@ -87,6 +90,85 @@ async def download_output(
     if not out or not Path(out.output_file_path).exists():
         raise HTTPException(404, "No output artifact found — generate output first")
     return FileResponse(out.output_file_path, filename=out.output_file_name)
+
+
+def _safe_name(s: str) -> str:
+    """Filesystem-safe token for zip entry names."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "conversion"
+
+
+@output_router.get("/project/{project_id}/download-all")
+async def download_all_outputs(
+    project_id: str,
+    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    _: User = Depends(get_current_user),
+):
+    """Generate the FBDI output for every bound conversion in a project and
+    return them together as a single zip, named/ordered by the supplier load
+    sequence so the user gets all the filled-in files in one download."""
+    from app.models.project import Project
+
+    project = await Project.get(PydanticObjectId(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    conversions = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)
+    ).sort(+Conversion.planned_load_order).to_list()
+    if not conversions:
+        raise HTTPException(404, "This engagement has no conversions yet")
+
+    buf = io.BytesIO()
+    used: dict[str, int] = {}
+    added = 0
+    skipped: list[str] = []
+    ext = "xlsx" if fmt == "xlsx" else "csv"
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for c in conversions:
+            is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+            if not c.template_id or (not is_ebs and not c.dataset_id):
+                skipped.append(c.name)
+                continue
+            try:
+                art = await generate_output_artifact(c, fmt=fmt)
+            except Exception:
+                skipped.append(c.name)
+                continue
+            if not art or not Path(art.output_file_path).exists():
+                skipped.append(c.name)
+                continue
+            # Prefix with the load-order number so files sort in the sequence
+            # the supplier load must run in (1 Import, 2 Address, …).
+            order = c.planned_load_order if c.planned_load_order and c.planned_load_order < 100 else None
+            prefix = f"{order:02d}_" if order is not None else ""
+            arcname = f"{prefix}{_safe_name(c.name)}.{ext}"
+            if arcname in used:
+                used[arcname] += 1
+                arcname = f"{prefix}{_safe_name(c.name)}_{used[arcname]}.{ext}"
+            else:
+                used[arcname] = 0
+            zf.write(art.output_file_path, arcname=arcname)
+            added += 1
+
+    if added == 0:
+        raise HTTPException(
+            400,
+            "No conversions in this engagement are ready to generate FBDI output "
+            "(each needs a source dataset and a bound FBDI template).",
+        )
+
+    buf.seek(0)
+    zip_name = f"{_safe_name(project.name)}_FBDI.zip"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_name}"',
+            "X-Files-Added": str(added),
+            "X-Files-Skipped": str(len(skipped)),
+        },
+    )
 
 
 # ----- LOAD -----
