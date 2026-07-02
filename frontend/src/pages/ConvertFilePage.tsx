@@ -21,6 +21,8 @@ type Item = {
   templateId?: string;
   targetConf?: number;
   error?: string;
+  dirty?: boolean;   // user changed source/target since last learn
+  saving?: boolean;  // learn request in flight
 };
 
 /**
@@ -58,6 +60,26 @@ export const ConvertFilePage: React.FC = () => {
   const patch = (key: string, p: Partial<Item>) =>
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...p } : it)));
   const remove = (key: string) => setItems((prev) => prev.filter((it) => it.key !== key));
+
+  // Teach the AI the user-confirmed source + target for this file's column
+  // signature, so the next file with the same columns auto-recommends correctly.
+  const learnRow = async (it: Item) => {
+    if (!it.datasetId || !it.source) return;
+    patch(it.key, { saving: true });
+    setError(null);
+    try {
+      const tpl = templates.find((t) => t.id === it.templateId);
+      await DatasetsApi.classifyLearn(it.datasetId, {
+        source_system: it.source,
+        template_id: it.templateId || undefined,
+        target_object: tpl?.business_object || tpl?.name || undefined,
+      });
+      patch(it.key, { saving: false, learned: true, dirty: false });
+    } catch (e: any) {
+      patch(it.key, { saving: false });
+      setError(e?.response?.data?.detail || "Could not save the learned mapping — try again in a moment.");
+    }
+  };
 
   const createEngagement = async () => {
     if (!engForm.name.trim()) return;
@@ -211,7 +233,7 @@ export const ConvertFilePage: React.FC = () => {
                     <td>
                       <div className="flex items-center gap-1.5">
                         <select className="input !h-8 !w-auto !text-xs" disabled={it.status !== "ready"}
-                          value={it.source || ""} onChange={(e) => patch(it.key, { source: e.target.value })}>
+                          value={it.source || ""} onChange={(e) => patch(it.key, { source: e.target.value, dirty: true, learned: false })}>
                           <option value="">—</option>
                           {sources.map((s) => <option key={s.code} value={s.code}>{s.display_name}</option>)}
                         </select>
@@ -223,7 +245,7 @@ export const ConvertFilePage: React.FC = () => {
                     <td>
                       <div className="flex items-center gap-1.5">
                         <select className="input !h-8 !w-auto !text-xs" disabled={it.status !== "ready"}
-                          value={it.templateId || ""} onChange={(e) => patch(it.key, { templateId: e.target.value })}>
+                          value={it.templateId || ""} onChange={(e) => patch(it.key, { templateId: e.target.value, dirty: true, learned: false })}>
                           <option value="">— choose —</option>
                           {templates.map((t) => <option key={t.id} value={t.id}>{t.business_object || t.name}</option>)}
                         </select>
@@ -240,9 +262,23 @@ export const ConvertFilePage: React.FC = () => {
                       {it.error && <div className="mt-0.5 max-w-[180px] truncate text-[10.5px] text-danger" title={it.error}>{it.error}</div>}
                     </td>
                     <td className="text-right">
-                      <button onClick={() => remove(it.key)} className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger" title="Remove">
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => learnRow(it)}
+                          disabled={it.status !== "ready" || it.saving || !it.source}
+                          title="Teach the AI this source/target — files with the same columns will auto-fill next time"
+                          className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition disabled:opacity-40 ${
+                            it.dirty ? "bg-brand-subtle text-brand-dark hover:brightness-95"
+                            : "text-ink-subtle hover:bg-canvas hover:text-ink"
+                          }`}
+                        >
+                          {it.saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <GraduationCap className="h-3 w-3" />}
+                          {it.saving ? "Saving" : it.learned && !it.dirty ? "Learned" : "Learn"}
+                        </button>
+                        <button onClick={() => remove(it.key)} className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-danger" title="Remove">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -251,7 +287,7 @@ export const ConvertFilePage: React.FC = () => {
           </div>
           <CardBody className="!pt-3">
             <p className="text-[11px] text-ink-subtle">
-              Your source/target choices are learned by column signature, so the next similar file auto-recommends. After creating, map each conversion and download its FBDI file from Output Preview to upload into Fusion.
+              Adjust the source or target, then click <span className="font-medium text-ink">Learn</span> to teach the AI — files with the same columns auto-fill next time. (Creating conversions also saves your choices.) After creating, map each conversion and download its FBDI file from Output Preview to upload into Fusion.
             </p>
           </CardBody>
         </Card>
