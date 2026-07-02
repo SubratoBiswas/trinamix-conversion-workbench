@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X } from "lucide-react";
+import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus } from "lucide-react";
 import { ConversionsApi, DatasetsApi, FbdiApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, PageTitle, Pill,
@@ -38,6 +38,9 @@ export const ConvertFilePage: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showNewEng, setShowNewEng] = useState(false);
+  const [savingEng, setSavingEng] = useState(false);
+  const [engForm, setEngForm] = useState({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
 
   useEffect(() => {
     ProjectsApi.list().then((ps) => { setProjects(ps); if (ps[0]) setProjectId(ps[0].id); }).catch(() => {});
@@ -55,6 +58,28 @@ export const ConvertFilePage: React.FC = () => {
   const patch = (key: string, p: Partial<Item>) =>
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...p } : it)));
   const remove = (key: string) => setItems((prev) => prev.filter((it) => it.key !== key));
+
+  const createEngagement = async () => {
+    if (!engForm.name.trim()) return;
+    setSavingEng(true); setError(null);
+    try {
+      const created: any = await ProjectsApi.create({
+        name: engForm.name.trim(),
+        client: engForm.client.trim() || undefined,
+        source_system: engForm.source_system || undefined,
+        target_environment: engForm.target_environment || undefined,
+        status: "planning",
+      } as any);
+      setProjects((prev) => [created, ...prev]);
+      setProjectId(String(created.id));
+      setShowNewEng(false);
+      setEngForm({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || "Could not create engagement.");
+    } finally {
+      setSavingEng(false);
+    }
+  };
 
   const analyzeAll = async () => {
     setAnalyzing(true); setError(null);
@@ -133,8 +158,18 @@ export const ConvertFilePage: React.FC = () => {
         <CardBody className="space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div>
-              <label className="label">Engagement</label>
+              <div className="flex items-center justify-between">
+                <label className="label">Engagement</label>
+                <button
+                  type="button"
+                  onClick={() => setShowNewEng(true)}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:text-brand-dark"
+                >
+                  <Plus className="h-3 w-3" /> New engagement
+                </button>
+              </div>
               <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                {projects.length === 0 && <option value="">No engagements yet — create one →</option>}
                 {projects.map((p) => <option key={p.id} value={p.id}>{p.name}{p.client ? ` · ${p.client}` : ""}</option>)}
               </select>
             </div>
@@ -220,6 +255,65 @@ export const ConvertFilePage: React.FC = () => {
             </p>
           </CardBody>
         </Card>
+      )}
+
+      {showNewEng && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !savingEng && setShowNewEng(false)}
+        >
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-ink">New engagement</h3>
+              <button onClick={() => !savingEng && setShowNewEng(false)} className="rounded p-1 text-ink-subtle hover:bg-canvas hover:text-ink" title="Close">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="label">Engagement name *</label>
+                <input
+                  className="input" autoFocus value={engForm.name}
+                  onChange={(e) => setEngForm({ ...engForm, name: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === "Enter") createEngagement(); }}
+                  placeholder="e.g. Phoenix Fusion Cutover"
+                />
+              </div>
+              <div>
+                <label className="label">Client</label>
+                <input
+                  className="input" value={engForm.client}
+                  onChange={(e) => setEngForm({ ...engForm, client: e.target.value })}
+                  placeholder="e.g. Phoenix Corp"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Source system</label>
+                  <select className="input" value={engForm.source_system} onChange={(e) => setEngForm({ ...engForm, source_system: e.target.value })}>
+                    <option value="">—</option>
+                    {sources.map((s) => <option key={s.code} value={s.code}>{s.display_name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Target</label>
+                  <select className="input" value={engForm.target_environment} onChange={(e) => setEngForm({ ...engForm, target_environment: e.target.value })}>
+                    <option>FBDI File download</option>
+                    <option>Oracle Fusion SCM Cloud</option>
+                    <option>Oracle Fusion ERP Cloud</option>
+                    <option>Oracle Fusion HCM Cloud</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setShowNewEng(false)} disabled={savingEng}>Cancel</Button>
+              <Button onClick={createEngagement} loading={savingEng} disabled={!engForm.name.trim()}>
+                <Check className="h-4 w-4" /> Create engagement
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

@@ -42,6 +42,7 @@ export const AuthApi = {
 export const DatasetsApi = {
   list: () => api.get<Dataset[]>("/datasets").then(r => r.data),
   get: (id: string) => api.get<DatasetDetail>(`/datasets/${id}`).then(r => r.data),
+  delete: (id: string) => api.delete<{ deleted: boolean; id: string }>(`/datasets/${id}`).then(r => r.data),
   preview: (id: string, limit = 50) =>
     api.get<DatasetPreview>(`/datasets/${id}/preview`, { params: { limit } }).then(r => r.data),
   suggestTemplate: (id: string) =>

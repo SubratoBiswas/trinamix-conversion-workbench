@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Database, Plus, Eye, Sparkles, Search, Grid3x3, List as ListIcon, Wand2 } from "lucide-react";
+import { Database, Plus, Eye, Sparkles, Search, Grid3x3, List as ListIcon, Wand2, Trash2 } from "lucide-react";
 import { DatasetsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
@@ -16,8 +16,23 @@ export const DatasetsPage: React.FC = () => {
   const [search, setSearch] = useState("");
   const nav = useNavigate();
 
+  const [deleting, setDeleting] = useState<string | null>(null);
+
   const refresh = () => DatasetsApi.list().then(setItems);
   useEffect(() => { refresh(); }, []);
+
+  const handleDelete = async (d: Dataset) => {
+    if (!window.confirm(`Delete "${d.name}"?\n\nThis permanently removes the dataset and its profile. This can't be undone.`)) return;
+    setDeleting(d.id);
+    try {
+      await DatasetsApi.delete(d.id);
+      setItems((prev) => (prev ? prev.filter((x) => x.id !== d.id) : prev));
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || "Could not delete this dataset.");
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   const filtered = items?.filter((d) =>
     !search || d.name.toLowerCase().includes(search.toLowerCase()) || d.file_name.toLowerCase().includes(search.toLowerCase())
@@ -71,16 +86,29 @@ export const DatasetsPage: React.FC = () => {
         ) : view === "grid" ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {filtered.map((d) => (
-              <button
+              <div
                 key={d.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => nav(`/datasets/${d.id}/prepare`)}
-                className="group flex flex-col items-start rounded-lg border border-line bg-white px-4 py-4 text-left transition hover:border-brand hover:shadow-soft"
+                onKeyDown={(e) => { if (e.key === "Enter") nav(`/datasets/${d.id}/prepare`); }}
+                className="group flex cursor-pointer flex-col items-start rounded-lg border border-line bg-white px-4 py-4 text-left transition hover:border-brand hover:shadow-soft"
               >
                 <div className="flex w-full items-start justify-between">
                   <div className="flex h-10 w-10 items-center justify-center rounded-md bg-brand-subtle text-brand">
                     <Database className="h-5 w-5" />
                   </div>
-                  <Pill tone="success">{d.status}</Pill>
+                  <div className="flex items-center gap-1.5">
+                    <Pill tone="success">{d.status}</Pill>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDelete(d); }}
+                      disabled={deleting === d.id}
+                      title="Delete dataset"
+                      className="rounded p-1 text-ink-subtle opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-3 line-clamp-2 text-sm font-semibold text-ink">{d.name}</div>
                 <div className="mt-1 line-clamp-1 font-mono text-[11px] text-ink-muted">{d.file_name}</div>
@@ -97,7 +125,7 @@ export const DatasetsPage: React.FC = () => {
                     <Wand2 className="h-3 w-3" /> Prepare →
                   </span>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         ) : (
@@ -121,9 +149,19 @@ export const DatasetsPage: React.FC = () => {
                     <td><Pill tone="success">{d.status}</Pill></td>
                     <td className="text-ink-muted">{formatDate(d.uploaded_at)}</td>
                     <td className="text-right">
-                      <button className="btn-ghost h-7 px-2 text-xs" onClick={(e) => { e.stopPropagation(); nav(`/datasets/${d.id}/prepare`); }}>
-                        <Wand2 className="h-3.5 w-3.5" /> Prepare
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button className="btn-ghost h-7 px-2 text-xs" onClick={(e) => { e.stopPropagation(); nav(`/datasets/${d.id}/prepare`); }}>
+                          <Wand2 className="h-3.5 w-3.5" /> Prepare
+                        </button>
+                        <button
+                          className="btn-ghost h-7 px-2 text-xs text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                          disabled={deleting === d.id}
+                          title="Delete dataset"
+                          onClick={(e) => { e.stopPropagation(); handleDelete(d); }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

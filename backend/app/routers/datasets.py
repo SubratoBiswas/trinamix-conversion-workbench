@@ -45,6 +45,32 @@ async def list_datasets(_: User = Depends(get_current_user)):
     return [_ds_out(ds) for ds in datasets]
 
 
+@router.delete("/{dataset_id}")
+async def delete_dataset(dataset_id: str, _: User = Depends(get_current_user)):
+    """Delete a dataset, its column profiles, and its stored file. Blocked if a
+    conversion still references it (delete those conversions first)."""
+    from app.models.conversion import Conversion
+    ds = await Dataset.get(PydanticObjectId(dataset_id))
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    used = await Conversion.find(Conversion.dataset_id == ds.id).count()
+    if used:
+        raise HTTPException(
+            409,
+            f"Can't delete — {used} conversion(s) still use this dataset. "
+            "Remove those conversions first.",
+        )
+    await DatasetColumnProfile.find(DatasetColumnProfile.dataset_id == ds.id).delete()
+    try:
+        import os
+        if ds.file_path and os.path.exists(ds.file_path):
+            os.remove(ds.file_path)
+    except Exception:  # noqa: BLE001 — file cleanup is best-effort
+        pass
+    await ds.delete()
+    return {"deleted": True, "id": dataset_id}
+
+
 @router.get("/{dataset_id}", response_model=DatasetDetailOut)
 async def get_dataset(dataset_id: str, _: User = Depends(get_current_user)):
     ds = await Dataset.get(PydanticObjectId(dataset_id))
