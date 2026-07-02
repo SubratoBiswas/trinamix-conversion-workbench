@@ -23,8 +23,10 @@ from app.ai.base import MappingProvider, MappingSuggestion, SourceColumn, Target
 # Tuned from real Oracle FBDI vocabularies.
 SEMANTIC_DICT: dict[str, tuple[str, ...]] = {
     "item": ("item", "sku", "part", "product", "material", "catalog"),
-    "number": ("num", "number", "no", "id", "code", "key"),
-    "name": ("name", "title", "label"),
+    "number": ("num", "number", "no", "id", "code", "key",
+               "entityid", "entitynumber", "accountnumber", "custnum", "customernum"),
+    "name": ("name", "title", "label", "companyname", "fullname", "altname",
+             "legalname", "entitytitle", "displayname"),
     "description": ("desc", "description", "details", "remark", "note"),
     "organization": ("org", "organization", "plant", "facility", "site"),
     "uom": ("uom", "unit", "measure"),
@@ -40,6 +42,22 @@ SEMANTIC_DICT: dict[str, tuple[str, ...]] = {
     "phone": ("phone", "tel", "mobile", "cell"),
     "category": ("cat", "category", "class", "group", "type"),
     "lifecycle": ("lifecycle", "phase", "stage"),
+    # Party / account vocabulary — maps ERP export columns (companyname, entityid,
+    # entitynumber, altname, fullname, legalname) onto Fusion Party*/CustomerAccount*
+    # fields, which don't literally contain "party"/"account".
+    "party": ("party", "company", "companyname", "entity", "entityid", "account",
+              "customer", "cust", "client", "org", "legal", "name"),
+    "account": ("account", "acct", "entity", "entityid", "accountnumber",
+                "customer", "cust", "party", "company"),
+    "company": ("company", "companyname", "org", "organization", "business", "legal", "entity"),
+    "type": ("type", "kind", "class", "category", "stage"),
+    "code": ("code", "cd", "id", "num", "number", "iso"),
+    "credit": ("credit", "creditlimit", "limit"),
+    "limit": ("limit", "max", "cap", "credit"),
+    "city": ("city", "town"),
+    "state": ("state", "province", "region"),
+    "postal": ("postal", "zip", "zipcode", "postcode", "pincode", "pin"),
+    "country": ("country", "nation"),
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -291,17 +309,25 @@ class RuleBasedMapper:
                 lov_score, lov_reason = _lov_affinity(src, tgt)
                 # 6. required priority bonus when type/name overlap exists
                 bonus = 0.05 if (tgt.required and (name_score or sem_score)) else 0.0
+                # 7. fill rate — a well-populated source column produces real output;
+                # a near-empty one yields blank cells. Reward populated columns so
+                # they beat sparse look-alikes (e.g. companyname over a 100%-null
+                # custentity_* column), and demote essentially-empty columns.
+                fill = max(0.0, min(1.0, 1.0 - (src.null_percent or 0.0) / 100.0))
+                fill_penalty = 0.15 if (src.null_percent or 0.0) >= 98.0 else 0.0
 
                 # weighted combination capped at 1.0
                 composite = min(
                     1.0,
-                    name_score * 0.35
-                    + sem_score * 0.25
-                    + desc_score * 0.10
-                    + type_score * 0.10
+                    name_score * 0.30
+                    + sem_score * 0.22
+                    + desc_score * 0.08
+                    + type_score * 0.08
                     + val_score * 0.05
-                    + lov_score * 0.15
-                    + bonus,
+                    + lov_score * 0.13
+                    + fill * 0.14
+                    + bonus
+                    - fill_penalty,
                 )
 
                 reasons: list[str] = []
