@@ -27,19 +27,22 @@ async def _get_reference_standards(target_object: str | None) -> dict:
 
 
 async def build_converted_dataframe(
-    conversion: Conversion,
+    conversion: Conversion, max_rows: int | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     # Source rows come from the uploaded file (dataset mode) or are streamed
     # live from Oracle EBS (EBS mode — dataset_id is null). The column names in
-    # either DataFrame match the mappings' source_column values.
+    # either DataFrame match the mappings' source_column values. ``max_rows`` caps
+    # the work for previews (only the shown rows are generated).
     if conversion.dataset_id:
         dataset = await Dataset.get(conversion.dataset_id)
-        src = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+        src = parse_tabular(dataset.file_path, file_type=dataset.file_type, nrows=max_rows)
     else:
         from app.services.mapping_service import ebs_fetch_rows
         table = getattr(conversion, "ebs_table_hint", "") or ""
         rows = await ebs_fetch_rows(table) if table else []
         src = pd.DataFrame(rows)
+        if max_rows:
+            src = src.head(max_rows)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     mappings = await MappingSuggestion.find(MappingSuggestion.conversion_id == conversion.id).to_list()
@@ -60,6 +63,12 @@ async def build_converted_dataframe(
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
     n_rows = len(src)
+    # Precompute ONCE (not per-mapping): a fast per-column value cache, and build
+    # per-row dicts lazily only when a transformation rule needs sibling-column
+    # context. The old code rebuilt a dict of every column for every row for every
+    # mapping via slow .iloc scalar access - O(mappings x rows x cols).
+    col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in src.columns}
+    records: list[dict] | None = None
     sorted_mappings = sorted(
         mappings,
         key=lambda m: (fields_by_id.get(m.target_field_id).sequence if fields_by_id.get(m.target_field_id) else 0),
@@ -72,18 +81,25 @@ async def build_converted_dataframe(
         if m.suggested_transformation and not rules and m.status != "rejected":
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
-        col_values: list[Any] = []
-        if m.source_column and m.source_column in src.columns:
-            for i in range(n_rows):
-                row = {c: src.iloc[i][c] for c in src.columns}
-                v = src.iloc[i][m.source_column]
-                if rules:
-                    v = apply_pipeline(rules, v, row=row)
-                if (v is None or str(v).strip() == "") and m.default_value is not None:
-                    v = m.default_value
-                col_values.append(v)
+        dv = m.default_value
+        if m.source_column and m.source_column in col_cache:
+            src_vals = col_cache[m.source_column]
+            if rules:
+                if records is None:
+                    records = src.to_dict("records")
+                col_values = []
+                for i in range(n_rows):
+                    v = apply_pipeline(rules, src_vals[i], row=records[i])
+                    if (v is None or str(v).strip() == "") and dv is not None:
+                        v = dv
+                    col_values.append(v)
+            else:
+                col_values = [
+                    (dv if (v is None or str(v).strip() == "") and dv is not None else v)
+                    for v in src_vals
+                ]
         else:
-            col_values = [m.default_value or ""] * n_rows
+            col_values = [dv or ""] * n_rows
         out_cols[tgt.field_name] = col_values
         lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
                                     "rules": rules, "status": m.status, "confidence": m.confidence}
@@ -161,7 +177,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
 
 
 async def get_output_preview(conversion: Conversion, limit: int = 50) -> dict[str, Any]:
-    df, lineage = await build_converted_dataframe(conversion)
+    # Only generate the rows we actually show — previews were converting the whole
+    # file (tens of thousands of rows) just to display 50.
+    df, lineage = await build_converted_dataframe(conversion, max_rows=limit)
     head = df.head(limit)
+    total = int(len(df))
+    if conversion.dataset_id:
+        ds = await Dataset.get(conversion.dataset_id)
+        if ds and ds.row_count:
+            total = int(ds.row_count)  # true dataset size, not the capped preview
     return {"columns": list(head.columns.astype(str)), "rows": head.fillna("").to_dict(orient="records"),
-            "total_rows": int(len(df)), "lineage": lineage}
+            "total_rows": total, "lineage": lineage}
