@@ -41,9 +41,24 @@ const _settle = () => { _inflight = Math.max(0, _inflight - 1); _notify(); };
 
 api.interceptors.response.use(
   (r) => { _settle(); return r; },
-  (err) => {
+  async (err) => {
+    const cfg = err?.config || {};
+    const status = err?.response?.status;
+    const method = (cfg.method || "get").toLowerCase();
+    // Auto-recover from Render free-tier cold starts / brief deploy blips. A sleeping
+    // backend returns a no-CORS holding page (axios sees a network error with no
+    // response) or a 502/503/504 while waking. Retry idempotent GETs a few times with
+    // backoff so pages self-heal instead of crashing — the first request wakes the
+    // server and a later retry succeeds. Writes are NOT retried (avoids duplicates).
+    const transient = !err.response || status === 502 || status === 503 || status === 504;
+    if (transient && method === "get" && (cfg.__retry || 0) < 3) {
+      cfg.__retry = (cfg.__retry || 0) + 1;
+      _settle();
+      await new Promise((res) => setTimeout(res, 2500 * cfg.__retry));
+      return api(cfg);
+    }
     _settle();
-    if (err?.response?.status === 401) {
+    if (status === 401) {
       localStorage.removeItem("trinamix.token");
       localStorage.removeItem("trinamix.user");
       if (!location.pathname.startsWith("/login")) location.href = "/login";
