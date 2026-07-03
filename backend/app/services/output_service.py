@@ -70,12 +70,22 @@ async def build_converted_dataframe(
     # per-row dicts lazily only when a transformation rule needs sibling-column
     # context. The old code rebuilt a dict of every column for every row for every
     # mapping via slow .iloc scalar access - O(mappings x rows x cols).
-    col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in src.columns}
-    records: list[dict] | None = None
     sorted_mappings = sorted(
         mappings,
         key=lambda m: (fields_by_id.get(m.target_field_id).sequence if fields_by_id.get(m.target_field_id) else 0),
     )
+    # Memory: only materialize the source columns the mappings actually use, not
+    # every column in a wide extract. On a 258-column dataset this is the
+    # difference between caching ~18 columns and ~258 — the latter can OOM a
+    # small container on large row counts (the FBDI output for wide files was
+    # 503-ing). Columns referenced only by transformation-rule context are picked
+    # up lazily via the ``records`` fallback below.
+    needed_cols = {
+        m.source_column for m in sorted_mappings
+        if m.source_column and m.source_column in src.columns
+    }
+    col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
+    records: list[dict] | None = None
     for m in sorted_mappings:
         tgt = fields_by_id.get(m.target_field_id)
         if not tgt or m.status == "not_applicable":
@@ -89,7 +99,11 @@ async def build_converted_dataframe(
             src_vals = col_cache[m.source_column]
             if rules:
                 if records is None:
-                    records = src.to_dict("records")
+                    # Row context for transformation rules — restrict to the
+                    # mapped columns so we don't materialize a dict of every
+                    # column for every row (memory: avoids OOM on wide extracts).
+                    ctx_cols = [c for c in needed_cols if c in src.columns]
+                    records = src[ctx_cols].to_dict("records") if ctx_cols else src.to_dict("records")
                 col_values = []
                 for i in range(n_rows):
                     v = apply_pipeline(rules, src_vals[i], row=records[i])
