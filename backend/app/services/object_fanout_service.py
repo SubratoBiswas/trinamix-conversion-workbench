@@ -109,8 +109,22 @@ def _find_template_for_step(step: dict, templates: list[FBDITemplate]) -> FBDITe
     matches = [t for t in templates if _matches(t, step)]
     if not matches:
         return None
-    # Prefer a fully-parsed real Oracle template with the most required fields.
-    matches.sort(key=lambda t: ((t.status == "parsed"), (t.required_field_count or 0)), reverse=True)
+    # When several templates match the keywords (e.g. "Customer Import" AND
+    # "CustomerReturnImport" both contain customer+import), prefer an EXACT name
+    # or business-object match to the step first, then a parsed real template
+    # with the most required fields. This keeps the fan-out on the full import
+    # workbook rather than a narrow variant.
+    label = (step.get("label") or "").strip().lower()
+    obj = (step.get("object") or "").strip().lower()
+
+    def _rank(t: FBDITemplate) -> tuple:
+        name = (t.name or "").strip().lower()
+        bo = (t.business_object or "").strip().lower()
+        exact_name = 1 if name in (label, obj) else 0
+        exact_bo = 1 if bo in (label, obj) else 0
+        return (exact_name, exact_bo, 1 if t.status == "parsed" else 0, t.required_field_count or 0)
+
+    matches.sort(key=_rank, reverse=True)
     return matches[0]
 
 
