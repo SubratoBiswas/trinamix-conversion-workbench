@@ -34,6 +34,19 @@ function isCOAConversion(targetObject?: string | null): boolean {
   return _COA_TARGET_HINTS.some((h) => t.includes(h));
 }
 
+// Map a conversion's target object to its fan-out catalog key, so the detail
+// screen can show the full FBDI load-sequence (e.g. supplier → 7 files).
+function seqKeyForTarget(target?: string | null, bo?: string | null): string | null {
+  const s = `${target || ""} ${bo || ""}`.toLowerCase();
+  if (/supplier|vendor/.test(s)) return "supplier";
+  if (/customer|client/.test(s)) return "customer";
+  if (/\bitem\b|product|material/.test(s)) return "item";
+  if (/journal|\bgl\b/.test(s)) return "gl_journal";
+  if (/autoinvoice|receivable/.test(s)) return "ar_invoice";
+  if (/payable|\bap\b/.test(s)) return "ap_invoice";
+  return null;
+}
+
 /**
  * Operations page for a single Conversion object. The user runs AI mapping,
  * cleansing, validation, output generation, and load simulation from here.
@@ -60,8 +73,29 @@ export const ConversionDetailPage: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
+  // Load-sequence map: the full FBDI file set for this object (Req 2).
+  const [seqSteps, setSeqSteps] = useState<{ label: string; load_order: number }[]>([]);
+  const [siblings, setSiblings] = useState<Conversion[]>([]);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
+
+  // Fetch the object's FBDI load sequence + the engagement's conversions so we
+  // can render the connected file-set map (supplier → 7 files, etc.).
+  useEffect(() => {
+    if (!conv) { setSeqSteps([]); setSiblings([]); return; }
+    const key = seqKeyForTarget(conv.target_object, template?.business_object);
+    if (!key) { setSeqSteps([]); setSiblings([]); return; }
+    let alive = true;
+    Promise.all([
+      ConversionsApi.objectTypes().catch(() => [] as any[]),
+      ConversionsApi.list({ project_id: String(conv.project_id) }).catch(() => [] as Conversion[]),
+    ]).then(([types, sibs]) => {
+      if (!alive) return;
+      setSeqSteps(((types as any[]).find((t) => t.key === key)?.steps) || []);
+      setSiblings((sibs as Conversion[]) || []);
+    });
+    return () => { alive = false; };
+  }, [conv?.id, template?.id]);
 
   // Upload a CSV/Excel file, create a dataset, and link it to this conversion
   const handleDatasetUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -298,6 +332,58 @@ export const ConversionDetailPage: React.FC = () => {
           </div>
         </CardBody>
       </Card>
+
+      {/* Load-sequence map — all FBDI files for this object, connected (Req 2) */}
+      {seqSteps.length > 1 && (
+        <Card className="mb-4">
+          <CardHeader
+            title="Load Sequence"
+            subtitle={`All ${seqSteps.length} FBDI files for this object, connected in Fusion load order`}
+          />
+          <CardBody>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {seqSteps.map((s, i) => {
+                const sc = siblings.find(
+                  (x) =>
+                    (x.target_object || "").toLowerCase() === s.label.toLowerCase() ||
+                    (x.template_name || "").toLowerCase() === s.label.toLowerCase()
+                );
+                const isCurrent = !!sc && String(sc.id) === String(conv?.id);
+                const node = (
+                  <div
+                    className={cn(
+                      "flex min-w-[128px] flex-col rounded-md border px-3 py-2 transition",
+                      isCurrent
+                        ? "border-brand bg-brand-subtle"
+                        : sc
+                        ? "border-line bg-white hover:border-brand"
+                        : "border-dashed border-line bg-canvas"
+                    )}
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-subtle">Step {s.load_order}</span>
+                    <span className={cn("truncate text-[12.5px] font-medium", sc ? "text-ink" : "text-ink-subtle")}>{s.label}</span>
+                    <span className="mt-0.5 text-[10px]">
+                      {isCurrent ? (
+                        <span className="font-semibold text-brand-dark">● current</span>
+                      ) : sc ? (
+                        <span className="text-success">✓ generated</span>
+                      ) : (
+                        <span className="text-ink-subtle">not generated</span>
+                      )}
+                    </span>
+                  </div>
+                );
+                return (
+                  <React.Fragment key={s.label}>
+                    {sc && !isCurrent ? <Link to={`/conversions/${sc.id}`}>{node}</Link> : node}
+                    {i < seqSteps.length - 1 && <ArrowRight className="h-4 w-4 shrink-0 text-ink-subtle" />}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* Action toolbar */}
       <Card className="mb-4">

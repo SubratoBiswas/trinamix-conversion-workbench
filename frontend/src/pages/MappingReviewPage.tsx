@@ -39,6 +39,19 @@ const KB_SOURCE_DISPLAY: Record<string, string> = {
   custom: "Custom",
 };
 
+// Map a target object to its fan-out catalog key so we can show the FBDI
+// load-sequence at the top of the mapping screen.
+function seqKeyForTarget(target?: string | null): string | null {
+  const s = (target || "").toLowerCase();
+  if (/supplier|vendor/.test(s)) return "supplier";
+  if (/customer|client/.test(s)) return "customer";
+  if (/\bitem\b|product|material/.test(s)) return "item";
+  if (/journal|\bgl\b/.test(s)) return "gl_journal";
+  if (/autoinvoice|receivable/.test(s)) return "ar_invoice";
+  if (/payable|\bap\b/.test(s)) return "ap_invoice";
+  return null;
+}
+
 export const MappingReviewPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
@@ -82,6 +95,8 @@ export const MappingReviewPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [search, setSearch] = useState("");
+  // FBDI load-sequence shown at the top of the mapping screen (Req 2).
+  const [seqSteps, setSeqSteps] = useState<{ label: string; load_order: number }[]>([]);
   const [selectedMappingId, setSelectedMappingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showRecs, setShowRecs] = useState(true);
@@ -208,6 +223,17 @@ export const MappingReviewPage: React.FC = () => {
       .catch(() => setRuleTargetIds(new Set()));
   };
   useEffect(() => { loadAll(); }, [pid]);
+
+  // Load the FBDI file-set sequence for the current object (supplier → 7, …).
+  useEffect(() => {
+    const key = seqKeyForTarget(project?.target_object || project?.template_name);
+    if (!key) { setSeqSteps([]); return; }
+    let alive = true;
+    ConversionsApi.objectTypes()
+      .then((types) => { if (alive) setSeqSteps((types.find((t) => t.key === key)?.steps) || []); })
+      .catch(() => { if (alive) setSeqSteps([]); });
+    return () => { alive = false; };
+  }, [project?.target_object, project?.template_name]);
 
   // Seed standard Oracle Fusion fields for templates with 0 parsed fields
   const [seeding, setSeeding] = useState(false);
@@ -652,7 +678,11 @@ export const MappingReviewPage: React.FC = () => {
           >
             {projects
               .filter((c) => !engagementId || String(c.project_id) === engagementId)
-              .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {(p as any).template_name || p.target_object || p.name}
+                </option>
+              ))}
           </select>
 
           <button
@@ -726,6 +756,46 @@ export const MappingReviewPage: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* FBDI load-sequence map — click a file to review its mappings (Req 2/6) */}
+      {seqSteps.length > 1 && (
+        <div className="border-b border-line bg-white px-5 py-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+            Load sequence · {seqSteps.length} FBDI files
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            {seqSteps.map((s, i) => {
+              const sc = projects.find(
+                (c) =>
+                  (!engagementId || String(c.project_id) === engagementId) &&
+                  ((c.target_object || "").toLowerCase() === s.label.toLowerCase() ||
+                    (c.template_name || "").toLowerCase() === s.label.toLowerCase())
+              );
+              const isCurrent = !!sc && String(sc.id) === String(pid);
+              return (
+                <React.Fragment key={s.label}>
+                  <button
+                    disabled={!sc}
+                    onClick={() => { if (sc) { setPid(String(sc.id)); setParams({ conversion: String(sc.id) }); } }}
+                    title={sc ? "Show this FBDI file's mappings" : "Not generated yet"}
+                    className={cn(
+                      "rounded border px-2 py-1 text-[11px] transition",
+                      isCurrent
+                        ? "border-brand bg-brand-subtle font-semibold text-brand-dark"
+                        : sc
+                        ? "border-line bg-white text-ink hover:border-brand"
+                        : "cursor-default border-dashed border-line bg-canvas text-ink-subtle"
+                    )}
+                  >
+                    <span className="font-mono text-ink-subtle">{s.load_order}.</span> {s.label}
+                  </button>
+                  {i < seqSteps.length - 1 && <span className="text-ink-subtle">→</span>}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {inherited.length > 0 && (
         <div className="border-b border-line bg-gradient-to-r from-brand-subtle/40 to-white px-5 py-2.5 text-[12px]">
