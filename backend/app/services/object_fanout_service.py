@@ -27,14 +27,17 @@ from app.models.fbdi import FBDITemplate
 # ``object`` is the canonical target-object label used on the conversion + the
 # load-sequence dependency graph. Steps are listed in Fusion load order.
 OBJECT_TEMPLATE_CATALOG: dict[str, list[dict]] = {
+    # Supplier is 6 separate FBDI files. "Supplier Contact Addresses" is NOT a
+    # standalone template — it is a second worksheet inside the Supplier Contacts
+    # import template, so it comes out as an extra CSV when that (2-sheet) file's
+    # output is generated, rather than as its own conversion.
     "supplier": [
-        {"label": "Supplier Import",            "object": "Supplier Import",            "all": ["supplier"],                       "none": ["address", "site", "contact", "bank", "assignment"]},
-        {"label": "Supplier Address",           "object": "Supplier Address",           "all": ["supplier", "address"],            "none": ["contact"]},
-        {"label": "Supplier Site",              "object": "Supplier Site",              "all": ["supplier", "site"],               "none": ["assignment"]},
-        {"label": "Supplier Site Assignment",   "object": "Supplier Site Assignment",   "all": ["supplier", "site", "assignment"], "none": []},
-        {"label": "Supplier Contacts",          "object": "Supplier Contacts",          "all": ["supplier", "contact"],            "none": ["address"]},
-        {"label": "Supplier Contact Addresses", "object": "Supplier Contact Addresses", "all": ["contact", "address"],             "none": []},
-        {"label": "Supplier Banks",             "object": "Supplier Banks",             "all": ["bank"],                           "none": []},
+        {"label": "Supplier Import",          "object": "Supplier Import",          "all": ["supplier"],                       "none": ["address", "site", "contact", "bank", "assignment"]},
+        {"label": "Supplier Address",         "object": "Supplier Address",         "all": ["supplier", "address"],            "none": ["contact"]},
+        {"label": "Supplier Site",            "object": "Supplier Site",            "all": ["supplier", "site"],               "none": ["assignment"]},
+        {"label": "Supplier Site Assignment", "object": "Supplier Site Assignment", "all": ["supplier", "site", "assignment"], "none": []},
+        {"label": "Supplier Contacts",        "object": "Supplier Contacts",        "all": ["supplier", "contact"],            "none": []},
+        {"label": "Supplier Banks",           "object": "Supplier Banks",           "all": ["bank"],                           "none": []},
     ],
     # Customer / Item / AP / AR / GL are each a SINGLE Oracle FBDI workbook with
     # many interface sheets (unlike supplier, which is 7 separate files). So the
