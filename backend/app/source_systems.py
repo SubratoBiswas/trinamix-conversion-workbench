@@ -37,10 +37,13 @@ class SourceSystemSpec:
 
 
 # v1 catalog. Codes are stable — do not rename without a migration.
+# Order matters: it drives the source picker and detection priority. The active
+# client's sources — NetSuite and Infor SyteLine — are listed first so they take
+# precedence over Oracle EBS (Req 10).
 SOURCE_SYSTEMS: tuple[SourceSystemSpec, ...] = (
     SourceSystemSpec("netsuite",   "NetSuite",        "erp",    True),
+    SourceSystemSpec("syteline",   "Infor SyteLine",  "erp",    True),
     SourceSystemSpec("oracle_ebs", "Oracle EBS",      "erp",    True),
-    SourceSystemSpec("syteline",   "Infor SyteLine",  "erp",    False),
     SourceSystemSpec("arena",      "Arena PLM",       "plm",    False),
     SourceSystemSpec("sap_ecc",    "SAP ECC",         "erp",    False),
     SourceSystemSpec("sap_s4",     "SAP S/4 HANA",    "erp",    False),
@@ -48,6 +51,9 @@ SOURCE_SYSTEMS: tuple[SourceSystemSpec, ...] = (
     SourceSystemSpec("jde",        "JD Edwards",      "erp",    False),
     SourceSystemSpec("custom",     "Custom / Other",  "custom", False),
 )
+
+# Sources to prefer when the AI detector is unsure (Req 10 — active client).
+PRIORITY_SOURCES: tuple[str, ...] = ("netsuite", "syteline")
 
 
 VALID_CODES: frozenset[str] = frozenset(s.code for s in SOURCE_SYSTEMS)

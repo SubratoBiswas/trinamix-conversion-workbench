@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus } from "lucide-react";
+import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus, Layers } from "lucide-react";
 import { ConversionsApi, DatasetsApi, FbdiApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, PageTitle, Pill,
@@ -42,6 +42,8 @@ export const ConvertFilePage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showNewEng, setShowNewEng] = useState(false);
   const [savingEng, setSavingEng] = useState(false);
+  const [genKey, setGenKey] = useState<string | null>(null);
+  const [genSummary, setGenSummary] = useState<string | null>(null);
   const [engForm, setEngForm] = useState({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
 
   useEffect(() => {
@@ -125,6 +127,32 @@ export const ConvertFilePage: React.FC = () => {
     setAnalyzing(false);
   };
 
+  // Req 1: from ONE dataset, generate the full set of FBDI templates the
+  // detected conversion object needs (e.g. supplier → 7 templates), each
+  // auto-mapped and load-sequenced. Object type is inferred from the detected
+  // target template; the backend resolves it (supplier/customer/item/…).
+  const generateSetForRow = async (it: Item) => {
+    if (!projectId || !it.datasetId) return;
+    const tpl = templates.find((t) => t.id === it.templateId);
+    const objectType = tpl?.business_object || tpl?.name || "";
+    if (!objectType) { setError("Pick a target template first so the object type can be detected."); return; }
+    setGenKey(it.key); setError(null); setGenSummary(null);
+    try {
+      const r = await ConversionsApi.generateSet({
+        project_id: projectId, dataset_id: it.datasetId, object_type: objectType,
+      });
+      const parts = [`${r.created.length} created`];
+      if (r.existing?.length) parts.push(`${r.existing.length} already present`);
+      if (r.missing?.length) parts.push(`${r.missing.length} missing template${r.missing.length === 1 ? "" : "s"} (${r.missing.map((m) => m.label).join(", ")})`);
+      setGenSummary(`${r.object_type}: ${parts.join(" · ")}. Opening the engagement…`);
+      setTimeout(() => nav(`/projects/${projectId}`), 1400);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || "Could not generate the FBDI template set.");
+    } finally {
+      setGenKey(null);
+    }
+  };
+
   const createAll = async () => {
     const ready = items.filter((it) => it.status === "ready" && it.templateId && it.datasetId);
     if (!projectId || ready.length === 0) return;
@@ -174,6 +202,11 @@ export const ConvertFilePage: React.FC = () => {
 
       {error && (
         <div className="mb-4 rounded-md border border-danger/40 bg-danger-subtle/50 px-4 py-3 text-[12.5px] text-danger">{error}</div>
+      )}
+      {genSummary && (
+        <div className="mb-4 rounded-md border border-success/40 bg-success-subtle/50 px-4 py-3 text-[12.5px] text-ink">
+          <Layers className="mr-1 inline h-3.5 w-3.5 text-success" /> {genSummary}
+        </div>
       )}
 
       <Card className="mb-4">
@@ -263,6 +296,15 @@ export const ConvertFilePage: React.FC = () => {
                     </td>
                     <td className="text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => generateSetForRow(it)}
+                          disabled={it.status !== "ready" || !it.templateId || genKey === it.key}
+                          title="Generate ALL related FBDI templates for this object (e.g. supplier → 7 files), each auto-mapped and load-sequenced"
+                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-brand-dark transition hover:bg-brand-subtle disabled:opacity-40"
+                        >
+                          {genKey === it.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Layers className="h-3 w-3" />}
+                          {genKey === it.key ? "Generating" : "Generate set"}
+                        </button>
                         <button
                           onClick={() => learnRow(it)}
                           disabled={it.status !== "ready" || it.saving || !it.source}

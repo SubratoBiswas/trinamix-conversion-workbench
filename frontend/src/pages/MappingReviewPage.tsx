@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
   GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock,
@@ -41,6 +41,7 @@ const KB_SOURCE_DISPLAY: Record<string, string> = {
 
 export const MappingReviewPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
+  const nav = useNavigate();
   const projParam = params.get("conversion");
 
   const [projects, setProjects] = useState<Conversion[]>([]);  // all conversions
@@ -113,12 +114,16 @@ export const MappingReviewPage: React.FC = () => {
         return;
       }
       setProjects(ps);
-      // Default the engagement selector to the first project that actually has
-      // conversions, so the landing list is populated immediately.
+      // Default the engagement selector. An ?engagement= param (set by the
+      // "Mapping list" back button) wins so the user lands on the same
+      // engagement they were reviewing; otherwise pick the first project that
+      // has conversions so the landing list is populated immediately.
       if (!engagementId && !pid) {
+        const engParam = params.get("engagement");
         const withConv = (engs || []).find((e: any) =>
           ps.some((c: any) => String(c.project_id) === String(e.id)));
-        const def = withConv?.id ?? (engs && engs[0]?.id) ?? (ps[0] ? String(ps[0].project_id) : null);
+        const def = engParam
+          ?? withConv?.id ?? (engs && engs[0]?.id) ?? (ps[0] ? String(ps[0].project_id) : null);
         if (def) setEngagementId(String(def));
       }
       setLoadingList(false);
@@ -577,13 +582,31 @@ export const MappingReviewPage: React.FC = () => {
       <header className="border-b border-line bg-white px-5 py-3">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => { setPid(null); setProject(null); setParams({}); }}
+            onClick={() => {
+              // Return to this engagement's mapping list (clear the open
+              // conversion but keep the engagement context so the right
+              // project's cards show). Fixes the broken back flow (Req 9).
+              setSelectedMappingId(null);
+              setPid(null);
+              setProject(null);
+              const eid = engagementId || (project ? String(project.project_id) : "");
+              setParams(eid ? { engagement: eid } : {});
+            }}
             className="btn-ghost !h-8 shrink-0"
-            title="Back to the project mapping list"
+            title="Back to this engagement's mapping list"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span className="ml-1 text-xs">Mapping list</span>
           </button>
+          {project?.project_id != null && (
+            <button
+              onClick={() => nav(`/projects/${project.project_id}`)}
+              className="btn-ghost !h-8 shrink-0"
+              title="Back to the engagement overview"
+            >
+              <span className="text-xs">Project</span>
+            </button>
+          )}
           <ArrowLeftRight className="h-4 w-4 text-brand" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-ink">Mapping Review</div>
@@ -619,12 +642,13 @@ export const MappingReviewPage: React.FC = () => {
             <option value="" disabled>— engagement —</option>
             {engagements.map((eng) => <option key={eng.id} value={eng.id}>{eng.name}</option>)}
           </select>
-          {/* Conversion selector — scoped to the chosen engagement. */}
+          {/* FBDI-file (target template) selector — Req 6: switch which of the
+              engagement's generated FBDI files you're reviewing. */}
           <select
             className="input !h-8 !w-auto !text-xs"
             value={pid ?? ""}
             onChange={(e) => { const v = e.target.value; setPid(v); setParams({ conversion: v }); }}
-            title="Conversion"
+            title="FBDI file — switch between the templates generated for this engagement"
           >
             {projects
               .filter((c) => !engagementId || String(c.project_id) === engagementId)

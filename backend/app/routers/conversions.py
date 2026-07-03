@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from beanie import PydanticObjectId
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.models.conversion import Conversion
 from app.models.dataset import Dataset
@@ -110,6 +111,47 @@ async def _hydrate_bulk(convs: list[Conversion]) -> list[ConversionOut]:
         data["project_name"] = proj.name if proj else None
         results.append(ConversionOut(**data))
     return results
+
+
+@router.get("/object-types")
+async def list_object_types(_: User = Depends(get_current_user)):
+    """Catalog of conversion object types and the FBDI template set each needs."""
+    from app.services.object_fanout_service import object_types
+    return {"object_types": object_types()}
+
+
+class GenerateSetRequest(BaseModel):
+    project_id: str
+    dataset_id: str
+    object_type: str
+
+
+@router.post("/generate-set")
+async def generate_object_set(
+    payload: GenerateSetRequest,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(get_current_user),
+):
+    """One dataset -> all FBDI templates for the object type (Req 1).
+
+    Creates one auto-mapped conversion per resolved template, sets the load
+    order, chains the load-sequence dependencies, and reports any template the
+    object needs that isn't seeded yet.
+    """
+    from app.services.object_fanout_service import generate_object_template_set
+    proj = await Project.get(PydanticObjectId(payload.project_id))
+    if not proj:
+        raise HTTPException(400, f"Project {payload.project_id} does not exist")
+    result = await generate_object_template_set(
+        payload.project_id, payload.dataset_id, payload.object_type
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    for item in result.get("created", []):
+        cid = item.get("conversion_id")
+        if cid:
+            background_tasks.add_task(_auto_map, PydanticObjectId(cid))
+    return result
 
 
 @router.get("", response_model=list[ConversionOut])

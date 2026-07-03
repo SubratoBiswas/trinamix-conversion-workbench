@@ -128,6 +128,21 @@ export const ConversionsApi = {
     api.post<{ updated: number; message: string }>(
       `/conversions/project/${projectId}/use-ebs-source`
     ).then(r => r.data),
+  /** Catalog of conversion object types + the FBDI template set each needs. */
+  objectTypes: () =>
+    api.get<{ object_types: { key: string; label: string; step_count: number; steps: { label: string; load_order: number }[] }[] }>(
+      "/conversions/object-types"
+    ).then(r => r.data.object_types),
+  /** One dataset -> all FBDI templates for the object type (Req 1). */
+  generateSet: (body: { project_id: string; dataset_id: string; object_type: string }) =>
+    api.post<{
+      object_type: string;
+      created: { label: string; template: string; conversion_id?: string; load_order: number }[];
+      existing: { label: string; template: string; load_order: number }[];
+      missing: { label: string; load_order: number }[];
+      resolved_count: number;
+      total_steps: number;
+    }>("/conversions/generate-set", body).then(r => r.data),
   /** Unified source columns for the Mapping Review canvas. Returns dataset
    *  profiles in dataset mode, or live Oracle EBS ALL_TAB_COLUMNS metadata
    *  when the conversion has no linked dataset (EBS live mode). */

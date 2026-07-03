@@ -116,7 +116,7 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
     """Reformat any date/Date columns to YYYYMMDD as required by Oracle FBDI."""
     date_field_names = {
-        f.field_name.strip().upper().replace(" ", "_").replace("-", "_")
+        f.field_name
         for f in fields
         if (f.data_type or "").lower() in ("date", "datetime")
     }
@@ -142,15 +142,27 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     df, _ = await build_converted_dataframe(conversion)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
-    # Fetch fields for date-column detection, and primary sheet name for xlsx tab
-    fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
+    # Fetch fields (in interface sequence) for exact-format output + date detection.
+    fields = await FBDIField.find(
+        FBDIField.template_id == template.id
+    ).sort(+FBDIField.sequence).to_list() if template else []
     primary_sheet = await FBDISheet.find(
         FBDISheet.template_id == template.id
     ).sort(+FBDISheet.sequence).first_or_none() if template else None
     sheet_name = (primary_sheet.sheet_name if primary_sheet else None) or "SCM Items"
 
-    # Normalize columns and format dates
-    df = _normalize_columns(df)
+    # Req 8 — emit EXACTLY the template's interface columns, in the template's
+    # sequence order, using the real Oracle column headers. Mapped fields carry
+    # data; every other interface column is present but blank so the CSV lines up
+    # with the Fusion interface. No instruction sheet, no top instruction rows —
+    # the tool builds the file from parsed fields, so the output is already the
+    # bare header + data grid Fusion expects.
+    if fields:
+        ordered = [f.field_name for f in fields]
+        # de-dupe while preserving order (guards against repeated field names)
+        seen: set[str] = set()
+        ordered = [c for c in ordered if not (c in seen or seen.add(c))]
+        df = df.reindex(columns=ordered, fill_value="")
     df = _format_date_columns(df, fields)
 
     fmt = fmt.lower()
