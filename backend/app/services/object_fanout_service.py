@@ -36,35 +36,22 @@ OBJECT_TEMPLATE_CATALOG: dict[str, list[dict]] = {
         {"label": "Supplier Contact Addresses", "object": "Supplier Contact Addresses", "all": ["contact", "address"],             "none": []},
         {"label": "Supplier Banks",             "object": "Supplier Banks",             "all": ["bank"],                           "none": []},
     ],
-    "customer": [
-        {"label": "Customer Parties",       "object": "Customer Parties",       "all": ["part"],             "none": []},
-        {"label": "Customer Addresses",     "object": "Customer Addresses",     "all": ["address"],          "none": ["contact"]},
-        {"label": "Customer Accounts",      "object": "Customer Accounts",      "all": ["account"],          "none": ["site", "profile"]},
-        {"label": "Customer Account Sites", "object": "Customer Account Sites", "all": ["account", "site"],  "none": ["use"]},
-        {"label": "Customer Site Uses",     "object": "Customer Site Uses",     "all": ["site", "use"],      "none": []},
-        {"label": "Customer Contacts",      "object": "Customer Contacts",      "all": ["contact"],          "none": []},
-        {"label": "Customer Profiles",      "object": "Customer Profiles",      "all": ["profile"],          "none": []},
-    ],
-    "item": [
-        {"label": "Item Import",           "object": "Item Import",           "all": ["item"],             "none": ["revision", "category", "cross", "relationship", "org"]},
-        {"label": "Item Revisions",        "object": "Item Revisions",        "all": ["item", "revision"], "none": []},
-        {"label": "Item Categories",       "object": "Item Categories",       "all": ["categor"],          "none": []},
-        {"label": "Item Org Assignments",  "object": "Item Org Assignments",  "all": ["item", "org"],      "none": []},
-        {"label": "Item Cross References", "object": "Item Cross References",  "all": ["cross"],            "none": []},
-    ],
-    "ap_invoice": [
-        {"label": "AP Invoice Headers", "object": "AP Invoice Headers", "all": ["invoice"], "none": ["line"]},
-        {"label": "AP Invoice Lines",   "object": "AP Invoice Lines",   "all": ["invoice", "line"], "none": []},
-    ],
-    "ar_invoice": [
-        {"label": "AR Invoice Lines",         "object": "AR Invoice Lines",         "all": ["line"],         "none": ["distribution", "credit"]},
-        {"label": "AR Invoice Distributions", "object": "AR Invoice Distributions", "all": ["distribution"], "none": []},
-        {"label": "AR Sales Credits",         "object": "AR Sales Credits",         "all": ["credit"],       "none": []},
-    ],
-    "gl_journal": [
-        {"label": "GL Journal Import", "object": "GL Journal Import", "all": ["journal"], "none": []},
-    ],
+    # Customer / Item / AP / AR / GL are each a SINGLE Oracle FBDI workbook with
+    # many interface sheets (unlike supplier, which is 7 separate files). So the
+    # object resolves to one template; the per-sheet load order lives inside that
+    # workbook and is emitted as one CSV per sheet at output time.
+    "customer":   [{"label": "Customer Import", "object": "Customer Import", "all": ["customer", "import"], "none": []}],
+    "item":       [{"label": "Item Import",     "object": "Item Import",     "all": ["item", "import"],     "none": []}],
+    "ap_invoice": [{"label": "AP Invoice Import", "object": "AP Invoice Import", "all": ["invoice"], "none": ["autoinvoice", "receivable"]}],
+    "ar_invoice": [{"label": "AR Invoice Import", "object": "AR Invoice Import", "all": ["autoinvoice"], "none": []}],
+    "gl_journal": [{"label": "GL Journal Import", "object": "GL Journal Import", "all": ["journal"], "none": []}],
 }
+
+# Objects whose FBDI is a single multi-sheet workbook (vs supplier's many files).
+# The UI + object detail surface the sheet order as the load sequence for these.
+SINGLE_TEMPLATE_OBJECTS: frozenset[str] = frozenset(
+    {"customer", "item", "ap_invoice", "ar_invoice", "gl_journal"}
+)
 
 # Free-text aliases the UI / detector might supply -> canonical catalog key.
 OBJECT_ALIASES: dict[str, str] = {

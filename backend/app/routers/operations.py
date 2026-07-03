@@ -140,13 +140,16 @@ async def download_all_outputs(
                 skipped.append(c.name)
                 continue
             # Prefix with the load-order number so files sort in the sequence
-            # the supplier load must run in (1 Import, 2 Address, …).
+            # the supplier load must run in (1 Import, 2 Address, …). Use the
+            # artifact's REAL extension — multi-sheet objects (Customer/Item)
+            # produce a per-sheet .zip, single objects a .csv/.xlsx.
+            real_ext = (Path(art.output_file_name).suffix.lstrip(".") or ext)
             order = c.planned_load_order if c.planned_load_order and c.planned_load_order < 100 else None
             prefix = f"{order:02d}_" if order is not None else ""
-            arcname = f"{prefix}{_safe_name(c.name)}.{ext}"
+            arcname = f"{prefix}{_safe_name(c.name)}.{real_ext}"
             if arcname in used:
                 used[arcname] += 1
-                arcname = f"{prefix}{_safe_name(c.name)}_{used[arcname]}.{ext}"
+                arcname = f"{prefix}{_safe_name(c.name)}_{used[arcname]}.{real_ext}"
             else:
                 used[arcname] = 0
             zf.write(art.output_file_path, arcname=arcname)

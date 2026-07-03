@@ -1,6 +1,9 @@
 """Generate the Fusion-ready FBDI output (async/Beanie)."""
 from __future__ import annotations
 
+import io
+import re
+import zipfile
 from datetime import datetime
 from typing import Any
 
@@ -137,43 +140,80 @@ def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
     return df
 
 
+def _dedup(cols: list[str]) -> list[str]:
+    seen: set[str] = set()
+    return [c for c in cols if not (c in seen or seen.add(c))]
+
+
+def _safe_sheet_name(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "sheet"
+
+
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
     from app.models.fbdi import FBDISheet
     df, _ = await build_converted_dataframe(conversion)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
-    # Fetch fields (in interface sequence) for exact-format output + date detection.
+    # Fetch fields (interface sequence) + sheets so we can emit exactly the
+    # template's columns and, for multi-sheet workbooks, one file per sheet.
     fields = await FBDIField.find(
         FBDIField.template_id == template.id
     ).sort(+FBDIField.sequence).to_list() if template else []
-    primary_sheet = await FBDISheet.find(
+    sheets = await FBDISheet.find(
         FBDISheet.template_id == template.id
-    ).sort(+FBDISheet.sequence).first_or_none() if template else None
-    sheet_name = (primary_sheet.sheet_name if primary_sheet else None) or "SCM Items"
+    ).sort(+FBDISheet.sequence).to_list() if template else []
 
-    # Req 8 — emit EXACTLY the template's interface columns, in the template's
-    # sequence order, using the real Oracle column headers. Mapped fields carry
-    # data; every other interface column is present but blank so the CSV lines up
-    # with the Fusion interface. No instruction sheet, no top instruction rows —
-    # the tool builds the file from parsed fields, so the output is already the
-    # bare header + data grid Fusion expects.
-    if fields:
-        ordered = [f.field_name for f in fields]
-        # de-dupe while preserving order (guards against repeated field names)
-        seen: set[str] = set()
-        ordered = [c for c in ordered if not (c in seen or seen.add(c))]
-        df = df.reindex(columns=ordered, fill_value="")
-    df = _format_date_columns(df, fields)
+    # Group fields by their interface sheet (preserving field sequence).
+    fields_by_sheet: dict[Any, list] = {}
+    for f in fields:
+        fields_by_sheet.setdefault(f.sheet_id, []).append(f)
+    sheets_with_fields = [s for s in sheets if s.id in fields_by_sheet]
 
     fmt = fmt.lower()
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     obj_name = (template.business_object if template else None) or "fbdi"
+
+    def _sheet_frame(sfields: list) -> pd.DataFrame:
+        # Req 8 — exactly this sheet's interface columns, in sequence, real
+        # headers, blanks where unmapped, no instruction rows.
+        cols = _dedup([f.field_name for f in sfields])
+        sdf = df.reindex(columns=cols, fill_value="")
+        return _format_date_columns(sdf, sfields)
+
+    # Multi-sheet FBDI workbook (Customer/Item/…): emit ONE CSV per interface
+    # sheet — "all sheets populated" — numbered in load order, bundled in a zip.
+    if fmt == "csv" and len(sheets_with_fields) > 1:
+        buf = io.BytesIO()
+        total_rows = 0
+        total_cols = 0
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, s in enumerate(sheets_with_fields, start=1):
+                sdf = _sheet_frame(fields_by_sheet[s.id])
+                zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False))
+                total_rows = max(total_rows, len(sdf))
+                total_cols += len(sdf.columns)
+        out_name = f"{obj_name}_{ts}.zip"
+        out_path = out_dir / out_name
+        out_path.write_bytes(buf.getvalue())
+        artefact = ConvertedOutput(
+            conversion_id=conversion.id, output_file_path=str(out_path),
+            output_file_name=out_name, row_count=total_rows, column_count=total_cols,
+            status="generated",
+        )
+        await artefact.insert()
+        await conversion.set({"status": "output_generated", "updated_at": datetime.utcnow()})
+        return artefact
+
+    # Single-sheet (or xlsx): one flat file with all interface columns in order.
+    if fields:
+        df = df.reindex(columns=_dedup([f.field_name for f in fields]), fill_value="")
+    df = _format_date_columns(df, fields)
+    sheet_name = (sheets_with_fields[0].sheet_name if sheets_with_fields else None) or "SCM Items"
     if fmt == "xlsx":
         out_name = f"{obj_name}_{ts}.xlsx"
         out_path = out_dir / out_name
-        # Use canonical Oracle sheet name so the file can be loaded directly
         df.to_excel(out_path, index=False, sheet_name=sheet_name[:31])  # Excel max 31 chars
     else:
         out_name = f"{obj_name}_{ts}.csv"
