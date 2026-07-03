@@ -88,9 +88,9 @@ export const ConversionDetailPage: React.FC = () => {
     let alive = true;
     Promise.all([
       ConversionsApi.objectTypes().catch(() => [] as any[]),
-      // Resolve step→conversion GLOBALLY (not just this project) so the map +
-      // Prev/Next work even when the object's files live in separate engagements.
-      ConversionsApi.list().catch(() => [] as Conversion[]),
+      // Resolve step→conversion within THIS engagement only, so the map and
+      // Prev/Next never jump the user into a different project.
+      ConversionsApi.list({ project_id: String(conv.project_id) }).catch(() => [] as Conversion[]),
     ]).then(([types, sibs]) => {
       if (!alive) return;
       setSeqSteps(((types as any[]).find((t) => t.key === key)?.steps) || []);
@@ -348,7 +348,10 @@ export const ConversionDetailPage: React.FC = () => {
                 const sc = siblings.find(
                   (x) =>
                     (x.target_object || "").toLowerCase() === s.label.toLowerCase() ||
-                    (x.template_name || "").toLowerCase() === s.label.toLowerCase()
+                    (x.template_name || "").toLowerCase() === s.label.toLowerCase() ||
+                    (x.planned_load_order === s.load_order &&
+                      seqKeyForTarget(x.target_object, x.template_name) ===
+                        seqKeyForTarget(conv?.target_object, template?.business_object))
                 );
                 const isCurrent = !!sc && String(sc.id) === String(conv?.id);
                 const node = (
@@ -384,27 +387,23 @@ export const ConversionDetailPage: React.FC = () => {
               })}
             </div>
             {(() => {
-              // Resolve each step to its conversion, then find the previous /
-              // next generated file so the user can step through the sequence
-              // with one click instead of hunting (Req: ease of use).
-              const stepConvs = seqSteps.map((s) =>
-                siblings.find(
-                  (x) =>
-                    (x.target_object || "").toLowerCase() === s.label.toLowerCase() ||
-                    (x.template_name || "").toLowerCase() === s.label.toLowerCase()
-                )
-              );
-              const idx = stepConvs.findIndex((c) => c && String(c.id) === String(conv?.id));
-              let prevC: Conversion | undefined, nextC: Conversion | undefined;
-              for (let i = idx - 1; i >= 0; i--) { if (stepConvs[i]) { prevC = stepConvs[i]; break; } }
-              for (let i = idx + 1; i < stepConvs.length; i++) { if (stepConvs[i]) { nextC = stepConvs[i]; break; } }
+              // Step through THIS engagement's files for the same object, in
+              // Fusion load order — robust regardless of template naming, and
+              // it never leaves the engagement.
+              const curKey = seqKeyForTarget(conv?.target_object, template?.business_object);
+              const set = siblings
+                .filter((c) => seqKeyForTarget(c.target_object, c.template_name) === curKey)
+                .sort((a, b) => (a.planned_load_order ?? 999) - (b.planned_load_order ?? 999));
+              const idx = set.findIndex((c) => String(c.id) === String(conv?.id));
+              const prevC = idx > 0 ? set[idx - 1] : undefined;
+              const nextC = idx >= 0 && idx < set.length - 1 ? set[idx + 1] : undefined;
               return (
                 <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
                   <Button variant="secondary" disabled={!prevC} onClick={() => prevC && nav(`/conversions/${prevC.id}`)}>
                     <ArrowLeft className="h-4 w-4" /> Previous file
                   </Button>
                   <span className="text-[11px] text-ink-muted">
-                    {idx >= 0 ? `File ${idx + 1} of ${seqSteps.length}` : `${stepConvs.filter(Boolean).length} of ${seqSteps.length} generated`}
+                    {idx >= 0 ? `File ${idx + 1} of ${set.length} in this engagement` : `${set.length} file(s) in this engagement`}
                   </span>
                   <Button variant="primary" disabled={!nextC} onClick={() => nextC && nav(`/conversions/${nextC.id}`)}>
                     Next file <ArrowRight className="h-4 w-4" />
