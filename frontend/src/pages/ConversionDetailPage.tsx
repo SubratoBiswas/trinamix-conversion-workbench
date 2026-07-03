@@ -88,7 +88,9 @@ export const ConversionDetailPage: React.FC = () => {
     let alive = true;
     Promise.all([
       ConversionsApi.objectTypes().catch(() => [] as any[]),
-      ConversionsApi.list({ project_id: String(conv.project_id) }).catch(() => [] as Conversion[]),
+      // Resolve step→conversion GLOBALLY (not just this project) so the map +
+      // Prev/Next work even when the object's files live in separate engagements.
+      ConversionsApi.list().catch(() => [] as Conversion[]),
     ]).then(([types, sibs]) => {
       if (!alive) return;
       setSeqSteps(((types as any[]).find((t) => t.key === key)?.steps) || []);
@@ -381,6 +383,35 @@ export const ConversionDetailPage: React.FC = () => {
                 );
               })}
             </div>
+            {(() => {
+              // Resolve each step to its conversion, then find the previous /
+              // next generated file so the user can step through the sequence
+              // with one click instead of hunting (Req: ease of use).
+              const stepConvs = seqSteps.map((s) =>
+                siblings.find(
+                  (x) =>
+                    (x.target_object || "").toLowerCase() === s.label.toLowerCase() ||
+                    (x.template_name || "").toLowerCase() === s.label.toLowerCase()
+                )
+              );
+              const idx = stepConvs.findIndex((c) => c && String(c.id) === String(conv?.id));
+              let prevC: Conversion | undefined, nextC: Conversion | undefined;
+              for (let i = idx - 1; i >= 0; i--) { if (stepConvs[i]) { prevC = stepConvs[i]; break; } }
+              for (let i = idx + 1; i < stepConvs.length; i++) { if (stepConvs[i]) { nextC = stepConvs[i]; break; } }
+              return (
+                <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
+                  <Button variant="secondary" disabled={!prevC} onClick={() => prevC && nav(`/conversions/${prevC.id}`)}>
+                    <ArrowLeft className="h-4 w-4" /> Previous file
+                  </Button>
+                  <span className="text-[11px] text-ink-muted">
+                    {idx >= 0 ? `File ${idx + 1} of ${seqSteps.length}` : `${stepConvs.filter(Boolean).length} of ${seqSteps.length} generated`}
+                  </span>
+                  <Button variant="primary" disabled={!nextC} onClick={() => nextC && nav(`/conversions/${nextC.id}`)}>
+                    Next file <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })()}
           </CardBody>
         </Card>
       )}
