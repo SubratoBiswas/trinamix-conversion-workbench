@@ -166,13 +166,27 @@ export const ConvertFilePage: React.FC = () => {
         await DatasetsApi.classifyLearn(it.datasetId!, {
           source_system: it.source, template_id: it.templateId, target_object: targetObject || undefined,
         }).catch(() => {});
-        await ConversionsApi.create({
-          project_id: projectId,
-          name: it.file.name.replace(/\.[^.]+$/, ""),
-          dataset_id: it.datasetId, template_id: it.templateId,
-          target_object: targetObject, source_type: "dataset",
-          output_mode: outputMode, status: "draft",
-        } as any);
+        // For a multi-file conversion object (supplier/customer/item/…), fan out
+        // the FULL FBDI set from this one dataset — so the engagement gets the
+        // whole load sequence starting at step 1 (e.g. Supplier Import), not just
+        // whichever single file the AI happened to detect. Falls back to a single
+        // conversion only when the object type isn't a known set.
+        let fannedOut = false;
+        try {
+          const r = await ConversionsApi.generateSet({
+            project_id: projectId, dataset_id: it.datasetId!, object_type: targetObject || "",
+          });
+          fannedOut = (r.created?.length || 0) + (r.existing?.length || 0) > 0;
+        } catch { /* not a known object set — fall through to single create */ }
+        if (!fannedOut) {
+          await ConversionsApi.create({
+            project_id: projectId,
+            name: it.file.name.replace(/\.[^.]+$/, ""),
+            dataset_id: it.datasetId, template_id: it.templateId,
+            target_object: targetObject, source_type: "dataset",
+            output_mode: outputMode, status: "draft",
+          } as any);
+        }
       }
       nav(`/projects/${projectId}`);
     } catch (e: any) {
