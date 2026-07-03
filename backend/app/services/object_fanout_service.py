@@ -150,10 +150,11 @@ async def generate_object_template_set(
     existing_convs = await Conversion.find(
         Conversion.project_id == PydanticObjectId(project_id)
     ).to_list()
-    existing_pairs = {
-        (str(c.dataset_id), str(c.template_id))
+    existing_by_pair = {
+        (str(c.dataset_id), str(c.template_id)): c
         for c in existing_convs if c.dataset_id and c.template_id
     }
+    existing_pairs = set(existing_by_pair.keys())
 
     created: list[dict] = []
     existing: list[dict] = []
@@ -168,6 +169,12 @@ async def generate_object_template_set(
             continue
         resolved_objects.append(step["object"])
         if (str(dataset.id), str(tpl.id)) in existing_pairs:
+            # Already have this file — heal its load order + object label so the
+            # sequence stays correct (e.g. a Supplier Address created ad-hoc at
+            # load order 100 becomes step 2).
+            ec = existing_by_pair.get((str(dataset.id), str(tpl.id)))
+            if ec and (ec.planned_load_order != i or ec.target_object != step["object"]):
+                await ec.set({"planned_load_order": i, "target_object": step["object"], "updated_at": now})
             existing.append({"label": step["label"], "template": tpl.name, "load_order": i})
             continue
         conv = Conversion(
