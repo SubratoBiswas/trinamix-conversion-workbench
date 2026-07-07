@@ -1101,18 +1101,18 @@ async def _reseed_scm_om_templates() -> None:
                 reseeded += 1
             continue
 
-        existing_names = [f.field_name for f in existing]
-        if existing_names != canonical_names:
-            # Schema genuinely changed — reseed. Id churn is unavoidable here,
-            # but this is rare (only when STANDARD_FIELDS is edited).
-            log.info(f"_reseed_scm_om: schema changed for '{tpl.name}' — reseeding")
-            if await auto_seed_if_empty(tpl, force=True):
-                reseeded += 1
-        else:
-            # Identical — DO NOT touch fields (keep ids so mappings stay valid).
-            req = sum(1 for fd in STANDARD_FIELDS[key] if fd.get("required"))
-            if tpl.required_field_count != req:
-                await tpl.set({"required_field_count": req})
+        # Template already has fields — NEVER force-reseed on startup. Force
+        # reseeding deletes + reinserts every field with a brand-new ObjectId,
+        # which orphans approved/learned MappingSuggestions (they reference
+        # target_field_id) AND replaces uploaded gold multi-sheet templates
+        # (e.g. Supplier Site = POZ_SUPPLIER_SITES_INT + Third_Party) with the
+        # generic single-"Import" STANDARD_FIELDS schema. Both broke real user
+        # data on every redeploy. We only ever seed EMPTY templates now; a
+        # genuine STANDARD_FIELDS change is applied deliberately via the manual
+        # "seed standard fields" endpoint, not silently on boot.
+        req = sum(1 for fd in STANDARD_FIELDS[key] if fd.get("required"))
+        if tpl.required_field_count != req:
+            await tpl.set({"required_field_count": req})
 
     if reseeded:
         log.info(f"_reseed_scm_om: refreshed {reseeded} SCM/OM templates (ids preserved where unchanged)")

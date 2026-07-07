@@ -941,6 +941,18 @@ async def auto_seed_if_empty(tpl: FBDITemplate, force: bool = False) -> int:
     if existing > 0 and not force:
         return 0
 
+    # Never replace a template that was uploaded from a real file with the
+    # generic STANDARD_FIELDS schema — that would clobber gold multi-sheet
+    # templates and orphan mappings. Its true structure is stored in Mongo and
+    # should be restored via reparse, not seeded over.
+    from app.models.fbdi import FBDITemplateFile
+    if await FBDITemplateFile.find_one(FBDITemplateFile.template_id == tpl.id) is not None:
+        logger.warning(
+            f"auto_seed_if_empty: '{tpl.name}' was uploaded from a file — refusing "
+            f"to seed a generic schema; reparse to restore its real structure."
+        )
+        return 0
+
     key = _schema_key_for(tpl.name, tpl.business_object)
     if key is None:
         logger.warning(f"auto_seed_if_empty: no schema for '{tpl.name}' -- skipped")
