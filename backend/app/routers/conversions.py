@@ -177,6 +177,22 @@ async def get_conversion(conversion_id: str, _: User = Depends(get_current_user)
     return await _hydrate(c)
 
 
+@router.get("/{conversion_id}/effective-defaults")
+async def get_effective_defaults(
+    conversion_id: str,
+    use_ai: bool = Query(True),
+    _: User = Depends(get_current_user),
+):
+    """Values that Generate Output writes for unmapped target fields (control
+    constants, sequence keys, learned + AI-inferred defaults). The mapping-review
+    UI uses this to render 'defaulted -> value' instead of a red required gap."""
+    c = await Conversion.get(PydanticObjectId(conversion_id))
+    if not c:
+        raise HTTPException(404, "Conversion not found")
+    from app.services.defaults_service import compute_effective_defaults
+    return await compute_effective_defaults(c, use_ai=use_ai)
+
+
 @router.post("", response_model=ConversionOut)
 async def create_conversion(
     payload: ConversionCreate,

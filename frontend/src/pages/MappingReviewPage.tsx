@@ -42,6 +42,33 @@ const KB_SOURCE_DISPLAY: Record<string, string> = {
 
 // Map a target object to its fan-out catalog key so we can show the FBDI
 // load-sequence at the top of the mapping screen.
+// Output-time control defaults (mirror of backend output_service._CONTROL_DEFAULTS
+// / _SEQ_FIELDS). These fields are filled with a fixed value (or a running key)
+// at Generate Output even when no source column maps to them — they're
+// standardization constants, not data pulled from the extract. Used to show a
+// "defaulted → value" state instead of a misleading "required gap".
+const CONTROL_DEFAULTS: Record<string, string> = {
+  "import action": "CREATE", "batch id": "900001",
+  "tax organization type": "Corporation", "organization type": "Corporation",
+  "supplier type": "Supplier", "business relationship": "PROSPECTIVE",
+  "federal reportable": "N", "delivery channel": "EMAIL",
+  "address name": "PRIMARY", "pay": "Y", "ordering": "Y", "rfq or bidding": "Y",
+  "supplier site": "PRIMARY", "administrative contact": "Y", "user account action": "NONE",
+};
+const SEQ_FIELDS = new Set([
+  "suppliernumber", "supplierpartynumber", "partynumber",
+  "customeraccountnumber", "customernumber",
+]);
+function normFieldKey(fieldName?: string | null): string {
+  return (fieldName || "").toLowerCase().replace(/\*/g, "").trim();
+}
+function controlDefaultFor(fieldName?: string | null): string | null {
+  if (!fieldName) return null;
+  const k = normFieldKey(fieldName);
+  if (SEQ_FIELDS.has(k.replace(/\s+/g, ""))) return "auto-number (100000+)";
+  return CONTROL_DEFAULTS[k] ?? null;
+}
+
 function seqKeyForTarget(target?: string | null): string | null {
   const s = (target || "").toLowerCase();
   if (/supplier|vendor/.test(s)) return "supplier";
@@ -86,6 +113,10 @@ export const MappingReviewPage: React.FC = () => {
   const [ruleTargetIds, setRuleTargetIds] = useState<Set<number>>(new Set());
   const [targetFields, setTargetFields] = useState<FBDIField[]>([]);
   const [mappings, setMappings] = useState<MappingSuggestion[]>([]);
+  // Values Generate Output writes for unmapped target fields (control constants,
+  // sequence keys, learned + AI-inferred defaults), keyed by normalized field
+  // name. Lets the canvas show "defaulted → value" instead of a red required gap.
+  const [effectiveDefaults, setEffectiveDefaults] = useState<Record<string, string>>({});
   // Cascade visibility — when an upstream master has taught a rule
   // (e.g. REMOVE_HYPHEN on Item.InventoryItemNumber), the matching FK
   // columns on this conversion inherit that rule at output time. We
@@ -185,6 +216,7 @@ export const MappingReviewPage: React.FC = () => {
       setEbsDebug(null);
       setRuleTargetIds(new Set());
       setTargetFields([]);
+      setEffectiveDefaults({});
       setLoadingConversion(false);
       return;
     }
@@ -222,6 +254,13 @@ export const MappingReviewPage: React.FC = () => {
     MappingApi.rules(pid)
       .then((rs) => setRuleTargetIds(new Set(rs.filter((r) => r.target_field_id != null).map((r) => r.target_field_id as any))))
       .catch(() => setRuleTargetIds(new Set()));
+
+    // Effective defaults (control constants + learned + AI-inferred) for unmapped
+    // target fields → drives the "defaulted → value" badges. Fetched separately
+    // so the optional AI inference pass never blocks the canvas render.
+    ConversionsApi.effectiveDefaults(pid)
+      .then((r) => setEffectiveDefaults(r.defaults || {}))
+      .catch(() => setEffectiveDefaults({}));
   };
   useEffect(() => { loadAll(); }, [pid]);
 
@@ -306,14 +345,26 @@ export const MappingReviewPage: React.FC = () => {
     const total = targetFields.length;
     const mapped = scoped.filter((m) => m.source_column).length;
     const approved = scoped.filter((m) => m.status === "approved").length;
-    const reqMissing = scoped.filter((m) => m.target_required && !m.source_column && m.status !== "approved").length;
+    const nameById = new Map(targetFields.map((f) => [f.id, f.field_name]));
+    // A required field is only a genuine gap when it has neither a source column
+    // nor any default (learned default_value, static control constant, sequence
+    // key, or an AI-inferred/effective default). Defaulted fields are handled at
+    // Generate Output, so they must not inflate the "required gaps" count.
+    const reqMissing = scoped.filter((m) => {
+      if (!m.target_required || m.source_column || m.status === "approved") return false;
+      if (m.default_value) return false;
+      const fname = nameById.get(m.target_field_id);
+      if (controlDefaultFor(fname)) return false;
+      if (effectiveDefaults[normFieldKey(fname)]) return false;
+      return true;
+    }).length;
     const learned = scoped.filter(
       (m) => m.status === "approved" &&
         (m.approved_by === "learning-engine" || m.comment?.includes("[learned]"))
     ).length;
     const kb = scoped.filter((m) => !!m.kb_source).length;
     return { total, mapped, approved, reqMissing, learned, kb };
-  }, [mappings, targetFields]);
+  }, [mappings, targetFields, effectiveDefaults]);
 
   // ── Recommendations (column-level cleansing tied to this project) ──
   const recommendations = useMemo<Recommendation[]>(() => {
@@ -869,6 +920,7 @@ export const MappingReviewPage: React.FC = () => {
           hoveredTarget={hoveredTarget}
           setHoveredTarget={setHoveredTarget}
           ruleTargetIds={ruleTargetIds}
+          effectiveDefaults={effectiveDefaults}
           onMapDrop={mapDrop}
           onUnmap={unmap}
           loading={running}
@@ -957,6 +1009,7 @@ interface CanvasProps {
   hoveredTarget: number | null;
   setHoveredTarget: (t: number | null) => void;
   ruleTargetIds?: Set<number>;
+  effectiveDefaults?: Record<string, string>;
   onMapDrop?: (targetFieldId: number, sourceColumn: string) => void;
   onUnmap?: (m: MappingSuggestion) => void;
   loading?: boolean;
@@ -966,7 +1019,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   sourceColumns, targetFields, mappings, visibleTargetIds,
   selectedMappingId, setSelectedMappingId,
   hoveredSource, setHoveredSource, hoveredTarget, setHoveredTarget,
-  ruleTargetIds, onMapDrop, onUnmap, loading,
+  ruleTargetIds, effectiveDefaults = {}, onMapDrop, onUnmap, loading,
 }) => {
   // Which source column is being dragged, and which target is hovered during a
   // drag — drives the drop-zone highlight for the drag-to-map gesture.
@@ -1277,11 +1330,24 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                     </button>
                   )}
                 </div>
-                {f.required && !mapping?.source_column && (
-                  <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-danger">
-                    <AlertTriangle className="h-2.5 w-2.5" /> Required field unmapped
-                  </div>
-                )}
+                {!mapping?.source_column && (() => {
+                  const dv = mapping?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+                  if (dv) {
+                    return (
+                      <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-emerald-600">
+                        <Sparkles className="h-2.5 w-2.5" /> Defaulted → {dv}
+                      </div>
+                    );
+                  }
+                  if (f.required) {
+                    return (
+                      <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-danger">
+                        <AlertTriangle className="h-2.5 w-2.5" /> Required field unmapped
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             );
           })}

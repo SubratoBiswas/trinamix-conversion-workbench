@@ -165,6 +165,15 @@ export const ConversionsApi = {
     api.get<{ source_type: string; table: string | null; columns: import("@/types").DatasetColumnProfile[]; debug?: Record<string, any> | null }>(
       `/conversions/${id}/source-columns`
     ).then(r => r.data),
+  /** Values Generate Output writes for unmapped target fields (control
+   *  constants, sequence keys, learned + AI-inferred defaults). Used by the
+   *  mapping-review UI to show "defaulted -> value" instead of a required gap. */
+  effectiveDefaults: (id: string, useAi = true) =>
+    api.get<{
+      defaults: Record<string, string>;
+      detail: { field: string; label: string; value: string; source: string }[];
+      ai_used: boolean;
+    }>(`/conversions/${id}/effective-defaults`, { params: { use_ai: useAi } }).then(r => r.data),
 };
 
 export interface ValueMapRecommendation {
