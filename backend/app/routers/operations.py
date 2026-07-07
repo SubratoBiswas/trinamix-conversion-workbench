@@ -131,6 +131,22 @@ async def download_all_outputs(
             if not c.template_id or (not is_ebs and not c.dataset_id):
                 skipped.append(c.name)
                 continue
+            # Ensure the conversion is mapped BEFORE generating. A just-created
+            # conversion whose background auto-map hasn't finished yet would
+            # otherwise export headers with no data (a partial zip). Running
+            # mapping here when none exist also applies the reusable learned
+            # standards (via apply_learned_to_conversion), so the bundle is
+            # complete regardless of when the user clicks download.
+            try:
+                from app.models.mapping import MappingSuggestion
+                have = await MappingSuggestion.find(
+                    MappingSuggestion.conversion_id == c.id
+                ).count()
+                if have == 0:
+                    from app.services.mapping_service import run_mapping_suggestions
+                    await run_mapping_suggestions(c)
+            except Exception:
+                pass
             try:
                 art = await generate_output_artifact(c, fmt=fmt)
             except Exception:
