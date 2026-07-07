@@ -53,6 +53,17 @@ async def build_converted_dataframe(
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     mappings = await MappingSuggestion.find(MappingSuggestion.conversion_id == conversion.id).to_list()
+    # Dedupe: a target field can end up with more than one MappingSuggestion (an
+    # auto-map "suggested" row plus an approved/overridden one, e.g. after prompt
+    # steering or learning). Keep the highest-priority mapping per target field so
+    # the output uses the APPROVED source, not whichever row was processed last.
+    _PRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
+    _best: dict = {}
+    for _m in mappings:
+        _cur = _best.get(_m.target_field_id)
+        if _cur is None or _PRIO.get(_m.status or "suggested", 0) > _PRIO.get(_cur.status or "suggested", 0):
+            _best[_m.target_field_id] = _m
+    mappings = list(_best.values())
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
     fields_by_id = {f.id: f for f in fields}
 
