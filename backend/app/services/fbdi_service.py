@@ -9,7 +9,7 @@ from fastapi import UploadFile
 logger = logging.getLogger(__name__)
 
 from app.config import settings
-from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField
+from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile
 from app.parsers import parse_fbdi_template
 
 
@@ -30,6 +30,45 @@ def _save_bytes(filename: str, contents: bytes) -> tuple[Path, str]:
         counter += 1
     target.write_bytes(contents)
     return target, target.name
+
+
+async def store_template_bytes(tpl: FBDITemplate, filename: str, contents: bytes) -> None:
+    """Persist the raw uploaded bytes in MongoDB (durable across redeploys).
+    One record per template; replaces any prior copy."""
+    try:
+        await FBDITemplateFile.find(FBDITemplateFile.template_id == tpl.id).delete()
+        await FBDITemplateFile(
+            template_id=tpl.id,
+            file_name=Path(filename).name,
+            content=contents,
+            size=len(contents),
+        ).insert()
+    except Exception as exc:  # storage is best-effort; never break the upload
+        logger.exception(f"Failed to store template bytes in Mongo for {tpl.id}: {exc}")
+
+
+async def materialize_template_file(tpl: FBDITemplate) -> Path | None:
+    """Return a filesystem path to the template's raw file for parsing.
+
+    Prefers the on-disk copy; if the ephemeral disk was wiped (e.g. after a
+    Render redeploy), rehydrates the bytes stored in MongoDB to a local file and
+    returns that. Also refreshes tpl.file_path so later reads hit the disk copy.
+    Returns None only when no bytes exist anywhere.
+    """
+    if tpl.file_path and Path(tpl.file_path).exists():
+        return Path(tpl.file_path)
+    rec = await FBDITemplateFile.find_one(FBDITemplateFile.template_id == tpl.id)
+    if not rec or not rec.content:
+        return None
+    name = rec.file_name or tpl.file_name or f"{tpl.id}.xlsx"
+    target = settings.upload_path / "fbdi" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(rec.content)
+    try:
+        await tpl.set({"file_path": str(target), "file_name": target.name})
+    except Exception:
+        pass
+    return target
 
 
 async def create_template_from_upload(
@@ -69,6 +108,8 @@ async def create_template_from_upload(
         description=parsed.get("description"),
     )
     await tpl.insert()
+    # Durable copy in MongoDB so re-parse still works after a redeploy wipes disk.
+    await store_template_bytes(tpl, stored_name, contents)
 
     sheet_id_by_name: dict[str, object] = {}
     for s in parsed["sheets"]:

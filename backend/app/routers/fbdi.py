@@ -3,12 +3,12 @@ from pathlib import Path
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate
+from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate, FBDITemplateFile
 from app.models.user import User
 from app.parsers.fbdi_parser import parse_fbdi_template
 from app.schemas.fbdi import FBDIFieldOut, FBDIFieldUpdate, FBDISheetOut, FBDITemplateDetailOut, FBDITemplateOut
 from app.services.auth_service import get_current_user
-from app.services.fbdi_service import create_template_from_upload
+from app.services.fbdi_service import create_template_from_upload, materialize_template_file
 
 router = APIRouter(prefix="/api/fbdi", tags=["fbdi"])
 
@@ -75,6 +75,7 @@ async def delete_template(template_id: str, _: User = Depends(get_current_user))
         raise HTTPException(404, "Template not found")
     await FBDIField.find(FBDIField.template_id == tpl.id).delete()
     await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
+    await FBDITemplateFile.find(FBDITemplateFile.template_id == tpl.id).delete()
     await tpl.delete()
 
 
@@ -114,13 +115,14 @@ async def reparse_template(template_id: str, _: User = Depends(get_current_user)
     tpl = await FBDITemplate.get(PydanticObjectId(template_id))
     if not tpl:
         raise HTTPException(404, "Template not found")
-    if not tpl.file_path or not Path(tpl.file_path).exists():
+    src = await materialize_template_file(tpl)
+    if src is None:
         raise HTTPException(422, "Stored file not found; please delete and re-upload this template")
     # Delete existing fields and sheets
     await FBDIField.find(FBDIField.template_id == tpl.id).delete()
     await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
     # Re-parse
-    parsed = parse_fbdi_template(tpl.file_path)
+    parsed = parse_fbdi_template(str(src))
     sheet_id_by_name: dict[str, object] = {}
     for s in parsed["sheets"]:
         sheet = FBDISheet(
@@ -151,12 +153,13 @@ async def reparse_all_templates(_: User = Depends(get_current_user)):
     templates = await FBDITemplate.find_all().to_list()
     results = []
     for tpl in templates:
-        if not tpl.file_path or not Path(tpl.file_path).exists():
+        src = await materialize_template_file(tpl)
+        if src is None:
             results.append({"id": str(tpl.id), "name": tpl.name, "status": "skipped_no_file", "fields": 0})
             continue
         await FBDIField.find(FBDIField.template_id == tpl.id).delete()
         await FBDISheet.find(FBDISheet.template_id == tpl.id).delete()
-        parsed = parse_fbdi_template(tpl.file_path)
+        parsed = parse_fbdi_template(str(src))
         sheet_id_by_name: dict[str, object] = {}
         for s in parsed["sheets"]:
             sheet = FBDISheet(

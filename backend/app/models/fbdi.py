@@ -21,6 +21,20 @@ class FBDITemplate(Document):
     class Settings:
         name = "fbdi_templates"
 
+class FBDITemplateFile(Document):
+    """Durable copy of an uploaded template's raw bytes, stored in MongoDB so it
+    survives Render redeploys (the container disk is ephemeral). FBDI templates
+    are small (well under the 16MB BSON doc limit), so inline binary is fine."""
+    template_id: PydanticObjectId
+    file_name: Optional[str] = None
+    content: bytes
+    size: int = 0
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "fbdi_template_files"
+        indexes = ["template_id"]
+
 class FBDISheet(Document):
     template_id: PydanticObjectId
     sheet_name: str
