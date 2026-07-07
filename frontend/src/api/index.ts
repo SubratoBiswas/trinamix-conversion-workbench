@@ -179,7 +179,7 @@ export const ConversionsApi = {
 export interface ValueMapRecommendation {
   source_value: string;
   target_value: string;
-  method: "exact_code" | "exact_meaning" | "synonym" | "fuzzy" | "learned";
+  method: "exact_code" | "exact_meaning" | "synonym" | "fuzzy" | "learned" | "ai";
   confidence: number;
   already_valid?: boolean;
 }

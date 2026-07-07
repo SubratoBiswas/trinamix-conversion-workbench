@@ -1364,7 +1364,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
 // cover ...). Unresolved values surface as exceptions needing manual mapping.
 const methodLabel: Record<string, string> = {
   exact_code: "exact", exact_meaning: "meaning", synonym: "synonym",
-  fuzzy: "fuzzy", learned: "learned",
+  fuzzy: "fuzzy", learned: "learned", ai: "AI",
 };
 
 const ValueMapRecommendationsPanel: React.FC<{
@@ -1380,7 +1380,9 @@ const ValueMapRecommendationsPanel: React.FC<{
   useEffect(() => { setRecs(null); setSelected({}); setAppliedMsg(null); }, [mapping.id]);
 
   const lov = mapping.target_lov || [];
-  if (!lov.length) return null;
+  // Show for any mapped field: with a stored LOV we resolve deterministically,
+  // and without one the AI still normalizes values to standard Fusion codes.
+  if (!mapping.source_column) return null;
 
   const load = async () => {
     setLoading(true); setAppliedMsg(null);
@@ -1419,21 +1421,28 @@ const ValueMapRecommendationsPanel: React.FC<{
     <div className="mt-4 rounded-md border border-brand/30 bg-brand/5 p-2.5">
       <div className="flex items-center justify-between">
         <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
-          <Sparkles className="h-3 w-3" /> Target list of values
+          <Sparkles className="h-3 w-3" /> {lov.length ? "Target list of values" : "AI value normalization"}
         </span>
         {mapping.target_default_if_blank && (
           <span className="text-[10px] text-ink-subtle">blank → {mapping.target_default_if_blank}</span>
         )}
       </div>
-      {/* LOV chips — what the destination actually accepts */}
-      <div className="mt-1.5 flex flex-wrap gap-1">
-        {lov.map((e) => (
-          <span key={e.code} title={e.meaning || e.code}
-            className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10.5px] text-ink">
-            {e.code}{e.meaning && e.meaning !== e.code ? ` · ${e.meaning}` : ""}
-          </span>
-        ))}
-      </div>
+      {/* LOV chips — what the destination actually accepts (when defined) */}
+      {lov.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {lov.map((e) => (
+            <span key={e.code} title={e.meaning || e.code}
+              className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10.5px] text-ink">
+              {e.code}{e.meaning && e.meaning !== e.code ? ` · ${e.meaning}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
+      {!lov.length && (
+        <div className="mt-1 text-[10px] text-ink-subtle">
+          Claude maps this column's values to standard Oracle Fusion codes (e.g. United States → US, Kilogram → KG).
+        </div>
+      )}
 
       {!recs && !appliedMsg && (
         <button onClick={load} disabled={loading}
@@ -1453,7 +1462,7 @@ const ValueMapRecommendationsPanel: React.FC<{
         <div className="mt-2">
           <div className="text-[10.5px] text-ink-subtle">
             {recs.distinct_values.length} distinct source value{recs.distinct_values.length !== 1 ? "s" : ""} ·{" "}
-            {Math.round((recs.coverage || 0) * 100)}% resolve to the target LOV
+            {Math.round((recs.coverage || 0) * 100)}% resolved to a Fusion value
           </div>
           <div className="mt-1.5 max-h-52 space-y-1 overflow-y-auto pr-0.5">
             {(recs.recommendations || []).map((p: any) => (
