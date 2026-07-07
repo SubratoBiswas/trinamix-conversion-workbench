@@ -107,26 +107,38 @@ async def _upsert_mapping(conversion, field, *, source_column, default_value, co
 
 
 async def _save_reference_standard(target_object, field, *, source_column, default_value):
-    """Persist a reusable learned rule for the object so future conversions reuse it."""
-    if not target_object:
+    """Persist a reusable, OBJECT-LEVEL learned rule so a brand-new conversion of
+    the same object auto-applies it on Generate Set — the learning engine's
+    ``apply_learned_to_conversion`` re-reads these when auto-mapping.
+
+    Source->target maps are stored as kind='column_mapping' (the exact shape the
+    engine reuses: original_value = source column name, resolved_value/target_field
+    = target field, keyed by target_object). Constant defaults are recorded
+    informationally as 'example_default' (common defaults are also applied in code).
+    """
+    if not target_object or not field.field_name:
         return
-    original = source_column or "(default)"
-    resolved = default_value if default_value is not None else source_column
+    if source_column:
+        kind, category = "column_mapping", "Column Mapping Alias"
+        original, resolved, rtype = source_column, field.field_name, None
+    else:
+        kind, category = "example_default", "Default Value"
+        original, resolved, rtype = "(default)", (default_value or ""), "default"
     existing = await LearnedMapping.find_one(
-        LearnedMapping.kind == "example_mapping",
+        LearnedMapping.kind == kind,
         LearnedMapping.target_object == target_object,
         LearnedMapping.target_field == field.field_name,
     )
     doc = {
-        "kind": "example_mapping",
-        "category": "mapping",
+        "kind": kind,
+        "category": category,
         "original_value": str(original),
         "resolved_value": str(resolved),
         "target_object": target_object,
         "target_field": field.field_name,
-        "rule_type": "default" if default_value is not None else "direct_map",
+        "rule_type": rtype,
         "rule_config": {"source_column": source_column, "default_value": default_value},
-        "captured_from": "example_output",
+        "captured_from": "gold example",
         "captured_at": datetime.utcnow(),
     }
     if existing:
