@@ -143,6 +143,21 @@ export const ConversionsApi = {
       resolved_count: number;
       total_steps: number;
     }>("/conversions/generate-set", body).then(r => r.data),
+  /** Phase 2 learning: derive source->target mappings + constant defaults from a
+   *  populated example output, and/or apply a plain-text steering prompt. */
+  learnFromExample: (conversionId: string, opts: { file?: File; prompt?: string }) => {
+    const fd = new FormData();
+    if (opts.file) fd.append("file", opts.file);
+    if (opts.prompt) fd.append("prompt", opts.prompt);
+    return api.post<{
+      learned?: {
+        target_object?: string; mapped_count: number; default_count: number; skipped: number;
+        mapped: { field: string; source: string; match: number }[];
+        defaults: { field: string; value: string }[];
+      };
+      steer?: { applied: { field: string; source?: string; default?: string }[]; unmatched: string[] };
+    }>(`/conversions/${conversionId}/learn-from-example`, fd, { timeout: 300_000 }).then(r => r.data);
+  },
   /** Unified source columns for the Mapping Review canvas. Returns dataset
    *  profiles in dataset mode, or live Oracle EBS ALL_TAB_COLUMNS metadata
    *  when the conversion has no linked dataset (EBS live mode). */

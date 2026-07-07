@@ -8,6 +8,7 @@ import {
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
 const PiiLockGlyph: React.FC = () => <Lock className="h-2 w-2" />;
 import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi, ProjectsApi } from "@/api";
+import LearnFromExamplePanel from "@/components/learn/LearnFromExamplePanel";
 import type { InheritedStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import {
@@ -795,6 +796,10 @@ export const MappingReviewPage: React.FC = () => {
             })}
           </div>
         </div>
+      )}
+
+      {pid && (
+        <LearnFromExamplePanel conversionId={String(pid)} onApplied={loadAll} />
       )}
 
       {inherited.length > 0 && (
