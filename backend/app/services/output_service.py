@@ -227,6 +227,20 @@ _SEQ_FIELDS: set[str] = {
     "partynumber", "customeraccountnumber", "customernumber",  # customer
 }
 
+# Control fields that are CONSTANTS in the Oracle gold templates. These are set
+# AUTHORITATIVELY — the standard value is written even if auto-map filled the
+# column with a (usually wrong) source guess, e.g. Address Name / Supplier Site
+# landing a street address or "No", or User Account Action getting a phone
+# fragment. Excludes fields whose value is genuinely per-row (Business Unit,
+# currency) or correctly source-mapped (names, addresses, tax ids, web site).
+_AUTHORITATIVE: set[str] = {
+    "import action", "batch id",
+    "tax organization type", "organization type", "supplier type",
+    "business relationship", "federal reportable", "delivery channel",
+    "address name", "pay", "ordering", "rfq or bidding",
+    "supplier site", "user account action",
+}
+
 
 def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000) -> pd.DataFrame:
     n = len(df)
@@ -234,12 +248,18 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000) -> pd.Dat
         return df
     for col in df.columns:
         key = str(col).strip().lower().rstrip("*").strip()
-        if not bool((df[col].astype(str).str.strip() == "").all()):
-            continue  # column already carries data — leave it
-        if key in _CONTROL_DEFAULTS:
-            df[col] = _CONTROL_DEFAULTS[key]
-        elif key.replace(" ", "") in _SEQ_FIELDS:
+        keyc = key.replace(" ", "")
+        if keyc in _SEQ_FIELDS:
+            # Running key column — authoritative: Fusion needs a clean sequential
+            # id, not whatever source column auto-map happened to guess.
             df[col] = [str(seq_start + i) for i in range(n)]
+        elif key in _AUTHORITATIVE:
+            # Gold-constant control field — always write the standard value,
+            # overriding any wrong auto-mapped source guess.
+            df[col] = _CONTROL_DEFAULTS[key]
+        elif key in _CONTROL_DEFAULTS and bool((df[col].astype(str).str.strip() == "").all()):
+            # Other defaults only fill columns the source left entirely blank.
+            df[col] = _CONTROL_DEFAULTS[key]
     return df
 
 
