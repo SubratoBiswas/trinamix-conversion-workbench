@@ -120,6 +120,14 @@ async def create_dataset_from_upload(
     )
     await ds.insert()
 
+    # Durable copy in MongoDB GridFS so output generation still works after a
+    # redeploy wipes the ephemeral container disk.
+    try:
+        from app.services.dataset_file_store import store_dataset_bytes
+        await store_dataset_bytes(ds.id, stored_name, Path(file_path).read_bytes())
+    except Exception:
+        pass
+
     # Bulk-insert column profiles in one round-trip instead of one per column
     # (200+ sequential inserts was a major upload-latency source at scale).
     col_docs = [
@@ -132,13 +140,15 @@ async def create_dataset_from_upload(
     return ds, col_docs
 
 
-def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
-    import os
-    if not os.path.exists(ds.file_path):
-        # File wiped on redeploy — return empty preview so UI doesn't hang
+async def get_dataset_preview(ds: Dataset, limit: int = 50) -> dict[str, Any]:
+    # Rehydrate from GridFS if the ephemeral disk copy was wiped on redeploy.
+    from app.services.dataset_file_store import materialize_dataset_file
+    src_path = await materialize_dataset_file(ds)
+    if src_path is None:
         return {"columns": [], "rows": [], "total_rows": 0, "missing_file": True}
-    head = parse_tabular(ds.file_path, file_type=ds.file_type, nrows=limit)
-    total = ds.row_count or count_data_rows(ds.file_path, ds.file_type) or int(len(head))
+    src_path = str(src_path)
+    head = parse_tabular(src_path, file_type=ds.file_type, nrows=limit)
+    total = ds.row_count or count_data_rows(src_path, ds.file_type) or int(len(head))
     return {
         "columns": list(head.columns.astype(str)),
         "rows": head.fillna("").to_dict(orient="records"),

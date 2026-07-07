@@ -108,7 +108,7 @@ async def preview_dataset(dataset_id: str, limit: int = 50, _: User = Depends(ge
     ds = await Dataset.get(PydanticObjectId(dataset_id))
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    return get_dataset_preview(ds, limit=limit)
+    return await get_dataset_preview(ds, limit=limit)
 
 
 @router.get("/{dataset_id}/profile", response_model=DatasetDetailOut)

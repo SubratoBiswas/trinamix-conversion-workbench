@@ -38,7 +38,11 @@ async def build_converted_dataframe(
     # the work for previews (only the shown rows are generated).
     if conversion.dataset_id:
         dataset = await Dataset.get(conversion.dataset_id)
-        src = parse_tabular(dataset.file_path, file_type=dataset.file_type, nrows=max_rows)
+        from app.services.dataset_file_store import materialize_dataset_file
+        src_path = await materialize_dataset_file(dataset) if dataset else None
+        if src_path is None:
+            raise ValueError("Dataset source file not found; please re-upload the dataset")
+        src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
     else:
         from app.services.mapping_service import ebs_fetch_rows
         table = getattr(conversion, "ebs_table_hint", "") or ""
