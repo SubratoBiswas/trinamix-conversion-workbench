@@ -163,6 +163,35 @@ def _safe_sheet_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "sheet"
 
 
+# Control-field defaults + auto-numbered keys so generated files aren't blank in
+# the columns Fusion requires — mirrors how a consultant fills the template
+# (Import Action = CREATE, a batch id, a running supplier number, standard
+# org/type values). Applied ONLY to columns the source left entirely blank.
+_CONTROL_DEFAULTS: dict[str, str] = {
+    "import action": "CREATE",
+    "batch id": "900001",
+    "tax organization type": "Corporation",
+    "organization type": "Corporation",
+    "supplier type": "Supplier",
+}
+_SEQ_FIELDS: set[str] = {"suppliernumber", "supplierpartynumber"}
+
+
+def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000) -> pd.DataFrame:
+    n = len(df)
+    if n == 0:
+        return df
+    for col in df.columns:
+        key = str(col).strip().lower().rstrip("*").strip()
+        if not bool((df[col].astype(str).str.strip() == "").all()):
+            continue  # column already carries data — leave it
+        if key in _CONTROL_DEFAULTS:
+            df[col] = _CONTROL_DEFAULTS[key]
+        elif key.replace(" ", "") in _SEQ_FIELDS:
+            df[col] = [str(seq_start + i) for i in range(n)]
+    return df
+
+
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
     from app.models.fbdi import FBDISheet
     df, _ = await build_converted_dataframe(conversion)
@@ -196,46 +225,31 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         sdf = df.reindex(columns=cols, fill_value="")
         return _format_date_columns(sdf, sfields)
 
-    # Multi-sheet FBDI workbook (Customer/Item/…): emit ONE CSV per interface
-    # sheet — "all sheets populated" — numbered in load order, bundled in a zip.
-    if fmt == "csv" and len(sheets_with_fields) > 1:
-        buf = io.BytesIO()
-        total_rows = 0
-        total_cols = 0
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for i, s in enumerate(sheets_with_fields, start=1):
-                sdf = _sheet_frame(fields_by_sheet[s.id])
-                zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False))
+    # Emit a POPULATED .xlsx template — the interface sheet(s) with headers +
+    # data, matching the Oracle template format the team ships (not stripped
+    # CSVs). Control columns the source didn't map get sensible defaults + a
+    # running key number so the file is load-ready.
+    out_name = f"{obj_name}_{ts}.xlsx"
+    out_path = out_dir / out_name
+    total_rows = 0
+    total_cols = 0
+    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+        if sheets_with_fields:
+            for s in sheets_with_fields:
+                sdf = _apply_control_defaults(_sheet_frame(fields_by_sheet[s.id]))
+                sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                 total_rows = max(total_rows, len(sdf))
                 total_cols += len(sdf.columns)
-        out_name = f"{obj_name}_{ts}.zip"
-        out_path = out_dir / out_name
-        out_path.write_bytes(buf.getvalue())
-        artefact = ConvertedOutput(
-            conversion_id=conversion.id, output_file_path=str(out_path),
-            output_file_name=out_name, row_count=total_rows, column_count=total_cols,
-            status="generated",
-        )
-        await artefact.insert()
-        await conversion.set({"status": "output_generated", "updated_at": datetime.utcnow()})
-        return artefact
-
-    # Single-sheet (or xlsx): one flat file with all interface columns in order.
-    if fields:
-        df = df.reindex(columns=_dedup([f.field_name for f in fields]), fill_value="")
-    df = _format_date_columns(df, fields)
-    sheet_name = (sheets_with_fields[0].sheet_name if sheets_with_fields else None) or "SCM Items"
-    if fmt == "xlsx":
-        out_name = f"{obj_name}_{ts}.xlsx"
-        out_path = out_dir / out_name
-        df.to_excel(out_path, index=False, sheet_name=sheet_name[:31])  # Excel max 31 chars
-    else:
-        out_name = f"{obj_name}_{ts}.csv"
-        out_path = out_dir / out_name
-        df.to_csv(out_path, index=False)
+        else:
+            fdf = df.reindex(columns=_dedup([f.field_name for f in fields]), fill_value="") if fields else df
+            fdf = _apply_control_defaults(_format_date_columns(fdf, fields))
+            fdf.to_excel(xw, index=False, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
+            total_rows = len(fdf)
+            total_cols = len(fdf.columns)
     artefact = ConvertedOutput(
         conversion_id=conversion.id, output_file_path=str(out_path),
-        output_file_name=out_name, row_count=len(df), column_count=len(df.columns), status="generated",
+        output_file_name=out_name, row_count=total_rows, column_count=total_cols,
+        status="generated",
     )
     await artefact.insert()
     await conversion.set({"status": "output_generated", "updated_at": datetime.utcnow()})
