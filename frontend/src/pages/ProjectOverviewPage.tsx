@@ -322,26 +322,41 @@ export const ProjectOverviewPage: React.FC = () => {
           <CardHeader
             title="Conversion Objects"
             subtitle={`${totals.total} object${totals.total === 1 ? "" : "s"} ordered by planned load sequence`}
-            actions={!fileBased && (
-              <button
-                onClick={async () => {
-                  setEbsBusy(true);
-                  try {
-                    const res = await ConversionsApi.switchProjectToEbs(pid);
-                    setToast(res.message);
-                    const updated = await ConversionsApi.list({ project_id: pid });
-                    setConversions(updated);
-                  } catch (e: any) {
-                    setToast(`Failed: ${e?.response?.data?.detail || e?.message}`);
-                  } finally { setEbsBusy(false); }
-                }}
-                disabled={ebsBusy}
-                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-                title="Remove uploaded datasets and use live Oracle EBS as source for all conversions"
-              >
-                <Zap className="h-3 w-3" />
-                {ebsBusy ? "Switching…" : "Use EBS Source"}
-              </button>
+            actions={conversions.length > 0 && (
+              <div className="flex items-center gap-2">
+                {/* Generate every object's FBDI output and download them together
+                    as one zip (ordered by the supplier load sequence). */}
+                <button
+                  onClick={downloadAllFbdi}
+                  disabled={dlAll}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand-dark hover:bg-brand-subtle/70 disabled:opacity-50"
+                  title="Generate output for all objects and download them together as one .zip, ordered by load sequence"
+                >
+                  <FolderDown className="h-3 w-3" />
+                  {dlAll ? "Generating…" : "Generate all & download (.zip)"}
+                </button>
+                {!fileBased && (
+                  <button
+                    onClick={async () => {
+                      setEbsBusy(true);
+                      try {
+                        const res = await ConversionsApi.switchProjectToEbs(pid);
+                        setToast(res.message);
+                        const updated = await ConversionsApi.list({ project_id: pid });
+                        setConversions(updated);
+                      } catch (e: any) {
+                        setToast(`Failed: ${e?.response?.data?.detail || e?.message}`);
+                      } finally { setEbsBusy(false); }
+                    }}
+                    disabled={ebsBusy}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                    title="Remove uploaded datasets and use live Oracle EBS as source for all conversions"
+                  >
+                    <Zap className="h-3 w-3" />
+                    {ebsBusy ? "Switching…" : "Use EBS Source"}
+                  </button>
+                )}
+              </div>
             )}
           />
           {conversions.length === 0 ? (
