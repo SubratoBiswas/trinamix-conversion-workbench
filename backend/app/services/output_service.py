@@ -170,13 +170,33 @@ def _safe_sheet_name(s: str) -> str:
 _CONTROL_DEFAULTS: dict[str, str] = {
     # Applied by EXACT column name to blank columns only, so these are safe to
     # merge across objects (a supplier sheet has no "Transaction Type" column,
-    # an item sheet has no "Supplier Type", etc.).
-    # --- Supplier (confirmed against the reference output) ---
+    # an item sheet has no "Supplier Type", etc.). Keys are lower-case with any
+    # trailing "*" already stripped (matcher strips "*").
+    # --- Supplier import (POZ_SUPPLIERS_INT) — confirmed vs the gold output ---
     "import action": "CREATE",
     "batch id": "900001",
     "tax organization type": "Corporation",
     "organization type": "Corporation",
     "supplier type": "Supplier",
+    "business relationship": "PROSPECTIVE",
+    "federal reportable": "N",
+    "delivery channel": "EMAIL",
+    # --- Supplier address (POZ_SUPPLIER_ADDRESSES_INT) ---
+    "address name": "PRIMARY",
+    "pay": "Y",
+    "ordering": "Y",
+    "rfq or bidding": "Y",
+    # --- Supplier site (POZ_SUPPLIER_SITES_INT) ---
+    "supplier site": "PRIMARY",
+    # --- Supplier site assignment (POZ_SITE_ASSIGNMENTS_INT) ---
+    # Business-unit columns are client-specific; default to the primary BU for
+    # this engagement so the file is load-ready (override per-row via mapping).
+    "client bu": "Nextpower LLC Business Unit",
+    "procurement bu": "Nextpower LLC Business Unit",
+    "bill-to bu": "Nextpower LLC Business Unit",
+    # --- Supplier contacts (POZ_SUP_CONTACTS) ---
+    "administrative contact": "Y",
+    "user account action": "NONE",
     # --- Item (Product Hub) — sensible defaults; confirm vs a reference ---
     "transaction type": "SYNC",
     "item class": "Root Item Class",
@@ -184,6 +204,20 @@ _CONTROL_DEFAULTS: dict[str, str] = {
     "insert update flag": "I",
     "create or update record": "1",
 }
+
+
+def _header_label(f) -> str:
+    """The header text to write for a field. Prefer the raw header captured at
+    parse time (which carries Oracle's exact '*' required markers, e.g.
+    'Import Action *', 'Supplier Name*'); fall back to appending a trailing '*'
+    for required fields when only the cleaned name is stored (older templates)."""
+    raw = (getattr(f, "display_name", None) or "").strip()
+    if "*" in raw:
+        return raw
+    base = (f.field_name or "").strip()
+    if getattr(f, "required", False) and base and "*" not in base:
+        return base + " *"
+    return base or raw
 _SEQ_FIELDS: set[str] = {
     "suppliernumber", "supplierpartynumber",   # supplier
     "partynumber", "customeraccountnumber", "customernumber",  # customer
@@ -231,12 +265,21 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     obj_name = (template.business_object if template else None) or "fbdi"
 
-    def _sheet_frame(sfields: list) -> pd.DataFrame:
-        # Req 8 — exactly this sheet's interface columns, in sequence, real
-        # headers, blanks where unmapped, no instruction rows.
+    def _finalize(sfields: list) -> pd.DataFrame:
+        # Req 8 — exactly this sheet's interface columns, in sequence, blanks
+        # where unmapped, no instruction rows. Data ops (date reformat, control
+        # defaults) run while columns are still keyed by cleaned field_name; the
+        # LAST step renames columns to Oracle's exact header labels (with the
+        # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
         sdf = df.reindex(columns=cols, fill_value="")
-        return _format_date_columns(sdf, sfields)
+        sdf = _format_date_columns(sdf, sfields)
+        sdf = _apply_control_defaults(sdf)
+        hdr: dict[str, str] = {}
+        for f in sfields:
+            hdr.setdefault(f.field_name, _header_label(f))
+        sdf.columns = [hdr.get(c, c) for c in sdf.columns]
+        return sdf
 
     # Emit a POPULATED .xlsx template — the interface sheet(s) with headers +
     # data, matching the Oracle template format the team ships (not stripped
@@ -249,13 +292,12 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
         if sheets_with_fields:
             for s in sheets_with_fields:
-                sdf = _apply_control_defaults(_sheet_frame(fields_by_sheet[s.id]))
+                sdf = _finalize(fields_by_sheet[s.id])
                 sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                 total_rows = max(total_rows, len(sdf))
                 total_cols += len(sdf.columns)
         else:
-            fdf = df.reindex(columns=_dedup([f.field_name for f in fields]), fill_value="") if fields else df
-            fdf = _apply_control_defaults(_format_date_columns(fdf, fields))
+            fdf = _finalize(fields) if fields else _apply_control_defaults(df)
             fdf.to_excel(xw, index=False, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
             total_rows = len(fdf)
             total_cols = len(fdf.columns)

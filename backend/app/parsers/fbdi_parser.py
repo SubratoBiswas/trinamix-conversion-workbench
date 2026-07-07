@@ -134,7 +134,9 @@ def parse_fbdi_template(file_path):
                 sheet_field_count += 1
                 fields_out.append({
                     "field_name": field_name,
-                    "display_name": field_name,
+                    # keep the raw header (with Oracle's '*' required marker) so
+                    # generated output can reproduce the exact template header.
+                    "display_name": name,
                     "description": desc_text,
                     "required": required,
                     "data_type": data_type,
@@ -189,7 +191,9 @@ def parse_fbdi_template(file_path):
                 sheet_field_count += 1
                 fields_out.append({
                     "field_name": field_name,
-                    "display_name": field_name,
+                    # keep the raw header (with Oracle's '*' required marker) so
+                    # generated output can reproduce the exact template header.
+                    "display_name": name,
                     "description": None,
                     "required": is_req,
                     "data_type": data_type,
