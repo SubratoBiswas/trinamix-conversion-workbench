@@ -267,7 +267,15 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    obj_name = (template.business_object if template else None) or "fbdi"
+    # Name the output after the object: prefer the template's business object,
+    # then the conversion's target object (always set, e.g. "Supplier Site"),
+    # then the template name — only fall back to "fbdi" if nothing is available.
+    obj_name = (
+        (template.business_object if template else None)
+        or getattr(conversion, "target_object", None)
+        or (template.name if template else None)
+        or "fbdi"
+    )
 
     def _finalize(sfields: list) -> pd.DataFrame:
         # Req 8 — exactly this sheet's interface columns, in sequence, blanks
