@@ -71,7 +71,10 @@ async def _ai_infer_defaults(target_object: str, fields: list[dict]) -> dict[str
                     "content-type": "application/json",
                 },
                 json={
-                    "model": settings.ANTHROPIC_MODEL,
+                    # Haiku: cheap + fast for this lightweight constant-inference
+                    # task, and the exact model the working copilot path uses
+                    # (avoids the ANTHROPIC_MODEL default, which may be unavailable).
+                    "model": "claude-haiku-4-5-20251001",
                     "max_tokens": 1500,
                     "messages": [{"role": "user", "content": prompt}],
                 },
