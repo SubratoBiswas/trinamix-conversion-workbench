@@ -168,13 +168,26 @@ def _safe_sheet_name(s: str) -> str:
 # (Import Action = CREATE, a batch id, a running supplier number, standard
 # org/type values). Applied ONLY to columns the source left entirely blank.
 _CONTROL_DEFAULTS: dict[str, str] = {
+    # Applied by EXACT column name to blank columns only, so these are safe to
+    # merge across objects (a supplier sheet has no "Transaction Type" column,
+    # an item sheet has no "Supplier Type", etc.).
+    # --- Supplier (confirmed against the reference output) ---
     "import action": "CREATE",
     "batch id": "900001",
     "tax organization type": "Corporation",
     "organization type": "Corporation",
     "supplier type": "Supplier",
+    # --- Item (Product Hub) — sensible defaults; confirm vs a reference ---
+    "transaction type": "SYNC",
+    "item class": "Root Item Class",
+    # --- Customer (Trading Community / AR) — confirm vs a reference ---
+    "insert update flag": "I",
+    "create or update record": "1",
 }
-_SEQ_FIELDS: set[str] = {"suppliernumber", "supplierpartynumber"}
+_SEQ_FIELDS: set[str] = {
+    "suppliernumber", "supplierpartynumber",   # supplier
+    "partynumber", "customeraccountnumber", "customernumber",  # customer
+}
 
 
 def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000) -> pd.DataFrame:
