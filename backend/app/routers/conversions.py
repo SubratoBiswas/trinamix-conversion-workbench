@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 from beanie import PydanticObjectId
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.models.conversion import Conversion
@@ -303,3 +303,47 @@ async def switch_project_to_ebs_source(
         "updated": updated,
         "message": f"Switched {updated} conversions to Oracle EBS live source",
     }
+
+
+@router.post("/{conversion_id}/learn-from-example")
+async def learn_from_example(
+    conversion_id: str,
+    file: UploadFile | None = File(None),
+    prompt: str | None = Form(None),
+    _: User = Depends(get_current_user),
+):
+    """Teach this conversion from a populated example output and/or a plain-text
+    steering prompt. Infers source->target mappings + constant defaults from the
+    example (value-set matching) and applies any prompt directives, writing them
+    as approved mappings so Generate Output reproduces the example."""
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    if not conv.template_id:
+        raise HTTPException(422, "Conversion has no target template")
+
+    result: dict = {}
+    if file is not None:
+        import os
+        import tempfile
+        from app.services.example_learning_service import learn_conversion_from_example
+        contents = await file.read()
+        suffix = os.path.splitext(file.filename or "")[1] or ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+            tf.write(contents)
+            tmp = tf.name
+        try:
+            result["learned"] = await learn_conversion_from_example(conv, tmp)
+        finally:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+    if prompt and prompt.strip():
+        from app.services.steering_service import apply_steer_prompt
+        result["steer"] = await apply_steer_prompt(conv, prompt)
+
+    if not result:
+        raise HTTPException(400, "Provide an example file and/or a prompt")
+    return result
