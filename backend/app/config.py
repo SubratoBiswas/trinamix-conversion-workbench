@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # AI provider
     AI_PROVIDER: str = "none"
     ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-6"  # latest Sonnet
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
 
