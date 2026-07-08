@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +52,21 @@ def _norm_val(v) -> str:
     return s.lower()
 
 
+def _clean(v) -> str:
+    """Like _norm_val but PRESERVES the original casing. Used for the values the
+    tool writes back — a constant default learned from the gold example must keep
+    gold's exact form ('EMAIL', 'Y', 'PROSPECTIVE'), not a lowercased one.
+    Lowercasing via _norm_val is used ONLY for value-set overlap scoring."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if s.lower() in _BLANKS:
+        return ""
+    if re.fullmatch(r"-?\d+\.0+", s):
+        s = s.split(".")[0]
+    return s
+
+
 def _read_example(path: Path) -> dict[str, list[str]]:
     """Return {normalized_header_key: [row values]} across all non-instruction
     sheets of a populated template. Header = the row with the most text cells in
@@ -79,7 +95,7 @@ def _read_example(path: Path) -> dict[str, list[str]]:
             key = _norm_key(col)
             if not key or key in out:
                 continue
-            out[key] = [(_norm_val(r[ci]) if ci < len(r) else "") for r in data]
+            out[key] = [(_clean(r[ci]) if ci < len(r) else "") for r in data]
     wb.close()
     return out
 
@@ -197,13 +213,21 @@ async def learn_conversion_from_example(conversion: Conversion, example_path: st
                                            default_value=None, suppress=True)
             suppressed.append(f.field_name)
             continue
-        uniq = set(nonblank)
-        # Constant column -> default value (use the original-cased example value).
-        if len(uniq) == 1:
-            # recover original casing from the raw example (first non-blank)
-            val = nonblank[0]
+        # Normalized values drive matching/counting; ORIGINAL-cased values are
+        # what we write back (so gold's exact form — EMAIL, Y, PROSPECTIVE — is
+        # preserved instead of a lowercased copy).
+        norm_vals = [_norm_val(v) for v in nonblank]
+        uniq = set(norm_vals)
+        top_norm, top_cnt = Counter(norm_vals).most_common(1)[0]
+        # Constant, OR near-constant (one value covers >=90% of the sample) ->
+        # write it as a default. Near-constant captures BU / EMAIL / Y-N flags
+        # that are effectively fixed in the gold sample; gold/prompt can override.
+        if len(uniq) == 1 or (top_cnt / len(norm_vals)) >= 0.90:
+            val = next(v for v in nonblank if _norm_val(v) == top_norm)  # original casing
+            constant = len(uniq) == 1
             await _upsert_mapping(conversion, f, source_column=None, default_value=val,
-                                  confidence=0.97, reason="constant in example")
+                                  confidence=0.97 if constant else 0.9,
+                                  reason="constant in example" if constant else "dominant value in example")
             await _save_reference_standard(target_object, f, source_column=None, default_value=val)
             defaulted.append({"field": f.field_name, "value": val})
             continue
