@@ -376,6 +376,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     )
     await artefact.insert()
     await conversion.set({"status": "output_generated", "updated_at": datetime.utcnow()})
+    # Learning capture: a successful output means these mappings/defaults worked —
+    # persist the trustworthy ones as reusable object-level learnings so the next
+    # conversion of this object reuses them and needs less AI (best-effort).
+    try:
+        from app.services.learning_service import capture_learnings_from_conversion
+        await capture_learnings_from_conversion(conversion)
+    except Exception:
+        pass
     return artefact
 
 

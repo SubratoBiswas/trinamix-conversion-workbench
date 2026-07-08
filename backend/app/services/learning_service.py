@@ -44,6 +44,80 @@ async def _business_object_for(conversion: Conversion) -> str | None:
     return conversion.target_object
 
 
+async def _upsert_learned(kind, business_object, field_name, *, original, resolved,
+                          rule_type=None, rule_config=None, captured_from="auto-capture"):
+    """Upsert one reusable object-level learned rule. Never downgrades a rule
+    captured from a gold example / prompt / accepted crosswalk with an
+    auto-captured one (human/gold signals outrank auto-capture)."""
+    if not business_object or not field_name:
+        return False
+    existing = await LearnedMapping.find_one(
+        LearnedMapping.kind == kind,
+        LearnedMapping.target_object == business_object,
+        LearnedMapping.target_field == field_name,
+    )
+    if existing and existing.captured_from in ("gold example", "prompt", "value-map-accept") \
+            and captured_from == "auto-capture":
+        return False
+    category = _category_for(rule_type) if kind == "column_mapping" else kind
+    doc = {
+        "kind": kind, "category": category,
+        "original_value": str(original), "resolved_value": str(resolved),
+        "target_object": business_object, "target_field": field_name,
+        "rule_type": rule_type, "rule_config": rule_config or {},
+        "captured_from": captured_from, "captured_at": datetime.utcnow(),
+    }
+    if existing:
+        await existing.set(doc)
+    else:
+        await LearnedMapping(**doc).insert()
+    return True
+
+
+async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
+    """After a successful mapping/output, persist the conversion's effective
+    mappings, constant defaults and suppressions as reusable object-level
+    learnings so future conversions of the same object reuse them (and lean on
+    AI less). Only trustworthy signals are captured — user-approved/overridden,
+    deterministic/high-confidence (>=0.85), or suppressed — so low-confidence AI
+    guesses don't get propagated."""
+    business_object = await _business_object_for(conversion)
+    if not business_object or not conversion.template_id:
+        return {"captured": 0}
+    fields = {f.id: f.field_name for f in await FBDIField.find(
+        FBDIField.template_id == conversion.template_id).to_list()}
+    maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == conversion.id).to_list()
+    _PRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
+    best: dict = {}
+    for m in maps:
+        c = best.get(m.target_field_id)
+        if c is None or _PRIO.get(m.status or "suggested", 0) > _PRIO.get(c.status or "suggested", 0):
+            best[m.target_field_id] = m
+    n = 0
+    for m in best.values():
+        fname = fields.get(m.target_field_id)
+        if not fname:
+            continue
+        trustworthy = (m.status in ("approved", "overridden")) or ((m.confidence or 0) >= 0.85)
+        if m.status == "not_applicable":
+            if await _upsert_learned("suppress_field", business_object, fname,
+                                     original="(blank)", resolved="", rule_type="suppress"):
+                n += 1
+        elif m.source_column and trustworthy:
+            st = m.suggested_transformation or {}
+            if await _upsert_learned("column_mapping", business_object, fname,
+                                     original=m.source_column, resolved=fname,
+                                     rule_type=st.get("rule_type"), rule_config=st.get("config")):
+                n += 1
+        elif m.default_value and trustworthy:
+            if await _upsert_learned("example_default", business_object, fname,
+                                     original="(default)", resolved=m.default_value,
+                                     rule_type="default"):
+                n += 1
+    return {"captured": n, "object": business_object}
+
+
 def _category_for(rule_type: str | None) -> str:
     if not rule_type:
         return "Column Mapping Alias"

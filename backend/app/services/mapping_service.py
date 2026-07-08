@@ -402,8 +402,29 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     rule_results = RuleBasedMapper().suggest_mappings(sources, targets)
     rule_by_id = {str(r.target_field_id): r for r in rule_results}
     _CONF = 0.60
+
+    # Learning-first: targets already covered by a learned rule (a captured
+    # column mapping or suppression for this object) are resolved from the
+    # learning DB afterward (apply_learned_to_conversion) — so never spend AI on
+    # them. This is what makes the tool need less AI as it accumulates learnings.
+    learned_targets: set[str] = set()
+    try:
+        from app.models.learned import LearnedMapping
+        bo = (template.business_object if template else None) or conversion.target_object
+        if bo:
+            for lm in await LearnedMapping.find({
+                "target_object": bo,
+                "kind": {"$in": ["column_mapping", "suppress_field"]},
+            }).to_list():
+                if lm.target_field:
+                    learned_targets.add(lm.target_field)
+    except Exception:
+        learned_targets = set()
+
     weak = []
     for t in targets:
+        if t.field_name in learned_targets:
+            continue  # will be filled from the learning DB — no AI needed
         r = rule_by_id.get(str(t.id))
         if r is None or not r.source_column or (r.confidence or 0) < _CONF:
             weak.append(t)
