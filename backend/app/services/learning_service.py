@@ -322,6 +322,40 @@ async def apply_learned_to_conversion(
                     "updated_at": now,
                 })
                 auto_count += 1
+
+    # Constant-default pass — re-apply the constant values learned from gold
+    # (kind="example_default") so a brand-new conversion of this object inherits
+    # them WITHOUT the user re-uploading the gold file. Only fills targets that
+    # are still "suggested" (i.e. not covered by a learned column mapping above).
+    defaults = await LearnedMapping.find({
+        "kind": "example_default", "target_object": business_object
+    }).to_list()
+    if defaults:
+        by_default: dict[str, LearnedMapping] = {}
+        for lm in defaults:
+            if lm.target_field:
+                by_default.setdefault(lm.target_field, lm)
+        for m in mappings:
+            if m.status != "suggested":
+                continue
+            tgt_name = fields_map.get(m.target_field_id)
+            if not tgt_name or tgt_name not in by_default:
+                continue
+            lm = by_default[tgt_name]
+            val = (lm.rule_config or {}).get("default_value")
+            if val in (None, ""):
+                val = lm.resolved_value
+            if val in (None, ""):
+                continue
+            await m.set({
+                "source_column": None, "default_value": val,
+                "confidence": 0.96, "review_required": 0, "status": "approved",
+                "approved_by": "learning-engine", "approved_at": now,
+                "reason": f'Constant default re-applied from learning library (from "{lm.captured_from}")',
+                "updated_at": now,
+            })
+            await lm.set({"records_auto_fixed": (lm.records_auto_fixed or 0) + 1})
+            auto_count += 1
     return auto_count
 
 

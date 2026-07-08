@@ -9,7 +9,7 @@ import {
 const PiiLockGlyph: React.FC = () => <Lock className="h-2 w-2" />;
 import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
 import LearnFromExamplePanel from "@/components/learn/LearnFromExamplePanel";
-import type { InheritedStandard } from "@/api";
+import type { InheritedStandard, ReferenceStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import {
   Button, Card, CardBody, EmptyState, PageLoader, PageTitle, Pill, Spinner,
@@ -123,6 +123,9 @@ export const MappingReviewPage: React.FC = () => {
   // surface them as a banner + per-row chips so the analyst can see
   // the propagation without having to open Output Preview.
   const [inherited, setInherited] = useState<InheritedStandard[]>([]);
+  // Gold reference standard stored in the DB for this conversion's object type
+  // (auto-applied; no re-upload needed). Null when none is on file yet.
+  const [refStd, setRefStd] = useState<ReferenceStandard | null>(null);
 
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
@@ -243,6 +246,15 @@ export const MappingReviewPage: React.FC = () => {
       setTargetFields(fields);
       setMappings(ms);
       setInherited(std);
+      // Reference standard on file for this object (from the learning library).
+      const objKey = (proj.target_object || "").trim().toLowerCase();
+      if (objKey) {
+        LearningApi.referenceStandards()
+          .then((rows) => setRefStd(rows.find((r) => (r.business_object || "").trim().toLowerCase() === objKey) || null))
+          .catch(() => setRefStd(null));
+      } else {
+        setRefStd(null);
+      }
     } catch (e: any) {
       setLoadError(`Couldn't load mapping data (${e?.response?.status || "network error"}). Retry in a moment.`);
       setLoadingConversion(false);
@@ -880,6 +892,24 @@ export const MappingReviewPage: React.FC = () => {
 
       {pid && (
         <LearnFromExamplePanel conversionId={String(pid)} onApplied={loadAll} />
+      )}
+
+      {pid && refStd && (
+        <div className="border-b border-line bg-brand-subtle/15 px-5 py-2 text-[12px]">
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-brand text-[10px] font-bold text-white">✓</span>
+            <div>
+              <div className="font-semibold text-ink">
+                Gold reference standard on file for {refStd.business_object} — auto-applied
+              </div>
+              <div className="mt-0.5 leading-snug text-ink-muted">
+                Stored from a previously uploaded gold output: {refStd.column_mappings} mapped column{refStd.column_mappings === 1 ? "" : "s"},
+                {" "}{refStd.defaults} constant default{refStd.defaults === 1 ? "" : "s"}, {refStd.suppressions} suppressed field{refStd.suppressions === 1 ? "" : "s"}.
+                No need to re-upload — uploading a new gold file above overrides it for this object.
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {inherited.length > 0 && (

@@ -104,6 +104,38 @@ async def learning_stats(
     }
 
 
+@router.get("/reference-standards")
+async def reference_standards(_: User = Depends(get_current_user)):
+    """Per-object summary of the gold-derived reference standards stored in the
+    DB. Once gold has been applied for an object type (e.g. Supplier Import),
+    a reusable standard is on file and auto-applied to every future conversion
+    of that object — so the UI can show it without the user re-uploading gold.
+    Grouped by target_object across the reusable (global) learned rules."""
+    items = await LearnedMapping.find(
+        {"kind": {"$in": ["column_mapping", "example_default", "suppress_field"]},
+         "target_object": {"$ne": None}}
+    ).to_list()
+    by_obj: dict[str, dict] = {}
+    for it in items:
+        obj = it.target_object
+        row = by_obj.setdefault(obj, {
+            "business_object": obj, "column_mappings": 0, "defaults": 0,
+            "suppressions": 0, "captured_from": it.captured_from,
+            "captured_at": it.captured_at,
+        })
+        if it.kind == "column_mapping":
+            row["column_mappings"] += 1
+        elif it.kind == "example_default":
+            row["defaults"] += 1
+        elif it.kind == "suppress_field":
+            row["suppressions"] += 1
+        if it.captured_at and (row["captured_at"] is None or it.captured_at > row["captured_at"]):
+            row["captured_at"] = it.captured_at
+            row["captured_from"] = it.captured_from
+    rows = sorted(by_obj.values(), key=lambda r: r["business_object"])
+    return {"reference_standards": rows}
+
+
 @router.get("/knowledge-bank/stats")
 async def knowledge_bank_stats(_: User = Depends(get_current_user)):
     items = await LearnedMapping.find_all().to_list()

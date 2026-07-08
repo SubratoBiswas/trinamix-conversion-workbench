@@ -9,7 +9,8 @@ import {
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download, FolderDown, Upload,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, LearningApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
+import type { ReferenceStandard } from "@/api";
 import { api } from "@/api/client";
 import type { Dataset, FBDITemplate, FusionModule, ScopeHints } from "@/types";
 import {
@@ -107,6 +108,17 @@ export const ProjectOverviewPage: React.FC = () => {
   const [showModuleModal, setShowModuleModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [hasConnection, setHasConnection] = useState(false);
+  // Gold reference standards on file (per object type), loaded from the DB.
+  // Once gold has been applied for an object, its standard is stored globally
+  // and auto-applied to future conversions — shown here without re-upload.
+  const [refStandards, setRefStandards] = useState<ReferenceStandard[]>([]);
+  const loadRefStandards = () =>
+    LearningApi.referenceStandards().then(setRefStandards).catch(() => setRefStandards([]));
+  const refStdFor = (obj?: string | null): ReferenceStandard | undefined => {
+    if (!obj) return undefined;
+    const k = obj.trim().toLowerCase();
+    return refStandards.find((r) => (r.business_object || "").trim().toLowerCase() === k);
+  };
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
 
@@ -239,6 +251,7 @@ export const ProjectOverviewPage: React.FC = () => {
       const okc = results.filter((r) => r.ok).length;
       flash(`Applied gold to ${okc}/${files.length} object${files.length === 1 ? "" : "s"} — regenerate outputs to apply.`);
       refresh();
+      loadRefStandards();
     } finally {
       setGoldBusy(false); setGoldStatus(null);
       if (goldInputRef.current) goldInputRef.current.value = "";
@@ -264,6 +277,7 @@ export const ProjectOverviewPage: React.FC = () => {
   };
 
   useEffect(() => {
+    loadRefStandards();
     Promise.all([
       ProjectsApi.get(pid),
       ProjectsApi.conversions(pid),
@@ -468,6 +482,27 @@ export const ProjectOverviewPage: React.FC = () => {
               </div>
             )}
           />
+          {refStandards.length > 0 && (
+            <div className="border-b border-line bg-brand-subtle/15 px-4 py-2 text-[11px]">
+              <div className="mb-1 flex items-center gap-1.5 font-semibold text-brand-dark">
+                <Wand2 className="h-3 w-3" />
+                Reference standards on file — auto-applied from your learning library (no re-upload needed)
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-ink-muted">
+                {refStandards.map((r) => (
+                  <span key={r.business_object} className="inline-flex items-center gap-1">
+                    <span className="font-medium text-ink">{r.business_object}</span>
+                    <span className="font-mono text-[10px]">
+                      {r.column_mappings}m · {r.defaults}d · {r.suppressions}s
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <div className="mt-0.5 text-[10px] text-ink-subtle">
+                m = mapped columns · d = constant defaults · s = suppressed (kept blank). Uploading gold again overrides the stored standard for that object.
+              </div>
+            </div>
+          )}
           {goldResults.length > 0 && (
             <div className="border-b border-line bg-canvas px-4 py-2 text-[11px]">
               <div className="mb-1 font-semibold text-ink">Gold applied — regenerate to see updated output:</div>
@@ -516,6 +551,18 @@ export const ProjectOverviewPage: React.FC = () => {
                       {c.target_object && (
                         <div className="text-[10.5px] text-ink-muted">→ {c.target_object}</div>
                       )}
+                      {(() => {
+                        const rs = refStdFor(c.target_object);
+                        return rs ? (
+                          <div
+                            className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-brand-subtle/40 px-1.5 py-0.5 text-[9.5px] font-medium text-brand-dark"
+                            title={`A gold reference standard is on file for ${rs.business_object} and is auto-applied to this conversion: ${rs.column_mappings} mapped columns, ${rs.defaults} constant defaults, ${rs.suppressions} suppressed. Uploading gold again overrides it.`}
+                          >
+                            <Wand2 className="h-2.5 w-2.5" />
+                            gold on file · {rs.column_mappings}m {rs.defaults}d {rs.suppressions}s
+                          </div>
+                        ) : null;
+                      })()}
                     </td>
                     <td>
                       {c.template_name

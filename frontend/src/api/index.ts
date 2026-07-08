@@ -358,6 +358,20 @@ export const LearningApi = {
   delete: (id: string) => api.delete(`/learned-mappings/${id}`).then(r => r.data),
   backfillProjects: () =>
     api.post("/learned-mappings/backfill-projects").then(r => r.data),
+  /** Per-object gold reference standards stored in the DB (auto-applied to
+   *  future conversions of the same object; no re-upload needed). */
+  referenceStandards: () =>
+    api.get<{ reference_standards: ReferenceStandard[] }>("/learned-mappings/reference-standards")
+      .then(r => r.data.reference_standards),
+};
+
+export type ReferenceStandard = {
+  business_object: string;
+  column_mappings: number;
+  defaults: number;
+  suppressions: number;
+  captured_from: string | null;
+  captured_at: string | null;
 };
 
 export const CutoverApi = {
