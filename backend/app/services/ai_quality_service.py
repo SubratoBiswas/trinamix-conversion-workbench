@@ -25,7 +25,7 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
-_MAX_COLS = 60
+_MAX_COLS = 35
 _ALLOWED_SEVERITY = {"info", "warning", "error"}
 
 
@@ -46,8 +46,11 @@ async def ai_cleansing_issues(
 
     mapped = {m.get("source_column"): m.get("target_field_name")
               for m in (mappings or []) if m.get("source_column")}
+    # Prioritize mapped columns — those actually flow into the load — so the
+    # prompt stays small and the call fast/reliable on wide (200+ col) datasets.
+    ordered = sorted(profiles, key=lambda p: 0 if mapped.get(p.get("column_name")) else 1)
     cols = []
-    for p in profiles[:_MAX_COLS]:
+    for p in ordered[:_MAX_COLS]:
         name = p.get("column_name")
         cols.append({
             "column": name,
@@ -55,7 +58,7 @@ async def ai_cleansing_issues(
             "type": p.get("inferred_type"),
             "null_pct": p.get("null_percent"),
             "distinct": p.get("distinct_count"),
-            "samples": [str(v) for v in (p.get("sample_values") or [])[:6]],
+            "samples": [str(v) for v in (p.get("sample_values") or [])[:5]],
             "pattern": p.get("pattern_summary"),
         })
     # Normalized name lookup so the AI's field_name matches even if it drops a
@@ -91,7 +94,12 @@ async def ai_cleansing_issues(
             cleaned = cleaned.strip("`")
             if cleaned.lower().startswith("json"):
                 cleaned = cleaned[4:].strip()
-        arr = json.loads(cleaned)
+        try:
+            arr = json.loads(cleaned)
+        except Exception:
+            # Model wrapped the array in prose — extract the outermost [...].
+            m = re.search(r"\[.*\]", cleaned, re.DOTALL)
+            arr = json.loads(m.group(0)) if m else []
         if isinstance(arr, dict):  # tolerate {"issues":[...]}
             arr = arr.get("issues", [])
         if not isinstance(arr, list):
