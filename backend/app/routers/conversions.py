@@ -154,6 +154,42 @@ async def generate_object_set(
     return result
 
 
+async def _apply_reference_standard(conv: Conversion) -> dict:
+    """Force-apply the object's stored gold reference standard to one conversion,
+    overriding AI-approved mappings (human 'overridden' mappings are preserved)."""
+    from app.models.mapping import MappingSuggestion
+    from app.services.learning_service import apply_learned_to_conversion
+    maps = await MappingSuggestion.find(MappingSuggestion.conversion_id == conv.id).to_list()
+    applied = await apply_learned_to_conversion(conv, maps, force=True)
+    return {"conversion_id": str(conv.id),
+            "target_object": conv.target_object, "applied": applied}
+
+
+@router.post("/{conversion_id}/apply-reference-standard")
+async def apply_reference_standard(conversion_id: str, _: User = Depends(get_current_user)):
+    """Apply the stored gold reference standard to this conversion now (no
+    re-upload, no regenerate) so its mappings reflect the learned standard."""
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    return await _apply_reference_standard(conv)
+
+
+@router.post("/project/{project_id}/apply-reference-standards")
+async def apply_reference_standards_project(project_id: str, _: User = Depends(get_current_user)):
+    """Apply stored gold reference standards to every conversion in the project."""
+    convs = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)
+    ).to_list()
+    objects = []
+    total = 0
+    for c in convs:
+        r = await _apply_reference_standard(c)
+        total += r["applied"]
+        objects.append(r)
+    return {"applied": total, "objects": objects}
+
+
 @router.get("", response_model=list[ConversionOut])
 async def list_conversions(
     project_id: Optional[str] = Query(None),

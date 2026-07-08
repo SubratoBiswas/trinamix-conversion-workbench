@@ -282,6 +282,19 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
 
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
     from app.models.fbdi import FBDISheet
+    # Force-apply the object's stored gold reference standard BEFORE building the
+    # output, so the generated file always reflects the learned column mappings,
+    # constant defaults, and suppressions — even if this conversion's mappings
+    # were approved by the AI before gold was on file. This is what guarantees a
+    # stored standard is actually applied (fixes "gold saved but not applied").
+    try:
+        from app.services.learning_service import apply_learned_to_conversion
+        _pre_maps = await MappingSuggestion.find(
+            MappingSuggestion.conversion_id == conversion.id
+        ).to_list()
+        await apply_learned_to_conversion(conversion, _pre_maps, force=True)
+    except Exception:
+        pass  # best-effort — never block output generation on the learning pass
     df, _ = await build_converted_dataframe(conversion)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 

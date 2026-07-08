@@ -245,8 +245,19 @@ async def record_learning_from_rule(
 
 
 async def apply_learned_to_conversion(
-    conversion: Conversion, mappings: Iterable[MappingSuggestion]
+    conversion: Conversion, mappings: Iterable[MappingSuggestion], force: bool = False,
 ) -> int:
+    """Apply the object's stored reference standard (column mappings, constant
+    defaults, suppressions) to a conversion's mappings.
+
+    Normally only touches still-"suggested" mappings. With ``force=True`` (used
+    at generate time and by the explicit "apply gold" action) the gold-derived
+    rules also OVERRIDE mappings the AI already approved — so a stored standard
+    is guaranteed to reach the output. Human "overridden" mappings are always
+    preserved."""
+    def _eligible(m: MappingSuggestion) -> bool:
+        return m.status == "suggested" or (force and m.status == "approved")
+
     business_object = await _business_object_for(conversion)
     if not business_object:
         return 0
@@ -277,7 +288,7 @@ async def apply_learned_to_conversion(
     auto_count = 0
     now = datetime.utcnow()
     for m in mappings:
-        if m.status != "suggested":
+        if not _eligible(m):
             continue
         tgt_name = fields_map.get(m.target_field_id)
         if not tgt_name:
@@ -310,7 +321,7 @@ async def apply_learned_to_conversion(
     # not_applicable so it stays empty at output.
     if suppressed_targets:
         for m in mappings:
-            if m.status != "suggested":
+            if not _eligible(m):
                 continue
             tgt_name = fields_map.get(m.target_field_id)
             if tgt_name and tgt_name in suppressed_targets:
@@ -336,7 +347,7 @@ async def apply_learned_to_conversion(
             if lm.target_field:
                 by_default.setdefault(lm.target_field, lm)
         for m in mappings:
-            if m.status != "suggested":
+            if not _eligible(m):
                 continue
             tgt_name = fields_map.get(m.target_field_id)
             if not tgt_name or tgt_name not in by_default:

@@ -128,6 +128,17 @@ export const ConversionsApi = {
     api.post<{ updated: number; message: string }>(
       `/conversions/project/${projectId}/use-ebs-source`
     ).then(r => r.data),
+  /** Force-apply the stored gold reference standards to every conversion in the
+   *  project (overrides AI-approved mappings; keeps human overrides). */
+  applyReferenceStandards: (projectId: string) =>
+    api.post<{ applied: number; objects: { conversion_id: string; target_object: string | null; applied: number }[] }>(
+      `/conversions/project/${projectId}/apply-reference-standards`
+    ).then(r => r.data),
+  /** Force-apply the stored gold reference standard to one conversion. */
+  applyReferenceStandard: (conversionId: string) =>
+    api.post<{ conversion_id: string; target_object: string | null; applied: number }>(
+      `/conversions/${conversionId}/apply-reference-standard`
+    ).then(r => r.data),
   /** Catalog of conversion object types + the FBDI template set each needs. */
   objectTypes: () =>
     api.get<{ object_types: { key: string; label: string; step_count: number; steps: { label: string; load_order: number }[] }[] }>(
