@@ -152,6 +152,7 @@ export const ConversionsApi = {
     return api.post<{
       learned?: {
         target_object?: string; mapped_count: number; default_count: number; skipped: number;
+        suppressed_count?: number; suppressed?: string[];
         mapped: { field: string; source: string; match: number }[];
         defaults: { field: string; value: string }[];
       };

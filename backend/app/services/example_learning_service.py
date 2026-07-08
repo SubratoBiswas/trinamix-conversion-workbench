@@ -84,7 +84,8 @@ def _read_example(path: Path) -> dict[str, list[str]]:
     return out
 
 
-async def _upsert_mapping(conversion, field, *, source_column, default_value, confidence, reason):
+async def _upsert_mapping(conversion, field, *, source_column, default_value, confidence, reason,
+                          status="approved"):
     existing = await MappingSuggestion.find_one(
         MappingSuggestion.conversion_id == conversion.id,
         MappingSuggestion.target_field_id == field.id,
@@ -94,7 +95,7 @@ async def _upsert_mapping(conversion, field, *, source_column, default_value, co
         "default_value": default_value,
         "confidence": float(confidence),
         "reason": reason,
-        "status": "approved",
+        "status": status,
         "review_required": 0,
         "updated_at": datetime.utcnow(),
     }
@@ -106,7 +107,7 @@ async def _upsert_mapping(conversion, field, *, source_column, default_value, co
         ).insert()
 
 
-async def _save_reference_standard(target_object, field, *, source_column, default_value):
+async def _save_reference_standard(target_object, field, *, source_column, default_value, suppress=False):
     """Persist a reusable, OBJECT-LEVEL learned rule so a brand-new conversion of
     the same object auto-applies it on Generate Set — the learning engine's
     ``apply_learned_to_conversion`` re-reads these when auto-mapping.
@@ -118,7 +119,12 @@ async def _save_reference_standard(target_object, field, *, source_column, defau
     """
     if not target_object or not field.field_name:
         return
-    if source_column:
+    if suppress:
+        # Gold leaves this field blank → reusable rule to keep it blank on every
+        # future conversion of this object (overrides aggressive AI mapping).
+        kind, category = "suppress_field", "Suppressed (blank in gold)"
+        original, resolved, rtype = "(blank)", "", "suppress"
+    elif source_column:
         kind, category = "column_mapping", "Column Mapping Alias"
         original, resolved, rtype = source_column, field.field_name, None
     else:
@@ -171,7 +177,7 @@ async def learn_conversion_from_example(conversion: Conversion, example_path: st
     src_sets = {c: set(v for v in vals if v) for c, vals in src_cols.items()}
 
     target_object = template.business_object or conversion.target_object
-    mapped, defaulted, skipped = [], [], 0
+    mapped, defaulted, skipped, suppressed = [], [], 0, []
 
     for f in fields:
         ex_vals = ex.get(_norm_key(f.field_name))
@@ -180,7 +186,16 @@ async def learn_conversion_from_example(conversion: Conversion, example_path: st
             continue
         nonblank = [v for v in ex_vals if v]
         if not nonblank:
-            skipped += 1
+            # Field is a column in the gold example but LEFT BLANK everywhere →
+            # the gold says don't populate it. Suppress it (status not_applicable)
+            # so it overrides the aggressive AI mapping and stays empty at output,
+            # and learn it as a reusable rule for future conversions of this object.
+            await _upsert_mapping(conversion, f, source_column=None, default_value=None,
+                                  confidence=0.9, reason="blank in gold example",
+                                  status="not_applicable")
+            await _save_reference_standard(target_object, f, source_column=None,
+                                           default_value=None, suppress=True)
+            suppressed.append(f.field_name)
             continue
         uniq = set(nonblank)
         # Constant column -> default value (use the original-cased example value).
@@ -214,7 +229,9 @@ async def learn_conversion_from_example(conversion: Conversion, example_path: st
         "target_object": target_object,
         "mapped_count": len(mapped),
         "default_count": len(defaulted),
+        "suppressed_count": len(suppressed),
         "skipped": skipped,
         "mapped": mapped[:60],
         "defaults": defaulted[:60],
+        "suppressed": suppressed[:60],
     }

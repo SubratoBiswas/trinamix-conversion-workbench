@@ -19,6 +19,7 @@ from datetime import datetime
 
 from app.models.conversion import Conversion
 from app.models.fbdi import FBDIField, FBDITemplate
+from app.models.learned import LearnedMapping
 from app.models.mapping import MappingSuggestion
 
 
@@ -26,6 +27,14 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (s or "").strip().lower().strip("*"))
 
 
+# "clear X" / "blank X" / "leave X blank" / "don't map X" / "do not populate X"
+# / "remove X"  → suppress (keep the field empty, overriding AI mapping)
+_SUPPRESS_RES = [
+    re.compile(r"^\s*(?:clear|blank|empty|remove|skip)\s+(?P<f>.+?)\s*$", re.I),
+    re.compile(r"^\s*(?:don'?t|do not)\s+(?:map|populate|fill|use)\s+(?P<f>.+?)\s*$", re.I),
+    re.compile(r"^\s*leave\s+(?P<f>.+?)\s+(?:blank|empty)\s*$", re.I),
+    re.compile(r"^\s*(?P<f>.+?)\s+(?:should be|must be)\s+(?:blank|empty)\s*$", re.I),
+]
 # "default X to Y" / "set X = Y" / "X as Y"  (default value)
 _DEFAULT_RES = [
     re.compile(r"^\s*(?:default|set|make)\s+(?P<f>.+?)\s+(?:to|=|as)\s+(?P<v>.+?)\s*$", re.I),
@@ -58,10 +67,46 @@ async def _upsert(conversion, field, *, source_column, default_value, reason):
         await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
 
 
+async def _suppress(conversion, field, business_object):
+    """Force a field to stay blank (status not_applicable), overriding AI mapping,
+    and learn it as a reusable suppression for this object."""
+    existing = await MappingSuggestion.find_one(
+        MappingSuggestion.conversion_id == conversion.id,
+        MappingSuggestion.target_field_id == field.id,
+    )
+    payload = {
+        "source_column": None, "default_value": None, "confidence": 1.0,
+        "reason": "prompt: leave blank", "status": "not_applicable",
+        "review_required": 0, "updated_at": datetime.utcnow(),
+    }
+    if existing:
+        await existing.set(payload)
+    else:
+        await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
+    if business_object and field.field_name:
+        lm = await LearnedMapping.find_one(
+            LearnedMapping.kind == "suppress_field",
+            LearnedMapping.target_object == business_object,
+            LearnedMapping.target_field == field.field_name,
+        )
+        doc = {
+            "kind": "suppress_field", "category": "Suppressed (prompt)",
+            "original_value": "(blank)", "resolved_value": "",
+            "target_object": business_object, "target_field": field.field_name,
+            "rule_type": "suppress", "captured_from": "prompt",
+            "captured_at": datetime.utcnow(),
+        }
+        if lm:
+            await lm.set(doc)
+        else:
+            await LearnedMapping(**doc).insert()
+
+
 async def apply_steer_prompt(conversion: Conversion, prompt: str) -> dict:
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
     if not template:
         return {"applied": [], "unmatched": [], "error": "no template"}
+    business_object = template.business_object or conversion.target_object
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
     by_key = {}
     for f in fields:
@@ -85,6 +130,18 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str) -> dict:
         if not line:
             continue
         handled = False
+        # Suppression first — "leave X blank" must not be read as "default X to blank".
+        for rx in _SUPPRESS_RES:
+            m = rx.match(line)
+            if m:
+                f = find_field(m.group("f"))
+                if f:
+                    await _suppress(conversion, f, business_object)
+                    applied.append({"field": f.field_name, "suppressed": True})
+                    handled = True
+                break
+        if handled:
+            continue
         for rx in _MAP_RES:
             m = rx.match(line)
             if m:

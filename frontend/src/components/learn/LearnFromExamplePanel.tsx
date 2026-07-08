@@ -118,6 +118,9 @@ export default function LearnFromExamplePanel({
                   <span className="font-semibold text-ink">From example:</span>{" "}
                   <span className="text-emerald-700">{learned.mapped_count} mapped</span>,{" "}
                   <span className="text-brand-dark">{learned.default_count} defaults</span>,{" "}
+                  {typeof learned.suppressed_count === "number" && learned.suppressed_count > 0 && (
+                    <><span className="text-amber-700">{learned.suppressed_count} kept blank (per gold)</span>,{" "}</>
+                  )}
                   <span className="text-ink-muted">{learned.skipped} left for review</span>
                   {learned.mapped.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">

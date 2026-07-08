@@ -176,8 +176,12 @@ async def apply_learned_to_conversion(
     learned = await LearnedMapping.find({
         "kind": "column_mapping", "target_object": business_object
     }).to_list()
-    if not learned:
+    suppressed = await LearnedMapping.find({
+        "kind": "suppress_field", "target_object": business_object
+    }).to_list()
+    if not learned and not suppressed:
         return 0
+    suppressed_targets = {lm.target_field for lm in suppressed if lm.target_field}
     by_target: dict[str, list[LearnedMapping]] = {}
     for lm in learned:
         if lm.target_field:
@@ -223,6 +227,24 @@ async def apply_learned_to_conversion(
             await lm.set({"records_auto_fixed": (lm.records_auto_fixed or 0) + 1})
             auto_count += 1
             break
+
+    # Suppression pass — fields the gold example left blank override the AI's
+    # aggressive mapping: any still-"suggested" mapping for such a target is set
+    # not_applicable so it stays empty at output.
+    if suppressed_targets:
+        for m in mappings:
+            if m.status != "suggested":
+                continue
+            tgt_name = fields_map.get(m.target_field_id)
+            if tgt_name and tgt_name in suppressed_targets:
+                await m.set({
+                    "source_column": None, "status": "not_applicable",
+                    "review_required": 0, "approved_by": "learning-engine",
+                    "approved_at": now,
+                    "reason": "Suppressed — blank in the uploaded gold example",
+                    "updated_at": now,
+                })
+                auto_count += 1
     return auto_count
 
 

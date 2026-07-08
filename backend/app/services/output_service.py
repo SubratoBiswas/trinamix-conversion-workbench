@@ -253,12 +253,18 @@ _AUTHORITATIVE: set[str] = {
 }
 
 
-def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000) -> pd.DataFrame:
+def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
+                            suppressed: set | None = None) -> pd.DataFrame:
     n = len(df)
     if n == 0:
         return df
+    suppressed = suppressed or set()
     for col in df.columns:
         key = str(col).strip().lower().rstrip("*").strip()
+        # The user's gold example / prompt marked this field as intentionally
+        # blank — never fill it with a control default or authoritative constant.
+        if key in suppressed:
+            continue
         keyc = key.replace(" ", "")
         if keyc in _SEQ_FIELDS:
             # Running key column — authoritative: Fusion needs a clean sequential
@@ -294,6 +300,25 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         fields_by_sheet.setdefault(f.sheet_id, []).append(f)
     sheets_with_fields = [s for s in sheets if s.id in fields_by_sheet]
 
+    # Fields the user's gold example / prompt marked as intentionally blank
+    # (a not_applicable mapping wins the dedup). These must stay empty in the
+    # output — no control default, no authoritative constant.
+    _all_maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == conversion.id
+    ).to_list()
+    _SPRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
+    _best_m: dict = {}
+    for _m in _all_maps:
+        _c = _best_m.get(_m.target_field_id)
+        if _c is None or _SPRIO.get(_m.status or "suggested", 0) > _SPRIO.get(_c.status or "suggested", 0):
+            _best_m[_m.target_field_id] = _m
+    _fbyid = {f.id: f for f in fields}
+    suppressed_keys = {
+        _fbyid[tid].field_name.strip().lower().rstrip("*").strip()
+        for tid, _m in _best_m.items()
+        if _m.status == "not_applicable" and tid in _fbyid and _fbyid[tid].field_name
+    }
+
     fmt = fmt.lower()
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -317,7 +342,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         cols = _dedup([f.field_name for f in sfields])
         sdf = df.reindex(columns=cols, fill_value="")
         sdf = _format_date_columns(sdf, sfields)
-        sdf = _apply_control_defaults(sdf)
+        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys)
         hdr: dict[str, str] = {}
         for f in sfields:
             hdr.setdefault(f.field_name, _header_label(f))
