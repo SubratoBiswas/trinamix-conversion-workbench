@@ -25,6 +25,20 @@ type Item = {
   saving?: boolean;  // learn request in flight
 };
 
+// One conversion object type and its ordered FBDI steps (supplier → 6 files).
+type ObjType = { key: string; label: string; step_count: number; steps: { label: string; load_order: number }[] };
+
+// Detected target → catalog key (mirrors the backend resolver) so a file
+// detected as Supplier expands to its full 6-file set in the preview.
+const OBJ_ALIASES: Record<string, string[]> = {
+  supplier: ["supplier", "vendor"],
+  customer: ["customer", "client"],
+  item: ["item", "product", "material"],
+  ap_invoice: ["ap invoice", "ap_invoice", "payable"],
+  ar_invoice: ["ar invoice", "ar_invoice", "autoinvoice", "receivable"],
+  gl_journal: ["gl journal", "gl_journal", "journal"],
+};
+
 /**
  * Guided "Convert a file" flow — supports MULTIPLE files:
  *   upload → AI detects each file's source system + target FBDI template
@@ -44,13 +58,36 @@ export const ConvertFilePage: React.FC = () => {
   const [savingEng, setSavingEng] = useState(false);
   const [genKey, setGenKey] = useState<string | null>(null);
   const [genSummary, setGenSummary] = useState<string | null>(null);
+  // Fan-out preview: object-type catalog + per-file deselected steps.
+  const [objectCatalog, setObjectCatalog] = useState<ObjType[]>([]);
+  const [disabledSteps, setDisabledSteps] = useState<Record<string, string[]>>({});
   const [engForm, setEngForm] = useState({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
 
   useEffect(() => {
     ProjectsApi.list().then((ps) => { setProjects(ps); if (ps[0]) setProjectId(ps[0].id); }).catch(() => {});
     SourceSystemsApi.list().then(setSources).catch(() => setSources([]));
     FbdiApi.list().then(setTemplates).catch(() => setTemplates([]));
+    ConversionsApi.objectTypes().then(setObjectCatalog).catch(() => setObjectCatalog([]));
   }, []);
+
+  // Resolve a file's detected target (via its chosen template's business object)
+  // to a fan-out object type, and toggle individual steps on/off.
+  const resolveObjType = (it: Item): ObjType | null => {
+    const tpl = templates.find((t) => t.id === it.templateId);
+    const detected = (tpl?.business_object || tpl?.name || "").toLowerCase();
+    if (!detected || objectCatalog.length === 0) return null;
+    for (const c of objectCatalog) {
+      const al = OBJ_ALIASES[c.key] || [c.key];
+      if (al.some((a) => detected.includes(a))) return c;
+    }
+    return null;
+  };
+  const toggleStep = (key: string, label: string) =>
+    setDisabledSteps((prev) => {
+      const cur = new Set(prev[key] || []);
+      cur.has(label) ? cur.delete(label) : cur.add(label);
+      return { ...prev, [key]: Array.from(cur) };
+    });
 
   const addFiles = (fl: FileList | null) => {
     const add = Array.from(fl || []).map((file) => ({
@@ -177,6 +214,15 @@ export const ConvertFilePage: React.FC = () => {
             project_id: projectId, dataset_id: it.datasetId!, object_type: targetObject || "",
           });
           fannedOut = (r.created?.length || 0) + (r.existing?.length || 0) > 0;
+          // Honor any steps the user unticked in the preview: drop them.
+          const off = new Set(disabledSteps[it.key] || []);
+          if (off.size) {
+            for (const c of r.created || []) {
+              if (off.has(c.label) && c.conversion_id) {
+                await ConversionsApi.remove(c.conversion_id).catch(() => {});
+              }
+            }
+          }
         } catch { /* not a known object set — fall through to single create */ }
         if (!fannedOut) {
           await ConversionsApi.create({
@@ -348,6 +394,71 @@ export const ConvertFilePage: React.FC = () => {
           </CardBody>
         </Card>
       )}
+
+      {/* Conversions from your files — a file detected as a multi-file object
+          (e.g. Supplier) expands to its full FBDI set, all selected by default;
+          untick any step you don't need. Created via generate-set on submit. */}
+      {(() => {
+        const ready = items.filter((it) => it.status === "ready" && it.templateId);
+        const totalConvs = ready.reduce((sum, it) => {
+          const steps = resolveObjType(it)?.steps || [];
+          const off = new Set(disabledSteps[it.key] || []);
+          return sum + (steps.length ? steps.filter((s) => !off.has(s.label)).length : 1);
+        }, 0);
+        if (!ready.length) return null;
+        return (
+          <Card className="mt-4">
+            <CardHeader
+              title={`Conversions from your files (${totalConvs})`}
+              subtitle="Objects like Supplier load as a set of FBDI files (Import → Address → Site → Site Assignment → Contacts → Banks) — all selected by default. Untick any step you don't need; you can also change targets above."
+            />
+            <CardBody className="space-y-2.5">
+              {ready.map((it) => {
+                const ot = resolveObjType(it);
+                const steps = ot?.steps || [];
+                const off = new Set(disabledSteps[it.key] || []);
+                const tpl = templates.find((t) => t.id === it.templateId);
+                const label = ot?.label || tpl?.business_object || tpl?.name || "—";
+                return (
+                  <div key={it.key} className="rounded-md border border-line bg-white">
+                    <div className="flex items-center gap-2 px-2.5 py-1.5 text-[12px]">
+                      <span className="min-w-0 flex-1 truncate text-ink" title={it.file.name}>{it.file.name}</span>
+                      <ArrowRight className="h-3 w-3 shrink-0 text-ink-subtle" />
+                      <span className="font-medium text-ink">{label}</span>
+                      <Pill tone="success">FBDI</Pill>
+                    </div>
+                    {steps.length > 1 && (
+                      <div className="border-t border-brand/25 bg-brand-subtle/15 px-2.5 py-2">
+                        <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+                          <Layers className="h-3 w-3" />
+                          {steps.filter((s) => !off.has(s.label)).length} of {steps.length} {ot?.label} FBDI files selected
+                        </div>
+                        <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                          {steps.map((s) => {
+                            const on = !off.has(s.label);
+                            return (
+                              <label
+                                key={s.label}
+                                className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1 text-[11.5px] transition ${
+                                  on ? "border-brand/40 bg-white text-ink" : "border-line bg-canvas text-ink-muted"
+                                }`}
+                              >
+                                <input type="checkbox" checked={on} onChange={() => toggleStep(it.key, s.label)} className="h-3.5 w-3.5 accent-brand" />
+                                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand/10 font-mono text-[9px] text-brand-dark">{s.load_order}</span>
+                                <span className="truncate">{s.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </CardBody>
+          </Card>
+        );
+      })()}
 
       {showNewEng && (
         <div
