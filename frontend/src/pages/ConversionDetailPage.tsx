@@ -4,11 +4,13 @@ import {
   ArrowLeft, Database, FileSpreadsheet, Sparkles, ShieldCheck,
   ListChecks, Play, Download, FileOutput, ArrowRight, Workflow as WfIcon,
   Eye, Cloud, GitBranch, CheckCircle2, Clock, XCircle, Loader2, Zap, Table2,
+  Upload, Wand2,
 } from "lucide-react";
 import {
-  ConversionsApi, CutoverApi, DatasetsApi, FbdiApi, LoadApi, MappingApi,
+  ConversionsApi, CutoverApi, DatasetsApi, FbdiApi, LearningApi, LoadApi, MappingApi,
   OutputApi, ProjectsApi, QualityApi,
 } from "@/api";
+import type { ReferenceStandard } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -73,6 +75,11 @@ export const ConversionDetailPage: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
+  // Gold reference standards on file (per object), loaded from the DB. Lets this
+  // page show whether a standard already exists for this conversion's object
+  // (uploaded here or on the project screen) — it's auto-applied at generate.
+  const [refStandards, setRefStandards] = useState<ReferenceStandard[]>([]);
+  const goldInputRef = React.useRef<HTMLInputElement>(null);
   // Load-sequence map: the full FBDI file set for this object (Req 2).
   const [seqSteps, setSeqSteps] = useState<{ label: string; load_order: number }[]>([]);
   const [siblings, setSiblings] = useState<Conversion[]>([]);
@@ -143,6 +150,7 @@ export const ConversionDetailPage: React.FC = () => {
   const loadAll = async () => {
     const c = await ConversionsApi.get(cid);
     setConv(c);
+    LearningApi.referenceStandards().then(setRefStandards).catch(() => setRefStandards([]));
     if (c.project_id) {
       ProjectsApi.get(c.project_id).then(setProject);
       CutoverApi.environments(c.project_id).then(setEnvironments).catch(() => setEnvironments([]));
@@ -175,6 +183,36 @@ export const ConversionDetailPage: React.FC = () => {
       flash(`Error: ${e?.response?.data?.detail || e?.message || "operation failed"}`);
     } finally { setBusy(null); }
   };
+
+  // Upload a gold-standard output for THIS object. It's learned + stored as a
+  // reusable reference standard (same store used by the project screen) and
+  // force-applied at generate time. Overrides any previously stored standard.
+  const uploadGold = async (files: FileList | null) => {
+    const f = files?.[0];
+    if (!f) return;
+    setBusy("gold");
+    try {
+      const r = await ConversionsApi.learnFromExample(cid, { file: f });
+      const l = r.learned;
+      flash(l
+        ? `Gold applied — ${l.mapped_count} mapped, ${l.default_count} defaults, ${l.suppressed_count ?? 0} suppressed. Regenerate to refresh the output.`
+        : "Gold applied.");
+      loadAll();
+    } catch (e: any) {
+      flash(`Gold upload failed: ${e?.response?.data?.detail || e?.message}`);
+    } finally {
+      setBusy(null);
+      if (goldInputRef.current) goldInputRef.current.value = "";
+    }
+  };
+
+  // A reference standard is "on file" for this object if one is stored under the
+  // conversion's target object or the template's business object (e.g. "Supplier").
+  const _rn = (s?: string | null) => (s || "").trim().toLowerCase();
+  const refStd = refStandards.find(
+    (r) => _rn(r.business_object) === _rn(conv.target_object)
+      || _rn(r.business_object) === _rn(template?.business_object),
+  );
 
   return (
     <>
@@ -484,7 +522,37 @@ export const ConversionDetailPage: React.FC = () => {
               >
                 <Download className="h-4 w-4" /> Download Output
               </button>
+              {/* Upload a gold-standard output for this object — learned, stored,
+                  and force-applied at generate (same logic as the project screen). */}
+              <input
+                ref={goldInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => uploadGold(e.target.files)}
+              />
+              <Button
+                variant="secondary"
+                loading={busy === "gold"}
+                onClick={() => goldInputRef.current?.click()}
+                title="Upload the gold-standard output for this object. The tool learns exactly what to map, default, and leave blank, stores it as a reusable reference standard, and applies it automatically at generate time. Overrides any previously stored standard for this object."
+              >
+                <Upload className="h-4 w-4" /> {refStd ? "Replace gold" : "Upload gold"}
+              </Button>
             </div>
+            {refStd && (
+              <div className="mt-3 flex items-start gap-2 rounded-md border border-brand/25 bg-brand-subtle/15 px-3 py-2 text-[11.5px]">
+                <Wand2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-dark" />
+                <div>
+                  <span className="font-semibold text-ink">
+                    Gold reference standard on file for {refStd.business_object} — applied automatically at generate
+                  </span>
+                  <span className="ml-1 text-ink-muted">
+                    ({refStd.column_mappings} mapped columns · {refStd.defaults} constant defaults · {refStd.suppressions} suppressed). No re-upload needed — uploading again overrides it.
+                  </span>
+                </div>
+              </div>
+            )}
         </CardBody>
       </Card>
 
