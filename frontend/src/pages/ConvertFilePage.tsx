@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus, Layers } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, ProjectsApi, SourceSystemsApi } from "@/api";
+import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus, Layers, Boxes } from "lucide-react";
+import { ConversionsApi, DatasetsApi, FbdiApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
-import type { FBDITemplate, Project } from "@/types";
+import { cn } from "@/lib/utils";
+import type { FBDITemplate, FusionModule, Project } from "@/types";
 
 const pct = (n: number) => `${Math.round((n || 0) * 100)}%`;
 const confTone = (n: number) => (n >= 0.6 ? "success" : n >= 0.3 ? "warning" : "neutral");
@@ -61,6 +62,11 @@ export const ConvertFilePage: React.FC = () => {
   // Fan-out preview: object-type catalog + per-file deselected steps.
   const [objectCatalog, setObjectCatalog] = useState<ObjType[]>([]);
   const [disabledSteps, setDisabledSteps] = useState<Record<string, string[]>>({});
+  // Fusion module catalog — optional default (non-file) conversions to also create.
+  const [fusionModules, setFusionModules] = useState<FusionModule[]>([]);
+  const [selectedModules, setSelectedModules] = useState<string[]>([]);
+  const toggleModule = (code: string) =>
+    setSelectedModules((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
   const [engForm, setEngForm] = useState({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
 
   useEffect(() => {
@@ -68,6 +74,7 @@ export const ConvertFilePage: React.FC = () => {
     SourceSystemsApi.list().then(setSources).catch(() => setSources([]));
     FbdiApi.list().then(setTemplates).catch(() => setTemplates([]));
     ConversionsApi.objectTypes().then(setObjectCatalog).catch(() => setObjectCatalog([]));
+    FusionModulesApi.list().then(setFusionModules).catch(() => setFusionModules([]));
   }, []);
 
   // Resolve a file's detected target (via its chosen template's business object)
@@ -192,7 +199,7 @@ export const ConvertFilePage: React.FC = () => {
 
   const createAll = async () => {
     const ready = items.filter((it) => it.status === "ready" && it.templateId && it.datasetId);
-    if (!projectId || ready.length === 0) return;
+    if (!projectId || (ready.length === 0 && selectedModules.length === 0)) return;
     setCreating(true); setError(null);
     const proj = projects.find((p) => p.id === projectId);
     const outputMode = /fbdi/i.test((proj as any)?.target_environment || "") ? "fbdi_download" : "fusion_load";
@@ -233,6 +240,11 @@ export const ConvertFilePage: React.FC = () => {
             output_mode: outputMode, status: "draft",
           } as any);
         }
+      }
+      // Also auto-create the default planned conversions for any selected Fusion
+      // modules (the module catalog below) — same as the setup wizard scope step.
+      if (selectedModules.length) {
+        await ProjectsApi.autoPopulate(projectId, selectedModules).catch(() => {});
       }
       nav(`/projects/${projectId}`);
     } catch (e: any) {
@@ -302,9 +314,12 @@ export const ConvertFilePage: React.FC = () => {
             <Button onClick={analyzeAll} loading={analyzing} disabled={items.length === 0 || !projectId}>
               <Sparkles className="h-4 w-4" /> Upload & analyze {items.length > 0 ? `(${items.length})` : ""}
             </Button>
-            {readyCount > 0 && (
+            {(readyCount > 0 || selectedModules.length > 0) && (
               <Button variant="primary" onClick={createAll} loading={creating}>
-                <Check className="h-4 w-4" /> Create {readyCount} conversion{readyCount === 1 ? "" : "s"} & map
+                <Check className="h-4 w-4" />
+                {readyCount > 0
+                  ? ` Create ${readyCount} conversion${readyCount === 1 ? "" : "s"} & map`
+                  : ` Create ${selectedModules.length} module set${selectedModules.length === 1 ? "" : "s"}`}
               </Button>
             )}
           </div>
@@ -455,6 +470,60 @@ export const ConvertFilePage: React.FC = () => {
                   </div>
                 );
               })}
+            </CardBody>
+          </Card>
+        );
+      })()}
+
+      {/* Implementation scope · Fusion Cloud modules — optional default (non-file)
+          conversions. Picking modules auto-creates one planned conversion per
+          canonical Fusion target object on create (same as the setup wizard). */}
+      {fusionModules.length > 0 && (() => {
+        const scoped = fusionModules.filter((m) => selectedModules.includes(m.code));
+        const uniqueObjects = new Set<string>();
+        scoped.forEach((m) => m.objects.forEach((o) => uniqueObjects.add(o.target_object)));
+        return (
+          <Card className="mt-4">
+            <CardHeader
+              title="Implementation scope · Fusion Cloud modules"
+              subtitle="Optional — pick the Fusion modules in scope to also auto-create one planned conversion per canonical target object (with load order). These are in addition to your file-based conversions above; you can add / remove them later on the Project Overview."
+            />
+            <CardBody>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {fusionModules.map((m) => {
+                  const on = selectedModules.includes(m.code);
+                  return (
+                    <button
+                      key={m.code}
+                      onClick={() => toggleModule(m.code)}
+                      className={cn(
+                        "rounded-md border bg-white p-3 text-left transition",
+                        on ? "border-brand ring-2 ring-brand/20" : "border-line hover:border-brand-dark/40 hover:shadow-soft",
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink">
+                          <Boxes className="h-3.5 w-3.5 text-brand-dark" />
+                          {m.name}
+                        </span>
+                        <Pill tone={on ? "brand" : "neutral"} className="!text-[10px]">
+                          {m.objects.length} object{m.objects.length === 1 ? "" : "s"}
+                        </Pill>
+                      </div>
+                      <div className="mt-1 text-[11.5px] text-ink-muted">{m.description}</div>
+                      <div className="mt-1.5 font-mono text-[10.5px] text-ink-muted">
+                        {m.objects.slice(0, 5).map((o) => o.target_object).join(" · ")}
+                        {m.objects.length > 5 && ` · +${m.objects.length - 5} more`}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {uniqueObjects.size > 0 && (
+                <div className="mt-3 rounded-md border border-brand/30 bg-brand-subtle/15 px-3 py-2 text-[11.5px] text-brand-dark">
+                  {uniqueObjects.size} default conversion{uniqueObjects.size === 1 ? "" : "s"} will be auto-created from the selected module{scoped.length === 1 ? "" : "s"} when you click Create.
+                </div>
+              )}
             </CardBody>
           </Card>
         );
