@@ -65,16 +65,23 @@ def _parse_response(text: str, target_fields: list[TargetField]) -> list[Mapping
         if cleaned.lower().startswith("json"):
             cleaned = cleaned[4:].strip()
     arr = json.loads(cleaned)
-    by_id = {t.id: t.field_name for t in target_fields}
+    # Target ids are Mongo ObjectId strings (24-char hex) — compare as strings.
+    # (The old int() cast raised on every item, silently forcing the rule-based
+    # fallback so the LLM mapper never actually took effect.)
+    by_id = {str(t.id): t.field_name for t in target_fields}
     out: list[MappingSuggestion] = []
     for item in arr:
-        tid = int(item["target_field_id"])
+        if not isinstance(item, dict):
+            continue
+        tid = str(item.get("target_field_id", "")).strip()
+        if tid not in by_id:
+            continue  # skip unknown / hallucinated target ids
         out.append(
             MappingSuggestion(
                 target_field_id=tid,
-                target_field_name=by_id.get(tid, ""),
+                target_field_name=by_id[tid],
                 source_column=item.get("source_column"),
-                confidence=float(item.get("confidence", 0.0)),
+                confidence=float(item.get("confidence", 0.0) or 0.0),
                 reason=item.get("reason", ""),
                 suggested_transformation=item.get("suggested_transformation"),
                 review_required=bool(item.get("review_required", True)),
