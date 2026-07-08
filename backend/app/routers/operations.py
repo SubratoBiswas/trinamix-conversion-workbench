@@ -233,6 +233,30 @@ async def list_load_errors(
     ]
 
 
+@load_router.post("/load-runs/{run_id}/ai-explain", response_model=list[LoadErrorOut])
+async def ai_explain_load_errors(run_id: str, _: User = Depends(get_current_user)):
+    """Re-explain an existing run's errors with AI: fills each LoadError's
+    root_cause + suggested_fix with a plain-English cause and concrete fix."""
+    run = await LoadRun.get(PydanticObjectId(run_id))
+    if not run:
+        raise HTTPException(404, "Load run not found")
+    errors = await LoadError.find(LoadError.load_run_id == run.id).to_list()
+    if not errors:
+        return []
+    conv = await Conversion.get(run.conversion_id)
+    from app.services.ai_error_service import explain_load_errors
+    dicts = [e.model_dump() for e in errors]
+    enriched = await explain_load_errors(dicts, conv.target_object if conv else None)
+    by_msg = {(d.get("error_message") or ""): d for d in enriched}
+    out = []
+    for e in errors:
+        d = by_msg.get(e.error_message or "")
+        if d and (d.get("root_cause") != e.root_cause or d.get("suggested_fix") != e.suggested_fix):
+            await e.set({"root_cause": d.get("root_cause"), "suggested_fix": d.get("suggested_fix")})
+        out.append({**e.model_dump(), "id": str(e.id), "load_run_id": str(e.load_run_id)})
+    return out
+
+
 @load_router.get(
     "/conversions/{conversion_id}/load-errors", response_model=list[LoadErrorOut]
 )

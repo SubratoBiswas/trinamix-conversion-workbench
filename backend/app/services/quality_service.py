@@ -34,6 +34,14 @@ async def run_cleansing(conversion: Conversion) -> list[ValidationIssue]:
         for m in mappings
     ]
     raw_issues = run_cleansing_checks(df, profiles, mapping_dicts)
+    # Augment the deterministic checks with an AI data-quality review (best-effort).
+    try:
+        from app.services.ai_quality_service import ai_cleansing_issues
+        raw_issues = list(raw_issues) + await ai_cleansing_issues(
+            profiles, mapping_dicts, conversion.target_object
+        )
+    except Exception:
+        pass
     await ValidationIssue.find({"conversion_id": conversion.id, "category": "cleansing"}).delete()
     saved = []
     for issue in raw_issues:
@@ -125,7 +133,14 @@ async def simulate_conversion_load(conversion: Conversion) -> LoadRun:
         error_count=result["error_count"], completed_at=datetime.utcnow(),
     )
     await run.insert()
-    for e in result["errors"]:
+    load_errors = result["errors"]
+    # Turn terse Oracle rejections into plain-English root cause + fix (best-effort).
+    try:
+        from app.services.ai_error_service import explain_load_errors
+        load_errors = await explain_load_errors(load_errors, conversion.target_object)
+    except Exception:
+        pass
+    for e in load_errors:
         await LoadError(load_run_id=run.id, **e).insert()
     new_status = "loaded" if result["failed_count"] == 0 else "failed"
     await conversion.set({"status": new_status, "updated_at": datetime.utcnow()})
