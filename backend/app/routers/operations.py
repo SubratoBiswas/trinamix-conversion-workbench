@@ -191,6 +191,62 @@ async def download_all_outputs(
     )
 
 
+@output_router.get("/project/{project_id}/download-zip")
+async def download_project_zip(
+    project_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Package the LATEST already-generated FBDI output for every conversion in
+    the project into one zip — no mapping or generation. The client calls this
+    after it has auto-mapped + generated each object itself (so it can show
+    per-object progress); this step just zips what's on disk, fast."""
+    from app.models.project import Project
+
+    project = await Project.get(PydanticObjectId(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+    conversions = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)
+    ).sort(+Conversion.planned_load_order).to_list()
+    if not conversions:
+        raise HTTPException(404, "This engagement has no conversions yet")
+
+    buf = io.BytesIO()
+    used: dict[str, int] = {}
+    added = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for c in conversions:
+            art = await ConvertedOutput.find(
+                ConvertedOutput.conversion_id == c.id
+            ).sort("-generated_at").first_or_none()
+            if not art or not art.output_file_path or not Path(art.output_file_path).exists():
+                continue
+            real_ext = (Path(art.output_file_name or "").suffix.lstrip(".") or "csv")
+            order = c.planned_load_order if c.planned_load_order and c.planned_load_order < 100 else None
+            prefix = f"{order:02d}_" if order is not None else ""
+            arcname = f"{prefix}{_safe_name(c.name)}.{real_ext}"
+            if arcname in used:
+                used[arcname] += 1
+                arcname = f"{prefix}{_safe_name(c.name)}_{used[arcname]}.{real_ext}"
+            else:
+                used[arcname] = 0
+            zf.write(art.output_file_path, arcname=arcname)
+            added += 1
+
+    if added == 0:
+        raise HTTPException(400, "No generated outputs to package — generate output first.")
+    buf.seek(0)
+    zip_name = f"{_safe_name(project.name)}_FBDI.zip"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_name}"',
+            "X-Files-Added": str(added),
+        },
+    )
+
+
 # ----- LOAD -----
 load_router = APIRouter(prefix="/api", tags=["load"])
 

@@ -295,6 +295,22 @@ export const OutputApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+  /** Package the ALREADY-generated outputs for a project into one zip (no
+   * re-generation). Use after generating each object client-side. */
+  downloadZip: async (projectId: string, filename = "FBDI.zip") => {
+    const response = await api.get(`/conversions/project/${projectId}/download-zip`, {
+      responseType: "blob",
+      timeout: 120000,
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
 };
 
 export const LoadApi = {

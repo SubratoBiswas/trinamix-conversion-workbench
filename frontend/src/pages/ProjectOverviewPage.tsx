@@ -9,7 +9,7 @@ import {
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download, FolderDown,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, OutputApi, ProjectsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
 import type { Dataset, FBDITemplate, FusionModule, ScopeHints } from "@/types";
 import {
@@ -140,20 +140,54 @@ export const ProjectOverviewPage: React.FC = () => {
   // Generate + download every bound conversion's FBDI file for this engagement
   // as one zip (named/ordered by the supplier load sequence).
   const [dlAll, setDlAll] = useState(false);
+  const [dlStatus, setDlStatus] = useState<string | null>(null);
+  // Full pipeline with live per-object status: AI auto-map every conversion that
+  // isn't mapped yet → generate each object's FBDI output → package all into one
+  // zip (load-ordered) and download. The client drives each step so it can show
+  // exactly what's happening instead of a bare spinner.
   const downloadAllFbdi = async () => {
     setDlAll(true);
+    const objName = (c: Conversion) =>
+      (c as any).target_object || (c as any).template_name || c.name;
     try {
-      await OutputApi.downloadAll(
+      const convs = [...conversions].sort(
+        (a, b) => ((a as any).planned_load_order ?? 99) - ((b as any).planned_load_order ?? 99),
+      );
+      const n = convs.length;
+      if (!n) { flash("This engagement has no conversions yet."); return; }
+
+      // Phase 1 — AI auto-map any conversion with no source-mapped fields.
+      for (let i = 0; i < n; i++) {
+        const c = convs[i];
+        setDlStatus(`Checking mappings — ${objName(c)} (${i + 1}/${n})`);
+        let ms: any[] = [];
+        try { ms = await MappingApi.list(String(c.id)); } catch { ms = []; }
+        if (!ms.some((m) => m.source_column)) {
+          setDlStatus(`AI auto-mapping — ${objName(c)} (${i + 1}/${n})`);
+          try { await MappingApi.suggest(String(c.id)); } catch { /* keep going */ }
+        }
+      }
+      // Phase 2 — generate each object's FBDI output.
+      for (let i = 0; i < n; i++) {
+        const c = convs[i];
+        setDlStatus(`Generating output — ${objName(c)} (${i + 1}/${n})`);
+        try { await OutputApi.generate(String(c.id), "csv"); } catch { /* keep going */ }
+      }
+      // Phase 3 — package everything into one zip and download.
+      setDlStatus(`Packaging ${n} files into .zip…`);
+      await OutputApi.downloadZip(
         pid,
         `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_FBDI.zip`,
       );
+      flash("FBDI bundle generated and downloaded.");
+      refresh();
     } catch (e: any) {
       flash(
         e?.response?.status === 400
           ? "No conversions are ready yet — each needs a source file and a bound FBDI template."
           : "Couldn't build the FBDI bundle. Please try again.",
       );
-    } finally { setDlAll(false); }
+    } finally { setDlAll(false); setDlStatus(null); }
   };
 
   const refresh = () => {
@@ -275,8 +309,9 @@ export const ProjectOverviewPage: React.FC = () => {
             >
               <Wand2 className="h-4 w-4" /> Auto-populate
             </Button>
-            <Button variant="secondary" loading={dlAll} onClick={downloadAllFbdi}>
-              <FolderDown className="h-4 w-4" /> Download all FBDI
+            <Button variant="secondary" disabled={dlAll} onClick={downloadAllFbdi}>
+              <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
+              {dlAll ? (dlStatus ?? "Working…") : "Download all FBDI"}
             </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
@@ -330,10 +365,10 @@ export const ProjectOverviewPage: React.FC = () => {
                   onClick={downloadAllFbdi}
                   disabled={dlAll}
                   className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand-dark hover:bg-brand-subtle/70 disabled:opacity-50"
-                  title="Generate output for all objects and download them together as one .zip, ordered by load sequence"
+                  title="AI auto-map every object, generate its FBDI output, and download all as one .zip ordered by load sequence"
                 >
-                  <FolderDown className="h-3 w-3" />
-                  {dlAll ? "Generating…" : "Generate all & download (.zip)"}
+                  <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
+                  {dlAll ? (dlStatus ?? "Working…") : "Generate all & download (.zip)"}
                 </button>
                 {!fileBased && (
                   <button
