@@ -21,7 +21,17 @@ from app.load import simulate_load
 
 async def run_cleansing(conversion: Conversion) -> list[ValidationIssue]:
     dataset = await Dataset.get(conversion.dataset_id)
-    df = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+    # Materialize the durable (GridFS) copy first — Render's disk is ephemeral,
+    # so dataset.file_path is often gone after a redeploy and would parse empty.
+    path = dataset.file_path
+    try:
+        from app.services.dataset_file_store import materialize_dataset_file
+        mp = await materialize_dataset_file(dataset)
+        if mp:
+            path = str(mp)
+    except Exception:
+        pass
+    df = parse_tabular(path, file_type=dataset.file_type)
     profiles = profile_dataframe(df)
     fields = await FBDIField.find(FBDIField.template_id == conversion.template_id).to_list() if conversion.template_id else []
     fields_by_id = {f.id: f for f in fields}
