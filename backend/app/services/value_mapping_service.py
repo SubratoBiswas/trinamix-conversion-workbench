@@ -288,9 +288,25 @@ async def recommend_value_map(conv: Conversion, mapping: MappingSuggestion) -> d
             ai_candidates.append(v)
 
     ai_used = False
+    det_used = 0
     if ai_candidates:
-        ai_map = await _ai_crosswalk(field.field_name, field.description, ai_candidates, allowed)
+        # Deterministic-first: resolve known domains (country/currency/UOM/Y-N
+        # flags) with plain Python — no LLM. Only what's left goes to the model.
+        from app.services.deterministic import deterministic_crosswalk
+        det = deterministic_crosswalk(field.field_name, field.description, ai_candidates)
+        residual = []
         for v in ai_candidates:
+            code = det.get(v)
+            if code is not None:
+                det_used += 1
+                recs.append({"source_value": v, "target_value": code,
+                             "method": "deterministic", "confidence": 0.98,
+                             "already_valid": _norm(code) == _norm(v)})
+            else:
+                residual.append(v)
+        ai_map = await _ai_crosswalk(field.field_name, field.description, residual, allowed) \
+            if residual else {}
+        for v in residual:
             if v in ai_map:
                 ai_used = True
                 recs.append({"source_value": v, "target_value": ai_map[v],
@@ -309,6 +325,7 @@ async def recommend_value_map(conv: Conversion, mapping: MappingSuggestion) -> d
         "unmatched": unmatched,
         "coverage": round(coverage, 3),
         "ai_used": ai_used,
+        "deterministic_count": det_used,
     }
 
 

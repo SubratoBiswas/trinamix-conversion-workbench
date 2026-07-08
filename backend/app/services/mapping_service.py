@@ -393,19 +393,44 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
 
     targets = await _target_fields_for(template)
     provider = get_mapping_provider()
-    # Anthropic: map in concurrent, bounded batches so wide templates don't
-    # overrun the token budget (truncated JSON → silent rule-based fallback) or
-    # take 45s+ in one call. Other providers keep the single-shot path.
-    if getattr(provider, "name", "") == "anthropic":
-        from app.ai.llm_provider import anthropic_suggest_batched
-        from app.config import settings
-        ai_results = await anthropic_suggest_batched(
-            sources, targets,
-            api_key=settings.ANTHROPIC_API_KEY,
-            model=settings.ANTHROPIC_MODEL or "claude-sonnet-4-6",
-        )
-    else:
-        ai_results = provider.suggest_mappings(sources, targets)
+    pname = getattr(provider, "name", "")
+    # Deterministic-first: the rule-based matcher (name similarity + LOV coverage
+    # + sample patterns) is free and confidently maps most columns. Only the
+    # targets it CAN'T place confidently are sent to the LLM — this cuts AI
+    # mapping from every field to just the ambiguous/semantic residual.
+    from app.ai.rule_based import RuleBasedMapper
+    rule_results = RuleBasedMapper().suggest_mappings(sources, targets)
+    rule_by_id = {str(r.target_field_id): r for r in rule_results}
+    _CONF = 0.60
+    weak = []
+    for t in targets:
+        r = rule_by_id.get(str(t.id))
+        if r is None or not r.source_column or (r.confidence or 0) < _CONF:
+            weak.append(t)
+
+    ai_by_id: dict = {}
+    if weak and pname in ("anthropic", "openai"):
+        if pname == "anthropic":
+            from app.ai.llm_provider import anthropic_suggest_batched
+            from app.config import settings
+            ai_list = await anthropic_suggest_batched(
+                sources, weak,
+                api_key=settings.ANTHROPIC_API_KEY,
+                model=settings.ANTHROPIC_MODEL or "claude-sonnet-4-6",
+            )
+        else:
+            ai_list = provider.suggest_mappings(sources, weak)
+        ai_by_id = {str(r.target_field_id): r for r in ai_list}
+
+    # Merge: use the AI result for a weak target when it actually found a source;
+    # otherwise keep the confident rule-based result.
+    ai_results = []
+    for t in targets:
+        rid = str(t.id)
+        r_ai = ai_by_id.get(rid)
+        r_rule = rule_by_id.get(rid)
+        ai_results.append(r_ai if (r_ai and r_ai.source_column) else (r_rule or r_ai))
+    ai_results = [r for r in ai_results if r is not None]
 
     existing = {
         m.target_field_id: m

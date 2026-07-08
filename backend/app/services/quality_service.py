@@ -43,15 +43,18 @@ async def run_cleansing(conversion: Conversion) -> list[ValidationIssue]:
          "status": m.status, "confidence": m.confidence}
         for m in mappings
     ]
-    raw_issues = run_cleansing_checks(df, profiles, mapping_dicts)
-    # Augment the deterministic checks with an AI data-quality review (best-effort).
-    try:
-        from app.services.ai_quality_service import ai_cleansing_issues
-        raw_issues = list(raw_issues) + await ai_cleansing_issues(
-            profiles, mapping_dicts, conversion.target_object
-        )
-    except Exception:
-        pass
+    raw_issues = list(run_cleansing_checks(df, profiles, mapping_dicts))
+    # Deterministic-first: only call the AI review to SUPPLEMENT when the
+    # rule-based checks came back sparse (< 8 issues). When the deterministic
+    # checks already found plenty, skip the LLM entirely to save tokens.
+    if len(raw_issues) < 8:
+        try:
+            from app.services.ai_quality_service import ai_cleansing_issues
+            raw_issues += await ai_cleansing_issues(
+                profiles, mapping_dicts, conversion.target_object
+            )
+        except Exception:
+            pass
     await ValidationIssue.find({"conversion_id": conversion.id, "category": "cleansing"}).delete()
     saved = []
     for issue in raw_issues:

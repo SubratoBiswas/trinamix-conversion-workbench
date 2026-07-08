@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -23,14 +24,50 @@ log = logging.getLogger(__name__)
 
 _MAX_DISTINCT = 40
 
+# Deterministic explanations for common FBDI load errors — matched by regex so
+# the LLM is only called for messages we don't already recognize (cuts tokens).
+_STATIC_PATTERNS: list[tuple] = [
+    (re.compile(r"required|mandatory|has no value|is null", re.I),
+     "A required Fusion field is empty for this row.",
+     "Map a source column to it, or set a default in Mapping Review, then re-load."),
+    (re.compile(r"confiden", re.I),
+     "The auto-mapping for this field is low-confidence and may be wrong.",
+     "Review and approve/correct the mapping in Mapping Review, then regenerate."),
+    (re.compile(r"invalid.*(lookup|value|code)|not a valid|no matching", re.I),
+     "The value isn't a valid Fusion lookup/reference code.",
+     "Add a value crosswalk (source value → Fusion code) for this field and re-load."),
+    (re.compile(r"date.*(format|invalid)|invalid date", re.I),
+     "The date value isn't in Fusion's expected format.",
+     "Apply a DATE_FORMAT transform (e.g. output YYYY/MM/DD) to this column."),
+    (re.compile(r"duplicate", re.I),
+     "A duplicate key would create a conflicting record.",
+     "De-duplicate the source rows or adjust the key field."),
+    (re.compile(r"(not found|does not exist|no such).*(supplier|parent|site|party)|parent .*missing", re.I),
+     "A referenced parent record doesn't exist yet.",
+     "Load the parent object first — follow the supplier load sequence."),
+    (re.compile(r"(numeric|number).*(invalid|expected|required)|non-?numeric", re.I),
+     "A numeric field received a non-numeric value.",
+     "Strip non-numeric characters (e.g. punctuation) so only digits remain."),
+    (re.compile(r"too long|exceeds|max(imum)? length|truncat", re.I),
+     "The value exceeds the field's maximum length.",
+     "Truncate or abbreviate the value to the field's max length."),
+]
+
+
+def _static_explain(msg: str) -> Optional[dict]:
+    for rx, root, fix in _STATIC_PATTERNS:
+        if rx.search(msg):
+            return {"root_cause": root, "suggested_fix": fix}
+    return None
+
 
 async def explain_load_errors(errors: list[dict], object_name: Optional[str]) -> list[dict]:
     """Enrich error dicts (LoadError fields) with an AI root_cause + suggested_fix,
     keyed by distinct error_message. Returns the same list, enriched in place.
     Empty AI / errors are handled gracefully."""
-    provider = (settings.AI_PROVIDER or "none").lower()
-    if provider not in ("anthropic", "openai") or not errors:
+    if not errors:
         return errors
+    provider = (settings.AI_PROVIDER or "none").lower()
 
     # Distinct messages (+ a sample category/reference) → one explanation each.
     distinct: dict[str, dict] = {}
@@ -48,27 +85,41 @@ async def explain_load_errors(errors: list[dict], object_name: Optional[str]) ->
     if not distinct:
         return errors
 
-    prompt = (
-        "You are an Oracle Fusion Cloud FBDI load-error expert. For each error "
-        f"below (from loading the '{object_name or 'Fusion'}' object), give a "
-        "concise plain-English ROOT CAUSE and a concrete FIX telling the analyst "
-        "exactly what to change in the mapping, value crosswalk, default, or "
-        "format and re-load. Return ONLY a JSON object keyed by the exact error "
-        "message, each value {\"root_cause\": \"...\", \"suggested_fix\": \"...\"}.\n\n"
-        "ERRORS:\n" + json.dumps(list(distinct.values()), indent=1)
-    )
-    try:
-        text = await _call_llm(provider, prompt)
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.lower().startswith("json"):
-                cleaned = cleaned[4:].strip()
-        obj = json.loads(cleaned)
-        if not isinstance(obj, dict):
-            return errors
-    except Exception as e:  # noqa: BLE001
-        log.warning("AI load-error explanation failed (%s); keeping originals", e)
+    # Deterministic-first: explain known error patterns with no LLM; only the
+    # messages we don't recognize go to the model.
+    obj: dict[str, dict] = {}
+    residual: dict[str, dict] = {}
+    for msg, meta in distinct.items():
+        st = _static_explain(msg)
+        if st:
+            obj[msg] = st
+        else:
+            residual[msg] = meta
+
+    if residual and provider in ("anthropic", "openai"):
+        prompt = (
+            "You are an Oracle Fusion Cloud FBDI load-error expert. For each error "
+            f"below (from loading the '{object_name or 'Fusion'}' object), give a "
+            "concise plain-English ROOT CAUSE and a concrete FIX telling the analyst "
+            "exactly what to change in the mapping, value crosswalk, default, or "
+            "format and re-load. Return ONLY a JSON object keyed by the exact error "
+            "message, each value {\"root_cause\": \"...\", \"suggested_fix\": \"...\"}.\n\n"
+            "ERRORS:\n" + json.dumps(list(residual.values()), indent=1)
+        )
+        try:
+            text = await _call_llm(provider, prompt)
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.strip("`")
+                if cleaned.lower().startswith("json"):
+                    cleaned = cleaned[4:].strip()
+            ai_obj = json.loads(cleaned)
+            if isinstance(ai_obj, dict):
+                obj.update(ai_obj)
+        except Exception as e:  # noqa: BLE001
+            log.warning("AI load-error explanation failed (%s); static only", e)
+
+    if not obj:
         return errors
 
     for err in errors:
