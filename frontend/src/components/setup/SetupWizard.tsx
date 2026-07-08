@@ -205,10 +205,18 @@ export const SetupWizard: React.FC = () => {
     }));
   }, [sourceCode]);
 
+  // File-upload path: the featured Source card pins sourceCode to "custom"
+  // (filtered out of the live-source grid), so this uniquely identifies the
+  // file-based engagement. No live DB connection is collected in this mode.
+  const isFileMode = sourceCode === "custom";
+
   const canAdvance = useMemo(() => {
     if (step === 1) return Boolean(details.name.trim());
     if (step === 2) return Boolean(sourceCode);
     if (step === 3) {
+      // File mode: no DB connection form — allow Continue once any in-flight
+      // upload has finished analyzing (files themselves are optional here).
+      if (isFileMode) return !fileItems.some((f) => f.status === "uploading");
       if (!conn.display_name.trim()) return false;
       // Mock mode is deterministic-fixture-driven — the responder
       // doesn't read metadata or credentials, so we don't gate the
@@ -224,7 +232,7 @@ export const SetupWizard: React.FC = () => {
     // Step 4 (Scope) is optional — zero modules is OK; the engagement
     // can be planned without auto-creating conversions.
     return true;
-  }, [step, details, sourceCode, conn]);
+  }, [step, details, sourceCode, conn, isFileMode, fileItems]);
 
   const submit = async () => {
     setError(null);
@@ -244,12 +252,14 @@ export const SetupWizard: React.FC = () => {
         phase: details.phase || "blueprint",
         initial_connection: {
           source_system: sourceCode,
-          display_name: conn.display_name,
+          display_name: conn.display_name || (isFileMode ? "Custom / Other (file upload)" : ""),
           endpoint: conn.endpoint || undefined,
-          auth_type: conn.auth_type,
-          connection_metadata: conn.metadata,
-          credentials: conn.mock_mode ? undefined : conn.credentials,
-          mock_mode: conn.mock_mode,
+          // File mode collects no live connection — persist a clean mock
+          // connection so the project has a valid Source Connection card.
+          auth_type: isFileMode ? "mock" : conn.auth_type,
+          connection_metadata: isFileMode ? {} : conn.metadata,
+          credentials: (isFileMode || conn.mock_mode) ? undefined : conn.credentials,
+          mock_mode: isFileMode ? true : conn.mock_mode,
         },
         selected_modules: selectedModules,
       };
@@ -350,12 +360,14 @@ export const SetupWizard: React.FC = () => {
       )}
       {step === 3 && (
         <>
-          <Step3Connection
-            sourceCode={sourceCode}
-            conn={conn}
-            setConn={setConn}
-          />
-          <FileUploadCard items={fileItems} setItems={setFileItems} sourceCode={sourceCode} />
+          {!isFileMode && (
+            <Step3Connection
+              sourceCode={sourceCode}
+              conn={conn}
+              setConn={setConn}
+            />
+          )}
+          <FileUploadCard items={fileItems} setItems={setFileItems} sourceCode={sourceCode} fileMode={isFileMode} />
         </>
       )}
       {step === 4 && fileItems.length > 0 && (
@@ -829,7 +841,8 @@ const FileUploadCard: React.FC<{
   items: WizFile[];
   setItems: React.Dispatch<React.SetStateAction<WizFile[]>>;
   sourceCode: string;
-}> = ({ items, setItems, sourceCode }) => {
+  fileMode?: boolean;
+}> = ({ items, setItems, sourceCode, fileMode }) => {
   const patch = (key: string, p: Partial<WizFile>) =>
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...p } : it)));
 
@@ -861,10 +874,14 @@ const FileUploadCard: React.FC<{
       <CardBody className="space-y-3">
         <div className="flex items-center gap-2">
           <UploadCloud className="h-4 w-4 text-brand" />
-          <span className="text-sm font-semibold text-ink">Upload source files (optional)</span>
+          <span className="text-sm font-semibold text-ink">
+            {fileMode ? "Upload source files" : "Upload source files (optional)"}
+          </span>
         </div>
         <p className="text-[12px] text-ink-muted">
-          Working from file exports instead of (or in addition to) a live connection? Upload your source extracts (CSV / XLSX). Each file is auto-detected to its source and target FBDI object; on finish, the workbench creates one conversion per file — ready to map and export as an FBDI template.
+          {fileMode
+            ? "Upload your source extracts (CSV / XLSX). Each file is auto-detected to its Oracle Fusion FBDI object; on finish, the workbench creates one conversion per file — ready to map and export as an FBDI template."
+            : "Working from file exports instead of (or in addition to) a live connection? Upload your source extracts (CSV / XLSX). Each file is auto-detected to its source and target FBDI object; on finish, the workbench creates one conversion per file — ready to map and export as an FBDI template."}
         </p>
         <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-line bg-canvas px-4 py-4 hover:border-brand">
           <UploadCloud className="h-5 w-5 text-brand" />
