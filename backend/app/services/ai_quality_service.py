@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 import httpx
@@ -26,6 +27,10 @@ log = logging.getLogger(__name__)
 
 _MAX_COLS = 60
 _ALLOWED_SEVERITY = {"info", "warning", "error"}
+
+
+def _norm_name(s: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
 
 
 async def ai_cleansing_issues(
@@ -53,7 +58,14 @@ async def ai_cleansing_issues(
             "samples": [str(v) for v in (p.get("sample_values") or [])[:6]],
             "pattern": p.get("pattern_summary"),
         })
-    valid_names = {p.get("column_name") for p in profiles}
+    # Normalized name lookup so the AI's field_name matches even if it drops a
+    # space or changes case (was previously an exact match, which silently
+    # dropped every AI issue when the model echoed a slightly different name).
+    name_by_norm: dict[str, str] = {}
+    for p in profiles:
+        cn = p.get("column_name")
+        if cn:
+            name_by_norm[_norm_name(cn)] = cn
 
     prompt = (
         "You are an Oracle Fusion Cloud data-migration data-quality expert. The "
@@ -92,8 +104,8 @@ async def ai_cleansing_issues(
     for item in arr:
         if not isinstance(item, dict):
             continue
-        fname = item.get("field_name")
-        if fname not in valid_names:  # drop hallucinated columns
+        fname = name_by_norm.get(_norm_name(item.get("field_name")))
+        if not fname:  # drop hallucinated columns
             continue
         sev = str(item.get("severity", "warning")).lower()
         if sev not in _ALLOWED_SEVERITY:
@@ -125,7 +137,7 @@ async def _call_llm(provider: str, prompt: str) -> str:
             },
             json={
                 "model": settings.ANTHROPIC_MODEL or "claude-sonnet-4-6",
-                "max_tokens": 2500,
+                "max_tokens": 4000,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=50.0,
