@@ -393,7 +393,19 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
 
     targets = await _target_fields_for(template)
     provider = get_mapping_provider()
-    ai_results = provider.suggest_mappings(sources, targets)
+    # Anthropic: map in concurrent, bounded batches so wide templates don't
+    # overrun the token budget (truncated JSON → silent rule-based fallback) or
+    # take 45s+ in one call. Other providers keep the single-shot path.
+    if getattr(provider, "name", "") == "anthropic":
+        from app.ai.llm_provider import anthropic_suggest_batched
+        from app.config import settings
+        ai_results = await anthropic_suggest_batched(
+            sources, targets,
+            api_key=settings.ANTHROPIC_API_KEY,
+            model=settings.ANTHROPIC_MODEL or "claude-sonnet-4-6",
+        )
+    else:
+        ai_results = provider.suggest_mappings(sources, targets)
 
     existing = {
         m.target_field_id: m

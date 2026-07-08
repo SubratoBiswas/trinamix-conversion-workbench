@@ -7,12 +7,16 @@ deterministic rule-based mapper so the product never breaks the workflow.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from typing import Any
 
 import httpx
 
 from app.ai.base import MappingProvider, MappingSuggestion, SourceColumn, TargetField
+
+log = logging.getLogger(__name__)
 from app.ai.rule_based import RuleBasedMapper
 
 
@@ -150,3 +154,66 @@ class OpenAIMapper:
             return _parse_response(json.dumps(arr), target_fields)
         except Exception:
             return self._fallback.suggest_mappings(source_columns, target_fields)
+
+
+async def anthropic_suggest_batched(
+    source_columns: list[SourceColumn],
+    target_fields: list[TargetField],
+    *,
+    api_key: str,
+    model: str,
+    chunk_size: int = 24,
+    concurrency: int = 5,
+) -> list[MappingSuggestion]:
+    """Map targets in concurrent, bounded batches.
+
+    A single call over all target fields makes the model emit a huge JSON array
+    that overruns max_tokens (truncated → parse fail → silent rule-based
+    fallback) and takes 45s+. Splitting the targets into small chunks keeps each
+    response well within the token budget, and running the chunks concurrently
+    keeps total latency low. Each source column (name, type, samples, null%) is
+    still sent with every chunk so the model has full context. Any chunk that
+    errors falls back to the deterministic mapper for just that chunk, so the
+    run always returns a complete set of suggestions."""
+    fallback = RuleBasedMapper()
+    if not target_fields:
+        return []
+    chunks = [target_fields[i:i + chunk_size]
+              for i in range(0, len(target_fields), chunk_size)]
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def _one(chunk: list[TargetField]) -> list[MappingSuggestion]:
+        async with sem:
+            prompt = _build_prompt(source_columns, chunk)
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    r = await client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": api_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "max_tokens": 4000,
+                            "messages": [{"role": "user", "content": prompt}],
+                        },
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    text = "".join(
+                        b.get("text", "") for b in data.get("content", [])
+                        if b.get("type") == "text"
+                    )
+                return _parse_response(text, chunk)
+            except Exception as e:  # noqa: BLE001
+                log.warning("AI mapping chunk failed (%s); rule-based for %d targets",
+                            e, len(chunk))
+                return fallback.suggest_mappings(source_columns, chunk)
+
+    batches = await asyncio.gather(*[_one(c) for c in chunks])
+    out: list[MappingSuggestion] = []
+    for b in batches:
+        out.extend(b)
+    return out
