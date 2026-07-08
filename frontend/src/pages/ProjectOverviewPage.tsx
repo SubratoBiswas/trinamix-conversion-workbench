@@ -119,19 +119,6 @@ export const ProjectOverviewPage: React.FC = () => {
     const k = obj.trim().toLowerCase();
     return refStandards.find((r) => (r.business_object || "").trim().toLowerCase() === k);
   };
-  const [applyingGold, setApplyingGold] = useState(false);
-  const applyGoldNow = async () => {
-    setApplyingGold(true);
-    try {
-      const r = await ConversionsApi.applyReferenceStandards(pid);
-      flash(`Applied stored gold to ${r.objects.filter((o) => o.applied > 0).length} object(s) · ${r.applied} field(s) set — regenerate to refresh outputs.`);
-      refresh();
-    } catch (e: any) {
-      flash(`Apply failed: ${e?.response?.data?.detail || e?.message}`);
-    } finally {
-      setApplyingGold(false);
-    }
-  };
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
 
@@ -181,21 +168,25 @@ export const ProjectOverviewPage: React.FC = () => {
       const n = convs.length;
       if (!n) { flash("This engagement has no conversions yet."); return; }
 
-      // Phase 1 — AI auto-map any conversion with no source-mapped fields.
+      // Phase 1 — map any conversion with no source-mapped fields. suggest() is
+      // deterministic-first (country/currency/UOM/flags + rule-based matching) +
+      // learning-first, and only sends the residual to AI.
       for (let i = 0; i < n; i++) {
         const c = convs[i];
         setDlStatus(`Checking mappings — ${objName(c)} (${i + 1}/${n})`);
         let ms: any[] = [];
         try { ms = await MappingApi.list(String(c.id)); } catch { ms = []; }
         if (!ms.some((m) => m.source_column)) {
-          setDlStatus(`AI auto-mapping — ${objName(c)} (${i + 1}/${n})`);
+          setDlStatus(`Mapping (deterministic + learnings, AI if needed) — ${objName(c)} (${i + 1}/${n})`);
           try { await MappingApi.suggest(String(c.id)); } catch { /* keep going */ }
         }
       }
-      // Phase 2 — generate each object's FBDI output.
+      // Phase 2 — generate each object's FBDI output. generate_output_artifact
+      // force-applies the stored gold reference standard (mappings + constant
+      // defaults + suppressions) first, so gold always wins in the output.
       for (let i = 0; i < n; i++) {
         const c = convs[i];
-        setDlStatus(`Generating output — ${objName(c)} (${i + 1}/${n})`);
+        setDlStatus(`Applying gold + generating — ${objName(c)} (${i + 1}/${n})`);
         try { await OutputApi.generate(String(c.id), "csv"); } catch { /* keep going */ }
       }
       // Phase 3 — package everything into one zip and download.
@@ -466,7 +457,7 @@ export const ProjectOverviewPage: React.FC = () => {
                   onClick={downloadAllFbdi}
                   disabled={dlAll}
                   className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand-dark hover:bg-brand-subtle/70 disabled:opacity-50"
-                  title="AI auto-map every object, generate its FBDI output, and download all as one .zip ordered by load sequence"
+                  title="For every object: apply your gold reference standard (if on file) + learnings + uploaded templates + deterministic Python (country/currency/UOM/flags) + rule-based matching, using AI only for the residual — then generate each FBDI output and download all as one .zip ordered by load sequence."
                 >
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
                   {dlAll ? (dlStatus ?? "Working…") : "Generate all & download (.zip)"}
@@ -497,20 +488,9 @@ export const ProjectOverviewPage: React.FC = () => {
           />
           {refStandards.length > 0 && (
             <div className="border-b border-line bg-brand-subtle/15 px-4 py-2 text-[11px]">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 font-semibold text-brand-dark">
-                  <Wand2 className="h-3 w-3" />
-                  Reference standards on file — auto-applied from your learning library (no re-upload needed)
-                </div>
-                <button
-                  onClick={applyGoldNow}
-                  disabled={applyingGold || goldBusy || dlAll}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-brand/40 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-brand-dark hover:bg-brand-subtle/40 disabled:opacity-50"
-                  title="Force-apply the stored gold reference standards to all conversions now (overrides AI-approved mappings; keeps any manual overrides). Then regenerate to refresh outputs."
-                >
-                  <RefreshCw className={cn("h-3 w-3", applyingGold && "animate-spin")} />
-                  {applyingGold ? "Applying…" : "Apply gold now"}
-                </button>
+              <div className="mb-1 flex items-center gap-1.5 font-semibold text-brand-dark">
+                <Wand2 className="h-3 w-3" />
+                Reference standards on file — applied automatically on Generate &amp; download (no re-upload, no extra step)
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-ink-muted">
                 {refStandards.map((r) => (
