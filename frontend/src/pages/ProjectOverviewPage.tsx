@@ -7,7 +7,7 @@ import "reactflow/dist/style.css";
 import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
-  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download, FolderDown,
+  PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download, FolderDown, Upload,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
 import { api } from "@/api/client";
@@ -190,6 +190,61 @@ export const ProjectOverviewPage: React.FC = () => {
     } finally { setDlAll(false); setDlStatus(null); }
   };
 
+  // Bulk gold upload — each file is matched to its object (by filename) and
+  // applied via learn-from-example to that conversion, so the tool learns
+  // exactly what to populate / leave blank per object.
+  const goldInputRef = React.useRef<HTMLInputElement>(null);
+  const [goldBusy, setGoldBusy] = useState(false);
+  const [goldStatus, setGoldStatus] = useState<string | null>(null);
+  const [goldResults, setGoldResults] = useState<{ name: string; object: string | null; ok: boolean; msg: string }[]>([]);
+  const _gn = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const matchGoldObject = (filename: string): string | null => {
+    const n = filename.toLowerCase();
+    if (/assignment/.test(n)) return "Supplier Site Assignment";
+    if (/address/.test(n)) return "Supplier Address";
+    if (/contact/.test(n)) return "Supplier Contacts";
+    if (/bank/.test(n)) return "Supplier Banks";
+    if (/site/.test(n)) return "Supplier Site";
+    if (/supplier|vendor|import/.test(n)) return "Supplier Import";
+    return null;
+  };
+  const uploadGoldAll = async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    setGoldBusy(true); setGoldResults([]);
+    const results: { name: string; object: string | null; ok: boolean; msg: string }[] = [];
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const obj = matchGoldObject(f.name);
+        const conv = obj ? conversions.find(
+          (c) => _gn((c as any).target_object || (c as any).template_name || c.name) === _gn(obj)
+        ) : null;
+        if (!obj || !conv) {
+          results.push({ name: f.name, object: obj, ok: false, msg: "no matching object" });
+          setGoldResults([...results]); continue;
+        }
+        setGoldStatus(`Applying gold → ${obj} (${i + 1}/${files.length})`);
+        try {
+          const r = await ConversionsApi.learnFromExample(String(conv.id), { file: f });
+          const l = r.learned;
+          const msg = l
+            ? `${l.mapped_count} mapped · ${l.default_count} defaults${l.suppressed_count ? ` · ${l.suppressed_count} blanked` : ""}`
+            : "applied";
+          results.push({ name: f.name, object: obj, ok: true, msg });
+        } catch (e: any) {
+          results.push({ name: f.name, object: obj, ok: false, msg: e?.response?.data?.detail || "failed" });
+        }
+        setGoldResults([...results]);
+      }
+      const okc = results.filter((r) => r.ok).length;
+      flash(`Applied gold to ${okc}/${files.length} object${files.length === 1 ? "" : "s"} — regenerate outputs to apply.`);
+      refresh();
+    } finally {
+      setGoldBusy(false); setGoldStatus(null);
+      if (goldInputRef.current) goldInputRef.current.value = "";
+    }
+  };
+
   const refresh = () => {
     ProjectsApi.get(pid).then(setProject);
     ProjectsApi.conversions(pid).then(setConversions);
@@ -359,6 +414,25 @@ export const ProjectOverviewPage: React.FC = () => {
             subtitle={`${totals.total} object${totals.total === 1 ? "" : "s"} ordered by planned load sequence`}
             actions={conversions.length > 0 && (
               <div className="flex items-center gap-2">
+                {/* Upload gold-standard outputs — each file is matched to its
+                    object and applied (learn-from-example) to that conversion. */}
+                <input
+                  ref={goldInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => uploadGoldAll(e.target.files)}
+                />
+                <button
+                  onClick={() => goldInputRef.current?.click()}
+                  disabled={goldBusy || dlAll}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-canvas disabled:opacity-50"
+                  title="Upload one or more gold-standard output files (.xlsx). Each is matched to its object by filename and applied to that conversion — the tool learns exactly what to map, default, and leave blank."
+                >
+                  <Upload className={cn("h-3 w-3", goldBusy && "animate-pulse")} />
+                  {goldBusy ? (goldStatus ?? "Applying gold…") : "Upload gold outputs"}
+                </button>
                 {/* Generate every object's FBDI output and download them together
                     as one zip (ordered by the supplier load sequence). */}
                 <button
@@ -394,6 +468,22 @@ export const ProjectOverviewPage: React.FC = () => {
               </div>
             )}
           />
+          {goldResults.length > 0 && (
+            <div className="border-b border-line bg-canvas px-4 py-2 text-[11px]">
+              <div className="mb-1 font-semibold text-ink">Gold applied — regenerate to see updated output:</div>
+              <div className="flex flex-col gap-0.5">
+                {goldResults.map((r, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <span className={r.ok ? "text-emerald-600" : "text-danger"}>{r.ok ? "✓" : "✕"}</span>
+                    <span className="truncate font-mono text-ink-muted" style={{ maxWidth: "16rem" }}>{r.name}</span>
+                    <ArrowRight className="h-3 w-3 shrink-0 text-ink-subtle" />
+                    <span className="font-medium text-ink">{r.object || "unmatched"}</span>
+                    <span className="text-ink-subtle">· {r.msg}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {conversions.length === 0 ? (
             <CardBody>
               <EmptyState
