@@ -1,16 +1,41 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, LogOut, Plus } from "lucide-react";
+import { Search, LogOut, Plus, Cpu } from "lucide-react";
 import { useAuth } from "@/store/authStore";
+import { SettingsApi, type AiModelOption } from "@/api";
 
 export const TopBar: React.FC = () => {
   const { user, clear } = useAuth();
   const nav = useNavigate();
 
+  // Global Anthropic model selector — lets the user trade cost vs capability
+  // (Haiku = cheapest/fastest → Opus = most capable/priciest). Applies to every
+  // AI feature (mapping, crosswalks, defaults, data-quality, error explanations).
+  const [models, setModels] = useState<AiModelOption[]>([]);
+  const [model, setModel] = useState<string>("");
+  const [savingModel, setSavingModel] = useState(false);
+
+  useEffect(() => {
+    SettingsApi.getAiModel()
+      .then((r) => { setModels(r.options); setModel(r.current); })
+      .catch(() => { /* AI settings unavailable — hide selector */ });
+  }, []);
+
+  const changeModel = async (id: string) => {
+    const prev = model;
+    setModel(id);
+    setSavingModel(true);
+    try { const r = await SettingsApi.setAiModel(id); setModel(r.current); }
+    catch { setModel(prev); }
+    finally { setSavingModel(false); }
+  };
+
   const logout = () => {
     clear();
     nav("/login");
   };
+
+  const activeTier = models.find((m) => m.id === model)?.tier;
 
   return (
     <div className="flex h-14 items-center gap-3 border-b border-line bg-white px-5">
@@ -22,6 +47,28 @@ export const TopBar: React.FC = () => {
         />
       </div>
       <div className="flex items-center gap-2">
+        {models.length > 0 && (
+          <div
+            className="hidden md:flex items-center gap-1.5 rounded-md border border-line bg-canvas px-2 py-1"
+            title={
+              activeTier
+                ? `AI model: ${activeTier}. Lower = cheaper & faster, higher = more capable. Controls token spend across all AI features.`
+                : "Choose the Anthropic model used for all AI features"
+            }
+          >
+            <Cpu className={"h-3.5 w-3.5 text-brand" + (savingModel ? " animate-pulse" : "")} />
+            <select
+              value={model}
+              onChange={(e) => changeModel(e.target.value)}
+              disabled={savingModel}
+              className="max-w-[9.5rem] bg-transparent text-xs font-medium text-ink focus:outline-none disabled:opacity-60"
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <button
           onClick={() => nav("/projects/new")}
           className="btn-primary h-9"

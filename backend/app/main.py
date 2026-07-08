@@ -30,6 +30,7 @@ from app.routers import source_connections as source_connections_router
 from app.routers import cutover_slice6 as cutover_slice6_router
 from app.routers import copilot as copilot_router
 from app.routers import fusion as fusion_router
+from app.routers import settings as settings_router
 
 
 @asynccontextmanager
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     from app.seed import run_seed
     await run_seed()
+    from app.services.ai_settings import load_persisted_model
+    await load_persisted_model()
     yield
 
 
@@ -94,5 +97,6 @@ app.include_router(fusion_modules_router.router)
 app.include_router(source_connections_router.router)
 app.include_router(cutover_slice6_router.router)
 app.include_router(copilot_router.router)
+app.include_router(settings_router.router)
 app.include_router(fusion_router.router)
 app.include_router(fusion_router.conv_router)

@@ -29,6 +29,7 @@ async def init_db() -> None:
     from app.models.validation import ValidationIssue
     from app.models.dependency import Dependency
     from app.models.environment import Environment, EnvironmentRun
+    from app.models.app_setting import AppSetting
     from app.models.v10 import (
         SourceConnection, DiscoveryRun, DiscoveredObject,
         AuditEvent, CoaStructure, CoaSegment, CoaValueCrosswalk,
@@ -54,5 +55,6 @@ async def init_db() -> None:
             AuditEvent, CoaStructure, CoaSegment, CoaValueCrosswalk,
             Issue, Risk, SignOff, DressRehearsal, CutoverTask,
             ReconciliationCheck,
+            AppSetting,
         ],
     )

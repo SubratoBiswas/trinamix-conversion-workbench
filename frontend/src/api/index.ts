@@ -599,6 +599,15 @@ export const CopilotApi = {
     api.post<{ suggestion: string; available: boolean; reason?: string }>("/copilot/suggest-default", body).then(r => r.data),
 };
 
+// === App settings — Anthropic model selector (cost vs capability) =============
+export interface AiModelOption { id: string; label: string; tier: string; }
+export interface AiModelSetting { current: string; options: AiModelOption[]; }
+export const SettingsApi = {
+  getAiModel: () => api.get<AiModelSetting>("/settings/ai-model").then(r => r.data),
+  setAiModel: (model: string) =>
+    api.put<AiModelSetting>("/settings/ai-model", { model }).then(r => r.data),
+};
+
 // === Inherited Reference Standards ============================================
 export interface InheritedStandard {
   target_field: string;
