@@ -99,7 +99,10 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
         fname = fields.get(m.target_field_id)
         if not fname:
             continue
-        trustworthy = (m.status in ("approved", "overridden")) or ((m.confidence or 0) >= 0.85)
+        # Capture user-confirmed mappings and reasonably confident ones
+        # (rule-based confident matches sit ~0.6+). Gold/prompt rules are never
+        # downgraded by _upsert_learned, so this only ADDS coverage over time.
+        trustworthy = (m.status in ("approved", "overridden")) or ((m.confidence or 0) >= 0.60)
         if m.status == "not_applicable":
             if await _upsert_learned("suppress_field", business_object, fname,
                                      original="(blank)", resolved="", rule_type="suppress"):
