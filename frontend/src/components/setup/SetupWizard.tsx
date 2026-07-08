@@ -256,6 +256,31 @@ export const SetupWizard: React.FC = () => {
       return { ...prev, [fileKey]: Array.from(cur) };
     });
 
+  // Per-file summary for the Review step: the uploaded file, its resolved
+  // Fusion object, and the FBDI conversion labels that will be created (after
+  // any deselected fan-out steps are removed).
+  const fileSummary = useMemo(
+    () =>
+      fileItems
+        .filter((f) => f.status === "ready")
+        .map((it) => {
+          const ot = resolveObjType(it.targetObject);
+          const steps = ot?.steps || [];
+          const off = new Set(disabledSteps[it.key] || []);
+          const enabled = steps.length ? steps.filter((s) => !off.has(s.label)) : [];
+          return {
+            key: it.key,
+            fileName: it.file.name,
+            objectLabel: ot?.label || it.targetObject || "Detected FBDI object",
+            convLabels: steps.length
+              ? enabled.map((s) => s.label)
+              : [it.targetObject || it.file.name.replace(/\.[^.]+$/, "")],
+          };
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fileItems, objectCatalog, disabledSteps],
+  );
+
   const canAdvance = useMemo(() => {
     if (step === 1) return Boolean(details.name.trim());
     if (step === 2) return Boolean(sourceCode);
@@ -542,6 +567,8 @@ export const SetupWizard: React.FC = () => {
           conn={conn}
           selectedModules={selectedModules}
           allModules={fusionModules}
+          isFileMode={isFileMode}
+          fileSummary={fileSummary}
         />
       )}
 
@@ -1262,10 +1289,13 @@ const Step5Review: React.FC<{
   conn: ConnectionDetails;
   selectedModules: string[];
   allModules: FusionModule[];
-}> = ({ details, sourceSystem, conn, selectedModules, allModules }) => {
+  isFileMode?: boolean;
+  fileSummary?: { key: string; fileName: string; objectLabel: string; convLabels: string[] }[];
+}> = ({ details, sourceSystem, conn, selectedModules, allModules, isFileMode, fileSummary = [] }) => {
   const scopedModules = allModules.filter((m) => selectedModules.includes(m.code));
   const uniqueObjects = new Set<string>();
   scopedModules.forEach((m) => m.objects.forEach((o) => uniqueObjects.add(o.target_object)));
+  const totalFileConvs = fileSummary.reduce((s, f) => s + f.convLabels.length, 0);
   return (
     <Card>
       <CardBody>
@@ -1280,20 +1310,75 @@ const Step5Review: React.FC<{
             <ReviewRow k="Phase"  v={details.phase} />
           </ReviewBlock>
           <ReviewBlock title="Source system">
-            <ReviewRow k="System" v={sourceSystem?.display_name || "—"} />
-            <ReviewRow k="Family" v={sourceSystem?.family?.toUpperCase() || "—"} />
-            <ReviewRow k="Scanner"
-              v={sourceSystem?.has_scanner_v1 ? "Ready (mock)" : "Mock only for v1"} />
+            {isFileMode ? (
+              <>
+                <ReviewRow k="System" v="File upload" />
+                <ReviewRow k="Format" v="CSV / XLSX extract" />
+                <ReviewRow k="Target" v="Oracle Fusion FBDI" />
+              </>
+            ) : (
+              <>
+                <ReviewRow k="System" v={sourceSystem?.display_name || "—"} />
+                <ReviewRow k="Family" v={sourceSystem?.family?.toUpperCase() || "—"} />
+                <ReviewRow k="Scanner"
+                  v={sourceSystem?.has_scanner_v1 ? "Ready (mock)" : "Mock only for v1"} />
+              </>
+            )}
           </ReviewBlock>
-          <ReviewBlock title="Connection">
-            <ReviewRow k="Display name" v={conn.display_name} />
-            <ReviewRow k="Endpoint"     v={conn.endpoint || "—"} />
-            <ReviewRow k="Auth type"    v={conn.auth_type} />
-            <ReviewRow k="Mode"
-              v={conn.mock_mode ? "Mock (fixtures)" : "Live (sealed credentials)"} />
+          <ReviewBlock title={isFileMode ? "Source file" : "Connection"}>
+            {isFileMode ? (
+              fileSummary.length === 0 ? (
+                <div className="text-[11px] text-ink-muted">No file uploaded.</div>
+              ) : (
+                fileSummary.map((f, i) => (
+                  <ReviewRow
+                    key={f.key}
+                    k={fileSummary.length > 1 ? `File ${i + 1}` : "File"}
+                    v={f.fileName}
+                  />
+                ))
+              )
+            ) : (
+              <>
+                <ReviewRow k="Display name" v={conn.display_name} />
+                <ReviewRow k="Endpoint"     v={conn.endpoint || "—"} />
+                <ReviewRow k="Auth type"    v={conn.auth_type} />
+                <ReviewRow k="Mode"
+                  v={conn.mock_mode ? "Mock (fixtures)" : "Live (sealed credentials)"} />
+              </>
+            )}
           </ReviewBlock>
           <ReviewBlock title="Implementation scope">
-            {scopedModules.length === 0 ? (
+            {isFileMode ? (
+              totalFileConvs === 0 ? (
+                <div className="text-[11px] text-ink-muted">
+                  No conversions — upload a source file on the Connection step.
+                </div>
+              ) : (
+                <>
+                  <div className="mb-1.5 text-[11px] font-semibold text-ink">
+                    {totalFileConvs} FBDI conversion{totalFileConvs === 1 ? "" : "s"} will be created
+                  </div>
+                  {fileSummary.map((f) => (
+                    <div key={f.key} className="mb-1.5 last:mb-0">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+                        {f.objectLabel}
+                      </div>
+                      <div className="mt-0.5 space-y-0.5">
+                        {f.convLabels.map((l, i) => (
+                          <div key={l} className="flex items-center gap-1.5 text-[11px] text-ink">
+                            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-brand/10 font-mono text-[8.5px] text-brand-dark">
+                              {i + 1}
+                            </span>
+                            <span className="truncate">{l}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )
+            ) : scopedModules.length === 0 ? (
               <div className="text-[11px] text-ink-muted">
                 No modules selected — engagement created without auto-conversions.
               </div>
@@ -1310,11 +1395,23 @@ const Step5Review: React.FC<{
         </div>
         <div className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-success-subtle/60 px-3 py-2 text-[11px] text-success">
           <ShieldCheck className="h-3.5 w-3.5" />
-          Creating the engagement saves the project, the source connection,
-          {uniqueObjects.size > 0 && (
-            <> {uniqueObjects.size} planned conversion{uniqueObjects.size === 1 ? "" : "s"},</>
+          {isFileMode ? (
+            <>
+              Creating the engagement saves the project, your uploaded source file,
+              {totalFileConvs > 0 && (
+                <> {totalFileConvs} FBDI conversion{totalFileConvs === 1 ? "" : "s"},</>
+              )}
+              {" "}and an audit-log entry — all atomically.
+            </>
+          ) : (
+            <>
+              Creating the engagement saves the project, the source connection,
+              {uniqueObjects.size > 0 && (
+                <> {uniqueObjects.size} planned conversion{uniqueObjects.size === 1 ? "" : "s"},</>
+              )}
+              {" "}and an audit-log entry — all atomically.
+            </>
           )}
-          {" "}and an audit-log entry — all atomically.
         </div>
       </CardBody>
     </Card>
