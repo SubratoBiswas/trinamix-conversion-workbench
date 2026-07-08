@@ -59,6 +59,27 @@ type WizFile = {
   error?: string;
 };
 
+// One conversion object type and the ordered FBDI template steps it fans out to.
+// Supplier → 6 files (Import/Address/Site/Site Assignment/Contacts/Banks);
+// Customer/Item/AP/AR/GL → a single multi-sheet workbook.
+type ObjType = {
+  key: string;
+  label: string;
+  step_count: number;
+  steps: { label: string; load_order: number }[];
+};
+
+// Free-text detected-target → catalog key (mirrors the backend resolver so the
+// wizard can expand a detected "Supplier Import" file into the full 6-file set).
+const OBJ_ALIASES: Record<string, string[]> = {
+  supplier: ["supplier", "vendor"],
+  customer: ["customer", "client"],
+  item: ["item", "product", "material"],
+  ap_invoice: ["ap invoice", "ap_invoice", "payable"],
+  ar_invoice: ["ar invoice", "ar_invoice", "autoinvoice", "receivable"],
+  gl_journal: ["gl journal", "gl_journal", "journal"],
+};
+
 const PHASE_OPTIONS: { code: string; label: string; help: string }[] = [
   { code: "blueprint", label: "Blueprint", help: "Discovery + scoping + design sign-off" },
   { code: "own",       label: "Own",       help: "Build + SIT (mapping, transforms, validation)" },
@@ -160,6 +181,11 @@ export const SetupWizard: React.FC = () => {
   // File-based source: extract files uploaded during setup. When present, the
   // engagement's conversions are created from these files (not the module catalog).
   const [fileItems, setFileItems] = useState<WizFile[]>([]);
+  // Fan-out catalog (object type → ordered FBDI steps) + per-file deselected
+  // step labels. A file detected as "Supplier" expands to its 6 FBDI objects,
+  // all selected by default; the user can untick any before creating.
+  const [objectCatalog, setObjectCatalog] = useState<ObjType[]>([]);
+  const [disabledSteps, setDisabledSteps] = useState<Record<string, string[]>>({});
   const [conn, setConn] = useState<ConnectionDetails>({
     display_name: "", endpoint: "", auth_type: "mock", mock_mode: true,
     metadata: {}, credentials: {},
@@ -173,6 +199,7 @@ export const SetupWizard: React.FC = () => {
   useEffect(() => {
     SourceSystemsApi.list().then(setSourceSystems).catch(() => setSourceSystems([]));
     FusionModulesApi.list().then(setFusionModules).catch(() => setFusionModules([]));
+    ConversionsApi.objectTypes().then(setObjectCatalog).catch(() => setObjectCatalog([]));
   }, []);
 
   // When the source flips, reset auth_type and the metadata/credential
@@ -209,6 +236,25 @@ export const SetupWizard: React.FC = () => {
   // (filtered out of the live-source grid), so this uniquely identifies the
   // file-based engagement. No live DB connection is collected in this mode.
   const isFileMode = sourceCode === "custom";
+
+  // Map a file's AI-detected target (e.g. "Supplier Import") to its fan-out
+  // object type in the catalog, so the wizard can preview the full FBDI set.
+  const resolveObjType = (detected?: string): ObjType | null => {
+    if (!detected || objectCatalog.length === 0) return null;
+    const d = detected.toLowerCase();
+    for (const c of objectCatalog) {
+      const al = OBJ_ALIASES[c.key] || [c.key];
+      if (al.some((a) => d.includes(a))) return c;
+    }
+    return null;
+  };
+
+  const toggleStep = (fileKey: string, label: string) =>
+    setDisabledSteps((prev) => {
+      const cur = new Set(prev[fileKey] || []);
+      cur.has(label) ? cur.delete(label) : cur.add(label);
+      return { ...prev, [fileKey]: Array.from(cur) };
+    });
 
   const canAdvance = useMemo(() => {
     if (step === 1) return Boolean(details.name.trim());
@@ -270,14 +316,30 @@ export const SetupWizard: React.FC = () => {
       // precedence over module auto-populate.
       const readyFiles = fileItems.filter((it) => it.status === "ready" && it.datasetId);
       if (readyFiles.length > 0) {
-        // File upload always follows the FBDI template route: each conversion
-        // maps to its detected FBDI object and exports as an FBDI template.
-        const outputMode = "fbdi_download";
+        // File upload always follows the FBDI template route. When a file's
+        // detected target is a fan-out object (e.g. Supplier → 6 FBDI files),
+        // create the full object set via generate-set, then drop any steps the
+        // user deselected. Unknown object types fall back to a single conversion.
         for (const it of readyFiles) {
+          const ot = resolveObjType(it.targetObject);
+          if (ot) {
+            const res = await ConversionsApi.generateSet({
+              project_id: p.id, dataset_id: it.datasetId!, object_type: ot.key,
+            }).catch(() => null);
+            if (res) {
+              const disabled = new Set(disabledSteps[it.key] || []);
+              for (const c of res.created) {
+                if (disabled.has(c.label) && c.conversion_id) {
+                  await ConversionsApi.remove(c.conversion_id).catch(() => {});
+                }
+              }
+              continue;
+            }
+          }
           await ConversionsApi.create({
             project_id: p.id, name: it.file.name.replace(/\.[^.]+$/, ""),
             dataset_id: it.datasetId, template_id: it.templateId, target_object: it.targetObject,
-            source_type: "dataset", output_mode: outputMode, status: "draft",
+            source_type: "dataset", output_mode: "fbdi_download", status: "draft",
           } as any).catch(() => {});
         }
       } else if (selectedModules.length > 0) {
@@ -370,37 +432,89 @@ export const SetupWizard: React.FC = () => {
           <FileUploadCard items={fileItems} setItems={setFileItems} sourceCode={sourceCode} fileMode={isFileMode} />
         </>
       )}
-      {step === 4 && fileItems.length > 0 && (
+      {step === 4 && fileItems.length > 0 && (() => {
+        // Total conversions that will be created = the enabled fan-out steps
+        // across every ready file (a Supplier file contributes up to 6).
+        const readyFiles = fileItems.filter((f) => f.status === "ready");
+        const totalConvs = readyFiles.reduce((sum, it) => {
+          const steps = resolveObjType(it.targetObject)?.steps || [];
+          const off = new Set(disabledSteps[it.key] || []);
+          return sum + (steps.length ? steps.filter((s) => !off.has(s.label)).length : 1);
+        }, 0);
+        return (
         <Card className="mb-4">
           <CardBody>
             <div className="mb-1 flex items-center gap-2">
               <Layers className="h-4 w-4 text-brand" />
               <span className="text-sm font-semibold text-ink">
-                Conversions from your files ({fileItems.filter((f) => f.status === "ready").length})
+                Conversions from your files ({totalConvs})
               </span>
             </div>
-            <p className="mb-2 text-[12px] text-ink-muted">
-              One conversion is created per file on finish, each mapped to the AI-detected Fusion FBDI target below. You can change the target later on any conversion.
+            <p className="mb-3 text-[12px] text-ink-muted">
+              Each file maps to a Fusion object. Objects like <span className="font-medium text-ink">Supplier</span> load
+              as a set of FBDI files (Import → Address → Site → Site Assignment → Contacts → Banks) — all selected by
+              default. Untick any step you don't need; you can also change targets later on any conversion.
             </p>
-            <div className="space-y-1">
-              {fileItems.map((it) => (
-                <div key={it.key} className="flex items-center gap-2 rounded border border-line bg-white px-2.5 py-1.5 text-[12px]">
-                  <Database className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
-                  <span className="min-w-0 flex-1 truncate text-ink">{it.file.name}</span>
-                  <ArrowRight className="h-3 w-3 shrink-0 text-ink-subtle" />
-                  <span className="font-medium text-ink">{it.targetObject || "—"}</span>
-                  {it.status === "ready" ? <Pill tone="success">FBDI</Pill>
-                    : it.status === "error" ? <Pill tone="danger">error</Pill>
-                    : <Pill tone="neutral">analyzing…</Pill>}
-                </div>
-              ))}
+            <div className="space-y-2.5">
+              {fileItems.map((it) => {
+                const ot = resolveObjType(it.targetObject);
+                const steps = ot?.steps || [];
+                const off = new Set(disabledSteps[it.key] || []);
+                return (
+                  <div key={it.key} className="rounded-md border border-line bg-white">
+                    <div className="flex items-center gap-2 px-2.5 py-1.5 text-[12px]">
+                      <Database className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+                      <span className="min-w-0 flex-1 truncate text-ink">{it.file.name}</span>
+                      <ArrowRight className="h-3 w-3 shrink-0 text-ink-subtle" />
+                      <span className="font-medium text-ink">{ot?.label || it.targetObject || "—"}</span>
+                      {it.status === "ready" ? <Pill tone="success">FBDI</Pill>
+                        : it.status === "error" ? <Pill tone="danger">error</Pill>
+                        : <Pill tone="neutral">analyzing…</Pill>}
+                    </div>
+                    {it.status === "ready" && steps.length > 1 && (
+                      <div className="border-t border-brand/25 bg-brand-subtle/15 px-2.5 py-2">
+                        <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+                          <Boxes className="h-3 w-3" />
+                          {steps.filter((s) => !off.has(s.label)).length} of {steps.length} {ot?.label} FBDI files selected
+                        </div>
+                        <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                          {steps.map((s) => {
+                            const on = !off.has(s.label);
+                            return (
+                              <label
+                                key={s.label}
+                                className={cn(
+                                  "flex cursor-pointer items-center gap-2 rounded border px-2 py-1 text-[11.5px] transition",
+                                  on ? "border-brand/40 bg-white text-ink" : "border-line bg-canvas text-ink-muted",
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  onChange={() => toggleStep(it.key, s.label)}
+                                  className="h-3.5 w-3.5 accent-brand"
+                                />
+                                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand/10 font-mono text-[9px] text-brand-dark">
+                                  {s.load_order}
+                                </span>
+                                <span className="truncate">{s.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <p className="mt-2 text-[11px] text-ink-subtle">
               These files are your conversions. The Fusion module catalog below is optional for a file-based engagement.
             </p>
           </CardBody>
         </Card>
-      )}
+        );
+      })()}
       {step === 4 && (
         <Step4Scope
           modules={fusionModules}
