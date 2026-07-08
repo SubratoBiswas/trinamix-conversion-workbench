@@ -2,12 +2,12 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
-  GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock,
+  GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock, Download,
 } from "lucide-react";
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
 const PiiLockGlyph: React.FC = () => <Lock className="h-2 w-2" />;
-import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi, ProjectsApi } from "@/api";
+import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
 import LearnFromExamplePanel from "@/components/learn/LearnFromExamplePanel";
 import type { InheritedStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
@@ -318,6 +318,23 @@ export const MappingReviewPage: React.FC = () => {
   };
 
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
+
+  // Generate the FBDI output for this conversion and download it. Multi-sheet
+  // objects come back as a .zip (one CSV per interface sheet); the artifact's
+  // real file_name carries the correct extension.
+  const [generating, setGenerating] = useState(false);
+  const generateAndDownload = async () => {
+    if (!pid) return;
+    setGenerating(true);
+    try {
+      const out = await OutputApi.generate(pid, "csv");
+      const fallback = `${(project?.target_object || project?.name || "fbdi").replace(/[^\w.-]+/g, "_")}.csv`;
+      await OutputApi.download(pid, out.file_name || fallback);
+      flash("FBDI output generated and downloaded.");
+    } catch (e: any) {
+      flash(e?.response?.data?.detail || "Failed to generate output");
+    } finally { setGenerating(false); }
+  };
 
   // ── Filtering ──
   const visibleMappings = useMemo(() => {
@@ -749,6 +766,18 @@ export const MappingReviewPage: React.FC = () => {
           <Button onClick={suggest} loading={running} variant="primary" className="!h-8">
             <Sparkles className="h-3.5 w-3.5" />
             {mappings.length ? "Re-run AI" : "Run AI Mapping"}
+          </Button>
+
+          <Button
+            onClick={generateAndDownload}
+            loading={generating}
+            variant="secondary"
+            className="!h-8"
+            disabled={!mappings.some((m) => m.source_column)}
+            title="Generate this object's FBDI file and download it"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="ml-1 text-xs">Generate &amp; download</span>
           </Button>
         </div>
 
