@@ -260,7 +260,9 @@ export const SetupWizard: React.FC = () => {
       // precedence over module auto-populate.
       const readyFiles = fileItems.filter((it) => it.status === "ready" && it.datasetId);
       if (readyFiles.length > 0) {
-        const outputMode = /fbdi/i.test(details.target_environment) ? "fbdi_download" : "fusion_load";
+        // File upload always follows the FBDI template route: each conversion
+        // maps to its detected FBDI object and exports as an FBDI template.
+        const outputMode = "fbdi_download";
         for (const it of readyFiles) {
           await ConversionsApi.create({
             project_id: p.id, name: it.file.name.replace(/\.[^.]+$/, ""),
@@ -338,6 +340,12 @@ export const SetupWizard: React.FC = () => {
           sourceSystems={sourceSystems}
           selected={sourceCode}
           onSelect={(code) => setSourceCode(code)}
+          onSelectFileUpload={() => {
+            // File-based engagement: pin the source to Custom / Other and set the
+            // target to the FBDI template route so uploaded extracts export as FBDI.
+            setSourceCode("custom");
+            setDetails((d) => ({ ...d, target_environment: "FBDI Template (manual upload)" }));
+          }}
         />
       )}
       {step === 3 && (
@@ -576,54 +584,85 @@ const Step2Source: React.FC<{
   sourceSystems: SourceSystem[];
   selected: string;
   onSelect: (code: string) => void;
-}> = ({ sourceSystems, selected, onSelect }) => (
-  <Card>
-    <CardBody>
-      <SectionTitle icon={<Database className="h-4 w-4" />}>
-        Source system to migrate from
-      </SectionTitle>
-      <p className="mt-1 text-[12px] text-ink-muted">
-        The source pins the project's Mapping Knowledge Base lookup and drives which
-        discovery scanner runs. Destination is always Oracle Fusion Cloud.
-      </p>
+  onSelectFileUpload: () => void;
+}> = ({ sourceSystems, selected, onSelect, onSelectFileUpload }) => {
+  const fileActive = selected === "custom";
+  // Live-source ERPs shown as the secondary path (Custom / Other is promoted to
+  // the featured file-upload card above, so it's filtered out of this grid).
+  const liveSystems = sourceSystems.filter((s) => s.code !== "custom");
+  return (
+    <Card>
+      <CardBody>
+        <SectionTitle icon={<Database className="h-4 w-4" />}>
+          Source system to migrate from
+        </SectionTitle>
+        <p className="mt-1 text-[12px] text-ink-muted">
+          The source pins the project's Mapping Knowledge Base lookup and drives which
+          discovery scanner runs. Destination is always Oracle Fusion Cloud.
+        </p>
 
-      {sourceSystems.length === 0 ? (
-        <div className="mt-4 text-xs text-ink-muted">Loading source catalog…</div>
-      ) : (
-        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {sourceSystems.map((s) => {
-            const active = s.code === selected;
-            return (
-              <button
-                key={s.code}
-                onClick={() => onSelect(s.code)}
-                className={cn(
-                  "group flex flex-col items-start gap-1.5 rounded-md border bg-white px-3 py-3 text-left transition",
-                  active
-                    ? "border-brand ring-2 ring-brand/15"
-                    : "border-line hover:border-brand-dark/40 hover:shadow-soft",
-                )}
-              >
-                <div className="flex w-full items-center justify-between">
-                  <span className="text-sm font-semibold text-ink">{s.display_name}</span>
-                  {/* Every source ships with a connection probe + discovery
-                      scanner pathway. NetSuite + Oracle EBS run against
-                      live cells when mock_mode=False; the rest exercise
-                      the same dispatcher with deterministic fixtures so
-                      a scoping conversation can happen day-one. */}
-                  <Pill tone="success" className="!text-[9px]">Scanner ready</Pill>
-                </div>
-                <span className="text-[10.5px] uppercase tracking-wider text-ink-muted">
-                  {s.family.toUpperCase()}
-                </span>
-              </button>
-            );
-          })}
+        {/* Featured path: Custom / Other · File upload → FBDI template route */}
+        <button
+          onClick={onSelectFileUpload}
+          className={cn(
+            "mt-4 flex w-full items-start gap-3 rounded-lg border bg-white px-4 py-3.5 text-left transition",
+            fileActive
+              ? "border-brand ring-2 ring-brand/20"
+              : "border-line hover:border-brand-dark/40 hover:shadow-soft",
+          )}
+        >
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-subtle text-brand-dark">
+            <UploadCloud className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-ink">Custom / Other · File upload</span>
+              <Pill tone="brand" className="!text-[9px]">FBDI template route</Pill>
+            </span>
+            <span className="mt-0.5 block text-[11.5px] leading-snug text-ink-muted">
+              No live connection needed — upload your source extracts (CSV / XLSX) on the next step.
+              Each file is auto-detected to its Oracle Fusion FBDI object and exported as an FBDI template.
+            </span>
+          </span>
+        </button>
+
+        {/* Secondary path: connect a live source system */}
+        <div className="mt-5 mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+          Or connect a live source system
         </div>
-      )}
-    </CardBody>
-  </Card>
-);
+        {sourceSystems.length === 0 ? (
+          <div className="text-xs text-ink-muted">Loading source catalog…</div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {liveSystems.map((s) => {
+              const active = s.code === selected;
+              return (
+                <button
+                  key={s.code}
+                  onClick={() => onSelect(s.code)}
+                  className={cn(
+                    "group flex flex-col items-start gap-1.5 rounded-md border bg-white px-3 py-3 text-left transition",
+                    active
+                      ? "border-brand ring-2 ring-brand/15"
+                      : "border-line hover:border-brand-dark/40 hover:shadow-soft",
+                  )}
+                >
+                  <div className="flex w-full items-center justify-between">
+                    <span className="text-sm font-semibold text-ink">{s.display_name}</span>
+                    <Pill tone="success" className="!text-[9px]">Scanner ready</Pill>
+                  </div>
+                  <span className="text-[10.5px] uppercase tracking-wider text-ink-muted">
+                    {s.family.toUpperCase()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+};
 
 // ─────── Step 3 — connection ───────
 
