@@ -480,8 +480,15 @@ export const ConvertFilePage: React.FC = () => {
           canonical Fusion target object on create (same as the setup wizard). */}
       {fusionModules.length > 0 && (() => {
         const scoped = fusionModules.filter((m) => selectedModules.includes(m.code));
-        const uniqueObjects = new Set<string>();
-        scoped.forEach((m) => m.objects.forEach((o) => uniqueObjects.add(o.target_object)));
+        // De-duplicated, load-ordered list of the default conversions that will
+        // be auto-created from the selected modules (shown as a preview table).
+        const objMap = new Map<string, { label: string; planned: number; module: string }>();
+        scoped.forEach((m) => m.objects.forEach((o) => {
+          if (!objMap.has(o.target_object)) {
+            objMap.set(o.target_object, { label: o.label, planned: o.planned_load_order, module: m.name });
+          }
+        }));
+        const objRows = [...objMap.values()].sort((a, b) => a.planned - b.planned);
         return (
           <Card className="mt-4">
             <CardHeader
@@ -519,9 +526,29 @@ export const ConvertFilePage: React.FC = () => {
                   );
                 })}
               </div>
-              {uniqueObjects.size > 0 && (
-                <div className="mt-3 rounded-md border border-brand/30 bg-brand-subtle/15 px-3 py-2 text-[11.5px] text-brand-dark">
-                  {uniqueObjects.size} default conversion{uniqueObjects.size === 1 ? "" : "s"} will be auto-created from the selected module{scoped.length === 1 ? "" : "s"} when you click Create.
+              {objRows.length > 0 && (
+                <div className="mt-3 rounded-md border border-brand/30 bg-brand-subtle/15 p-3">
+                  <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+                    {objRows.length} default conversion{objRows.length === 1 ? "" : "s"} will be auto-created on Create
+                  </div>
+                  <table className="w-full text-[11.5px]">
+                    <thead className="text-left text-[10px] uppercase tracking-wider text-ink-muted">
+                      <tr>
+                        <th className="pb-1 pr-2">Object</th>
+                        <th className="pb-1 pr-2">Load order</th>
+                        <th className="pb-1">Module</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {objRows.map((o) => (
+                        <tr key={o.label} className="border-t border-line/60">
+                          <td className="py-1 pr-2 font-medium text-ink">{o.label}</td>
+                          <td className="py-1 pr-2 font-mono text-ink-muted">{o.planned}</td>
+                          <td className="py-1 text-ink-muted">{o.module}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </CardBody>
