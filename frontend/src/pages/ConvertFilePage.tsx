@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus, Layers, Boxes } from "lucide-react";
+import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus, Layers, Boxes, CheckCircle2 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, FbdiApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, PageTitle, Pill,
@@ -263,14 +263,48 @@ export const ConvertFilePage: React.FC = () => {
         subtitle="Upload one or more source extracts — AI detects each file's source system and target Fusion FBDI template, then hands off to mapping and FBDI download."
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-ink-muted">
-        {["Upload files", "AI detects source & target", "Map columns", "Download FBDI"].map((s, i) => (
-          <React.Fragment key={s}>
-            <span className={`rounded-full px-2.5 py-1 ${(i === 0 && items.length) || (i === 1 && analyzed) ? "bg-brand-subtle font-medium text-brand-dark" : "border border-line bg-white"}`}>{i + 1}. {s}</span>
-            {i < 3 && <ArrowRight className="h-3 w-3 text-ink-subtle" />}
-          </React.Fragment>
-        ))}
-      </div>
+      {(() => {
+        // Wizard-style progress stepper for the file-upload flow.
+        const curStep = creating ? 4 : analyzed ? 3 : items.length ? 2 : 1;
+        const steps = [
+          { n: 1, label: "Upload files", icon: UploadCloud },
+          { n: 2, label: "Detect source & target", icon: Sparkles },
+          { n: 3, label: "Review & scope", icon: Layers },
+          { n: 4, label: "Create & map", icon: Check },
+        ];
+        return (
+          <ol className="mb-4 flex items-center gap-2 rounded-lg border border-line bg-white p-3">
+            {steps.map((s, i) => {
+              const Icon = s.icon;
+              const active = curStep === s.n;
+              const done = curStep > s.n;
+              return (
+                <React.Fragment key={s.n}>
+                  <li className={cn(
+                    "flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium",
+                    active && "bg-brand-subtle text-brand-dark",
+                    done && "text-ink",
+                    !active && !done && "text-ink-muted",
+                  )}>
+                    <span className={cn(
+                      "flex h-5 w-5 items-center justify-center rounded-full text-[10.5px] font-semibold",
+                      active && "bg-brand text-white",
+                      done && "bg-success text-white",
+                      !active && !done && "bg-canvas text-ink-muted",
+                    )}>
+                      {done ? <CheckCircle2 className="h-3 w-3" /> : <Icon className="h-3 w-3" />}
+                    </span>
+                    {s.label}
+                  </li>
+                  {i < steps.length - 1 && (
+                    <span className={cn("h-px flex-1", curStep > s.n ? "bg-success" : "bg-line")} />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </ol>
+        );
+      })()}
 
       {error && (
         <div className="mb-4 rounded-md border border-danger/40 bg-danger-subtle/50 px-4 py-3 text-[12.5px] text-danger">{error}</div>
@@ -478,7 +512,7 @@ export const ConvertFilePage: React.FC = () => {
       {/* Implementation scope · Fusion Cloud modules — optional default (non-file)
           conversions. Picking modules auto-creates one planned conversion per
           canonical Fusion target object on create (same as the setup wizard). */}
-      {fusionModules.length > 0 && (() => {
+      {items.length > 0 && fusionModules.length > 0 && (() => {
         const scoped = fusionModules.filter((m) => selectedModules.includes(m.code));
         // De-duplicated, load-ordered list of the default conversions that will
         // be auto-created from the selected modules (shown as a preview table).
