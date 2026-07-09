@@ -512,7 +512,7 @@ export const ConvertFilePage: React.FC = () => {
       {/* Implementation scope · Fusion Cloud modules — optional default (non-file)
           conversions. Picking modules auto-creates one planned conversion per
           canonical Fusion target object on create (same as the setup wizard). */}
-      {items.length > 0 && fusionModules.length > 0 && (() => {
+      {analyzed && fusionModules.length > 0 && (() => {
         const scoped = fusionModules.filter((m) => selectedModules.includes(m.code));
         // De-duplicated, load-ordered list of the default conversions that will
         // be auto-created from the selected modules (shown as a preview table).
