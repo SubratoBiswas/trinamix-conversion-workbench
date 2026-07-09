@@ -20,6 +20,9 @@ class Dataset(Document):
     # oracle_ebs / netsuite / syteline / arena.
     source_system: Optional[str] = None
     source_confidence: float = 0.0
+    # SHA-256 of the uploaded file bytes — used to dedupe re-uploads of the same
+    # file so an identical dataset isn't created over and over.
+    content_hash: Optional[str] = None
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:

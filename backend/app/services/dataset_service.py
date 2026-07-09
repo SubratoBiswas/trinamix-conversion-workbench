@@ -93,6 +93,22 @@ async def create_dataset_from_upload(
         raise ValueError(f"Unsupported file extension: {ext}")
     file_path, stored_name = save_upload(upload)
 
+    # Dedupe: if a byte-identical file was already uploaded, reuse that dataset
+    # instead of creating another copy (prevents the Datasets list filling with
+    # duplicates of the same source extract).
+    import hashlib
+    content_hash = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
+    existing = await Dataset.find_one(Dataset.content_hash == content_hash)
+    if existing:
+        try:
+            Path(file_path).unlink(missing_ok=True)  # drop the redundant copy
+        except Exception:
+            pass
+        cols = await DatasetColumnProfile.find(
+            DatasetColumnProfile.dataset_id == existing.id
+        ).sort("+position").to_list()
+        return existing, cols
+
     # Profile on a bounded sample (fast even for 20-40 MB / 100k+ row files);
     # the true row count is read separately without materializing the whole frame.
     df = parse_tabular(file_path, file_type=ext.lstrip("."), nrows=PROFILE_SAMPLE_ROWS)
@@ -117,6 +133,7 @@ async def create_dataset_from_upload(
         detected_object_type=top["business_object"] if top else None,
         detection_confidence=top["confidence"] if top else 0.0,
         detection_suggestions=suggestions,
+        content_hash=content_hash,
     )
     await ds.insert()
 
