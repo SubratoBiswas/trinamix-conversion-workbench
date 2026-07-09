@@ -1,6 +1,7 @@
 """Generate the Fusion-ready FBDI output (async/Beanie)."""
 from __future__ import annotations
 
+import asyncio
 import io
 import re
 import zipfile
@@ -27,6 +28,66 @@ async def _get_reference_standards(target_object: str | None) -> dict:
         return {}
     standards = await LearnedMapping.find({"kind": "reference_standard", "target_object": target_object}).to_list()
     return {s.target_field: {"rule_type": s.rule_type, "config": s.rule_config or {}} for s in standards if s.rule_type}
+
+
+# Rows per chunk for the streaming transform. The transform is row-local, so we
+# process the source in windows and concat — this bounds peak memory (the per-row
+# ``records`` context + column caches stay chunk-sized instead of whole-file) and
+# keeps the CPU work in slices we can hand to a worker thread.
+_TRANSFORM_CHUNK_ROWS = 25_000
+
+
+def _transform_frame(
+    src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
+) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
+    """Pure, row-local transform of one source (chunk) frame → target columns.
+
+    Synchronous and CPU-bound (run via ``asyncio.to_thread``). Contains NO
+    cross-row state — running it per chunk and concatenating is byte-identical to
+    running it on the whole frame. Sequence numbering and whole-column-blank
+    control defaults are applied later on the full frame in ``_apply_control_defaults``.
+    """
+    out_cols: dict[str, list[Any]] = {}
+    lineage: dict[str, dict[str, Any]] = {}
+    n_rows = len(src)
+    needed_cols = {
+        m.source_column for m in sorted_mappings
+        if m.source_column and m.source_column in src.columns
+    }
+    col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
+    records: list[dict] | None = None
+    for m in sorted_mappings:
+        tgt = fields_by_id.get(m.target_field_id)
+        if not tgt or m.status == "not_applicable":
+            continue
+        rules = list(pipelines.get(tgt.id, []))
+        if m.suggested_transformation and not rules and m.status != "rejected":
+            rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
+                          "config": m.suggested_transformation.get("config", {})})
+        dv = m.default_value
+        if m.source_column and m.source_column in col_cache:
+            src_vals = col_cache[m.source_column]
+            if rules:
+                if records is None:
+                    ctx_cols = [c for c in needed_cols if c in src.columns]
+                    records = src[ctx_cols].to_dict("records") if ctx_cols else src.to_dict("records")
+                col_values = []
+                for i in range(n_rows):
+                    v = apply_pipeline(rules, src_vals[i], row=records[i])
+                    if (v is None or str(v).strip() == "") and dv is not None:
+                        v = dv
+                    col_values.append(v)
+            else:
+                col_values = [
+                    (dv if (v is None or str(v).strip() == "") and dv is not None else v)
+                    for v in src_vals
+                ]
+        else:
+            col_values = [dv or ""] * n_rows
+        out_cols[tgt.field_name] = col_values
+        lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
+                                   "rules": rules, "status": m.status, "confidence": m.confidence}
+    return pd.DataFrame(out_cols), lineage
 
 
 async def build_converted_dataframe(
@@ -78,64 +139,29 @@ async def build_converted_dataframe(
                 {"rule_type": r.rule_type, "config": r.rule_config or {}}
             )
 
-    out_cols: dict[str, list[Any]] = {}
-    lineage: dict[str, dict[str, Any]] = {}
-    n_rows = len(src)
-    # Precompute ONCE (not per-mapping): a fast per-column value cache, and build
-    # per-row dicts lazily only when a transformation rule needs sibling-column
-    # context. The old code rebuilt a dict of every column for every row for every
-    # mapping via slow .iloc scalar access - O(mappings x rows x cols).
+    # Order mappings by target field sequence once (metadata — cheap, row-count
+    # independent). The heavy per-column transform runs on row CHUNKS in a worker
+    # thread (asyncio.to_thread) so it (a) never blocks the event loop / other
+    # requests and (b) keeps peak memory bounded to one chunk's worth of the
+    # per-row context + column caches on wide/tall extracts. The transform is
+    # row-local, so chunk-then-concat is byte-identical to a single pass.
     sorted_mappings = sorted(
         mappings,
         key=lambda m: (fields_by_id.get(m.target_field_id).sequence if fields_by_id.get(m.target_field_id) else 0),
     )
-    # Memory: only materialize the source columns the mappings actually use, not
-    # every column in a wide extract. On a 258-column dataset this is the
-    # difference between caching ~18 columns and ~258 — the latter can OOM a
-    # small container on large row counts (the FBDI output for wide files was
-    # 503-ing). Columns referenced only by transformation-rule context are picked
-    # up lazily via the ``records`` fallback below.
-    needed_cols = {
-        m.source_column for m in sorted_mappings
-        if m.source_column and m.source_column in src.columns
-    }
-    col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
-    records: list[dict] | None = None
-    for m in sorted_mappings:
-        tgt = fields_by_id.get(m.target_field_id)
-        if not tgt or m.status == "not_applicable":
-            continue
-        rules = list(pipelines.get(tgt.id, []))
-        if m.suggested_transformation and not rules and m.status != "rejected":
-            rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
-                          "config": m.suggested_transformation.get("config", {})})
-        dv = m.default_value
-        if m.source_column and m.source_column in col_cache:
-            src_vals = col_cache[m.source_column]
-            if rules:
-                if records is None:
-                    # Row context for transformation rules — restrict to the
-                    # mapped columns so we don't materialize a dict of every
-                    # column for every row (memory: avoids OOM on wide extracts).
-                    ctx_cols = [c for c in needed_cols if c in src.columns]
-                    records = src[ctx_cols].to_dict("records") if ctx_cols else src.to_dict("records")
-                col_values = []
-                for i in range(n_rows):
-                    v = apply_pipeline(rules, src_vals[i], row=records[i])
-                    if (v is None or str(v).strip() == "") and dv is not None:
-                        v = dv
-                    col_values.append(v)
-            else:
-                col_values = [
-                    (dv if (v is None or str(v).strip() == "") and dv is not None else v)
-                    for v in src_vals
-                ]
-        else:
-            col_values = [dv or ""] * n_rows
-        out_cols[tgt.field_name] = col_values
-        lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
-                                    "rules": rules, "status": m.status, "confidence": m.confidence}
-    out_df = pd.DataFrame(out_cols)
+    n_total = len(src)
+    if n_total <= _TRANSFORM_CHUNK_ROWS:
+        return await asyncio.to_thread(_transform_frame, src, sorted_mappings, fields_by_id, pipelines)
+
+    parts: list[pd.DataFrame] = []
+    lineage: dict[str, dict[str, Any]] = {}
+    for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
+        chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
+        odf, lin = await asyncio.to_thread(_transform_frame, chunk, sorted_mappings, fields_by_id, pipelines)
+        parts.append(odf)
+        if not lineage:
+            lineage = lin
+    out_df = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
     return out_df, lineage
 
 

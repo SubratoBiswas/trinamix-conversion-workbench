@@ -153,6 +153,14 @@ export const ProjectOverviewPage: React.FC = () => {
   // as one zip (named/ordered by the supplier load sequence).
   const [dlAll, setDlAll] = useState(false);
   const [dlStatus, setDlStatus] = useState<string | null>(null);
+  // Per-object live progress for the Generate-all pipeline, shown as a panel so
+  // the user sees exactly what's happening (and what's left) while waiting.
+  type GenStage = "queued" | "mapping" | "generating" | "done" | "error";
+  const [genProg, setGenProg] = useState<{ key: string; name: string; order: number; stage: GenStage }[]>([]);
+  const GEN_STAGE_LABEL: Record<GenStage, string> = {
+    queued: "Queued", mapping: "Mapping (deterministic + learnings, AI if needed)",
+    generating: "Applying gold + generating", done: "Done", error: "Failed",
+  };
   // Full pipeline with live per-object status: AI auto-map every conversion that
   // isn't mapped yet → generate each object's FBDI output → package all into one
   // zip (load-ordered) and download. The client drives each step so it can show
@@ -161,6 +169,8 @@ export const ProjectOverviewPage: React.FC = () => {
     setDlAll(true);
     const objName = (c: Conversion) =>
       (c as any).target_object || (c as any).template_name || c.name;
+    const setStage = (key: string, stage: GenStage) =>
+      setGenProg((prev) => prev.map((p) => (p.key === key ? { ...p, stage } : p)));
     try {
       const convs = [...conversions].sort(
         (a, b) => ((a as any).planned_load_order ?? 99) - ((b as any).planned_load_order ?? 99),
@@ -168,28 +178,40 @@ export const ProjectOverviewPage: React.FC = () => {
       const n = convs.length;
       if (!n) { flash("This engagement has no conversions yet."); return; }
 
-      // Phase 1 — map any conversion with no source-mapped fields. suggest() is
-      // deterministic-first (country/currency/UOM/flags + rule-based matching) +
-      // learning-first, and only sends the residual to AI.
-      for (let i = 0; i < n; i++) {
-        const c = convs[i];
-        setDlStatus(`Checking mappings — ${objName(c)} (${i + 1}/${n})`);
-        let ms: any[] = [];
-        try { ms = await MappingApi.list(String(c.id)); } catch { ms = []; }
-        if (!ms.some((m) => m.source_column)) {
-          setDlStatus(`Mapping (deterministic + learnings, AI if needed) — ${objName(c)} (${i + 1}/${n})`);
-          try { await MappingApi.suggest(String(c.id)); } catch { /* keep going */ }
+      // Seed the progress panel (one row per object, in load order).
+      setGenProg(convs.map((c, i) => ({ key: String(c.id), name: objName(c), order: i + 1, stage: "queued" as GenStage })));
+
+      // Process objects with a small concurrency pool (they're independent), so
+      // the 6-object supplier set runs in parallel instead of one-by-one. Each
+      // worker maps (only if unmapped) then generates that object's FBDI output;
+      // generate force-applies the stored gold standard so gold always wins.
+      const runOne = async (c: Conversion) => {
+        const key = String(c.id);
+        try {
+          setStage(key, "mapping");
+          let ms: any[] = [];
+          try { ms = await MappingApi.list(key); } catch { ms = []; }
+          if (!ms.some((m) => m.source_column)) {
+            try { await MappingApi.suggest(key); } catch { /* keep going */ }
+          }
+          setStage(key, "generating");
+          await OutputApi.generate(key, "csv");
+          setStage(key, "done");
+        } catch {
+          setStage(key, "error");
         }
-      }
-      // Phase 2 — generate each object's FBDI output. generate_output_artifact
-      // force-applies the stored gold reference standard (mappings + constant
-      // defaults + suppressions) first, so gold always wins in the output.
-      for (let i = 0; i < n; i++) {
-        const c = convs[i];
-        setDlStatus(`Applying gold + generating — ${objName(c)} (${i + 1}/${n})`);
-        try { await OutputApi.generate(String(c.id), "csv"); } catch { /* keep going */ }
-      }
-      // Phase 3 — package everything into one zip and download.
+      };
+      const POOL = 3;
+      const queue = [...convs];
+      const workers = Array.from({ length: Math.min(POOL, queue.length) }, async () => {
+        while (queue.length) {
+          const c = queue.shift();
+          if (c) await runOne(c);
+        }
+      });
+      await Promise.all(workers);
+
+      // Package everything into one load-ordered zip and download.
       setDlStatus(`Packaging ${n} files into .zip…`);
       await OutputApi.downloadZip(
         pid,
@@ -197,13 +219,14 @@ export const ProjectOverviewPage: React.FC = () => {
       );
       flash("FBDI bundle generated and downloaded.");
       refresh();
+      loadRefStandards();
     } catch (e: any) {
       flash(
         e?.response?.status === 400
           ? "No conversions are ready yet — each needs a source file and a bound FBDI template."
           : "Couldn't build the FBDI bundle. Please try again.",
       );
-    } finally { setDlAll(false); setDlStatus(null); }
+    } finally { setDlAll(false); setDlStatus(null); setTimeout(() => setGenProg([]), 1500); }
   };
 
   // Bulk gold upload — each file is matched to its object (by filename) and
@@ -486,6 +509,42 @@ export const ProjectOverviewPage: React.FC = () => {
               </div>
             )}
           />
+          {genProg.length > 0 && (() => {
+            const done = genProg.filter((p) => p.stage === "done").length;
+            const failed = genProg.filter((p) => p.stage === "error").length;
+            const pctDone = Math.round(((done + failed) / genProg.length) * 100);
+            const stageTone: Record<GenStage, string> = {
+              queued: "text-ink-subtle", mapping: "text-brand-dark",
+              generating: "text-brand-dark", done: "text-emerald-600", error: "text-danger",
+            };
+            return (
+              <div className="border-b border-line bg-brand-subtle/10 px-4 py-3 text-[11px]">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-brand" />
+                    Generating FBDI bundle — {done}/{genProg.length} done{failed ? ` · ${failed} failed` : ""}
+                  </span>
+                  <span className="font-mono tabular-nums text-ink-muted">{dlStatus ?? `${pctDone}%`}</span>
+                </div>
+                <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-line">
+                  <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${pctDone}%` }} />
+                </div>
+                <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                  {genProg.map((p) => (
+                    <div key={p.key} className="flex items-center gap-2 rounded border border-line bg-white px-2 py-1">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand/10 font-mono text-[9px] text-brand-dark">{p.order}</span>
+                      <span className="min-w-0 flex-1 truncate text-ink">{p.name}</span>
+                      {p.stage === "done" ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                        : p.stage === "error" ? <AlertCircle className="h-3.5 w-3.5 shrink-0 text-danger" />
+                        : (p.stage === "mapping" || p.stage === "generating") ? <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-brand" />
+                        : <Clock className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />}
+                      <span className={cn("shrink-0 text-[10px]", stageTone[p.stage])}>{GEN_STAGE_LABEL[p.stage]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           {refStandards.length > 0 && (
             <div className="border-b border-line bg-brand-subtle/15 px-4 py-2 text-[11px]">
               <div className="mb-1 flex items-center gap-1.5 font-semibold text-brand-dark">
