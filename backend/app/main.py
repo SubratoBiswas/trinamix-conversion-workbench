@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
     await run_seed()
     from app.services.ai_settings import load_persisted_model
     await load_persisted_model()
+    # Seed the reusable Mapping Knowledge Base (source→FBDI column mappings for
+    # NetSuite / Infor SyteLine / Salesforce) so future files auto-apply them.
+    try:
+        from app.services.catalog_seed_service import seed_mapping_catalog
+        await seed_mapping_catalog()
+    except Exception:  # noqa: BLE001 — never block startup on the catalog seed
+        import logging
+        logging.getLogger(__name__).exception("mapping_catalog seed failed")
     yield
 
 

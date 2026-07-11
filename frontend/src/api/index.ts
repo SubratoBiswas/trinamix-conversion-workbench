@@ -374,6 +374,18 @@ export const LearningApi = {
   referenceStandards: () =>
     api.get<{ reference_standards: ReferenceStandard[] }>("/learned-mappings/reference-standards")
       .then(r => r.data.reference_standards),
+  /** Summary of the seeded source→FBDI metadata mapping catalog. */
+  catalogStatus: () =>
+    api.get<CatalogStatus>("/learned-mappings/catalog-status").then(r => r.data),
+  reseedCatalog: () =>
+    api.post<{ seeded: number; skipped: number; total: number }>("/learned-mappings/reseed-catalog").then(r => r.data),
+};
+
+export type CatalogStatus = {
+  total: number;
+  by_source_system: { source_system: string; count: number }[];
+  by_target_object: { target_object: string; count: number }[];
+  rows: { source_system: string; target_object: string; source_field: string; fbdi_column: string; fbdi_sheet: string | null }[];
 };
 
 export type ReferenceStandard = {

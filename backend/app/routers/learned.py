@@ -146,6 +146,40 @@ async def knowledge_bank_stats(_: User = Depends(get_current_user)):
     return [{"source_erp": erp, "count": cnt} for erp, cnt in by_erp.most_common()]
 
 
+@router.get("/catalog-status")
+async def catalog_status(_: User = Depends(get_current_user)):
+    """Counts of the seeded metadata-catalog mappings (source→FBDI column rules),
+    grouped by source system and target object — lets the UI confirm the Mapping
+    Knowledge Base is populated."""
+    items = await LearnedMapping.find(
+        LearnedMapping.captured_from == "metadata catalog"
+    ).to_list()
+    by_src: Counter = Counter()
+    by_obj: Counter = Counter()
+    rows = []
+    for it in items:
+        by_src[it.source_erp or "unknown"] += 1
+        by_obj[it.target_object or "unknown"] += 1
+        rows.append({
+            "source_system": it.source_erp, "target_object": it.target_object,
+            "source_field": it.original_value, "fbdi_column": it.target_field,
+            "fbdi_sheet": (it.rule_config or {}).get("fbdi_sheet"),
+        })
+    return {
+        "total": len(items),
+        "by_source_system": [{"source_system": k, "count": v} for k, v in by_src.most_common()],
+        "by_target_object": [{"target_object": k, "count": v} for k, v in by_obj.most_common()],
+        "rows": sorted(rows, key=lambda r: (r["source_system"] or "", r["target_object"] or "", r["fbdi_column"] or "")),
+    }
+
+
+@router.post("/reseed-catalog")
+async def reseed_catalog(_: User = Depends(get_current_user)):
+    """Re-run the metadata-catalog seed on demand (idempotent, additive)."""
+    from app.services.catalog_seed_service import seed_mapping_catalog
+    return await seed_mapping_catalog()
+
+
 @router.post("/backfill-projects")
 async def backfill_project_ids(_: User = Depends(get_current_user)):
     """

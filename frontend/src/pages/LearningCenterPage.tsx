@@ -3,6 +3,7 @@ import {
   BookOpen, TrendingUp, Zap, Clock, Download, Sparkles, Trash2, Link2, ChevronRight,
 } from "lucide-react";
 import { LearningApi, ProjectsApi } from "@/api";
+import type { CatalogStatus } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -15,6 +16,7 @@ export const LearningCenterPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [backfilling, setBackfilling] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogStatus | null>(null);
 
   const refresh = (pid?: string) => {
     const params = pid ? { project_id: pid } : undefined;
@@ -25,6 +27,7 @@ export const LearningCenterPage: React.FC = () => {
   useEffect(() => {
     refresh();
     ProjectsApi.list().then(setProjects).catch(() => {});
+    LearningApi.catalogStatus().then(setCatalog).catch(() => setCatalog(null));
   }, []);
 
   const handleProjectChange = (pid: string) => {
@@ -101,6 +104,59 @@ export const LearningCenterPage: React.FC = () => {
         <EmptyHero />
       ) : (
         <KpiStrip stats={stats} />
+      )}
+
+      {catalog && catalog.total > 0 && (
+        <Card className="mt-4">
+          <CardHeader
+            title="Mapping Knowledge Base — metadata catalog"
+            subtitle={`${catalog.total} standard source→Oracle FBDI column mappings seeded from public schemas (NetSuite, Infor SyteLine, Salesforce) — auto-applied when a matching source file is converted.`}
+          />
+          <CardBody>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">By source system</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {catalog.by_source_system.map((s) => (
+                    <Pill key={s.source_system} tone="brand">{s.source_system}: {s.count}</Pill>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">By target object</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {catalog.by_target_object.map((o) => (
+                    <Pill key={o.target_object} tone="neutral">{o.target_object}: {o.count}</Pill>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 max-h-64 overflow-auto rounded-md border border-line">
+              <table className="w-full text-[11.5px]">
+                <thead className="sticky top-0 bg-canvas text-left text-[10px] uppercase tracking-wider text-ink-muted">
+                  <tr>
+                    <th className="px-2 py-1">Source</th>
+                    <th className="px-2 py-1">Source field</th>
+                    <th className="px-2 py-1">Object</th>
+                    <th className="px-2 py-1">FBDI column</th>
+                    <th className="px-2 py-1">FBDI sheet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {catalog.rows.map((r, i) => (
+                    <tr key={i} className="border-t border-line/60">
+                      <td className="px-2 py-1 text-ink-muted">{r.source_system}</td>
+                      <td className="px-2 py-1 font-mono text-ink">{r.source_field}</td>
+                      <td className="px-2 py-1 text-ink-muted">{r.target_object}</td>
+                      <td className="px-2 py-1 font-medium text-ink">{r.fbdi_column}</td>
+                      <td className="px-2 py-1 font-mono text-[10px] text-ink-subtle">{r.fbdi_sheet}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       <ReferenceStandards

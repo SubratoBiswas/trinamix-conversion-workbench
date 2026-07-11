@@ -1,0 +1,1181 @@
+[
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Supplier Name",
+  "source_field": "entityid",
+  "source_label": "Vendor ID",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Supplier Name / Alternate Name",
+  "source_field": "companyname",
+  "source_label": "Company Name",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Alternate Name",
+  "source_field": "legalname",
+  "source_label": "Legal Name",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Taxpayer ID",
+  "source_field": "taxidnum",
+  "source_label": "Tax ID",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Site Assignment",
+  "target_field": "Procurement BU / Client BU",
+  "source_field": "subsidiary",
+  "source_label": "Subsidiary",
+  "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Site",
+  "target_field": "Invoice Currency / Payment Currency",
+  "source_field": "currency",
+  "source_label": "Primary Currency",
+  "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Site",
+  "target_field": "Payment Terms",
+  "source_field": "terms",
+  "source_label": "Terms",
+  "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Supplier Type",
+  "source_field": "category",
+  "source_label": "Category",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Federal Reportable Flag",
+  "source_field": "is1099eligible",
+  "source_label": "1099 Eligible",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Banks",
+  "target_field": "Remit-to Supplier / Payee Name",
+  "source_field": "printoncheckas",
+  "source_label": "Print on Check As",
+  "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Address Line 1",
+  "source_field": "addressbook.addr1",
+  "source_label": "Address 1 (sublist)",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Address Line 2",
+  "source_field": "addressbook.addr2",
+  "source_label": "Address 2",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "City",
+  "source_field": "addressbook.city",
+  "source_label": "City",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "State",
+  "source_field": "addressbook.state",
+  "source_label": "State/Province",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Postal Code",
+  "source_field": "addressbook.zip",
+  "source_label": "Zip/Postal Code",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Country",
+  "source_field": "addressbook.country",
+  "source_label": "Country",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Phone",
+  "source_field": "phone",
+  "source_label": "Phone",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Fax",
+  "source_field": "fax",
+  "source_label": "Fax",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Email",
+  "source_field": "email",
+  "source_label": "Email",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier",
+  "target_field": "Supplier URL / Website",
+  "source_field": "url",
+  "source_label": "Web Address",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Contacts",
+  "target_field": "First Name",
+  "source_field": "contact.firstname",
+  "source_label": "Primary Contact First",
+  "fbdi_sheet": "POZ_SUP_CONTACTS",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Contacts",
+  "target_field": "Last Name",
+  "source_field": "contact.lastname",
+  "source_label": "Primary Contact Last",
+  "fbdi_sheet": "POZ_SUP_CONTACTS",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Contacts",
+  "target_field": "Email",
+  "source_field": "contact.email",
+  "source_label": "Contact Email",
+  "fbdi_sheet": "POZ_SUP_CONTACTS",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Banks",
+  "target_field": "Bank Account Number / IBAN",
+  "source_field": "vendorbankaccount",
+  "source_label": "Bank Account (EFT)",
+  "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Party Original System Reference",
+  "source_field": "entityid",
+  "source_label": "Customer ID",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Party Name",
+  "source_field": "companyname",
+  "source_label": "Company Name",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Account Name",
+  "source_field": "companyname",
+  "source_label": "Company Name",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Account Number / Orig System Reference",
+  "source_field": "entityid",
+  "source_label": "Customer ID",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Business Unit / Profile",
+  "source_field": "subsidiary",
+  "source_label": "Subsidiary",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Currency",
+  "source_field": "currency",
+  "source_label": "Primary Currency",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Payment Terms",
+  "source_field": "terms",
+  "source_label": "Terms",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Credit Limit",
+  "source_field": "creditlimit",
+  "source_label": "Credit Limit",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Tax Reference / Resale",
+  "source_field": "resalenumber",
+  "source_label": "Resale Number",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Profile Class",
+  "source_field": "category",
+  "source_label": "Category",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Sales Rep (via site use)",
+  "source_field": "salesrep",
+  "source_label": "Sales Rep",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "Low"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Address Line 1",
+  "source_field": "addressbook.addr1",
+  "source_label": "Address 1",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Address Line 2",
+  "source_field": "addressbook.addr2",
+  "source_label": "Address 2",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "City",
+  "source_field": "addressbook.city",
+  "source_label": "City",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "State",
+  "source_field": "addressbook.state",
+  "source_label": "State",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Postal Code",
+  "source_field": "addressbook.zip",
+  "source_label": "Zip/Postal Code",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Country",
+  "source_field": "addressbook.country",
+  "source_label": "Country",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Site Use Type = BILL_TO",
+  "source_field": "addressbook.defaultbilling",
+  "source_label": "Bill-To flag",
+  "fbdi_sheet": "HZ_IMP_PARTYSITEUSES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Site Use Type = SHIP_TO",
+  "source_field": "addressbook.defaultshipping",
+  "source_label": "Ship-To flag",
+  "fbdi_sheet": "HZ_IMP_PARTYSITEUSES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Contact Point (PHONE)",
+  "source_field": "phone",
+  "source_label": "Phone",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Contact Point (EMAIL)",
+  "source_field": "email",
+  "source_label": "Email",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Contact Point (WEB)",
+  "source_field": "url",
+  "source_label": "Web Address",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Person First Name",
+  "source_field": "contact.firstname",
+  "source_label": "Contact First",
+  "fbdi_sheet": "HZ_IMP_CONTACTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Customer",
+  "target_field": "Person Last Name",
+  "source_field": "contact.lastname",
+  "source_label": "Contact Last",
+  "fbdi_sheet": "HZ_IMP_CONTACTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "itemid",
+  "source_label": "Item Name/Number",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Description",
+  "source_field": "displayname",
+  "source_label": "Display Name",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Long Description",
+  "source_field": "salesdescription",
+  "source_label": "Description (Sales)",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "User Item Type / Item Class",
+  "source_field": "itemtype/(recordtype)",
+  "source_label": "Item Type",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "stockunit / saleunit",
+  "source_label": "Units of Measure",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "GTIN / UPC (or DFF)",
+  "source_field": "upccode",
+  "source_label": "UPC Code",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Status",
+  "source_field": "isinactive",
+  "source_label": "Inactive",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Category / Category Set",
+  "source_field": "class",
+  "source_label": "Class",
+  "fbdi_sheet": "EGP_ITEM_CATEGORIES_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Cost / List Price",
+  "source_field": "cost",
+  "source_label": "Purchase Price",
+  "fbdi_sheet": "(Pricing / Cost FBDI)",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "List Price (Price List Import)",
+  "source_field": "baseprice",
+  "source_label": "Base Price",
+  "fbdi_sheet": "(Pricing FBDI)",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Unit Weight",
+  "source_field": "weight",
+  "source_label": "Weight",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Mfr (Trading Partner Item)",
+  "source_field": "manufacturer",
+  "source_label": "Manufacturer",
+  "fbdi_sheet": "EGP_ITEM_CATEGORIES_INTERFACE",
+  "confidence": "Low"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Manufacturer Part Number",
+  "source_field": "mpn",
+  "source_label": "Mfr Part Number",
+  "fbdi_sheet": "EGP_TRADING_PARTNER_ITEM",
+  "confidence": "Low"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier",
+  "target_field": "Supplier Number / Alternate Name",
+  "source_field": "vendor.vend_num",
+  "source_label": "Vendor Number",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier",
+  "target_field": "Supplier Name",
+  "source_field": "vendor.name",
+  "source_label": "Vendor Name",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier",
+  "target_field": "Taxpayer ID",
+  "source_field": "vendor.federal_tax_id / tax_id_num",
+  "source_label": "Federal Tax ID",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier",
+  "target_field": "Supplier Type",
+  "source_field": "vendor.type",
+  "source_label": "Vendor Type",
+  "fbdi_sheet": "POZ_SUPPLIERS_INT",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Site",
+  "target_field": "Payment Terms",
+  "source_field": "vendor.terms_code",
+  "source_label": "Terms Code",
+  "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Site",
+  "target_field": "Invoice Currency",
+  "source_field": "vendor.curr_code",
+  "source_label": "Currency Code",
+  "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "Address Line 1-3",
+  "source_field": "vendaddr.addr[] / vendor.addr[]",
+  "source_label": "Address lines",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "City",
+  "source_field": "vendor.city",
+  "source_label": "City",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "State",
+  "source_field": "vendor.state",
+  "source_label": "State",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "Postal Code",
+  "source_field": "vendor.zip",
+  "source_label": "Zip",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "Country",
+  "source_field": "vendor.country",
+  "source_label": "Country",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "Phone",
+  "source_field": "vendor.phone_num",
+  "source_label": "Phone",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "Fax",
+  "source_field": "vendor.fax_num",
+  "source_label": "Fax",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Address",
+  "target_field": "Email",
+  "source_field": "vendor.email_address",
+  "source_label": "Email",
+  "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Contacts",
+  "target_field": "First/Last Name",
+  "source_field": "vendor.contact / vendaddr.contact",
+  "source_label": "Contact Name",
+  "fbdi_sheet": "POZ_SUP_CONTACTS",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Supplier Banks",
+  "target_field": "Bank Account Number / IBAN",
+  "source_field": "vendaddr.bank_* / EFT fields",
+  "source_label": "Bank details",
+  "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Party Original System Reference",
+  "source_field": "customer.cust_num",
+  "source_label": "Customer Number",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Party Name",
+  "source_field": "customer.name",
+  "source_label": "Customer Name",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Account Name",
+  "source_field": "customer.name",
+  "source_label": "Customer Name",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Party Site (per ship-to)",
+  "source_field": "customer.cust_seq",
+  "source_label": "Customer Ship-To Seq",
+  "fbdi_sheet": "HZ_IMP_PARTYSITES_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Payment Terms",
+  "source_field": "customer.terms_code",
+  "source_label": "Terms Code",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Currency",
+  "source_field": "customer.curr_code",
+  "source_label": "Currency Code",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Credit Limit",
+  "source_field": "customer.credit_limit",
+  "source_label": "Credit Limit",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Sales Rep",
+  "source_field": "customer.slsman",
+  "source_label": "Salesperson",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "Low"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Tax Classification / Reference",
+  "source_field": "customer.tax_code1",
+  "source_label": "Tax Code",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Address Line 1-4",
+  "source_field": "customer.addr[] / custaddr.addr[]",
+  "source_label": "Address lines",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "City",
+  "source_field": "customer.city",
+  "source_label": "City",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "State",
+  "source_field": "customer.state",
+  "source_label": "State",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Postal Code",
+  "source_field": "customer.zip",
+  "source_label": "Zip",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Country",
+  "source_field": "customer.country",
+  "source_label": "Country",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Contact Point (PHONE)",
+  "source_field": "customer.phone_num",
+  "source_label": "Phone",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Contact Point (EMAIL)",
+  "source_field": "customer.email_address",
+  "source_label": "Email",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Customer",
+  "target_field": "Person First/Last Name",
+  "source_field": "customer.contact",
+  "source_label": "Contact Name",
+  "fbdi_sheet": "HZ_IMP_CONTACTS_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "item.item",
+  "source_label": "Item",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Item Description",
+  "source_field": "item.description",
+  "source_label": "Description",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "item.u_m",
+  "source_label": "Unit of Measure",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "User Item Type",
+  "source_field": "item.item_type",
+  "source_label": "Item Type",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Item Status",
+  "source_field": "item.stat",
+  "source_label": "Status",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Category / Category Set",
+  "source_field": "item.product_code",
+  "source_label": "Product Code",
+  "fbdi_sheet": "EGP_ITEM_CATEGORIES_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Purchasing Category",
+  "source_field": "item.commodity_code",
+  "source_label": "Commodity Code",
+  "fbdi_sheet": "EGP_ITEM_CATEGORIES_INTERFACE",
+  "confidence": "Low"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "List Price (Price List Import)",
+  "source_field": "item.unit_price / list_price",
+  "source_label": "Unit/List Price",
+  "fbdi_sheet": "(Pricing FBDI)",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Unit Weight",
+  "source_field": "item.unit_weight",
+  "source_label": "Weight",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Revision",
+  "source_field": "item.drawing_nbr",
+  "source_label": "Drawing / Rev",
+  "fbdi_sheet": "EGP_ITEM_REVISIONS_INTERFACE",
+  "confidence": "Low"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Party Original System Reference",
+  "source_field": "Id",
+  "source_label": "Account Id (18-char)",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Account Number / Orig System Reference",
+  "source_field": "AccountNumber",
+  "source_label": "Account Number",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Party Name",
+  "source_field": "Name",
+  "source_label": "Account Name",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Account Name",
+  "source_field": "Name",
+  "source_label": "Account Name",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Profile Class / Account Type",
+  "source_field": "Type",
+  "source_label": "Account Type",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Classification (Industry)",
+  "source_field": "Industry",
+  "source_label": "Industry",
+  "fbdi_sheet": "HZ_IMP_CLASSIFICS_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "SIC Code",
+  "source_field": "Sic",
+  "source_label": "SIC Code",
+  "fbdi_sheet": "HZ_IMP_PARTIES_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Address Line 1-4",
+  "source_field": "BillingStreet",
+  "source_label": "Billing Street",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "City",
+  "source_field": "BillingCity",
+  "source_label": "Billing City",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "State",
+  "source_field": "BillingState",
+  "source_label": "Billing State/Province",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Postal Code",
+  "source_field": "BillingPostalCode",
+  "source_label": "Billing Postal Code",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Country",
+  "source_field": "BillingCountry",
+  "source_label": "Billing Country",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Address Line (ship site)",
+  "source_field": "ShippingStreet",
+  "source_label": "Shipping Street",
+  "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Contact Point (PHONE)",
+  "source_field": "Phone",
+  "source_label": "Phone",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Contact Point (FAX)",
+  "source_field": "Fax",
+  "source_label": "Fax",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Contact Point (WEB)",
+  "source_field": "Website",
+  "source_label": "Website",
+  "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Currency",
+  "source_field": "CurrencyIsoCode",
+  "source_label": "Currency (multi-curr)",
+  "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Customer",
+  "target_field": "Account Description / Note",
+  "source_field": "Description",
+  "source_label": "Description",
+  "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "ProductCode",
+  "source_label": "Product Code",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Item Number / DFF",
+  "source_field": "StockKeepingUnit",
+  "source_label": "SKU",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Item Description",
+  "source_field": "Name",
+  "source_label": "Product Name",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Long Description",
+  "source_field": "Description",
+  "source_label": "Description",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "QuantityUnitOfMeasure",
+  "source_label": "Unit of Measure",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Category / Category Set",
+  "source_field": "Family",
+  "source_label": "Product Family",
+  "fbdi_sheet": "EGP_ITEM_CATEGORIES_INTERFACE",
+  "confidence": "Med"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Item Status",
+  "source_field": "IsActive",
+  "source_label": "Active",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Source System Code / Reference",
+  "source_field": "Id",
+  "source_label": "Product2 Id",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "salesforce",
+  "target_object": "Item",
+  "target_field": "Source System Reference",
+  "source_field": "ExternalId",
+  "source_label": "External ID",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "Med"
+ }
+]
