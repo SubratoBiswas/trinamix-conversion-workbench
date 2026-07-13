@@ -48,15 +48,17 @@ _BUNDLED: dict[str, tuple[str, str, str]] = {
 }
 
 
-async def _already_present(name: str, business_object: str) -> bool:
-    bo = (business_object or "").strip().lower()
-    nm = (name or "").strip().lower()
+async def _existing_keys() -> tuple[set[str], set[str]]:
+    """One scan of the template collection → the business objects and names that
+    already exist (so we don't re-query per bundled template)."""
+    objs: set[str] = set()
+    names: set[str] = set()
     for t in await FBDITemplate.find_all().to_list():
-        if bo and (t.business_object or "").strip().lower() == bo:
-            return True
-        if nm and (t.name or "").strip().lower() == nm:
-            return True
-    return False
+        if t.business_object:
+            objs.add(t.business_object.strip().lower())
+        if t.name:
+            names.add(t.name.strip().lower())
+    return objs, names
 
 
 async def _seed_one(path: Path, name: str, module: str, business_object: str) -> bool:
@@ -113,19 +115,24 @@ async def _seed_one(path: Path, name: str, module: str, business_object: str) ->
 async def seed_fbdi_templates() -> dict:
     if not _DIR.exists():
         return {"seeded": 0, "skipped": 0, "note": "no bundled templates"}
+    existing_objs, existing_names = await _existing_keys()
     seeded = skipped = failed = 0
     for fname, (name, module, bo) in _BUNDLED.items():
         path = _DIR / fname
         if not path.exists():
             continue
         try:
-            if await _already_present(name, bo):
+            if bo.strip().lower() in existing_objs or name.strip().lower() in existing_names:
                 skipped += 1
                 continue
             ok = await _seed_one(path, name, module, bo)
-            seeded += 1 if ok else 0
-            failed += 0 if ok else 1
-        except Exception:  # noqa: BLE001 — never block startup on one template
+            if ok:
+                seeded += 1
+                existing_objs.add(bo.strip().lower())
+                existing_names.add(name.strip().lower())
+            else:
+                failed += 1
+        except Exception:  # noqa: BLE001 — never fail the whole seed on one template
             logger.exception("template_seed: failed seeding %s", fname)
             failed += 1
     if seeded or failed:
