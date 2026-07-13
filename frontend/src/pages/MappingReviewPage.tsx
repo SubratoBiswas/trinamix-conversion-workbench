@@ -1130,6 +1130,38 @@ function mappingMethod(
   return { label: "AI suggested", tone: "warning", detail: m.reason || undefined };
 }
 
+/** Flag mappings the tool isn't sure about, so a human confirms rather than the
+ *  tool silently guessing (the "confirm per-install" idea). Returns the reason,
+ *  or null when the mapping is trustworthy. Human decisions and gold/learned
+ *  rules are never flagged — they're already settled. */
+function needsConfirmation(
+  m: MappingSuggestion | undefined,
+  f: FBDIField,
+  alts: MappingCandidate[],
+  dv?: string | null,
+): string | null {
+  if (!m) return null;
+  // Settled: a person chose it, gold suppressed it, or it came from the KB.
+  if (m.status === "overridden" || m.status === "not_applicable") return null;
+  const reason = (m.reason || "").toLowerCase();
+  if (reason.includes("learning library") || reason.includes("gold") || reason.includes("learned")) return null;
+
+  const conf = m.confidence ?? 0;
+  if (m.source_column) {
+    if (conf < 0.6) {
+      return `Low-confidence match (${Math.round(conf * 100)}%) — AI/weak rule score. Confirm the source column is right.`;
+    }
+    const top = alts[0];
+    const gap = conf - (top?.confidence ?? 0);
+    if (top && gap < 0.1) {
+      return `Ambiguous — “${top.source_column}” scored almost the same (${Math.round((top.confidence ?? 0) * 100)}%). Confirm which column is correct.`;
+    }
+    return null;
+  }
+  if (f.required && !dv) return "Required field with no source column and no default — must be resolved before load.";
+  return null;
+}
+
 const MethodChip: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
   <span
     title={title}
@@ -1191,7 +1223,60 @@ const MappingTableView: React.FC<{
     return m;
   }, [sourceColumns]);
 
-  const rows = targetFields.filter((f) => visibleTargetIds.has(f.id));
+  const [onlyConfirm, setOnlyConfirm] = useState(false);
+
+  // Derive every row once — the table, the confirm counter and the CSV export
+  // all read from this so they can never disagree.
+  const viewRows = useMemo(() => {
+    return targetFields
+      .filter((f) => visibleTargetIds.has(f.id))
+      .map((f) => {
+        const m = mapByTarget[String(f.id)];
+        const hasRule = ruleTargetIds.has(f.id);
+        const method = mappingMethod(m, f, effectiveDefaults, hasRule);
+        const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+        const prof = m?.source_column ? srcProfile[m.source_column] : undefined;
+        const transform = m?.suggested_transformation?.rule_type as string | undefined;
+        // Alternatives = ranked candidates minus the one actually chosen.
+        const alts = (altByTarget[String(f.id)] || [])
+          .filter((c) => c.source_column !== m?.source_column)
+          .slice(0, 3);
+        const isGap = !!f.required && !m?.source_column && !dv && m?.status !== "not_applicable";
+        const confirm = needsConfirmation(m, f, alts, dv);
+        return { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm };
+      });
+  }, [targetFields, visibleTargetIds, mapByTarget, ruleTargetIds, effectiveDefaults, srcProfile, altByTarget]);
+
+  const confirmCount = viewRows.filter((r) => r.confirm).length;
+  const rows = onlyConfirm ? viewRows.filter((r) => r.confirm) : viewRows;
+
+  const exportCsv = () => {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = [
+      "Source field", "Target FBDI field", "Required", "How it's mapped", "Transform",
+      "Confidence %", "Status", "Needs confirmation", "Why", "Other options (lower probability)", "Notes",
+    ];
+    const lines = rows.map((r) => [
+      r.m?.source_column || (r.dv ? "(constant)" : ""),
+      r.f.field_name,
+      r.f.required ? "YES" : "",
+      r.method.label + (r.dv && !r.m?.source_column ? ` → ${r.dv}` : ""),
+      r.transform || (r.hasRule ? "custom rule" : ""),
+      r.m?.source_column ? Math.round((r.m.confidence ?? 0) * 100) : "",
+      r.m?.status || "",
+      r.confirm ? "YES" : "",
+      r.confirm || "",
+      r.alts.map((c) => `${c.source_column} (${Math.round((c.confidence ?? 0) * 100)}%)`).join(" | "),
+      r.isGap ? "Required field with no source and no default." : (r.m?.reason || ""),
+    ].map(esc).join(","));
+    const csv = [header.map(esc).join(","), ...lines].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "field_mapping.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="flex-1 overflow-auto bg-white">
@@ -1200,6 +1285,36 @@ const MappingTableView: React.FC<{
           <Spinner /> Running mapping…
         </div>
       )}
+      {/* Table toolbar — uncertainty counter + CSV export */}
+      <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-line bg-white px-3 py-2">
+        <span className="text-[11px] text-ink-muted">
+          <span className="font-semibold text-ink">{viewRows.length}</span> field{viewRows.length === 1 ? "" : "s"}
+        </span>
+        {confirmCount > 0 && (
+          <button
+            onClick={() => setOnlyConfirm((v) => !v)}
+            title="Mappings the tool isn't confident about — low score, or a runner-up column scored almost as well. Confirm rather than trust blindly."
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition",
+              onlyConfirm
+                ? "border-warning bg-warning-subtle text-warning-dark"
+                : "border-line bg-white text-ink-muted hover:border-warning hover:text-warning-dark",
+            )}
+          >
+            <AlertTriangle className="h-3 w-3" />
+            {confirmCount} need confirmation
+            {onlyConfirm && <X className="h-3 w-3" />}
+          </button>
+        )}
+        <div className="flex-1" />
+        <button
+          onClick={exportCsv}
+          title="Export the rows currently shown (respects filters) as CSV"
+          className="inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-canvas"
+        >
+          <Download className="h-3 w-3" /> Export CSV
+        </button>
+      </div>
       <table className="w-full border-collapse text-[12px]">
         <thead className="sticky top-0 z-10 bg-canvas">
           <tr className="text-left text-[10px] uppercase tracking-wider text-ink-muted">
@@ -1213,18 +1328,8 @@ const MappingTableView: React.FC<{
           </tr>
         </thead>
         <tbody>
-          {rows.map((f) => {
-            const m = mapByTarget[String(f.id)];
-            const hasRule = ruleTargetIds.has(f.id);
-            const method = mappingMethod(m, f, effectiveDefaults, hasRule);
-            const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
-            const prof = m?.source_column ? srcProfile[m.source_column] : undefined;
-            const transform = m?.suggested_transformation?.rule_type as string | undefined;
-            // Alternatives = ranked candidates minus the one actually chosen.
-            const alts = (altByTarget[String(f.id)] || [])
-              .filter((c) => c.source_column !== m?.source_column)
-              .slice(0, 3);
-            const isGap = f.required && !m?.source_column && !dv && m?.status !== "not_applicable";
+          {rows.map((r) => {
+            const { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm } = r;
             const selected = m && selectedMappingId === m.id;
             return (
               <tr
@@ -1277,6 +1382,14 @@ const MappingTableView: React.FC<{
                       </MethodChip>
                     )}
                     {hasRule && !transform && <MethodChip tone="info">custom rule</MethodChip>}
+                    {confirm && (
+                      <span
+                        title={confirm}
+                        className="inline-flex items-center gap-0.5 whitespace-nowrap rounded border border-warning bg-warning-subtle px-1.5 py-0.5 text-[10px] font-semibold text-warning-dark"
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" /> confirm
+                      </span>
+                    )}
                   </div>
                   {dv && !m?.source_column && (
                     <div className="mt-0.5 font-mono text-[10px] text-info">→ {dv}</div>
@@ -1332,9 +1445,13 @@ const MappingTableView: React.FC<{
                 </td>
                 {/* Notes */}
                 <td className="px-3 py-2 text-[11px] leading-snug text-ink-muted">
-                  {isGap
-                    ? <span className="font-medium text-danger">Required field with no source and no default.</span>
-                    : (m?.reason || method.detail || "—")}
+                  {isGap ? (
+                    <span className="font-medium text-danger">Required field with no source and no default.</span>
+                  ) : confirm ? (
+                    <span className="text-warning-dark">{confirm}</span>
+                  ) : (
+                    m?.reason || method.detail || "—"
+                  )}
                 </td>
               </tr>
             );
@@ -1342,7 +1459,11 @@ const MappingTableView: React.FC<{
         </tbody>
       </table>
       {rows.length === 0 && (
-        <div className="p-8 text-center text-[12px] text-ink-muted">No fields match the current filter.</div>
+        <div className="p-8 text-center text-[12px] text-ink-muted">
+          {onlyConfirm
+            ? "Nothing needs confirmation — every mapping is either high-confidence, learned, or human-approved."
+            : "No fields match the current filter."}
+        </div>
       )}
     </div>
   );
