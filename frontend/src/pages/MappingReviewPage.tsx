@@ -1162,6 +1162,40 @@ function needsConfirmation(
   return null;
 }
 
+/** Clickable, sort-aware table header cell. */
+const SortableTh: React.FC<{
+  label: string;
+  sk: "seq" | "source" | "target" | "method" | "conf" | "required";
+  sortKey: string;
+  sortDir: "asc" | "desc";
+  onSort: (k: any) => void;
+  extra?: React.ReactNode;
+}> = ({ label, sk, sortKey, sortDir, onSort, extra }) => {
+  const active = sortKey === sk;
+  return (
+    <th
+      onClick={() => onSort(sk)}
+      title={`Sort by ${label.toLowerCase()}`}
+      className={cn(
+        "cursor-pointer select-none border-b border-line px-3 py-2 font-semibold transition hover:text-ink",
+        active && "text-brand-dark",
+      )}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <ChevronDown
+          className={cn(
+            "h-3 w-3 transition",
+            active ? "opacity-100" : "opacity-25",
+            active && sortDir === "asc" && "rotate-180",
+          )}
+        />
+        {extra}
+      </span>
+    </th>
+  );
+};
+
 const MethodChip: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
   <span
     title={title}
@@ -1224,6 +1258,16 @@ const MappingTableView: React.FC<{
   }, [sourceColumns]);
 
   const [onlyConfirm, setOnlyConfirm] = useState(false);
+  const [onlyRequired, setOnlyRequired] = useState(false);
+  const [methodFilter, setMethodFilter] = useState<string>("all");
+  const [tableSearch, setTableSearch] = useState("");
+  type SortKey = "seq" | "source" | "target" | "method" | "conf" | "required";
+  const [sortKey, setSortKey] = useState<SortKey>("seq");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const toggleSort = (k: SortKey) => {
+    if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("asc"); }
+  };
 
   // Derive every row once — the table, the confirm counter and the CSV export
   // all read from this so they can never disagree.
@@ -1248,7 +1292,59 @@ const MappingTableView: React.FC<{
   }, [targetFields, visibleTargetIds, mapByTarget, ruleTargetIds, effectiveDefaults, srcProfile, altByTarget]);
 
   const confirmCount = viewRows.filter((r) => r.confirm).length;
-  const rows = onlyConfirm ? viewRows.filter((r) => r.confirm) : viewRows;
+  const requiredCount = viewRows.filter((r) => r.f.required).length;
+  // The distinct "how it's mapped" methods actually present, for the dropdown.
+  const methods = useMemo(
+    () => Array.from(new Set(viewRows.map((r) => r.method.label))).sort(),
+    [viewRows],
+  );
+
+  const rows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    let out = viewRows.filter((r) => {
+      if (onlyConfirm && !r.confirm) return false;
+      if (onlyRequired && !r.f.required) return false;
+      if (methodFilter !== "all" && r.method.label !== methodFilter) return false;
+      if (q) {
+        const hay = `${r.f.field_name} ${r.m?.source_column ?? ""} ${r.dv ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    if (sortKey === "seq") {
+      // Default order: MANDATORY fields first (they're what blocks a load),
+      // then the template's own column sequence.
+      out = [...out].sort((a, b) => {
+        const ra = a.f.required ? 0 : 1;
+        const rb = b.f.required ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        return (a.f.sequence ?? 0) - (b.f.sequence ?? 0);
+      });
+    } else {
+      const dir = sortDir === "asc" ? 1 : -1;
+      const val = (r: typeof viewRows[number]) => {
+        switch (sortKey) {
+          case "source":   return (r.m?.source_column || "~").toLowerCase(); // unmapped sort last
+          case "target":   return (r.f.field_name || "").toLowerCase();
+          case "method":   return r.method.label.toLowerCase();
+          case "conf":     return r.m?.source_column ? (r.m.confidence ?? 0) : -1;
+          case "required": return r.f.required ? 1 : 0;
+          default:         return 0;
+        }
+      };
+      out = [...out].sort((a, b) => {
+        const va = val(a), vb = val(b);
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+        // Stable tiebreak: still keep required above optional, then sequence.
+        const ra = a.f.required ? 0 : 1;
+        const rb = b.f.required ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        return (a.f.sequence ?? 0) - (b.f.sequence ?? 0);
+      });
+    }
+    return out;
+  }, [viewRows, onlyConfirm, onlyRequired, methodFilter, tableSearch, sortKey, sortDir]);
 
   const exportCsv = () => {
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
@@ -1285,11 +1381,51 @@ const MappingTableView: React.FC<{
           <Spinner /> Running mapping…
         </div>
       )}
-      {/* Table toolbar — uncertainty counter + CSV export */}
-      <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-line bg-white px-3 py-2">
-        <span className="text-[11px] text-ink-muted">
-          <span className="font-semibold text-ink">{viewRows.length}</span> field{viewRows.length === 1 ? "" : "s"}
+      {/* Table toolbar — filters, uncertainty counter, CSV export */}
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-line bg-white px-3 py-2">
+        <span className="whitespace-nowrap text-[11px] text-ink-muted">
+          <span className="font-semibold text-ink">{rows.length}</span>
+          {rows.length !== viewRows.length && <span className="text-ink-subtle"> / {viewRows.length}</span>}
+          {" "}field{rows.length === 1 ? "" : "s"}
         </span>
+
+        {/* Search across source + target field names */}
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-ink-subtle" />
+          <input
+            value={tableSearch}
+            onChange={(e) => setTableSearch(e.target.value)}
+            placeholder="Filter source / target…"
+            className="h-7 w-52 rounded-md border border-line bg-white pl-7 pr-2 text-[11px] text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+          />
+        </div>
+
+        {/* How-it's-mapped filter */}
+        <select
+          value={methodFilter}
+          onChange={(e) => setMethodFilter(e.target.value)}
+          title="Filter by how the value is produced"
+          className="h-7 rounded-md border border-line bg-white px-2 text-[11px] text-ink focus:border-brand focus:outline-none"
+        >
+          <option value="all">All methods</option>
+          {methods.map((mv) => <option key={mv} value={mv}>{mv}</option>)}
+        </select>
+
+        {/* Required-only */}
+        <button
+          onClick={() => setOnlyRequired((v) => !v)}
+          title="Show only mandatory FBDI fields"
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition",
+            onlyRequired
+              ? "border-danger bg-danger-subtle text-danger"
+              : "border-line bg-white text-ink-muted hover:border-danger hover:text-danger",
+          )}
+        >
+          Required only ({requiredCount})
+          {onlyRequired && <X className="h-3 w-3" />}
+        </button>
+
         {confirmCount > 0 && (
           <button
             onClick={() => setOnlyConfirm((v) => !v)}
@@ -1306,23 +1442,48 @@ const MappingTableView: React.FC<{
             {onlyConfirm && <X className="h-3 w-3" />}
           </button>
         )}
+
+        {(onlyConfirm || onlyRequired || methodFilter !== "all" || tableSearch || sortKey !== "seq") && (
+          <button
+            onClick={() => {
+              setOnlyConfirm(false); setOnlyRequired(false);
+              setMethodFilter("all"); setTableSearch("");
+              setSortKey("seq"); setSortDir("asc");
+            }}
+            className="text-[11px] font-medium text-ink-subtle underline-offset-2 hover:text-ink hover:underline"
+          >
+            Reset
+          </button>
+        )}
+
         <div className="flex-1" />
         <button
           onClick={exportCsv}
-          title="Export the rows currently shown (respects filters) as CSV"
+          title="Export the rows currently shown (respects filters and sort) as CSV"
           className="inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-canvas"
         >
           <Download className="h-3 w-3" /> Export CSV
         </button>
       </div>
       <table className="w-full border-collapse text-[12px]">
-        <thead className="sticky top-0 z-10 bg-canvas">
+        <thead className="sticky top-[41px] z-10 bg-canvas">
           <tr className="text-left text-[10px] uppercase tracking-wider text-ink-muted">
-            <th className="border-b border-line px-3 py-2 font-semibold">Source field</th>
+            <SortableTh label="Source field"     sk="source"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <th className="border-b border-line px-1 py-2" />
-            <th className="border-b border-line px-3 py-2 font-semibold">Target FBDI field</th>
-            <th className="border-b border-line px-3 py-2 font-semibold">How it's mapped</th>
-            <th className="border-b border-line px-3 py-2 font-semibold">Conf.</th>
+            <SortableTh label="Target FBDI field" sk="target"  sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}
+              extra={
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleSort("required"); }}
+                  title="Sort by mandatory"
+                  className={cn("ml-1 rounded px-1 text-[9px] font-bold",
+                    sortKey === "required" ? "bg-danger text-white" : "bg-danger-subtle text-danger")}
+                >
+                  req
+                </button>
+              }
+            />
+            <SortableTh label="How it's mapped"  sk="method"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <SortableTh label="Conf."            sk="conf"     sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <th className="border-b border-line px-3 py-2 font-semibold">Other options (lower probability)</th>
             <th className="border-b border-line px-3 py-2 font-semibold">Notes</th>
           </tr>

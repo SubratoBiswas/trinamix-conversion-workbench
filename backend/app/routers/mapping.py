@@ -317,9 +317,21 @@ async def preview_rules(
     if conv.dataset_id:
         ds = await Dataset.get(conv.dataset_id)
         if ds:
-            df = parse_tabular(ds.file_path, file_type=ds.file_type)
-            for _, row in df.head(n).iterrows():
-                sample_rows.append({k: ("" if v is None else v) for k, v in row.to_dict().items()})
+            # Rehydrate from GridFS — the container disk is ephemeral, so
+            # ds.file_path may not exist after a redeploy (reading it raised and
+            # the request died, surfacing in the UI as a bare "Network Error").
+            from app.services.dataset_file_store import materialize_dataset_file
+            src_path = await materialize_dataset_file(ds)
+            if src_path is not None:
+                # Only read the sample rows. Parsing the WHOLE extract (a wide
+                # 7.5k x 258 workbook) for a 5-row preview was slow enough to
+                # exhaust a small instance — and this fires on every keystroke.
+                try:
+                    df = parse_tabular(str(src_path), file_type=ds.file_type, nrows=n)
+                    for _, row in df.head(n).iterrows():
+                        sample_rows.append({k: ("" if v is None else v) for k, v in row.to_dict().items()})
+                except Exception as exc:  # noqa: BLE001 — preview must never 500
+                    logging.getLogger(__name__).warning("rule preview: could not read source: %s", exc)
     else:
         table = getattr(conv, "ebs_table_hint", "") or ""
         if table:

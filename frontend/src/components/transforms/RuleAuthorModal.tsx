@@ -1144,8 +1144,16 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
         setPreview(res.samples);
         setPreviewError(null);
       } catch (e: any) {
+        // A bare axios "Network Error" means no response came back (backend
+        // restarting / cold start). Say that plainly — the rule is still saveable.
+        const detail = e?.response?.data?.detail;
+        const isNetwork = !e?.response && /network|failed to fetch/i.test(e?.message || "");
         setPreviewError(
-          e?.response?.data?.detail || e?.message || "Preview failed"
+          detail ||
+          (isNetwork
+            ? "Couldn't reach the server for a preview — it may be waking up. You can still save the rule."
+            : e?.message) ||
+          "Preview failed"
         );
         setPreview(null);
       }
