@@ -1328,7 +1328,8 @@ const MappingTableView: React.FC<{
           case "target":   return (r.f.field_name || "").toLowerCase();
           case "method":   return r.method.label.toLowerCase();
           case "conf":     return r.m?.source_column ? (r.m.confidence ?? 0) : -1;
-          case "required": return r.f.required ? 1 : 0;
+          // Ascending = mandatory first (that's what people mean by "sort by required").
+          case "required": return r.f.required ? 0 : 1;
           default:         return 0;
         }
       };
@@ -1470,18 +1471,8 @@ const MappingTableView: React.FC<{
           <tr className="text-left text-[10px] uppercase tracking-wider text-ink-muted">
             <SortableTh label="Source field"     sk="source"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <th className="border-b border-line px-1 py-2" />
-            <SortableTh label="Target FBDI field" sk="target"  sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}
-              extra={
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggleSort("required"); }}
-                  title="Sort by mandatory"
-                  className={cn("ml-1 rounded px-1 text-[9px] font-bold",
-                    sortKey === "required" ? "bg-danger text-white" : "bg-danger-subtle text-danger")}
-                >
-                  req
-                </button>
-              }
-            />
+            <SortableTh label="Target FBDI field" sk="target"  sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <SortableTh label="Required"         sk="required" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <SortableTh label="How it's mapped"  sk="method"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <SortableTh label="Conf."            sk="conf"     sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <th className="border-b border-line px-3 py-2 font-semibold">Other options (lower probability)</th>
@@ -1525,13 +1516,18 @@ const MappingTableView: React.FC<{
                 </td>
                 {/* Target */}
                 <td className="px-3 py-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink">{f.field_name}</span>
-                    {f.required && (
-                      <span className="rounded bg-danger-subtle px-1 py-0.5 text-[9px] font-bold uppercase text-danger">req</span>
-                    )}
-                  </div>
+                  <div className="font-medium text-ink">{f.field_name}</div>
                   <div className="mt-0.5 text-[10px] text-ink-subtle">{f.data_type || "Character"}</div>
+                </td>
+                {/* Required */}
+                <td className="px-3 py-2">
+                  {f.required ? (
+                    <span className="rounded bg-danger-subtle px-1.5 py-0.5 text-[9px] font-bold uppercase text-danger">
+                      required
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-ink-subtle">optional</span>
+                  )}
                 </td>
                 {/* How mapped */}
                 <td className="px-3 py-2">
