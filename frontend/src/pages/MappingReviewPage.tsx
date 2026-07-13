@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
   GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock, Download,
+  GitBranch, Table2, ArrowRight,
 } from "lucide-react";
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
@@ -129,6 +130,9 @@ export const MappingReviewPage: React.FC = () => {
 
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
+  // Canvas (drag-to-map graph) vs Table (row-per-field detail: required, how it
+  // was mapped, transform, confidence, lower-probability alternatives, notes).
+  const [viewMode, setViewMode] = useState<"canvas" | "table">("canvas");
   const [search, setSearch] = useState("");
   // FBDI load-sequence shown at the top of the mapping screen (Req 2).
   const [seqSteps, setSeqSteps] = useState<{ label: string; load_order: number }[]>([]);
@@ -823,6 +827,26 @@ export const MappingReviewPage: React.FC = () => {
 
           <div className="flex-1" />
 
+          {/* View toggle — canvas graph vs tabular field-mapping detail */}
+          <div className="flex items-center rounded-md border border-line bg-white p-0.5">
+            {([
+              { v: "canvas", label: "Canvas", Icon: GitBranch },
+              { v: "table",  label: "Table",  Icon: Table2 },
+            ] as const).map((o) => (
+              <button
+                key={o.v}
+                onClick={() => setViewMode(o.v)}
+                title={o.v === "table"
+                  ? "Tabular view — source → target with required flag, how it was mapped, transform, confidence, and lower-probability alternatives"
+                  : "Canvas view — drag source columns onto target fields"}
+                className={cn("inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium",
+                  viewMode === o.v ? "bg-brand text-white" : "text-ink-muted hover:text-ink")}
+              >
+                <o.Icon className="h-3 w-3" /> {o.label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center rounded-md border border-line bg-white p-0.5">
             {([
               { v: "all",      label: "All" },
@@ -966,7 +990,22 @@ export const MappingReviewPage: React.FC = () => {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Mapping canvas */}
+        {viewMode === "table" ? (
+          <MappingTableView
+            conversionId={pid ?? ""}
+            sourceColumns={sourceColumns}
+            targetFields={targetFields}
+            mappings={mappings}
+            visibleTargetIds={visibleTargetIds}
+            effectiveDefaults={effectiveDefaults}
+            ruleTargetIds={ruleTargetIds}
+            selectedMappingId={selectedMappingId}
+            setSelectedMappingId={setSelectedMappingId}
+            onOverride={(m, src) => override(m, src)}
+            loading={running}
+          />
+        ) : (
+        /* Mapping canvas */
         <MappingCanvas
           sourceColumns={sourceColumns}
           targetFields={targetFields}
@@ -984,6 +1023,7 @@ export const MappingReviewPage: React.FC = () => {
           onUnmap={unmap}
           loading={running}
         />
+        )}
 
         {/* Selected mapping inspector */}
         {selectedMapping && (
@@ -1050,6 +1090,260 @@ const Stat: React.FC<{ label: string; value: number; tone?: "info" | "success" |
     <div className="flex items-baseline gap-1.5">
       <span className={cn("text-base font-semibold tabular-nums", text)}>{value}</span>
       <span className="text-[10.5px] uppercase tracking-wider text-ink-muted">{label}</span>
+    </div>
+  );
+};
+
+// ─────── Tabular mapping view ───────
+// One row per target FBDI field: the source it's drawn from, whether the target
+// is mandatory, HOW the value is produced (learned / rule-based / AI / constant
+// default / suppressed), any transform, the confidence, and the lower-probability
+// alternative source columns the ranker considered (click one to re-map).
+
+/** Derive a human-readable "how was this mapped" chip from the mapping row. */
+function mappingMethod(
+  m: MappingSuggestion | undefined,
+  f: FBDIField,
+  effectiveDefaults: Record<string, string>,
+  hasRule: boolean,
+): { label: string; tone: "brand" | "info" | "success" | "warning" | "neutral"; detail?: string } {
+  const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+  if (m?.status === "not_applicable") {
+    return { label: "Suppressed", tone: "neutral", detail: "Blank in the gold standard — intentionally left empty" };
+  }
+  if (!m?.source_column) {
+    if (dv) return { label: "Constant default", tone: "info", detail: `Written as “${dv}” on every row` };
+    return { label: "Unmapped", tone: "neutral", detail: "No source column and no default" };
+  }
+  const reason = (m.reason || "").toLowerCase();
+  if (m.status === "overridden") return { label: "Manual override", tone: "warning", detail: m.reason || undefined };
+  if (reason.includes("learning library") || reason.includes("gold") || reason.includes("learned")) {
+    return { label: "Learned (KB)", tone: "brand", detail: m.reason || undefined };
+  }
+  if (reason.includes("value-set") || reason.includes("example")) {
+    return { label: "Learned from gold", tone: "brand", detail: m.reason || undefined };
+  }
+  if (hasRule || m.suggested_transformation?.rule_type) {
+    return { label: "Rule / transform", tone: "info", detail: m.reason || undefined };
+  }
+  if ((m.confidence ?? 0) >= 0.6) return { label: "Rule-based match", tone: "success", detail: m.reason || undefined };
+  return { label: "AI suggested", tone: "warning", detail: m.reason || undefined };
+}
+
+const MethodChip: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
+  <span
+    title={title}
+    className={cn(
+      "inline-flex items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium",
+      tone === "brand" && "bg-brand-subtle text-brand-dark",
+      tone === "info" && "bg-info-subtle text-info",
+      tone === "success" && "bg-success-subtle text-success",
+      tone === "warning" && "bg-warning-subtle text-warning-dark",
+      tone === "neutral" && "bg-canvas text-ink-muted",
+    )}
+  >
+    {children}
+  </span>
+);
+
+const MappingTableView: React.FC<{
+  conversionId: string;
+  sourceColumns: DatasetDetail["columns"];
+  targetFields: FBDIField[];
+  mappings: MappingSuggestion[];
+  visibleTargetIds: Set<number>;
+  effectiveDefaults: Record<string, string>;
+  ruleTargetIds: Set<number>;
+  selectedMappingId: number | null;
+  setSelectedMappingId: (id: number | null) => void;
+  onOverride: (m: MappingSuggestion, newSrc: string) => void;
+  loading?: boolean;
+}> = ({
+  conversionId, sourceColumns, targetFields, mappings, visibleTargetIds,
+  effectiveDefaults, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
+}) => {
+  // Ranked alternatives for every target field (one round-trip), so each row can
+  // show the runner-up source columns the matcher scored lower.
+  const [altByTarget, setAltByTarget] = useState<Record<string, MappingCandidate[]>>({});
+  const [altLoading, setAltLoading] = useState(true);
+  useEffect(() => {
+    if (!conversionId) return;
+    setAltLoading(true);
+    MappingApi.candidates(conversionId, { topN: 4 })
+      .then((groups) => {
+        const byId: Record<string, MappingCandidate[]> = {};
+        for (const g of groups) byId[String(g.target_field_id)] = g.candidates || [];
+        setAltByTarget(byId);
+      })
+      .catch(() => setAltByTarget({}))
+      .finally(() => setAltLoading(false));
+  }, [conversionId]);
+
+  const mapByTarget = useMemo(() => {
+    const m: Record<string, MappingSuggestion> = {};
+    for (const x of mappings) m[String(x.target_field_id)] = x;
+    return m;
+  }, [mappings]);
+
+  const srcProfile = useMemo(() => {
+    const m: Record<string, DatasetColumnProfile> = {};
+    for (const c of sourceColumns) m[c.column_name] = c;
+    return m;
+  }, [sourceColumns]);
+
+  const rows = targetFields.filter((f) => visibleTargetIds.has(f.id));
+
+  return (
+    <div className="flex-1 overflow-auto bg-white">
+      {loading && (
+        <div className="flex items-center gap-2 border-b border-line bg-canvas px-5 py-2 text-[12px] text-ink-muted">
+          <Spinner /> Running mapping…
+        </div>
+      )}
+      <table className="w-full border-collapse text-[12px]">
+        <thead className="sticky top-0 z-10 bg-canvas">
+          <tr className="text-left text-[10px] uppercase tracking-wider text-ink-muted">
+            <th className="border-b border-line px-3 py-2 font-semibold">Source field</th>
+            <th className="border-b border-line px-1 py-2" />
+            <th className="border-b border-line px-3 py-2 font-semibold">Target FBDI field</th>
+            <th className="border-b border-line px-3 py-2 font-semibold">How it's mapped</th>
+            <th className="border-b border-line px-3 py-2 font-semibold">Conf.</th>
+            <th className="border-b border-line px-3 py-2 font-semibold">Other options (lower probability)</th>
+            <th className="border-b border-line px-3 py-2 font-semibold">Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((f) => {
+            const m = mapByTarget[String(f.id)];
+            const hasRule = ruleTargetIds.has(f.id);
+            const method = mappingMethod(m, f, effectiveDefaults, hasRule);
+            const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+            const prof = m?.source_column ? srcProfile[m.source_column] : undefined;
+            const transform = m?.suggested_transformation?.rule_type as string | undefined;
+            // Alternatives = ranked candidates minus the one actually chosen.
+            const alts = (altByTarget[String(f.id)] || [])
+              .filter((c) => c.source_column !== m?.source_column)
+              .slice(0, 3);
+            const isGap = f.required && !m?.source_column && !dv && m?.status !== "not_applicable";
+            const selected = m && selectedMappingId === m.id;
+            return (
+              <tr
+                key={f.id}
+                onClick={() => m && setSelectedMappingId(selected ? null : m.id)}
+                className={cn(
+                  "cursor-pointer align-top border-b border-line/60 hover:bg-canvas/60",
+                  selected && "bg-brand-subtle/25",
+                  isGap && "bg-danger-subtle/25",
+                )}
+              >
+                {/* Source */}
+                <td className="px-3 py-2">
+                  {m?.source_column ? (
+                    <>
+                      <div className="font-mono text-[11.5px] text-ink">{m.source_column}</div>
+                      {prof && (
+                        <div className="mt-0.5 text-[10px] text-ink-subtle">
+                          {prof.inferred_type} · {formatNumber(prof.distinct_count ?? 0)} distinct
+                          {prof.null_percent != null && <> · {Number(prof.null_percent).toFixed(1)}% null</>}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-[11px] italic text-ink-subtle">
+                      {dv ? "— (constant)" : "— (none)"}
+                    </span>
+                  )}
+                </td>
+                <td className="px-1 py-2 text-ink-subtle">
+                  <ArrowRight className="h-3 w-3" />
+                </td>
+                {/* Target */}
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-ink">{f.field_name}</span>
+                    {f.required && (
+                      <span className="rounded bg-danger-subtle px-1 py-0.5 text-[9px] font-bold uppercase text-danger">req</span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-ink-subtle">{f.data_type || "Character"}</div>
+                </td>
+                {/* How mapped */}
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-1">
+                    <MethodChip tone={method.tone} title={method.detail}>{method.label}</MethodChip>
+                    {transform && (
+                      <MethodChip tone="info" title="Transformation applied to the source value">
+                        {transform}
+                      </MethodChip>
+                    )}
+                    {hasRule && !transform && <MethodChip tone="info">custom rule</MethodChip>}
+                  </div>
+                  {dv && !m?.source_column && (
+                    <div className="mt-0.5 font-mono text-[10px] text-info">→ {dv}</div>
+                  )}
+                  {m && (
+                    <div className="mt-0.5">
+                      <Pill tone={statusTone(m.status)}>{m.status.replace("_", " ")}</Pill>
+                    </div>
+                  )}
+                </td>
+                {/* Confidence */}
+                <td className="px-3 py-2">
+                  {m?.source_column ? (() => {
+                    const t = confidenceTone(m.confidence ?? 0);
+                    return (
+                      <span className={cn(
+                        "font-mono text-[11px] font-medium tabular-nums",
+                        t === "success" ? "text-success" : t === "warning" ? "text-warning-dark" : "text-danger",
+                      )}>
+                        {Math.round((m.confidence ?? 0) * 100)}%
+                      </span>
+                    );
+                  })() : (
+                    <span className="text-[11px] text-ink-subtle">—</span>
+                  )}
+                </td>
+                {/* Alternatives */}
+                <td className="px-3 py-2">
+                  {altLoading ? (
+                    <span className="text-[10px] text-ink-subtle">ranking…</span>
+                  ) : alts.length === 0 ? (
+                    <span className="text-[10px] text-ink-subtle">—</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {alts.map((c) => (
+                        <button
+                          key={c.source_column}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (m) onOverride(m, c.source_column);
+                          }}
+                          title={`Re-map to ${c.source_column} — ${(c.reasons || []).join("; ") || "ranked alternative"}${
+                            c.sample_values?.length ? `\nSamples: ${c.sample_values.slice(0, 3).join(", ")}` : ""
+                          }`}
+                          className="inline-flex items-center gap-1 rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10px] text-ink-muted transition hover:border-brand hover:text-brand-dark"
+                        >
+                          {c.source_column}
+                          <span className="text-[9px] text-ink-subtle">{Math.round((c.confidence ?? 0) * 100)}%</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </td>
+                {/* Notes */}
+                <td className="px-3 py-2 text-[11px] leading-snug text-ink-muted">
+                  {isGap
+                    ? <span className="font-medium text-danger">Required field with no source and no default.</span>
+                    : (m?.reason || method.detail || "—")}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {rows.length === 0 && (
+        <div className="p-8 text-center text-[12px] text-ink-muted">No fields match the current filter.</div>
+      )}
     </div>
   );
 };
