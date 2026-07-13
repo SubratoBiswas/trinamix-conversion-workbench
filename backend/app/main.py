@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
     await run_seed()
     from app.services.ai_settings import load_persisted_model
     await load_persisted_model()
+    # Seed the bundled Oracle FBDI templates (Supplier set + Customer master +
+    # Item master) so they're selectable targets without a manual upload.
+    try:
+        from app.services.template_seed_service import seed_fbdi_templates
+        await seed_fbdi_templates()
+    except Exception:  # noqa: BLE001 — never block startup on the template seed
+        import logging
+        logging.getLogger(__name__).exception("fbdi template seed failed")
     # Seed the reusable Mapping Knowledge Base (source→FBDI column mappings for
     # NetSuite / Infor SyteLine / Salesforce) so future files auto-apply them.
     try:
