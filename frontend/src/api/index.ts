@@ -88,7 +88,36 @@ export const FbdiApi = {
   reparseAll: () => api.post<{ reparsed: number; results: Array<{ id: string; name: string; status: string; fields: number }> }>("/fbdi/reparse-all").then(r => r.data),
   seedStandardFields: (id: string) =>
     api.post<{ seeded: number; existing: number; schema_matched?: string; message: string }>(`/fbdi/templates/${id}/seed-standard-fields`).then(r => r.data),
+  /** Which Oracle lookup types the templates need vs. which we hold codes for. */
+  lookupStatus: () =>
+    api.get<LookupStatus>("/fbdi/lookups/status").then(r => r.data),
+  /** Import codes from a Manage Standard Lookups export (CSV/XLSX). */
+  importLookups: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return api.post<LookupImportResult>("/fbdi/lookups/import", fd, { timeout: 120_000 })
+      .then(r => r.data);
+  },
 };
+
+export interface LookupStatus {
+  lookup_types: {
+    lookup_type: string;
+    codes: number;
+    columns_using_it: number;
+    status: "imported" | "missing";
+  }[];
+  summary: { referenced: number; imported: number; missing: number; total_codes: number };
+}
+
+export interface LookupImportResult {
+  codes_imported: number;
+  lookup_types: string[];
+  fields_updated: number;
+  types_matched: string[];
+  types_not_used_by_any_template: string[];
+  types_still_missing: string[];
+}
 
 // ─── Engagement-level (Projects) ───
 export const ProjectsApi = {

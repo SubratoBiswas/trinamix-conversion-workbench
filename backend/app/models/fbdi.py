@@ -70,3 +70,29 @@ class FBDIField(Document):
     class Settings:
         name = "fbdi_fields"
         indexes = ["template_id", "sheet_id"]
+
+
+class OracleLookup(Document):
+    """One lookup code from the customer's own Fusion instance.
+
+    Populated by importing a Manage Standard Lookups export. This is the ONLY
+    authoritative source for the ~45 lookup types the FBDI templates reference by
+    name but don't publish (EGP_MATERIAL_PLANNING, EGP_SOURCE_TYPES, …) — those
+    codes are instance-configurable, so anything we'd otherwise seed is a guess.
+
+    Once imported, these codes are written onto the matching FBDIFields'
+    ``allowed_values`` with ``verified=True``, which flips the column from
+    "unverified — passing values through" to fully mapped and validated.
+    """
+    lookup_type: str
+    code: str
+    meaning: Optional[str] = None
+    description: Optional[str] = None
+    enabled: bool = True
+    source: str = "instance_import"   # instance_import | oracle_standard
+    imported_by: Optional[str] = None
+    imported_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "oracle_lookups"
+        indexes = ["lookup_type", "code"]

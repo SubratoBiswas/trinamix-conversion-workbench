@@ -19,7 +19,9 @@ async def init_db() -> None:
     from app.models.project import Project
     from app.models.conversion import Conversion
     from app.models.dataset import Dataset, DatasetColumnProfile
-    from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile
+    from app.models.fbdi import (
+        FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
+    )
     from app.models.mapping import MappingSuggestion
     from app.models.learned import LearnedMapping
     from app.models.transformation import TransformationRule, Crosswalk
@@ -43,7 +45,7 @@ async def init_db() -> None:
         document_models=[
             User, Project, Conversion,
             Dataset, DatasetColumnProfile,
-            FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile,
+            FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
             MappingSuggestion, LearnedMapping,
             TransformationRule, Crosswalk,
             ConvertedOutput, Workflow,

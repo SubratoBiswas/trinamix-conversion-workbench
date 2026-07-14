@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { MappingApi, type CodedValueAudit, type CodedValueColumn } from "@/api";
 import { Button, Card, CardBody, CardHeader, Pill, Spinner } from "@/components/ui/Primitives";
+import LookupImportModal from "@/components/transforms/LookupImportModal";
 import { cn } from "@/lib/utils";
 
 /**
@@ -150,6 +151,7 @@ const CodedValuesPanel: React.FC<{ conversionId: string }> = ({ conversionId }) 
   const [err, setErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [onlyIssues, setOnlyIssues] = useState(true);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -221,11 +223,22 @@ const CodedValuesPanel: React.FC<{ conversionId: string }> = ({ conversionId }) 
             {(s.confirm ?? 0) > 0 && <Pill tone="warning">{s.confirm} confirm</Pill>}
             {(s.unverified ?? 0) > 0 && <Pill tone="info">{s.unverified} lookup</Pill>}
             {(s.ok ?? 0) > 0 && <Pill tone="success">{s.ok} ready</Pill>}
+            {(s.unverified ?? 0) > 0 && (
+              <Button variant="secondary" onClick={() => setImportOpen(true)}>
+                Import lookup codes
+              </Button>
+            )}
             <Button variant="ghost" onClick={() => setExpanded(e => !e)}>
               {expanded ? "Hide" : "Review"}
             </Button>
           </div>
         }
+      />
+
+      <LookupImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => void load()}
       />
 
       {expanded && (

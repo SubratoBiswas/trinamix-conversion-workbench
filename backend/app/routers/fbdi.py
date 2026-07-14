@@ -46,6 +46,50 @@ async def upload_template(
     return await _detail_payload(tpl)
 
 
+@router.get("/lookups/status")
+async def lookups_status(_: User = Depends(get_current_user)):
+    """Which Oracle lookup types the loaded templates need, and which we hold codes for."""
+    from app.services.lookup_import_service import lookup_status
+    return await lookup_status()
+
+
+@router.post("/lookups/import")
+async def lookups_import(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+):
+    """Import lookup codes from a Manage Standard Lookups export.
+
+    These are the ONLY authoritative source for the lookup types the FBDI templates
+    reference but don't publish — the codes are configured per Fusion instance. Once
+    imported they're written onto the matching template fields, which flips those
+    columns from "passing values through unvalidated" to fully mapped.
+    """
+    import tempfile
+
+    from app.services.lookup_import_service import import_lookup_codes
+
+    suffix = Path(file.filename or "lookups.csv").suffix.lower() or ".csv"
+    if suffix not in (".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls"):
+        raise HTTPException(400, "Upload a CSV or Excel export of Manage Standard Lookups.")
+
+    contents = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+
+    try:
+        result = await import_lookup_codes(
+            tmp_path, file_type=suffix.lstrip("."), user_email=user.email,
+        )
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @router.get("/templates", response_model=list[FBDITemplateOut])
 async def list_templates(_: User = Depends(get_current_user)):
     templates = await FBDITemplate.find_all().sort("-uploaded_at").to_list()
