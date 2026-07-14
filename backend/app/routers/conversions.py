@@ -446,12 +446,17 @@ async def reset_defaults(
     """
     from app.models.fbdi import FBDIField
     from app.models.learned import LearnedMapping
+    from app.services.learning_service import _business_object_for
     from app.services.mapping_service import run_mapping_suggestions
 
     conv = await Conversion.get(PydanticObjectId(conversion_id))
     if not conv:
         raise HTTPException(404, "Conversion not found")
-    obj = conv.target_object or ""
+    # Rules are keyed by the TEMPLATE's business object (falling back to the
+    # conversion's target_object) — the same derivation the learning engine uses
+    # when it stores them. Keying off conv.target_object alone missed conversions
+    # whose object lives only on the template, which is what made this 422.
+    obj = (await _business_object_for(conv)) or ""
     if not obj:
         raise HTTPException(422, "Conversion has no target object")
 
