@@ -4,7 +4,7 @@ import {
   Home, Database, FileSpreadsheet, Boxes, Workflow as WfIcon,
   Sparkles, ListChecks, ShieldCheck, Cloud, Network, BookOpen,
   Library, ArrowLeftRight, BadgeCheck, Eye, AlertTriangle, Layers,
-  CircleDot, Activity,
+  CircleDot, Activity, Award,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversionsApi, ProjectsApi } from "@/api";
@@ -29,6 +29,7 @@ const GROUPS: NavGroup[] = [
     label: "FBDI Library",
     items: [
       { to: "/fbdi", label: "Templates", icon: FileSpreadsheet },
+      { to: "/gold", label: "Gold Standards", icon: Award },
       { to: "/fbdi?tab=targets", label: "Target Objects", icon: BadgeCheck },
     ],
   },

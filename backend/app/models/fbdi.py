@@ -72,6 +72,52 @@ class FBDIField(Document):
         indexes = ["template_id", "sheet_id"]
 
 
+class GoldStandard(Document):
+    """A client's approved FBDI output, held in a project-independent library.
+
+    A gold file is knowledge about an OBJECT (how a Supplier load should look), not
+    about one engagement — so it lives here rather than inside a conversion. On
+    upload we identify which template it belongs to by header overlap, derive the
+    reusable rules (constant defaults, fields gold deliberately leaves blank, and
+    source→target column mappings when a paired source extract is supplied), and
+    write them as global LearnedMappings. Every future conversion of that object
+    picks them up automatically at generate.
+
+    Raw bytes are kept in Mongo (like FBDITemplateFile) so a re-learn survives a
+    redeploy and the file can be re-applied after the rule engine changes.
+    """
+    name: str
+    target_object: Optional[str] = None
+    template_id: Optional[PydanticObjectId] = None
+    template_name: Optional[str] = None
+
+    file_name: Optional[str] = None
+    content: Optional[bytes] = None
+    size: int = 0
+
+    # Optional paired source extract — its presence is what unlocks learning
+    # source→target column mappings (without it we can still learn defaults and
+    # suppressions, which need only the gold file).
+    source_file_name: Optional[str] = None
+    source_content: Optional[bytes] = None
+
+    match_confidence: float = 0.0
+    rows: int = 0
+    defaults_learned: int = 0
+    suppressed_learned: int = 0
+    mappings_learned: int = 0
+    status: str = "learned"          # learned | unmatched | error
+    note: Optional[str] = None
+
+    uploaded_by: Optional[str] = None
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    learned_at: Optional[datetime] = None
+
+    class Settings:
+        name = "gold_standards"
+        indexes = ["target_object", "template_id"]
+
+
 class OracleLookup(Document):
     """One lookup code from the customer's own Fusion instance.
 

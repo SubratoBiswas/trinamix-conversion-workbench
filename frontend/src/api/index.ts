@@ -100,6 +100,50 @@ export const FbdiApi = {
   },
 };
 
+/** A client-approved FBDI output held in the project-independent library. */
+export interface GoldStandard {
+  id: string;
+  name: string;
+  target_object?: string | null;
+  template_id?: string | null;
+  template_name?: string | null;
+  file_name?: string | null;
+  size: number;
+  source_file_name?: string | null;
+  match_confidence: number;
+  rows: number;
+  defaults_learned: number;
+  suppressed_learned: number;
+  mappings_learned: number;
+  status: "learned" | "unmatched" | "error";
+  note?: string | null;
+  uploaded_by?: string | null;
+  uploaded_at?: string | null;
+  learned_at?: string | null;
+}
+
+export const GoldApi = {
+  list: () =>
+    api.get<{
+      items: GoldStandard[];
+      summary: { gold_files: number; objects_covered: string[]; rules_from_gold: number };
+    }>("/gold").then(r => r.data),
+  upload: (file: File, opts: { name?: string; templateId?: string; sourceFile?: File } = {}) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (opts.sourceFile) fd.append("source_file", opts.sourceFile);
+    if (opts.name) fd.append("name", opts.name);
+    if (opts.templateId) fd.append("template_id", opts.templateId);
+    return api.post<GoldStandard>("/gold/upload", fd, { timeout: 300_000 }).then(r => r.data);
+  },
+  relearn: (id: string) => api.post<GoldStandard>(`/gold/${id}/relearn`).then(r => r.data),
+  remove: (id: string, purgeRules = false) =>
+    api.delete<{ deleted: boolean; rules_purged: number }>(`/gold/${id}`, {
+      params: { purge_rules: purgeRules },
+    }).then(r => r.data),
+  downloadUrl: (id: string) => `${api.defaults.baseURL}/gold/${id}/download`,
+};
+
 export interface LookupStatus {
   lookup_types: {
     lookup_type: string;

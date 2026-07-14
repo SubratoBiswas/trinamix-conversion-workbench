@@ -21,6 +21,7 @@ async def init_db() -> None:
     from app.models.dataset import Dataset, DatasetColumnProfile
     from app.models.fbdi import (
         FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
+        GoldStandard,
     )
     from app.models.mapping import MappingSuggestion
     from app.models.learned import LearnedMapping
@@ -46,6 +47,7 @@ async def init_db() -> None:
             User, Project, Conversion,
             Dataset, DatasetColumnProfile,
             FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
+            GoldStandard,
             MappingSuggestion, LearnedMapping,
             TransformationRule, Crosswalk,
             ConvertedOutput, Workflow,

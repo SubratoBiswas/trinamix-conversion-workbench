@@ -11,6 +11,7 @@ import { ConvertFilePage } from "@/pages/ConvertFilePage";
 import { DatasetDetailPage } from "@/pages/DatasetDetailPage";
 import { DatasetPreparationPage } from "@/pages/DatasetPreparationPage";
 import { FbdiTemplatesPage, FbdiTemplateDetailPage } from "@/pages/FbdiTemplatesPage";
+import GoldStandardsPage from "@/pages/GoldStandardsPage";
 
 // Engagement-level pages
 import { ProjectsPage } from "@/pages/ProjectsPage";
@@ -66,6 +67,7 @@ const App: React.FC = () => {
         <Route path="datasets/:id/prepare"   element={<DatasetPreparationPage />} />
         <Route path="fbdi"                   element={<FbdiTemplatesPage />} />
         <Route path="fbdi/:id"               element={<FbdiTemplateDetailPage />} />
+        <Route path="gold"                   element={<GoldStandardsPage />} />
 
         {/* Engagements */}
         <Route path="projects"               element={<ProjectsPage />} />
