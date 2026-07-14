@@ -3,7 +3,7 @@ from collections import Counter
 from typing import Optional
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.models.conversion import Conversion
 from app.models.learned import LearnedMapping
@@ -94,6 +94,65 @@ _KIND_LABELS = {
     "reference_standard": "Reference standards",
     "file_classification": "File classification",
 }
+
+
+@router.post("/import-mappings")
+async def import_mappings(
+    files: list[UploadFile] = File(...),
+    default_object: str | None = Form(None),
+    source_system: str | None = Form(None),
+    user: User = Depends(get_current_user),
+):
+    """Import one or more source→target mapping workbooks.
+
+    A mapping workbook explicitly states the crosswalk a consultant already worked
+    out, so each row is stored as a reusable column_mapping and auto-applied on
+    every future conversion of that object. ``default_object`` / ``source_system``
+    are fallbacks used only where a row (or the sheet) doesn't carry its own.
+    """
+    import tempfile
+    from pathlib import Path as _P
+
+    from app.services.mapping_import_service import import_mapping_file
+
+    allowed = (".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls")
+    files = [f for f in files if f and f.filename]
+    if not files:
+        raise HTTPException(400, "No files uploaded.")
+
+    results = []
+    tot_new = tot_upd = tot_skip = 0
+    for f in files:
+        suffix = _P(f.filename).suffix.lower()
+        if suffix not in allowed:
+            results.append({"file_name": f.filename, "error": "Not a CSV or Excel file."})
+            continue
+        contents = await f.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+        try:
+            r = await import_mapping_file(
+                tmp_path, file_type=suffix.lstrip("."),
+                default_object=default_object or None,
+                source_system=source_system or None,
+                user_email=user.email,
+            )
+        finally:
+            _P(tmp_path).unlink(missing_ok=True)
+        r["file_name"] = f.filename
+        if not r.get("error"):
+            tot_new += r.get("imported", 0)
+            tot_upd += r.get("updated", 0)
+            tot_skip += r.get("skipped", 0)
+        results.append(r)
+
+    return {
+        "files": results,
+        "imported": tot_new,
+        "updated": tot_upd,
+        "skipped": tot_skip,
+    }
 
 
 @router.get("/by-object")

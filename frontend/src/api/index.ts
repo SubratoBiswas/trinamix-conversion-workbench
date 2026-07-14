@@ -500,6 +500,26 @@ export const DashboardApi = {
   kpis: () => api.get<DashboardKpis>("/dashboard/kpis").then(r => r.data),
 };
 
+/** Per-file outcome of a mapping-workbook import. */
+export interface MappingImportResult {
+  files: {
+    file_name: string;
+    error?: string;
+    imported?: number;
+    updated?: number;
+    skipped?: number;
+    objects?: string[];
+    unresolved_object?: string[];
+    columns_detected?: {
+      source?: string | null; target?: string | null;
+      object?: string | null; source_system?: string | null;
+    };
+  }[];
+  imported: number;
+  updated: number;
+  skipped: number;
+}
+
 /** What the tool has learned about one Oracle object. */
 export interface LearnedObjectGroup {
   target_object: string;
@@ -519,6 +539,19 @@ export const LearningApi = {
   byObject: () =>
     api.get<{ objects: LearnedObjectGroup[]; total: number }>("/learned-mappings/by-object")
       .then(r => r.data),
+  /** Import one or more source→target mapping workbooks as reusable column mappings. */
+  importMappings: (
+    files: File[],
+    opts: { defaultObject?: string; sourceSystem?: string } = {},
+  ) => {
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    if (opts.defaultObject) fd.append("default_object", opts.defaultObject);
+    if (opts.sourceSystem) fd.append("source_system", opts.sourceSystem);
+    return api.post<MappingImportResult>("/learned-mappings/import-mappings", fd, {
+      timeout: 300_000,
+    }).then(r => r.data);
+  },
   stats: (params?: { project_id?: string }) =>
     api.get<LearningStats>("/learned-mappings/stats", { params }).then(r => r.data),
   capture: (body: Partial<LearnedMapping>) =>

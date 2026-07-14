@@ -1,12 +1,13 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, BookOpen, ChevronDown, ChevronRight, Clock, Download, EyeOff,
-  Layers, Search, Sparkles, Trash2, TrendingUp, Zap,
+  ArrowRight, BookOpen, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock,
+  Download, EyeOff, FileSpreadsheet, Layers, Search, Sparkles, Trash2, TrendingUp,
+  Upload, X, Zap,
 } from "lucide-react";
 import { LearningApi, ProjectsApi } from "@/api";
-import type { CatalogStatus, LearnedObjectGroup } from "@/api";
+import type { CatalogStatus, LearnedObjectGroup, MappingImportResult } from "@/api";
 import {
-  Button, Card, CardBody, CardHeader, PageLoader, PageTitle, Pill, Spinner,
+  Button, Card, CardBody, CardHeader, Modal, PageLoader, PageTitle, Pill, Spinner,
 } from "@/components/ui/Primitives";
 import { formatDate, cn } from "@/lib/utils";
 import type { LearnedMapping, LearningStats, Project } from "@/types";
@@ -40,6 +41,205 @@ const KIND_META: Record<string, { label: string; tone: "brand" | "success" | "in
 const kindMeta = (k: string) =>
   KIND_META[k] ?? { label: k.replace(/_/g, " "), tone: "neutral" as const, hint: "" };
 
+/** Import a source→target mapping workbook.
+ *
+ * A gold file makes the tool INFER the crosswalk from data. A mapping workbook
+ * STATES it — a consultant already did the mapping — so it's the strongest signal
+ * we can take, and each row becomes a reusable column_mapping applied on every
+ * future conversion of that object. Header detection is forgiving; source-on-left,
+ * target-on-right is assumed only as a fallback.
+ */
+const MappingImportModal: React.FC<{
+  open: boolean;
+  objects: string[];
+  onClose: () => void;
+  onDone: () => void;
+}> = ({ open, objects, onClose, onDone }) => {
+  const [files, setFiles] = useState<File[]>([]);
+  const [defaultObject, setDefaultObject] = useState("");
+  const [sourceSystem, setSourceSystem] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<MappingImportResult | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) { setFiles([]); setDefaultObject(""); setSourceSystem(""); setErr(null); setResult(null); }
+  }, [open]);
+
+  const add = (list: FileList | null) => {
+    if (!list) return;
+    const incoming = Array.from(list);
+    setFiles(prev => {
+      const seen = new Set(prev.map(f => `${f.name}:${f.size}`));
+      return [...prev, ...incoming.filter(f => !seen.has(`${f.name}:${f.size}`))];
+    });
+    setResult(null);
+  };
+
+  const submit = async () => {
+    if (!files.length) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await LearningApi.importMappings(files, {
+        defaultObject: defaultObject || undefined,
+        sourceSystem: sourceSystem || undefined,
+      });
+      setResult(r);
+      onDone();
+      const anyError = r.files.some(f => f.error || (f.unresolved_object?.length ?? 0) > 0);
+      if (!anyError) onClose();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? "Import failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="Import mapping workbook"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>{result ? "Done" : "Cancel"}</Button>
+          <Button onClick={() => void submit()} loading={busy} disabled={!files.length}>
+            Import{files.length > 1 ? ` (${files.length})` : ""}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 text-sm">
+        <p className="text-ink-muted">
+          A spreadsheet that lists which source column feeds which FBDI field. The tool
+          takes each row as a reusable mapping and applies it on every future conversion
+          of that object. It reads the usual column headings — source/legacy field,
+          target/FBDI field, object, source system — and assumes source-on-left,
+          target-on-right if a heading is unusual.
+        </p>
+
+        <div>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls"
+            className="hidden"
+            onChange={e => { add(e.target.files); e.target.value = ""; }}
+          />
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); add(e.dataTransfer.files); }}
+            className="flex w-full items-center gap-2 rounded-lg border border-dashed border-line px-3 py-2.5 text-left hover:border-brand hover:bg-brand-subtle/20"
+          >
+            <Upload className="h-4 w-4 text-ink-muted" />
+            <span className="text-ink-muted">
+              {files.length ? "Add more files…" : "Choose mapping workbooks, or drop them here…"}
+            </span>
+          </button>
+          {files.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {files.map((f, i) => (
+                <li key={`${f.name}-${i}`} className="flex items-center gap-2 rounded-md border border-line bg-canvas px-2.5 py-1.5 text-xs">
+                  <FileSpreadsheet className="h-3.5 w-3.5 text-ink-muted" />
+                  <span className="flex-1 truncate text-ink">{f.name}</span>
+                  <button onClick={() => setFiles(g => g.filter((_, j) => j !== i))} className="text-ink-subtle hover:text-danger">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className="mb-1 text-xs font-semibold text-ink">
+              Object if the file doesn't say <span className="font-normal text-ink-muted">optional</span>
+            </div>
+            <input
+              list="known-objects"
+              value={defaultObject}
+              onChange={e => setDefaultObject(e.target.value)}
+              placeholder="e.g. Supplier"
+              className="w-full rounded-lg border border-line px-3 py-2 text-sm"
+            />
+            <datalist id="known-objects">
+              {objects.map(o => <option key={o} value={o} />)}
+            </datalist>
+            <p className="mt-1 text-[11px] text-ink-muted">
+              Used only for rows without their own object column. Rows are otherwise keyed
+              by the object named in the file, or inferred from the FBDI field.
+            </p>
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold text-ink">
+              Source system <span className="font-normal text-ink-muted">optional</span>
+            </div>
+            <input
+              value={sourceSystem}
+              onChange={e => setSourceSystem(e.target.value)}
+              placeholder="e.g. NetSuite"
+              className="w-full rounded-lg border border-line px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+
+        {result && (
+          <div className="rounded-lg border border-line">
+            <div className="flex items-center gap-2 border-b border-line bg-canvas px-3 py-2 text-xs">
+              <Pill tone="success">{result.imported} new</Pill>
+              {result.updated > 0 && <Pill tone="info">{result.updated} updated</Pill>}
+              {result.skipped > 0 && <Pill tone="warning">{result.skipped} skipped</Pill>}
+            </div>
+            <ul className="max-h-52 overflow-auto">
+              {result.files.map((f, i) => (
+                <li key={i} className="flex items-start gap-2 border-b border-line px-3 py-2 text-xs last:border-0">
+                  {f.error ? (
+                    <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
+                  ) : (
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-ink">{f.file_name}</div>
+                    {f.error ? (
+                      <div className="text-danger">{f.error}</div>
+                    ) : (
+                      <div className="text-ink-muted">
+                        {f.imported} new · {f.updated} updated · {f.skipped} skipped
+                        {f.objects?.length ? ` · ${f.objects.join(", ")}` : ""}
+                        {f.columns_detected?.source && (
+                          <span className="text-ink-subtle">
+                            {" "}· read {f.columns_detected.source} → {f.columns_detected.target}
+                          </span>
+                        )}
+                        {(f.unresolved_object?.length ?? 0) > 0 && (
+                          <div className="mt-0.5 text-warning">
+                            {f.unresolved_object!.length} row(s) had no object and were skipped —
+                            set a default object above and re-import.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {err && (
+          <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-xs text-danger">{err}</div>
+        )}
+      </div>
+    </Modal>
+  );
+};
+
 export const LearningCenterPage: React.FC = () => {
   const [stats, setStats] = useState<LearningStats | null>(null);
   const [groups, setGroups] = useState<LearnedObjectGroup[] | null>(null);
@@ -48,6 +248,7 @@ export const LearningCenterPage: React.FC = () => {
   const [catalog, setCatalog] = useState<CatalogStatus | null>(null);
   const [openObject, setOpenObject] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const refresh = async (pid?: string) => {
     const params = pid ? { project_id: pid } : undefined;
@@ -80,6 +281,9 @@ export const LearningCenterPage: React.FC = () => {
         }
         right={
           <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setImportOpen(true)}>
+              <Upload className="mr-1 h-4 w-4" /> Import mappings
+            </Button>
             {projects.length > 0 && (
               <select
                 value={selectedProjectId}
@@ -149,6 +353,13 @@ export const LearningCenterPage: React.FC = () => {
       )}
 
       {catalog && catalog.total > 0 && <CatalogCard catalog={catalog} />}
+
+      <MappingImportModal
+        open={importOpen}
+        objects={groups.map(g => g.target_object).filter(o => o !== "Not tied to an object")}
+        onClose={() => setImportOpen(false)}
+        onDone={() => void refresh(selectedProjectId || undefined)}
+      />
     </>
   );
 };
