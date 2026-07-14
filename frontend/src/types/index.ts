@@ -768,8 +768,9 @@ export interface LearnedMapping {
 
 export interface LearningStats {
   total: number;
-  avg_confidence_boost: number;
-  records_auto_fixed: number;
-  analyst_minutes_saved: number;
+  objects_covered: number;
+  reusable_no_ai: number;
+  times_applied: number;
   by_category: { category: string; count: number }[];
+  by_source?: { source: string; count: number }[];
 }

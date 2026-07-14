@@ -298,11 +298,23 @@ async def learning_stats(
     else:
         items = await LearnedMapping.find_all().to_list()
     total = len(items)
-    avg_boost = round(
-        sum(i.confidence_boost or 0 for i in items) / total, 3
-    ) if total else 0.0
-    records_fixed = sum(int(i.records_auto_fixed or 0) for i in items)
-    minutes_saved = total * 4
+
+    # Honest, computed-from-data metrics only. (The old strip showed an "avg
+    # confidence boost" that was just the hardcoded 0.26 default on every rule, and
+    # an "analyst time saved" that was literally total × 4 minutes — both invented.)
+    objects_covered = len({(i.target_object or "").strip() for i in items if i.target_object})
+
+    # Rules that resolve with NO AI call: column mappings, constant defaults,
+    # deliberate blanks, and value crosswalks. This is the real, defensible payoff —
+    # every one of these is work the tool does deterministically instead of paying
+    # for a model round trip.
+    _NO_AI_KINDS = {"column_mapping", "example_default", "suppress_field", "crosswalk"}
+    reusable_no_ai = sum(1 for i in items if (i.kind or "") in _NO_AI_KINDS)
+
+    # A real counter: incremented each time a learned rule was auto-applied to a
+    # conversion field (see apply_learned_to_conversion). Not "records fixed" — that
+    # label was wrong — but genuine reuse.
+    times_applied = sum(int(i.records_auto_fixed or 0) for i in items)
 
     by_cat = Counter(i.category for i in items)
     cat_rows = []
@@ -312,12 +324,16 @@ async def learning_stats(
         if c not in DEFAULT_CATEGORIES:
             cat_rows.append({"category": c, "count": by_cat[c]})
 
+    by_src = Counter((i.captured_from or "manual").strip() or "manual" for i in items)
+    src_rows = [{"source": s, "count": n} for s, n in by_src.most_common()]
+
     return {
         "total": total,
-        "avg_confidence_boost": avg_boost,
-        "records_auto_fixed": records_fixed,
-        "analyst_minutes_saved": minutes_saved,
+        "objects_covered": objects_covered,
+        "reusable_no_ai": reusable_no_ai,
+        "times_applied": times_applied,
         "by_category": cat_rows,
+        "by_source": src_rows,
     }
 
 

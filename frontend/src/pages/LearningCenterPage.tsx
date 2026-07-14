@@ -717,31 +717,45 @@ const EmptyHero: React.FC = () => (
   </div>
 );
 
-const KpiStrip: React.FC<{ stats: LearningStats }> = ({ stats }) => (
-  <div className="rounded-lg border border-brand/20 bg-gradient-to-br from-brand-subtle/50 to-white p-4">
-    <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
-      <TrendingUp className="h-3.5 w-3.5" /> Feedback loop impact
+const KpiStrip: React.FC<{ stats: LearningStats }> = ({ stats }) => {
+  const noAiPct = stats.total ? Math.round((stats.reusable_no_ai / stats.total) * 100) : 0;
+  return (
+    <div className="rounded-lg border border-brand/20 bg-gradient-to-br from-brand-subtle/50 to-white p-4">
+      <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+        <TrendingUp className="h-3.5 w-3.5" /> What the tool has learned
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiTile icon={Sparkles} label="Rules captured" value={stats.total} tone="text-brand-dark" />
+        <KpiTile icon={Layers} label="Objects covered" value={stats.objects_covered} tone="text-info" />
+        <KpiTile
+          icon={Zap}
+          label="Resolve without AI"
+          value={stats.reusable_no_ai}
+          sub={stats.total ? `${noAiPct}% of all rules` : undefined}
+          tone="text-success"
+        />
+        <KpiTile
+          icon={Clock}
+          label="Times auto-applied"
+          value={stats.times_applied}
+          sub="to conversion fields"
+          tone="text-warning"
+        />
+      </div>
     </div>
-    <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-      <KpiTile icon={Sparkles} label="Rules captured" value={stats.total} tone="text-brand-dark" />
-      <KpiTile icon={TrendingUp} label="Avg confidence boost"
-        value={`+${Math.round((stats.avg_confidence_boost || 0) * 100)}%`} tone="text-success" />
-      <KpiTile icon={Zap} label="Records auto-fixed" value={stats.records_auto_fixed} tone="text-info" />
-      <KpiTile icon={Clock} label="Analyst time saved"
-        value={`~${stats.analyst_minutes_saved}m`} tone="text-warning" />
-    </div>
-  </div>
-);
+  );
+};
 
 const KpiTile: React.FC<{
-  icon: React.ElementType; label: string; value: React.ReactNode; tone: string;
-}> = ({ icon: Icon, label, value, tone }) => (
+  icon: React.ElementType; label: string; value: React.ReactNode; tone: string; sub?: string;
+}> = ({ icon: Icon, label, value, tone, sub }) => (
   <div className="rounded-md border border-line bg-white px-4 py-3">
     <div className="flex items-center gap-1.5 text-ink-muted">
       <Icon className={cn("h-3.5 w-3.5", tone)} />
       <span className="text-[10.5px] uppercase tracking-wider">{label}</span>
     </div>
     <div className={cn("mt-1 text-2xl font-semibold tabular-nums", tone)}>{value}</div>
+    {sub && <div className="mt-0.5 text-[10.5px] text-ink-muted">{sub}</div>}
   </div>
 );
 

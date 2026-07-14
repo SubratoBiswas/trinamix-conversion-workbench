@@ -43,7 +43,8 @@ class LearnedMappingOut(LearnedMappingBase):
 
 class LearningStats(BaseModel):
     total: int
-    avg_confidence_boost: float
-    records_auto_fixed: int
-    analyst_minutes_saved: int
+    objects_covered: int
+    reusable_no_ai: int          # rules that resolve without any AI call
+    times_applied: int           # times a learned rule was auto-applied to a conversion
     by_category: list[dict[str, Any]]
+    by_source: list[dict[str, Any]] = []
