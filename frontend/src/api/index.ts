@@ -297,6 +297,20 @@ export const ConversionsApi = {
       detail: { field: string; label: string; value: string; source: string }[];
       ai_used: boolean;
     }>(`/conversions/${id}/effective-defaults`, { params: { use_ai: useAi } }).then(r => r.data),
+  /** Remove learned/gold-derived constant defaults (e.g. a wrong Country → AE that a
+   *  gold file baked in). Forgets the object-level rule so it can't reapply, and can
+   *  re-run AI to re-fill the freed fields. Control defaults are never touched. */
+  resetDefaults: (
+    id: string,
+    body: { fields?: string[]; include_ai_defaults?: boolean; forget_global?: boolean; rerun_ai?: boolean } = {},
+  ) =>
+    api.post<{
+      target_object: string;
+      rules_forgotten: number;
+      defaults_cleared: number;
+      fields: string[];
+      remapped: number | null;
+    }>(`/conversions/${id}/reset-defaults`, body).then(r => r.data),
 };
 
 export interface ValueMapRecommendation {

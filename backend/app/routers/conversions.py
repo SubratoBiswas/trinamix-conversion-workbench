@@ -417,3 +417,112 @@ async def learn_from_example(
     if not result:
         raise HTTPException(400, "Provide an example file and/or a prompt")
     return result
+
+
+class ResetDefaultsIn(BaseModel):
+    # None → every gold-derived default for the object. Otherwise just these fields.
+    fields: Optional[list[str]] = None
+    include_ai_defaults: bool = False   # also drop AI-inferred defaults
+    forget_global: bool = True          # remove the object-level rule so it can't reapply
+    rerun_ai: bool = False              # re-map the cleared fields afterward
+
+
+@router.post("/{conversion_id}/reset-defaults")
+async def reset_defaults(
+    conversion_id: str,
+    body: ResetDefaultsIn,
+    _: User = Depends(get_current_user),
+):
+    """Remove learned/gold-derived constant defaults from a conversion.
+
+    A constant like Country → AE gets captured when a gold file happens to hold one
+    value in every row — great for that client, wrong for the next. Clearing it on
+    the conversion alone isn't enough: the rule is stored globally and re-applied on
+    every regenerate. So (with forget_global, the default) this also deletes the
+    object-level rule, and optionally re-runs AI to re-fill the freed fields.
+
+    Control defaults (Import Action = CREATE, batch ids, running numbers) are NOT
+    touched — they're structural, not gold-derived.
+    """
+    from app.models.fbdi import FBDIField
+    from app.models.learned import LearnedMapping
+    from app.services.mapping_service import run_mapping_suggestions
+
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    obj = conv.target_object or ""
+    if not obj:
+        raise HTTPException(422, "Conversion has no target object")
+
+    want_fields = {f.strip().lower() for f in (body.fields or []) if f.strip()}
+
+    # 1. Which stored example_default rules to forget. Gold-derived by default;
+    #    AI-inferred too if asked. Never touches column mappings or suppressions.
+    sources_ok = {"gold example"}
+    # When the user targets specific fields, forget whatever default feeds them —
+    # including an AI-inferred one — so a single removal actually sticks instead of
+    # being re-applied on the next effective-defaults recompute.
+    if body.include_ai_defaults or want_fields:
+        sources_ok.add("ai-inference")
+    rules = await LearnedMapping.find(
+        LearnedMapping.kind == "example_default",
+        LearnedMapping.target_object == obj,
+    ).to_list()
+    rules = [
+        r for r in rules
+        if ((r.captured_from or "") in sources_ok or "gold" in (r.captured_from or "").lower())
+        and (not want_fields or (r.target_field or "").strip().lower() in want_fields)
+    ]
+    forget_field_keys = {(r.target_field or "").strip().lower() for r in rules if r.target_field}
+
+    rules_forgotten = 0
+    if body.forget_global:
+        for r in rules:
+            await r.delete()
+            rules_forgotten += 1
+
+    # 2. Clear the default off this conversion's mappings for those fields, so the
+    #    field goes empty and becomes eligible for AI/deterministic re-mapping.
+    fields = await FBDIField.find(FBDIField.template_id == conv.template_id).to_list()
+    id_to_key = {f.id: (f.field_name or "").strip().lower() for f in fields}
+    maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == conv.id
+    ).to_list()
+
+    cleared = 0
+    for m in maps:
+        key = id_to_key.get(m.target_field_id)
+        if key is None:
+            continue
+        # Only fields we're resetting, and only where the value is a default (no real
+        # source column). A field mapped to a source column is left alone.
+        target = (not forget_field_keys and not want_fields) or key in forget_field_keys or key in want_fields
+        if not target:
+            continue
+        if m.source_column:
+            continue
+        if not m.default_value:
+            continue
+        await m.set({
+            "default_value": None,
+            "status": "suggested",
+            "reason": "Gold-derived default removed by user",
+        })
+        cleared += 1
+
+    remapped = None
+    if body.rerun_ai:
+        try:
+            res = await run_mapping_suggestions(conv)
+            remapped = len(res)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("reset-defaults rerun AI failed: %s", exc)
+
+    return {
+        "target_object": obj,
+        "rules_forgotten": rules_forgotten,
+        "defaults_cleared": cleared,
+        "fields": sorted(forget_field_keys) or sorted(want_fields),
+        "remapped": remapped,
+    }

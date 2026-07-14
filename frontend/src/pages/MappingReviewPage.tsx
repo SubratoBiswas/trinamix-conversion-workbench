@@ -336,6 +336,32 @@ export const MappingReviewPage: React.FC = () => {
 
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
+  // Remove gold-derived constant defaults (e.g. a wrong Country → AE that one gold
+  // file baked in). This forgets the object-level rule so it can't reapply on
+  // regenerate, then — because that's the natural next step — re-runs AI to re-fill
+  // the freed fields. `fields` scopes it to one field; omit for all gold defaults.
+  const resetGoldDefaults = async (fields?: string[], rerunAi = true) => {
+    if (!pid) return;
+    const scope = fields?.length ? `“${fields[0]}”` : "all gold-derived defaults for this object";
+    if (!window.confirm(
+      `Remove ${scope}?\n\nThis forgets the rule so it stops being applied to this and future ` +
+      `conversions of this object${rerunAi ? ", then re-runs AI to re-fill the field(s)" : ""}. ` +
+      `Control defaults (Import Action, batch id, running numbers) are not touched.`
+    )) return;
+    setRunning(true);
+    try {
+      const r = await ConversionsApi.resetDefaults(pid, {
+        fields, forget_global: true, rerun_ai: rerunAi,
+      });
+      const bits = [`${r.defaults_cleared} default(s) cleared`, `${r.rules_forgotten} rule(s) forgotten`];
+      if (r.remapped != null) bits.push("AI re-run");
+      flash(bits.join(" · "));
+      await loadAll();
+    } catch {
+      flash("Couldn't reset the defaults — try again.");
+    } finally { setRunning(false); }
+  };
+
   // Generate the FBDI output for this conversion and download it. Multi-sheet
   // objects come back as a .zip (one CSV per interface sheet); the artifact's
   // real file_name carries the correct extension.
@@ -780,6 +806,15 @@ export const MappingReviewPage: React.FC = () => {
             <span className="ml-1 text-xs">Recommendations</span>
           </button>
 
+          <button
+            onClick={() => resetGoldDefaults()}
+            className="btn-ghost !h-8"
+            title="Remove constant defaults that a gold file baked in (e.g. a wrong Country → AE), then re-run AI to re-fill them. Control defaults are kept."
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span className="ml-1 text-xs">Reset gold defaults</span>
+          </button>
+
           <Button onClick={suggest} loading={running} variant="primary" className="!h-8">
             <Sparkles className="h-3.5 w-3.5" />
             {mappings.length ? "Re-run AI" : "Run AI Mapping"}
@@ -1054,6 +1089,7 @@ export const MappingReviewPage: React.FC = () => {
             onReject={(m) => reject(m)}
             onOverride={(m, newSrc) => override(m, newSrc)}
             onAddCustomRule={(m) => { setRuleAuthorMapping(m); setRuleAuthorOpen(true); }}
+            onResetDefault={(fn) => resetGoldDefaults([fn], false)}
           />
         )}
 
@@ -2518,8 +2554,9 @@ const MappingInspector: React.FC<{
   onReject: (m: MappingSuggestion) => void;
   onOverride: (m: MappingSuggestion, src: string) => void;
   onAddCustomRule: (m: MappingSuggestion) => void;
+  onResetDefault?: (fieldName: string) => void;
   targetObject?: string | null;
-}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, targetObject }) => {
+}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, targetObject }) => {
   const [editingOverride, setEditingOverride] = useState(false);
   const [override, setOverride] = useState(mapping.source_column || "");
   const [vmRefresh, setVmRefresh] = useState(0);
@@ -2575,6 +2612,29 @@ const MappingInspector: React.FC<{
             </div>
           </div>
         </div>
+
+        {/* Gold-derived constant default — offer to remove it. A value like
+            Country → AE captured from one client's gold is wrong for the next; this
+            forgets the object rule and blanks the field so it can be re-mapped. */}
+        {!mapping.source_column && mapping.default_value && onResetDefault && (
+          <div className="mt-4 rounded-md border border-warning/30 bg-warning-subtle/40 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-ink">
+                Filled with a constant default{" "}
+                <span className="font-mono font-semibold">{mapping.default_value}</span>.
+                <div className="mt-0.5 text-[11px] text-ink-muted">
+                  If a gold file baked this in and it's wrong here, remove it.
+                </div>
+              </div>
+              <button
+                onClick={() => onResetDefault(mapping.target_field_name || "")}
+                className="shrink-0 rounded-md border border-warning/50 bg-white px-2 py-1 text-[11px] font-medium text-warning-dark hover:bg-warning-subtle"
+              >
+                Remove default
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Knowledge Bank provenance — shown only when the row came from a
             prior project on the same source ERP. */}
