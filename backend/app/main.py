@@ -57,6 +57,16 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("mapping_catalog seed failed")
 
+    try:
+        # Mine allowed_values / lookup_type out of the descriptions of templates
+        # that were parsed before the LOV parser existed. Cheap (no file IO) and
+        # idempotent, so it's safe to run on every boot.
+        from app.services.lov_backfill_service import backfill_lov_metadata
+        r = await backfill_lov_metadata()
+        log.info("startup seed — LOV backfill: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("lov backfill failed")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

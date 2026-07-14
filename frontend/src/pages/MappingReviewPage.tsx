@@ -12,6 +12,7 @@ import { ConversionsApi, DatasetsApi, FbdiApi, InheritedStandardsApi, LearningAp
 import LearnFromExamplePanel from "@/components/learn/LearnFromExamplePanel";
 import type { InheritedStandard, ReferenceStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
+import CodedValuesPanel from "@/components/transforms/CodedValuesPanel";
 import {
   Button, Card, CardBody, EmptyState, PageLoader, PageTitle, Pill, Spinner,
 } from "@/components/ui/Primitives";
@@ -985,6 +986,13 @@ export const MappingReviewPage: React.FC = () => {
               diag: {JSON.stringify(ebsDebug)}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Coded (LOV) columns — what Oracle will accept, checked before generating */}
+      {pid && (
+        <div className="px-5 pt-4">
+          <CodedValuesPanel conversionId={String(pid)} />
         </div>
       )}
 

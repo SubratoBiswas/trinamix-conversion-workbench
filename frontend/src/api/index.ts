@@ -208,9 +208,41 @@ export interface ValueMapRecommendations {
   error?: string;
 }
 
+/** One coded (LOV) target column, audited before generation. */
+export interface CodedValueColumn {
+  target_field: string;
+  required: boolean;
+  data_type?: string | null;
+  source_column?: string | null;
+  default_value?: string | null;
+  lookup_type?: string | null;
+  allowed_codes: { code: string; meaning: string }[];
+  codes_source?: string | null;
+  status: 'ok' | 'confirm' | 'error' | 'unverified';
+  resolved: { from: string; to: string; how: string; confidence: number }[];
+  unresolved: string[];
+  message?: string | null;
+  notes?: string | null;
+}
+
+export interface CodedValueAudit {
+  columns: CodedValueColumn[];
+  summary: {
+    coded_columns?: number;
+    ok?: number;
+    confirm?: number;
+    error?: number;
+    unverified?: number;
+    source_sampled?: boolean;
+  };
+}
+
 export const MappingApi = {
   propagate: (mappingId: string) =>
     api.post<PropagationResult>(`/mappings/${mappingId}/propagate`).then(r => r.data),
+  /** Audit of every coded/LOV column: what will be converted, what can't be grounded. */
+  codedValues: (conversionId: string) =>
+    api.get<CodedValueAudit>(`/conversions/${conversionId}/coded-values`).then(r => r.data),
   valueMapRecommendations: (mappingId: string) =>
     api.get<ValueMapRecommendations>(`/mappings/${mappingId}/value-map-recommendations`).then(r => r.data),
   acceptValueMap: (mappingId: string, body: {

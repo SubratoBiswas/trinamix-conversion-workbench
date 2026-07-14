@@ -425,3 +425,143 @@ async def propagation_candidates(conversion_id: str, _: User = Depends(get_curre
 @router.get("/conversions/{conversion_id}/inherited-standards")
 async def inherited_standards(conversion_id: str, _: User = Depends(get_current_user)):
     return []
+
+
+@router.get("/conversions/{conversion_id}/coded-values")
+async def coded_values_audit(conversion_id: str, _: User = Depends(get_current_user)):
+    """Audit every coded (LOV) target column BEFORE generation.
+
+    Oracle rejects a file whose coded column holds a value outside its accepted
+    list, and the failure surfaces as an opaque load error hours later. This walks
+    the mapped source column for each coded field, resolves its distinct values
+    against the codes mined from the template, and reports exactly what will be
+    converted, what can't be grounded, and which columns depend on lookup codes
+    that only exist in the customer's Fusion instance.
+    """
+    from app.models.fbdi import FBDIField
+    from app.services.dataset_file_store import materialize_dataset_file
+    from app.services.lov_service import build_crosswalk
+
+    conv = await _require_conversion(conversion_id)
+    mappings = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == conv.id
+    ).to_list()
+    if not mappings:
+        return {"columns": [], "summary": {}}
+
+    field_ids = [m.target_field_id for m in mappings if m.target_field_id]
+    fields = await FBDIField.find({"_id": {"$in": field_ids}}).to_list()
+    coded = {f.id: f for f in fields if (f.allowed_values or f.lookup_type)}
+    if not coded:
+        return {"columns": [], "summary": {"coded_columns": 0}}
+
+    # Sample the source once — distinct values in a few thousand rows are enough
+    # to characterise a coded column, and this endpoint is called interactively.
+    sample: Any = None
+    if conv.dataset_id:
+        ds = await Dataset.get(conv.dataset_id)
+        if ds:
+            src_path = await materialize_dataset_file(ds)
+            if src_path is not None:
+                try:
+                    sample = parse_tabular(str(src_path), file_type=ds.file_type, nrows=2000)
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger(__name__).warning("coded-values: source read failed: %s", exc)
+
+    out: list[dict] = []
+    n_ok = n_confirm = n_error = n_unverified = 0
+
+    for m in mappings:
+        f = coded.get(m.target_field_id)
+        if f is None or m.status == "not_applicable":
+            continue
+
+        values: list[Any] = []
+        if sample is not None and m.source_column and m.source_column in sample.columns:
+            values = [v for v in sample[m.source_column].dropna().unique().tolist()
+                      if str(v).strip() != ""]
+        elif m.default_value not in (None, ""):
+            values = [m.default_value]
+
+        allowed = list(f.allowed_values or [])
+        row: dict[str, Any] = {
+            "target_field": f.field_name,
+            "required": bool(f.required),
+            "data_type": f.data_type,
+            "source_column": m.source_column,
+            "default_value": m.default_value,
+            "lookup_type": f.lookup_type,
+            "allowed_codes": [
+                {"code": str(a.get("code")), "meaning": a.get("meaning") or ""}
+                for a in allowed
+            ],
+            "codes_source": (allowed[0].get("source") if allowed else None),
+            "notes": f.validation_notes,
+        }
+
+        if not allowed:
+            row.update({
+                "status": "unverified",
+                "resolved": [],
+                "unresolved": [str(v) for v in values[:25]],
+                "message": (
+                    f"Codes for {f.lookup_type} live in your Fusion instance "
+                    f"(Manage Standard Lookups), not in the template. Values pass "
+                    f"through unchanged — import the lookup codes to validate them."
+                ),
+            })
+            n_unverified += 1
+            out.append(row)
+            continue
+
+        crosswalk = build_crosswalk(values, allowed)
+        resolved = [
+            {"from": k, "to": r["code"], "how": r["method"], "confidence": r["confidence"]}
+            for k, r in crosswalk.items() if r["code"] is not None
+        ]
+        unresolved = [k for k, r in crosswalk.items() if r["code"] is None]
+
+        unverified_codes = any(a.get("source") == "oracle_standard" for a in allowed)
+        if unresolved and f.required:
+            status = "error"
+            n_error += 1
+        elif unresolved or unverified_codes:
+            status = "confirm"
+            n_confirm += 1
+        else:
+            status = "ok"
+            n_ok += 1
+
+        msg = None
+        if unresolved and f.required:
+            msg = ("Required coded column. These values don't match any accepted code "
+                   "and will fail the load — add a value rule, or correct the source.")
+        elif unresolved:
+            msg = ("Optional coded column. Unmatched values will be written blank so the "
+                   "file still loads; map them if the data matters.")
+        elif unverified_codes:
+            msg = ("Resolved using Oracle-standard codes. Confirm them against your "
+                   "instance in Manage Standard Lookups.")
+
+        row.update({
+            "status": status,
+            "resolved": resolved[:25],
+            "unresolved": [str(v) for v in unresolved[:25]],
+            "message": msg,
+        })
+        out.append(row)
+
+    order = {"error": 0, "confirm": 1, "unverified": 2, "ok": 3}
+    out.sort(key=lambda r: (order.get(r["status"], 9), not r["required"], r["target_field"]))
+
+    return {
+        "columns": out,
+        "summary": {
+            "coded_columns": len(out),
+            "ok": n_ok,
+            "confirm": n_confirm,
+            "error": n_error,
+            "unverified": n_unverified,
+            "source_sampled": sample is not None,
+        },
+    }

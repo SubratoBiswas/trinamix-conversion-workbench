@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from openpyxl import load_workbook
 
+from app.services.lov_service import enrich_field
+
 _DATA_TYPE_RE = re.compile(r"^\s*([A-Za-z]+)\s*(?:\(\s*(\d+)(?:\s*,\s*\d+)?\s*\))?", re.IGNORECASE)
 
 
@@ -132,6 +134,10 @@ def parse_fbdi_template(file_path):
                 required = is_req or bool(req_modules)
                 seq += 1
                 sheet_field_count += 1
+                # Coded column? Oracle publishes the accepted codes (and which one
+                # means "no") right in the description — mine it rather than
+                # letting an AI guess what belongs in a NUMBER column later.
+                lov = enrich_field(field_name, desc_text)
                 fields_out.append({
                     "field_name": field_name,
                     # keep the raw header (with Oracle's '*' required marker) so
@@ -143,8 +149,10 @@ def parse_fbdi_template(file_path):
                     "max_length": max_length,
                     "format_mask": "YYYYMMDD" if data_type.lower() == "date" else None,
                     "sample_value": None,
-                    "lookup_type": None,
-                    "validation_notes": None,
+                    "lookup_type": lov["lookup_type"],
+                    "allowed_values": lov["allowed_values"],
+                    "default_if_blank": lov["default_if_blank"],
+                    "validation_notes": lov["validation_notes"],
                     "sequence": seq,
                     "sheet_name": sname,
                     "required_modules": req_modules,

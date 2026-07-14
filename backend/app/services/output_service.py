@@ -151,18 +151,36 @@ async def build_converted_dataframe(
     )
     n_total = len(src)
     if n_total <= _TRANSFORM_CHUNK_ROWS:
-        return await asyncio.to_thread(_transform_frame, src, sorted_mappings, fields_by_id, pipelines)
+        out_df, lineage = await asyncio.to_thread(
+            _transform_frame, src, sorted_mappings, fields_by_id, pipelines
+        )
+    else:
+        parts: list[pd.DataFrame] = []
+        lineage = {}
+        for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
+            chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
+            odf, lin = await asyncio.to_thread(_transform_frame, chunk, sorted_mappings, fields_by_id, pipelines)
+            parts.append(odf)
+            if not lineage:
+                lineage = lin
+        out_df = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
 
-    parts: list[pd.DataFrame] = []
-    lineage: dict[str, dict[str, Any]] = {}
-    for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
-        chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
-        odf, lin = await asyncio.to_thread(_transform_frame, chunk, sorted_mappings, fields_by_id, pipelines)
-        parts.append(odf)
-        if not lineage:
-            lineage = lin
-    out_df = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
+    # Coded (LOV) columns last, on the assembled frame: rewrite every value Oracle
+    # would reject into the code it actually accepts. Run here rather than per
+    # chunk so the audit counts distinct values across the whole file. Still
+    # row-local, so it stays chunk-safe and byte-identical.
+    if fields:
+        lov_report = await asyncio.to_thread(enforce_coded_values, out_df, fields)
+        for fname, rep in lov_report.items():
+            lineage.setdefault(fname, {})["lov"] = rep
+
     return out_df, lineage
+
+
+# Coded-value (LOV) enforcement lives in lov_service alongside the code that mines
+# the accepted values out of the template descriptions. Re-exported here because
+# this is where it's applied.
+from app.services.lov_service import enforce_coded_values  # noqa: E402
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:

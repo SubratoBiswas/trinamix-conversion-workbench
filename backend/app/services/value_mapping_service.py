@@ -228,6 +228,10 @@ async def _ai_crosswalk(
             return {}
         # keep only values we actually asked about, non-empty, and changed
         vset = {str(v): v for v in values}
+        # When the column HAS a published code list, the model's answer is only
+        # acceptable if it's one of those codes. A plausible-looking invention is
+        # the worst outcome here: it loads clean and is wrong.
+        valid_codes = {_norm(c) for c, _ in pairs} if pairs else None
         out: dict[str, str] = {}
         for k, code in obj.items():
             if code is None:
@@ -236,8 +240,15 @@ async def _ai_crosswalk(
             if src is None:
                 continue
             code = str(code).strip()
-            if code and _norm(code) != _norm(src):
-                out[src] = code
+            if not code or _norm(code) == _norm(src):
+                continue
+            if valid_codes is not None and _norm(code) not in valid_codes:
+                log.warning(
+                    "AI crosswalk: dropped %r → %r for %s (not an accepted code)",
+                    src, code, field_name,
+                )
+                continue
+            out[src] = code
         return out
     except Exception as e:  # noqa: BLE001
         log.warning("AI crosswalk failed (%s); deterministic only", e)
@@ -271,6 +282,8 @@ async def recommend_value_map(conv: Conversion, mapping: MappingSuggestion) -> d
     ):
         learned.setdefault(lm.original_value, lm.resolved_value)
 
+    from app.services.lov_service import resolve_value as lov_resolve
+
     recs: list[dict] = []
     unmatched: list[str] = []
     ai_candidates: list[str] = []
@@ -278,6 +291,15 @@ async def recommend_value_map(conv: Conversion, mapping: MappingSuggestion) -> d
         if v in learned:
             recs.append({"source_value": v, "target_value": learned[v],
                          "method": "learned", "confidence": 0.99, "already_valid": False})
+            continue
+        # Template-grounded resolution first: Oracle publishes the codes AND which
+        # one means "no", so a descriptive source value ("Not stocked", "Made in
+        # house") lands on the right code without an LLM and without guessing.
+        r = lov_resolve(v, allowed)
+        if r["code"] is not None:
+            recs.append({"source_value": v, "target_value": r["code"],
+                         "method": r["method"], "confidence": r["confidence"],
+                         "already_valid": _norm(r["code"]) == _norm(v)})
             continue
         code, method, conf = resolve_value(v, allowed)
         if code is not None:
@@ -304,6 +326,16 @@ async def recommend_value_map(conv: Conversion, mapping: MappingSuggestion) -> d
                              "already_valid": _norm(code) == _norm(v)})
             else:
                 residual.append(v)
+        # A column whose codes live in the customer's Fusion instance (lookup_type
+        # named, no published values) is off-limits to the AI. It cannot know what
+        # that instance's Manage Standard Lookups contains, so anything it returns
+        # is a guess dressed up as a code. Leave those values unmatched and flag
+        # them instead.
+        instance_lookup = bool(getattr(field, "lookup_type", None)) and not allowed
+        if instance_lookup:
+            unmatched.extend(residual)
+            residual = []
+
         ai_map = await _ai_crosswalk(field.field_name, field.description, residual, allowed) \
             if residual else {}
         for v in residual:
@@ -318,6 +350,13 @@ async def recommend_value_map(conv: Conversion, mapping: MappingSuggestion) -> d
     return {
         "target_field": field.field_name,
         "lov": [{"code": c, "meaning": m} for c, m in _lov_pairs(allowed)],
+        "lookup_type": getattr(field, "lookup_type", None),
+        "codes_source": (allowed[0].get("source") if allowed else None),
+        "codes_verified": bool(allowed) and not any(
+            a.get("source") == "oracle_standard" for a in allowed
+        ),
+        "validation_notes": getattr(field, "validation_notes", None),
+        "required": bool(getattr(field, "required", False)),
         "default_if_blank": getattr(field, "default_if_blank", None),
         "source_column": mapping.source_column,
         "distinct_values": values,
