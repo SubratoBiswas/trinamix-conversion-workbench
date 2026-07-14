@@ -9,12 +9,13 @@ from __future__ import annotations
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from app.models.fbdi import GoldStandard
 from app.models.user import User
 from app.services.auth_service import get_current_user
 from app.services.gold_library_service import (
-    create_gold_standard, library_summary, orphan_rule_groups, relearn,
+    create_gold_standard, library_summary, orphan_rule_groups, relearn, repoint_gold,
 )
 
 router = APIRouter(prefix="/api/gold", tags=["gold"])
@@ -135,6 +136,31 @@ async def upload_gold(
         "unmatched": sum(1 for r in results if r.get("status") == "unmatched"),
         "failed": sum(1 for r in results if r.get("status") == "error"),
     }
+
+
+class GoldPatch(BaseModel):
+    name: str | None = None
+    template_id: str | None = None
+
+
+@router.patch("/{gold_id}")
+async def patch_gold(gold_id: str, body: GoldPatch, _: User = Depends(get_current_user)):
+    """Correct a gold standard's name, or the template it was matched to.
+
+    Header detection is good but not infallible, and a wrong template isn't
+    cosmetic — the rules were keyed to the wrong Oracle object and are being applied
+    to the wrong conversions. So changing the template re-learns the file and re-keys
+    its rules, and retires what it taught the old object if it was the last gold
+    behind it. See ``repoint_gold``.
+    """
+    gold = await GoldStandard.get(PydanticObjectId(gold_id))
+    if not gold:
+        raise HTTPException(404, "Gold standard not found")
+
+    result = await repoint_gold(gold, name=body.name, template_id=body.template_id)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return {**_out(gold), "change": result}
 
 
 @router.post("/{gold_id}/relearn")

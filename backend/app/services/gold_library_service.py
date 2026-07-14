@@ -339,6 +339,113 @@ async def register_gold_from_conversion(
     return str(gold.id)
 
 
+async def repoint_gold(
+    gold: GoldStandard, *, name: Optional[str] = None, template_id: Optional[str] = None,
+) -> dict:
+    """Correct a gold standard's name and/or the template it was matched to.
+
+    Detection is header-based and good, but it isn't infallible — and a wrong
+    template is not cosmetic. The rules this file taught were keyed to the WRONG
+    Oracle object, which means they're being applied to the wrong conversions. So
+    re-pointing has to do three things, not one:
+
+      1. retire the rules this file taught under the old object,
+      2. re-learn the file against the new template,
+      3. re-key everything to the new object.
+
+    Retiring only happens when this is the last gold file for the old object — if
+    another gold still teaches it, those rules are still earned and we leave them.
+    """
+    if name:
+        gold.name = name
+
+    if not template_id or (gold.template_id and str(gold.template_id) == template_id):
+        await gold.save()
+        return {"retargeted": False, "rules_retired": 0}
+
+    template = await FBDITemplate.get(template_id)
+    if not template:
+        return {"error": "That template doesn't exist."}
+    if not gold.content:
+        return {"error": "The original file wasn't stored, so it can't be re-learned "
+                         "against a different template. Re-upload it."}
+
+    old_object = gold.target_object
+    new_object = template.business_object or template.name
+
+    # 1. Retire what this file taught the old object — but only if it was the last
+    #    gold standing behind it.
+    retired = 0
+    if old_object and old_object != new_object:
+        siblings = await GoldStandard.find(
+            GoldStandard.target_object == old_object
+        ).to_list()
+        if len([g for g in siblings if g.id != gold.id]) == 0:
+            res = await LearnedMapping.find({
+                "target_object": old_object,
+                "captured_from": "gold example",
+            }).delete()
+            retired = getattr(res, "deleted_count", 0) or 0
+
+    # 2 + 3. Re-learn against the new template and re-key.
+    suffix = Path(gold.file_name or "gold.xlsx").suffix or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(gold.content)
+        gold_path = Path(tmp.name)
+
+    src_path: Optional[Path] = None
+    src_suffix = ""
+    if gold.source_content:
+        src_suffix = Path(gold.source_file_name or "source.csv").suffix or ".csv"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=src_suffix) as tmp:
+            tmp.write(gold.source_content)
+            src_path = Path(tmp.name)
+
+    try:
+        result = await learn_from_gold(
+            gold_path, template,
+            source_path=src_path,
+            source_file_type=src_suffix.lstrip(".") or None,
+        )
+    finally:
+        gold_path.unlink(missing_ok=True)
+        if src_path:
+            src_path.unlink(missing_ok=True)
+
+    gold.template_id = template.id
+    gold.template_name = template.name
+    gold.target_object = new_object
+    gold.match_confidence = 1.0          # a human said so; that beats header overlap
+    gold.learned_at = datetime.utcnow()
+
+    if result.get("error"):
+        gold.status = "error"
+        gold.note = result["error"]
+        gold.defaults_learned = gold.suppressed_learned = gold.mappings_learned = 0
+    else:
+        gold.status = "learned"
+        gold.rows = result["rows"]
+        gold.defaults_learned = len(result["defaults"])
+        gold.suppressed_learned = len(result["suppressed"])
+        gold.mappings_learned = len(result["mappings"])
+        gold.note = (
+            f"Template set by hand and re-learned against {template.name}."
+            + ("" if result["source_used"] else
+               " Add a matching source extract to also learn column mappings.")
+        )
+    await gold.save()
+
+    return {
+        "retargeted": True,
+        "from_object": old_object,
+        "to_object": new_object,
+        "rules_retired": retired,
+        "defaults": gold.defaults_learned,
+        "suppressed": gold.suppressed_learned,
+        "mappings": gold.mappings_learned,
+    }
+
+
 async def orphan_rule_groups() -> list[dict]:
     """Objects taught by a gold file whose file we no longer hold.
 

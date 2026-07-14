@@ -164,6 +164,16 @@ export const GoldApi = {
     return api.post<GoldUploadResult>("/gold/upload", fd, { timeout: 600_000 })
       .then(r => r.data);
   },
+  /** Fix a wrongly-detected template (or rename). Changing the template re-learns the
+   *  file and re-keys its rules to the new object — a wrong template means the rules
+   *  were being applied to the wrong conversions, so this is not a cosmetic edit. */
+  patch: (id: string, body: { name?: string; template_id?: string }) =>
+    api.patch<GoldStandard & {
+      change: {
+        retargeted: boolean; from_object?: string; to_object?: string;
+        rules_retired?: number; defaults?: number; suppressed?: number; mappings?: number;
+      };
+    }>(`/gold/${id}`, body).then(r => r.data),
   relearn: (id: string) => api.post<GoldStandard>(`/gold/${id}/relearn`).then(r => r.data),
   remove: (id: string, purgeRules = false) =>
     api.delete<{ deleted: boolean; rules_purged: number }>(`/gold/${id}`, {

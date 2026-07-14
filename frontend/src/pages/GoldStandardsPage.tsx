@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Award, CheckCircle2, CircleAlert, RefreshCw, Trash2, Upload, X,
+  Award, CheckCircle2, CircleAlert, Pencil, RefreshCw, Trash2, Upload, X,
 } from "lucide-react";
 import {
   FbdiApi, GoldApi,
@@ -307,6 +307,126 @@ const OrphanSection: React.FC<{ orphans: GoldOrphan[] }> = ({ orphans }) => (
   </Card>
 );
 
+/** Correct a wrongly-detected template, or rename the file.
+ *
+ * Worth being explicit in the UI: changing the template is not a label change. The
+ * rules this file taught were keyed to the object the old template belongs to, so
+ * they've been applied to the wrong conversions. Saving re-learns the file against
+ * the new template and re-keys everything.
+ */
+const EditModal: React.FC<{
+  gold: GoldStandard | null;
+  templates: FBDITemplate[];
+  onClose: () => void;
+  onSaved: () => void;
+}> = ({ gold, templates, onClose, onSaved }) => {
+  const [name, setName] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (gold) {
+      setName(gold.name ?? "");
+      setTemplateId(gold.template_id ?? "");
+      setErr(null);
+    }
+  }, [gold]);
+
+  if (!gold) return null;
+
+  const changingTemplate = templateId && templateId !== (gold.template_id ?? "");
+  const newTemplate = templates.find(t => t.id === templateId);
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await GoldApi.patch(gold.id, {
+        name: name !== gold.name ? name : undefined,
+        template_id: changingTemplate ? templateId : undefined,
+      });
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? "Couldn't save that.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Edit gold standard"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => void save()} loading={busy}>
+            {changingTemplate ? "Save & re-learn" : "Save"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 text-sm">
+        <div>
+          <div className="mb-1 text-xs font-semibold text-ink">Name</div>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className="w-full rounded-lg border border-line px-3 py-2 text-sm"
+          />
+        </div>
+
+        <div>
+          <div className="mb-1 text-xs font-semibold text-ink">Template</div>
+          <select
+            value={templateId}
+            onChange={e => setTemplateId(e.target.value)}
+            className="w-full rounded-lg border border-line px-3 py-2 text-sm"
+          >
+            <option value="">— none —</option>
+            {templates.map(t => (
+              <option key={t.id} value={t.id}>
+                {t.name}{t.business_object ? ` · ${t.business_object}` : ""}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-ink-muted">
+            Detected from the file's headers
+            {gold.match_confidence ? ` (${Math.round(gold.match_confidence * 100)}% match)` : ""}.
+            Change it if that's wrong.
+          </p>
+        </div>
+
+        {changingTemplate && (
+          <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3 text-xs text-ink">
+            <div className="font-semibold text-warning">This re-learns the file.</div>
+            <p className="mt-1 text-ink-muted">
+              The rules this file taught were keyed to{" "}
+              <span className="font-medium text-ink">{gold.target_object ?? "its old object"}</span>,
+              so they've been applied to conversions of that object. Saving re-derives
+              them against{" "}
+              <span className="font-medium text-ink">
+                {newTemplate?.business_object || newTemplate?.name || "the new template"}
+              </span>{" "}
+              and re-keys them. Rules the old object learned from this file are retired,
+              unless another gold file still teaches it.
+            </p>
+          </div>
+        )}
+
+        {err && (
+          <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-xs text-danger">
+            {err}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+};
+
 const GoldStandardsPage: React.FC = () => {
   const [items, setItems] = useState<GoldStandard[]>([]);
   const [orphans, setOrphans] = useState<GoldOrphan[]>([]);
@@ -314,6 +434,7 @@ const GoldStandardsPage: React.FC = () => {
   const [templates, setTemplates] = useState<FBDITemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [editing, setEditing] = useState<GoldStandard | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = async () => {
@@ -437,8 +558,15 @@ const GoldStandardsPage: React.FC = () => {
                               <div className="font-medium text-ink">{g.name}</div>
                               <div className="text-xs text-ink-muted">{g.file_name}</div>
                             </td>
-                            <td className="px-4 py-2.5 text-xs text-ink-muted">
-                              {g.template_name ?? "—"}
+                            <td className="px-4 py-2.5 text-xs">
+                              <button
+                                onClick={() => setEditing(g)}
+                                className="group inline-flex items-center gap-1 rounded px-1 py-0.5 text-ink-muted hover:bg-canvas hover:text-ink"
+                                title="Detected from the file's headers — click to correct it"
+                              >
+                                {g.template_name ?? "Not matched"}
+                                <Pencil className="h-3 w-3 opacity-0 transition group-hover:opacity-100" />
+                              </button>
                             </td>
                             <td className="px-4 py-2.5 text-right text-ink-muted">
                               {formatNumber(g.rows)}
@@ -468,6 +596,13 @@ const GoldStandardsPage: React.FC = () => {
                             </td>
                             <td className="px-4 py-2.5">
                               <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  onClick={() => setEditing(g)}
+                                  title="Rename, or correct the matched template"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
                                 <Button
                                   variant="ghost"
                                   onClick={() => void onRelearn(g)}
@@ -511,6 +646,13 @@ const GoldStandardsPage: React.FC = () => {
       )}
 
       {orphans.length > 0 && <OrphanSection orphans={orphans} />}
+
+      <EditModal
+        gold={editing}
+        templates={templates}
+        onClose={() => setEditing(null)}
+        onSaved={() => void load()}
+      />
 
       <UploadModal
         open={uploadOpen}
