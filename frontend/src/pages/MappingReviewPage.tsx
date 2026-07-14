@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
   GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock, Download,
-  GitBranch, Table2, ArrowRight,
+  GitBranch, Table2, ArrowRight, Layers, ChevronRight,
 } from "lucide-react";
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
@@ -996,6 +996,15 @@ export const MappingReviewPage: React.FC = () => {
         </div>
       )}
 
+      {/* How each field is decided — the layered pipeline, shown for both views */}
+      <PrecedenceBar
+        mappings={mappings}
+        targetFields={targetFields}
+        visibleTargetIds={visibleTargetIds}
+        ruleTargetIds={ruleTargetIds}
+        effectiveDefaults={effectiveDefaults}
+      />
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {viewMode === "table" ? (
@@ -1109,34 +1118,182 @@ const Stat: React.FC<{ label: string; value: number; tone?: "info" | "success" |
 // alternative source columns the ranker considered (click one to re-map).
 
 /** Derive a human-readable "how was this mapped" chip from the mapping row. */
+/**
+ * The decision layers, in the exact order the tool applies them. Every target
+ * field takes the HIGHEST layer that has an answer; AI only fills what nothing
+ * above it could. This is the single source of truth for both the per-field badge
+ * and the precedence bar, so the two can never disagree.
+ */
+type LayerKey =
+  | "gold" | "learned" | "workbook" | "manual"
+  | "deterministic" | "default" | "ai" | "suppressed" | "unmapped";
+
+const LAYER_META: Record<
+  LayerKey,
+  { label: string; tone: "brand" | "info" | "success" | "warning" | "neutral"; blurb: string }
+> = {
+  gold:          { label: "Golden record",    tone: "brand",   blurb: "From an approved gold file for this object" },
+  learned:       { label: "Learned",          tone: "brand",   blurb: "From the learning knowledge base (prior conversions + metadata catalog)" },
+  workbook:      { label: "Mapping workbook",  tone: "info",    blurb: "From an uploaded source→target mapping" },
+  manual:        { label: "Your rule",         tone: "warning", blurb: "A rule or override you applied by hand" },
+  deterministic: { label: "Deterministic",     tone: "success", blurb: "Rule-based match — country/currency/UOM/flags and column-name match" },
+  default:       { label: "Default",           tone: "info",    blurb: "A constant value written on every row" },
+  ai:            { label: "AI",                tone: "warning", blurb: "AI suggestion — used only where no layer above it applied" },
+  suppressed:    { label: "Left blank",        tone: "neutral", blurb: "Gold leaves this column empty on purpose" },
+  unmapped:      { label: "Unmapped",          tone: "neutral", blurb: "No source column, default, or rule yet" },
+};
+
+// Priority order shown in the precedence bar (the pipeline, gold → AI).
+const LAYER_ORDER: LayerKey[] = ["gold", "learned", "workbook", "manual", "deterministic", "default", "ai"];
+
+function classifyLayer(
+  m: MappingSuggestion | undefined,
+  f: FBDIField,
+  effectiveDefaults: Record<string, string>,
+  hasRule: boolean,
+): LayerKey {
+  const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+  if (m?.status === "not_applicable") return "suppressed";
+  if (!m?.source_column) return dv ? "default" : "unmapped";
+
+  const reason = (m.reason || "").toLowerCase();
+  if (m.status === "overridden") return "manual";
+  // The learning engine embeds the rule's origin in the reason string
+  // (`…captured from "gold example"`), so we can name the exact source layer.
+  if (reason.includes('from "gold') || reason.includes("value-set") || reason.includes("example")) return "gold";
+  if (reason.includes("mapping workbook")) return "workbook";
+  if (reason.includes("learning library") || reason.includes("learned") ||
+      reason.includes("metadata catalog") || reason.includes("knowledge")) return "learned";
+  if (hasRule || m.suggested_transformation?.rule_type) return "manual";
+  if ((m.confidence ?? 0) >= 0.6) return "deterministic";
+  return "ai";
+}
+
 function mappingMethod(
   m: MappingSuggestion | undefined,
   f: FBDIField,
   effectiveDefaults: Record<string, string>,
   hasRule: boolean,
 ): { label: string; tone: "brand" | "info" | "success" | "warning" | "neutral"; detail?: string } {
-  const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
-  if (m?.status === "not_applicable") {
-    return { label: "Suppressed", tone: "neutral", detail: "Blank in the gold standard — intentionally left empty" };
-  }
-  if (!m?.source_column) {
-    if (dv) return { label: "Constant default", tone: "info", detail: `Written as “${dv}” on every row` };
-    return { label: "Unmapped", tone: "neutral", detail: "No source column and no default" };
-  }
-  const reason = (m.reason || "").toLowerCase();
-  if (m.status === "overridden") return { label: "Manual override", tone: "warning", detail: m.reason || undefined };
-  if (reason.includes("learning library") || reason.includes("gold") || reason.includes("learned")) {
-    return { label: "Learned (KB)", tone: "brand", detail: m.reason || undefined };
-  }
-  if (reason.includes("value-set") || reason.includes("example")) {
-    return { label: "Learned from gold", tone: "brand", detail: m.reason || undefined };
-  }
-  if (hasRule || m.suggested_transformation?.rule_type) {
-    return { label: "Rule / transform", tone: "info", detail: m.reason || undefined };
-  }
-  if ((m.confidence ?? 0) >= 0.6) return { label: "Rule-based match", tone: "success", detail: m.reason || undefined };
-  return { label: "AI suggested", tone: "warning", detail: m.reason || undefined };
+  const key = classifyLayer(m, f, effectiveDefaults, hasRule);
+  const meta = LAYER_META[key];
+  return { label: meta.label, tone: meta.tone, detail: m?.reason || meta.blurb };
 }
+
+const LAYER_DOT: Record<LayerKey, string> = {
+  gold: "bg-brand", learned: "bg-brand/70", workbook: "bg-info", manual: "bg-warning",
+  deterministic: "bg-success", default: "bg-info/60", ai: "bg-warning/70",
+  suppressed: "bg-ink-subtle", unmapped: "bg-line",
+};
+
+/**
+ * Precedence bar — shows HOW this output is built, and how much each layer did.
+ *
+ * The tool resolves every field through the same ordered pipeline: an approved
+ * golden record wins first, then learned rules, then an uploaded mapping workbook,
+ * then rules you applied by hand, then deterministic matches, then constant
+ * defaults — and only where none of those had an answer does AI fill the gap. The
+ * counts are live for this conversion, so the bar doubles as a "what carried the
+ * output" breakdown. Shown above both the canvas and the table.
+ */
+const PrecedenceBar: React.FC<{
+  mappings: MappingSuggestion[];
+  targetFields: FBDIField[];
+  visibleTargetIds: Set<string> | null;
+  ruleTargetIds: Set<string>;
+  effectiveDefaults: Record<string, string>;
+}> = ({ mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults }) => {
+  const { counts, total } = useMemo(() => {
+    const mapByTarget = new Map<string, MappingSuggestion>();
+    for (const m of mappings) mapByTarget.set(String(m.target_field_id), m);
+    const c: Record<LayerKey, number> = {
+      gold: 0, learned: 0, workbook: 0, manual: 0,
+      deterministic: 0, default: 0, ai: 0, suppressed: 0, unmapped: 0,
+    };
+    // Match the id handling the two views already use: visibleTargetIds/ruleTargetIds
+    // are keyed on the raw target_field_id, while mapByTarget is keyed on its string
+    // form. Be tolerant of both so counts can never silently diverge from the rows.
+    const seen = (set: Set<any>, id: any) => set.has(id) || set.has(String(id));
+    let n = 0;
+    for (const f of targetFields) {
+      if (visibleTargetIds && !seen(visibleTargetIds as Set<any>, f.id)) continue;
+      const m = mapByTarget.get(String(f.id));
+      const key = classifyLayer(m, f, effectiveDefaults, seen(ruleTargetIds as Set<any>, f.id));
+      c[key] += 1;
+      n += 1;
+    }
+    return { counts: c, total: n };
+  }, [mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults]);
+
+  const [open, setOpen] = useState(false);
+  const resolvedByAi = counts.ai;
+  const aiPct = total ? Math.round((resolvedByAi / total) * 100) : 0;
+
+  return (
+    <div className="border-b border-line bg-canvas/60 px-5 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
+          <Layers className="h-3.5 w-3.5 text-brand" />
+          <span className="font-semibold text-ink">How each field is decided</span>
+          <span className="hidden sm:inline">
+            — highest layer with an answer wins; AI only fills the rest
+            {total > 0 && <> (<span className="font-medium text-ink">{aiPct}%</span> from AI)</>}
+          </span>
+        </div>
+        <button onClick={() => setOpen(o => !o)} className="text-[11px] font-medium text-brand hover:underline">
+          {open ? "Hide" : "What's this?"}
+        </button>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
+        {LAYER_ORDER.map((k, i) => {
+          const meta = LAYER_META[k];
+          const n = counts[k];
+          return (
+            <React.Fragment key={k}>
+              {i > 0 && <ChevronRight className="h-3 w-3 text-ink-subtle" />}
+              <span
+                title={meta.blurb}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                  n > 0 ? "border-line bg-white text-ink" : "border-line/60 bg-transparent text-ink-subtle",
+                )}
+              >
+                <span className={cn("h-2 w-2 rounded-full", n > 0 ? LAYER_DOT[k] : "bg-line")} />
+                <span className="font-medium">{meta.label}</span>
+                <span className="tabular-nums">{n}</span>
+              </span>
+            </React.Fragment>
+          );
+        })}
+        {counts.suppressed > 0 && (
+          <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-line/60 px-2 py-0.5 text-[11px] text-ink-subtle" title={LAYER_META.suppressed.blurb}>
+            <span className="h-2 w-2 rounded-full bg-ink-subtle" /> Left blank {counts.suppressed}
+          </span>
+        )}
+        {counts.unmapped > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-line/60 px-2 py-0.5 text-[11px] text-ink-subtle" title={LAYER_META.unmapped.blurb}>
+            <span className="h-2 w-2 rounded-full bg-line" /> Unmapped {counts.unmapped}
+          </span>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-2 grid grid-cols-1 gap-1 rounded-md border border-line bg-white p-3 text-[11.5px] sm:grid-cols-2">
+          {LAYER_ORDER.map((k, i) => (
+            <div key={k} className="flex items-baseline gap-2">
+              <span className={cn("mt-1 h-2 w-2 shrink-0 rounded-full", LAYER_DOT[k])} />
+              <span>
+                <span className="font-semibold text-ink">{i + 1}. {LAYER_META[k].label}</span>{" "}
+                <span className="text-ink-muted">— {LAYER_META[k].blurb}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 /** Flag mappings the tool isn't sure about, so a human confirms rather than the
  *  tool silently guessing (the "confirm per-install" idea). Returns the reason,
@@ -1948,9 +2105,27 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                         </span>
                       )}
                     </div>
-                    <div className="font-mono text-[10px] text-ink-muted">
-                      {f.data_type || "Character"}
-                      {f.max_length && ` (${f.max_length})`}
+                    <div className="flex items-center gap-1.5 font-mono text-[10px] text-ink-muted">
+                      <span>
+                        {f.data_type || "Character"}
+                        {f.max_length && ` (${f.max_length})`}
+                      </span>
+                      {(() => {
+                        // Which decision layer produced this field — the same
+                        // classification the table view and the precedence bar use.
+                        const key = classifyLayer(mapping, f, effectiveDefaults, !!ruleTargetIds?.has(f.id));
+                        if (key === "unmapped") return null;
+                        const meta = LAYER_META[key];
+                        return (
+                          <span
+                            title={meta.blurb}
+                            className="inline-flex items-center gap-1 rounded-full border border-line bg-white px-1.5 py-0 font-sans text-[9px] text-ink"
+                          >
+                            <span className={cn("h-1.5 w-1.5 rounded-full", LAYER_DOT[key])} />
+                            {meta.label}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                   {mapping && (
