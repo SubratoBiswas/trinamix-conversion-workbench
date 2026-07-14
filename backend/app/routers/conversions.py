@@ -444,6 +444,16 @@ async def reset_defaults(
     Control defaults (Import Action = CREATE, batch ids, running numbers) are NOT
     touched — they're structural, not gold-derived.
     """
+    try:
+        return await _reset_defaults_impl(conversion_id, body)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — surface the real reason, not an opaque 500
+        logging.getLogger(__name__).exception("reset-defaults failed")
+        raise HTTPException(400, f"Reset failed: {exc}")
+
+
+async def _reset_defaults_impl(conversion_id: str, body: "ResetDefaultsIn") -> dict:
     from app.models.fbdi import FBDIField
     from app.models.learned import LearnedMapping
     from app.services.learning_service import _business_object_for

@@ -357,8 +357,10 @@ export const MappingReviewPage: React.FC = () => {
       if (r.remapped != null) bits.push("AI re-run");
       flash(bits.join(" · "));
       await loadAll();
-    } catch {
-      flash("Couldn't reset the defaults — try again.");
+    } catch (e: any) {
+      // Surface the backend's actual reason instead of a generic message.
+      const detail = e?.response?.data?.detail;
+      flash(detail ? `Reset failed: ${detail}` : "Couldn't reset the defaults — try again.");
     } finally { setRunning(false); }
   };
 
