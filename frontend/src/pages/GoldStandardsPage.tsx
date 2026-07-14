@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Award, CheckCircle2, CircleAlert, RefreshCw, Trash2, Upload,
 } from "lucide-react";
-import { FbdiApi, GoldApi, type FBDITemplate, type GoldStandard } from "@/api";
+import { FbdiApi, GoldApi, type FBDITemplate, type GoldOrphan, type GoldStandard } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, Modal, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -170,8 +170,57 @@ const UploadModal: React.FC<{
   );
 };
 
+/** Gold that taught the tool before the library existed.
+ *
+ * The old conversion-side upload learned from the file and then deleted it, so the
+ * rules are live and being applied but the artefact is gone. Hiding these would make
+ * it look like nothing was ever taught for that object, which is worse than saying
+ * plainly what we have and what we don't.
+ */
+const OrphanSection: React.FC<{ orphans: GoldOrphan[] }> = ({ orphans }) => (
+  <Card className="mt-4 border-warning/30">
+    <CardHeader
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <CircleAlert className="h-4 w-4 text-warning" /> Learned before the library existed
+        </span>
+      }
+      subtitle="These rules came from gold files uploaded on a conversion, back when the file itself wasn't kept. The learning is live and still applied on every generate — but there's no file to download or re-learn from. Re-upload the gold here to store it."
+    />
+    <CardBody className="p-0">
+      <table className="w-full text-sm">
+        <thead className="border-b border-line bg-canvas text-xs text-ink-muted">
+          <tr>
+            <th className="px-4 py-2 text-left font-medium">Object</th>
+            <th className="px-4 py-2 text-right font-medium">Rules in force</th>
+            <th className="px-4 py-2 text-right font-medium">Defaults</th>
+            <th className="px-4 py-2 text-right font-medium">Blank-by-design</th>
+            <th className="px-4 py-2 text-right font-medium">Column maps</th>
+            <th className="px-4 py-2 text-left font-medium">File</th>
+          </tr>
+        </thead>
+        <tbody>
+          {orphans.map(o => (
+            <tr key={o.target_object} className="border-b border-line last:border-0">
+              <td className="px-4 py-2.5 font-medium text-ink">{o.target_object}</td>
+              <td className="px-4 py-2.5 text-right font-medium text-ink">{o.rules}</td>
+              <td className="px-4 py-2.5 text-right text-ink-muted">{o.defaults || "—"}</td>
+              <td className="px-4 py-2.5 text-right text-ink-muted">{o.suppressed || "—"}</td>
+              <td className="px-4 py-2.5 text-right text-ink-muted">{o.mappings || "—"}</td>
+              <td className="px-4 py-2.5">
+                <Pill tone="warning">Not retained</Pill>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </CardBody>
+  </Card>
+);
+
 const GoldStandardsPage: React.FC = () => {
   const [items, setItems] = useState<GoldStandard[]>([]);
+  const [orphans, setOrphans] = useState<GoldOrphan[]>([]);
   const [summary, setSummary] = useState<{ gold_files: number; objects_covered: string[]; rules_from_gold: number } | null>(null);
   const [templates, setTemplates] = useState<FBDITemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,6 +232,7 @@ const GoldStandardsPage: React.FC = () => {
     try {
       const [g, t] = await Promise.all([GoldApi.list(), FbdiApi.list()]);
       setItems(g.items);
+      setOrphans(g.orphans ?? []);
       setSummary(g.summary);
       setTemplates(t);
     } finally {
@@ -370,6 +420,8 @@ const GoldStandardsPage: React.FC = () => {
           ))}
         </div>
       )}
+
+      {orphans.length > 0 && <OrphanSection orphans={orphans} />}
 
       <UploadModal
         open={uploadOpen}

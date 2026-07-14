@@ -122,10 +122,21 @@ export interface GoldStandard {
   learned_at?: string | null;
 }
 
+/** An object whose gold rules are live but whose original file was never stored. */
+export interface GoldOrphan {
+  target_object: string;
+  rules: number;
+  defaults: number;
+  suppressed: number;
+  mappings: number;
+  last_captured?: string | null;
+}
+
 export const GoldApi = {
   list: () =>
     api.get<{
       items: GoldStandard[];
+      orphans: GoldOrphan[];
       summary: { gold_files: number; objects_covered: string[]; rules_from_gold: number };
     }>("/gold").then(r => r.data),
   upload: (file: File, opts: { name?: string; templateId?: string; sourceFile?: File } = {}) => {

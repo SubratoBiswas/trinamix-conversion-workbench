@@ -270,6 +270,93 @@ async def relearn(gold: GoldStandard) -> dict:
     return {"id": str(return_val.id), "status": return_val.status}
 
 
+async def register_gold_from_conversion(
+    conversion, *, file_name: str, contents: bytes, learned: dict,
+) -> Optional[str]:
+    """File a gold uploaded on a conversion into the shared library too.
+
+    The conversion path already did the learning (against that conversion's source
+    dataset, so it can infer column mappings). We're only persisting the artefact
+    and the counts here — deliberately NOT re-learning, which would double the work
+    and could disagree with what was just applied.
+    """
+    if not contents or not conversion.template_id:
+        return None
+
+    template = await FBDITemplate.get(conversion.template_id)
+    if not template:
+        return None
+    target_object = template.business_object or conversion.target_object
+
+    # Same file, same object → replace rather than pile up duplicates every time
+    # someone re-teaches a conversion.
+    existing = await GoldStandard.find_one(
+        GoldStandard.file_name == Path(file_name).name,
+        GoldStandard.target_object == target_object,
+    )
+    if existing:
+        await existing.delete()
+
+    gold = GoldStandard(
+        name=Path(file_name).stem,
+        target_object=target_object,
+        template_id=template.id,
+        template_name=template.name,
+        file_name=Path(file_name).name,
+        content=contents,
+        size=len(contents),
+        match_confidence=1.0,
+        rows=0,
+        # Use the *_count keys, not the lists — the lists are truncated to 60 for
+        # the API response and would silently undercount a big gold file.
+        defaults_learned=int(learned.get("default_count") or 0),
+        suppressed_learned=int(learned.get("suppressed_count") or 0),
+        mappings_learned=int(learned.get("mapped_count") or 0),
+        status="learned",
+        note="Uploaded from a conversion. Column mappings were inferred against that "
+             "conversion's source extract.",
+        learned_at=datetime.utcnow(),
+    )
+    await gold.insert()
+    return str(gold.id)
+
+
+async def orphan_rule_groups() -> list[dict]:
+    """Objects taught by a gold file whose file we no longer hold.
+
+    Before the library existed, uploading gold on a conversion learned from the file
+    and then deleted it — the rules survived, the artefact didn't. Rather than
+    pretend those objects have nothing, we surface them honestly: the learning is
+    live and being applied, but there's no file to re-download or re-learn from.
+    """
+    have = {
+        g.target_object for g in await GoldStandard.find_all().to_list() if g.target_object
+    }
+    rules = await LearnedMapping.find({"captured_from": "gold example"}).to_list()
+
+    groups: dict[str, dict] = {}
+    for r in rules:
+        obj = (r.target_object or "").strip()
+        if not obj or obj in have:
+            continue
+        g = groups.setdefault(obj, {
+            "target_object": obj, "rules": 0,
+            "defaults": 0, "suppressed": 0, "mappings": 0,
+            "last_captured": None,
+        })
+        g["rules"] += 1
+        if r.kind == "example_default":
+            g["defaults"] += 1
+        elif r.kind == "suppress_field":
+            g["suppressed"] += 1
+        elif r.kind == "column_mapping":
+            g["mappings"] += 1
+        if r.captured_at and (g["last_captured"] is None or r.captured_at > g["last_captured"]):
+            g["last_captured"] = r.captured_at
+
+    return sorted(groups.values(), key=lambda g: -g["rules"])
+
+
 async def library_summary() -> dict:
     """What the library holds, and how many live rules came out of it."""
     golds = await GoldStandard.find_all().to_list()

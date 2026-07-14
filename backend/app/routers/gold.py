@@ -13,7 +13,9 @@ from fastapi.responses import Response
 from app.models.fbdi import GoldStandard
 from app.models.user import User
 from app.services.auth_service import get_current_user
-from app.services.gold_library_service import create_gold_standard, library_summary, relearn
+from app.services.gold_library_service import (
+    create_gold_standard, library_summary, orphan_rule_groups, relearn,
+)
 
 router = APIRouter(prefix="/api/gold", tags=["gold"])
 
@@ -46,7 +48,15 @@ def _out(g: GoldStandard) -> dict:
 @router.get("")
 async def list_gold(_: User = Depends(get_current_user)):
     golds = await GoldStandard.find_all().sort("-uploaded_at").to_list()
-    return {"items": [_out(g) for g in golds], "summary": await library_summary()}
+    return {
+        "items": [_out(g) for g in golds],
+        # Objects whose gold rules are live but whose original file predates the
+        # library (the old conversion-side upload learned from the file and then
+        # deleted it). Shown so the learning isn't invisible just because we can't
+        # produce the artefact.
+        "orphans": await orphan_rule_groups(),
+        "summary": await library_summary(),
+    }
 
 
 @router.post("/upload")

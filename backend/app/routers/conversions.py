@@ -1,4 +1,5 @@
 """Conversions router."""
+import logging
 from datetime import datetime
 from typing import Optional
 from beanie import PydanticObjectId
@@ -391,6 +392,23 @@ async def learn_from_example(
                 os.unlink(tmp)
             except Exception:
                 pass
+
+        # Also file it in the shared Gold Standards library. Historically this
+        # endpoint learned from the upload and then threw the bytes away, so the
+        # gold file itself was unrecoverable — you could see the rules it produced
+        # but never the file, and it couldn't be re-learned after a rule-engine
+        # change. Keep a durable copy so a gold uploaded on a conversion behaves
+        # exactly like one uploaded to the library.
+        try:
+            from app.services.gold_library_service import register_gold_from_conversion
+            reg = await register_gold_from_conversion(
+                conv, file_name=file.filename or "gold.xlsx", contents=contents,
+                learned=result.get("learned") or {},
+            )
+            if reg:
+                result["gold_standard_id"] = reg
+        except Exception:  # noqa: BLE001 — never fail the learn on a bookkeeping error
+            logging.getLogger(__name__).exception("could not add gold to library")
 
     if prompt and prompt.strip():
         from app.services.steering_service import apply_steer_prompt
