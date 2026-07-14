@@ -122,6 +122,14 @@ export interface GoldStandard {
   learned_at?: string | null;
 }
 
+/** Per-file outcome of a (possibly multi-file) gold upload. */
+export interface GoldUploadResult {
+  items: (GoldStandard | { file_name: string; status: "error"; note: string })[];
+  uploaded: number;
+  unmatched: number;
+  failed: number;
+}
+
 /** An object whose gold rules are live but whose original file was never stored. */
 export interface GoldOrphan {
   target_object: string;
@@ -139,13 +147,22 @@ export const GoldApi = {
       orphans: GoldOrphan[];
       summary: { gold_files: number; objects_covered: string[]; rules_from_gold: number };
     }>("/gold").then(r => r.data),
-  upload: (file: File, opts: { name?: string; templateId?: string; sourceFile?: File } = {}) => {
+  /** Upload one or many gold files. A supplier load is six of them, so batch is the norm.
+   *  `sourceFile` is a single extract shared by the whole batch — which is exactly the
+   *  fan-out case: one legacy supplier extract produced all six outputs. */
+  upload: (
+    files: File[],
+    opts: { name?: string; templateId?: string; sourceFile?: File } = {},
+  ) => {
     const fd = new FormData();
-    fd.append("file", file);
+    files.forEach(f => fd.append("files", f));
     if (opts.sourceFile) fd.append("source_file", opts.sourceFile);
-    if (opts.name) fd.append("name", opts.name);
-    if (opts.templateId) fd.append("template_id", opts.templateId);
-    return api.post<GoldStandard>("/gold/upload", fd, { timeout: 300_000 }).then(r => r.data);
+    // Name/template only make sense for a single file — in a batch each file
+    // names itself and detects its own template.
+    if (files.length === 1 && opts.name) fd.append("name", opts.name);
+    if (files.length === 1 && opts.templateId) fd.append("template_id", opts.templateId);
+    return api.post<GoldUploadResult>("/gold/upload", fd, { timeout: 600_000 })
+      .then(r => r.data);
   },
   relearn: (id: string) => api.post<GoldStandard>(`/gold/${id}/relearn`).then(r => r.data),
   remove: (id: string, purgeRules = false) =>

@@ -61,27 +61,39 @@ async def list_gold(_: User = Depends(get_current_user)):
 
 @router.post("/upload")
 async def upload_gold(
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     source_file: UploadFile | None = File(None),
     name: str | None = Form(None),
     template_id: str | None = Form(None),
     user: User = Depends(get_current_user),
 ):
-    """Upload an approved FBDI output. No project or conversion required.
+    """Upload one or more approved FBDI outputs. No project or conversion required.
 
-    ``source_file`` is optional. Without it we learn constant defaults and the
-    columns gold deliberately leaves blank — both derivable from the gold file
-    alone. With it we can additionally infer source→target column mappings by
-    value-set overlap, which is not something we're willing to guess at.
+    Multi-file is the normal case, not the exception: a supplier load is six gold
+    files (supplier, addresses, sites, site assignments, contacts, banks) and each
+    identifies its own template from its headers, so they can all go in at once.
+
+    ``source_file`` is a SINGLE optional extract shared by every gold file in the
+    batch — which is exactly right for a fan-out, where one legacy supplier extract
+    is what produced all six outputs. Without it we learn constant defaults and the
+    columns gold deliberately leaves blank (both derivable from the gold file alone).
+    With it we can additionally infer source→target column mappings by value-set
+    overlap, which is not something we're willing to guess at.
+
+    ``name`` and ``template_id`` only apply when a single file is uploaded — with a
+    batch, each file names itself and detects its own template.
     """
     from pathlib import Path as _P
 
-    if _P(file.filename or "").suffix.lower() not in _ALLOWED:
-        raise HTTPException(400, "Upload an Excel or CSV copy of the approved FBDI output.")
+    files = [f for f in files if f and f.filename]
+    if not files:
+        raise HTTPException(400, "No files uploaded.")
 
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(400, "That file is empty.")
+    for f in files:
+        if _P(f.filename or "").suffix.lower() not in _ALLOWED:
+            raise HTTPException(
+                400, f"'{f.filename}' isn't an Excel or CSV file."
+            )
 
     src_bytes = None
     src_name = None
@@ -91,16 +103,38 @@ async def upload_gold(
         src_bytes = await source_file.read()
         src_name = source_file.filename
 
-    gold = await create_gold_standard(
-        file_name=file.filename or "gold.xlsx",
-        contents=contents,
-        name=name,
-        template_id=template_id or None,
-        source_file_name=src_name,
-        source_contents=src_bytes or None,
-        user_email=user.email,
-    )
-    return _out(gold)
+    single = len(files) == 1
+    results: list[dict] = []
+    for f in files:
+        contents = await f.read()
+        if not contents:
+            results.append({
+                "file_name": f.filename, "status": "error",
+                "note": "That file is empty.",
+            })
+            continue
+        try:
+            gold = await create_gold_standard(
+                file_name=f.filename or "gold.xlsx",
+                contents=contents,
+                name=name if single else None,
+                template_id=(template_id or None) if single else None,
+                source_file_name=src_name,
+                source_contents=src_bytes or None,
+                user_email=user.email,
+            )
+            results.append(_out(gold))
+        except Exception as exc:  # noqa: BLE001 — one bad file must not sink the batch
+            results.append({
+                "file_name": f.filename, "status": "error", "note": str(exc),
+            })
+
+    return {
+        "items": results,
+        "uploaded": sum(1 for r in results if r.get("status") == "learned"),
+        "unmatched": sum(1 for r in results if r.get("status") == "unmatched"),
+        "failed": sum(1 for r in results if r.get("status") == "error"),
+    }
 
 
 @router.post("/{gold_id}/relearn")

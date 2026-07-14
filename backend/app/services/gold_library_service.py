@@ -199,13 +199,29 @@ async def create_gold_standard(
             ex = _read_example(gold_path)
             template, confidence = await identify_template(set(ex.keys()))
 
+        # Both blobs live inline in one Mongo document, and BSON caps a document at
+        # 16MB. A big source extract copied alongside every gold file in a 6-file
+        # batch is the realistic way to blow that. Keep the gold (it's the point of
+        # the record) and drop the source copy if the pair won't fit — the learning
+        # has already happened by then, so only re-learn is affected.
+        _BSON_BUDGET = 12 * 1024 * 1024
+        keep_source = source_contents
+        source_note = None
+        if source_contents and len(contents) + len(source_contents) > _BSON_BUDGET:
+            keep_source = None
+            source_note = (
+                "The source extract was too large to store alongside this gold file, so "
+                "it wasn't kept. The rules learned from it are unaffected; re-learning "
+                "will need the extract supplied again."
+            )
+
         gold = GoldStandard(
             name=name or Path(file_name).stem,
             file_name=Path(file_name).name,
             content=contents,
             size=len(contents),
             source_file_name=Path(source_file_name).name if source_file_name else None,
-            source_content=source_contents,
+            source_content=keep_source,
             uploaded_by=user_email,
             match_confidence=confidence,
         )
@@ -245,6 +261,8 @@ async def create_gold_standard(
                     "also learn source→target column mappings — those need source values "
                     "to overlap against."
                 )
+            elif source_note:
+                gold.note = source_note
         await gold.insert()
         return gold
     finally:

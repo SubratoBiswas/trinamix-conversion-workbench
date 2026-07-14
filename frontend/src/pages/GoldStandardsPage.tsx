@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Award, CheckCircle2, CircleAlert, RefreshCw, Trash2, Upload,
+  Award, CheckCircle2, CircleAlert, RefreshCw, Trash2, Upload, X,
 } from "lucide-react";
-import { FbdiApi, GoldApi, type FBDITemplate, type GoldOrphan, type GoldStandard } from "@/api";
+import {
+  FbdiApi, GoldApi,
+  type FBDITemplate, type GoldOrphan, type GoldStandard, type GoldUploadResult,
+} from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, Modal, PageLoader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -30,33 +33,50 @@ const UploadModal: React.FC<{
   onClose: () => void;
   onDone: () => void;
 }> = ({ open, templates, onClose, onDone }) => {
-  const [gold, setGold] = useState<File | null>(null);
+  const [golds, setGolds] = useState<File[]>([]);
   const [source, setSource] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<GoldUploadResult | null>(null);
   const goldRef = useRef<HTMLInputElement>(null);
   const srcRef = useRef<HTMLInputElement>(null);
 
+  const single = golds.length === 1;
+
   useEffect(() => {
     if (open) {
-      setGold(null); setSource(null); setName(""); setTemplateId(""); setErr(null);
+      setGolds([]); setSource(null); setName(""); setTemplateId("");
+      setErr(null); setResult(null);
     }
   }, [open]);
 
+  const addFiles = (list: FileList | null) => {
+    if (!list) return;
+    const incoming = Array.from(list);
+    setGolds(prev => {
+      // Same file picked twice (easy to do across two dialogs) shouldn't upload twice.
+      const seen = new Set(prev.map(f => `${f.name}:${f.size}`));
+      return [...prev, ...incoming.filter(f => !seen.has(`${f.name}:${f.size}`))];
+    });
+    setResult(null);
+  };
+
   const submit = async () => {
-    if (!gold) return;
+    if (!golds.length) return;
     setBusy(true);
     setErr(null);
     try {
-      await GoldApi.upload(gold, {
+      const r = await GoldApi.upload(golds, {
         name: name || undefined,
         templateId: templateId || undefined,
         sourceFile: source || undefined,
       });
+      setResult(r);
       onDone();
-      onClose();
+      // Anything unmatched or failed deserves a look, so hold the dialog open.
+      if (r.unmatched === 0 && r.failed === 0) onClose();
     } catch (e: any) {
       setErr(e?.response?.data?.detail ?? "Upload failed.");
     } finally {
@@ -68,42 +88,67 @@ const UploadModal: React.FC<{
     <Modal
       open={open}
       onClose={onClose}
-      title="Add a gold standard"
+      size="lg"
+      title={golds.length > 1 ? `Add ${golds.length} gold standards` : "Add a gold standard"}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => void submit()} loading={busy} disabled={!gold}>
-            Upload &amp; learn
+          <Button variant="ghost" onClick={onClose}>{result ? "Done" : "Cancel"}</Button>
+          <Button onClick={() => void submit()} loading={busy} disabled={!golds.length}>
+            Upload &amp; learn{golds.length > 1 ? ` (${golds.length})` : ""}
           </Button>
         </>
       }
     >
       <div className="space-y-4 text-sm">
         <p className="text-ink-muted">
-          Upload an FBDI output the client has already approved. The tool learns what
-          it can from it and applies those rules to every conversion of that object —
-          you don't need a project.
+          Upload the FBDI outputs the client has already approved — one, or the whole
+          set. A supplier load is six files, and each one identifies its own template
+          from its headers, so they can all go in together. No project needed.
         </p>
 
         <div>
-          <div className="mb-1 text-xs font-semibold text-ink">Approved FBDI output</div>
+          <div className="mb-1 text-xs font-semibold text-ink">Approved FBDI output(s)</div>
           <input
             ref={goldRef}
             type="file"
+            multiple
             accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt"
             className="hidden"
-            onChange={e => setGold(e.target.files?.[0] ?? null)}
+            onChange={e => { addFiles(e.target.files); e.target.value = ""; }}
           />
           <button
             type="button"
             onClick={() => goldRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
             className="flex w-full items-center gap-2 rounded-lg border border-dashed border-line px-3 py-2.5 text-left hover:border-brand hover:bg-brand-subtle/20"
           >
             <Upload className="h-4 w-4 text-ink-muted" />
-            <span className={gold ? "text-ink" : "text-ink-muted"}>
-              {gold ? gold.name : "Choose the gold file…"}
+            <span className="text-ink-muted">
+              {golds.length ? "Add more files…" : "Choose gold files, or drop them here…"}
             </span>
           </button>
+
+          {golds.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {golds.map((f, i) => (
+                <li
+                  key={`${f.name}-${i}`}
+                  className="flex items-center gap-2 rounded-md border border-line bg-canvas px-2.5 py-1.5 text-xs"
+                >
+                  <span className="flex-1 truncate text-ink">{f.name}</span>
+                  <span className="text-ink-muted">{Math.round(f.size / 1024)} KB</span>
+                  <button
+                    onClick={() => setGolds(g => g.filter((_, j) => j !== i))}
+                    className="text-ink-subtle hover:text-danger"
+                    title="Remove"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div>
@@ -129,36 +174,80 @@ const UploadModal: React.FC<{
             </span>
           </button>
           <p className="mt-1 text-[11px] text-ink-muted">
-            Without it we still learn constant defaults and the columns gold leaves blank.
-            With it we can also work out which source column feeds each target field —
-            that's inferred by overlapping the actual values, so it needs the source data.
+            One extract covers the whole batch — which is right for a fan-out, where a
+            single legacy supplier file produced all six outputs. Without it we still
+            learn constant defaults and the columns gold leaves blank. With it we can
+            also work out which source column feeds each target field — that's inferred
+            by overlapping the actual values, so it needs the source data.
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <div className="mb-1 text-xs font-semibold text-ink">Name</div>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Defaults to the file name"
-              className="w-full rounded-lg border border-line px-3 py-2 text-sm"
-            />
+        {single && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Name</div>
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Defaults to the file name"
+                className="w-full rounded-lg border border-line px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Template</div>
+              <select
+                value={templateId}
+                onChange={e => setTemplateId(e.target.value)}
+                className="w-full rounded-lg border border-line px-3 py-2 text-sm"
+              >
+                <option value="">Detect from the file's headers</option>
+                {templates.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div>
-            <div className="mb-1 text-xs font-semibold text-ink">Template</div>
-            <select
-              value={templateId}
-              onChange={e => setTemplateId(e.target.value)}
-              className="w-full rounded-lg border border-line px-3 py-2 text-sm"
-            >
-              <option value="">Detect from the file's headers</option>
-              {templates.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+        )}
+
+        {golds.length > 1 && (
+          <p className="text-[11px] text-ink-muted">
+            Each file names itself and detects its own template. Upload one on its own if
+            you need to override either.
+          </p>
+        )}
+
+        {result && (
+          <div className="rounded-lg border border-line">
+            <div className="flex items-center gap-2 border-b border-line bg-canvas px-3 py-2 text-xs">
+              {result.uploaded > 0 && <Pill tone="success">{result.uploaded} learned</Pill>}
+              {result.unmatched > 0 && <Pill tone="warning">{result.unmatched} unmatched</Pill>}
+              {result.failed > 0 && <Pill tone="danger">{result.failed} failed</Pill>}
+            </div>
+            <ul className="max-h-48 overflow-auto">
+              {result.items.map((it: any, i) => (
+                <li key={i} className="flex items-start gap-2 border-b border-line px-3 py-1.5 text-xs last:border-0">
+                  {it.status === "learned" ? (
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                  ) : (
+                    <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-ink">{it.file_name ?? it.name}</div>
+                    {it.status === "learned" ? (
+                      <div className="text-ink-muted">
+                        {it.target_object} · {it.defaults_learned} defaults ·{" "}
+                        {it.suppressed_learned} blank-by-design ·{" "}
+                        {it.mappings_learned} column maps
+                      </div>
+                    ) : (
+                      <div className="text-warning">{it.note}</div>
+                    )}
+                  </div>
+                </li>
               ))}
-            </select>
+            </ul>
           </div>
-        </div>
+        )}
 
         {err && (
           <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-xs text-danger">
