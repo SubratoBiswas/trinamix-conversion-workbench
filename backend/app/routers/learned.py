@@ -55,6 +55,9 @@ async def list_learned(
     kind: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     project_id: Optional[str] = Query(None),
+    target_object: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Free-text match on field / value"),
+    limit: int = Query(0, ge=0, le=5000),
     _: User = Depends(get_current_user),
 ):
     filters = []
@@ -64,9 +67,79 @@ async def list_learned(
         filters.append(LearnedMapping.category == category)
     if project_id:
         filters.append(LearnedMapping.project_id == PydanticObjectId(project_id))
+    if target_object:
+        filters.append(LearnedMapping.target_object == target_object)
     query = LearnedMapping.find(*filters)
     items = await query.sort("-captured_at").to_list()
+
+    if q:
+        needle = q.strip().lower()
+        items = [
+            i for i in items
+            if needle in (i.target_field or "").lower()
+            or needle in (i.original_value or "").lower()
+            or needle in (i.resolved_value or "").lower()
+        ]
+    if limit:
+        items = items[:limit]
     return [_serialize(item) for item in items]
+
+
+# Friendly names for the internal `kind` values, so the UI never has to know them.
+_KIND_LABELS = {
+    "column_mapping": "Column mappings",
+    "example_default": "Default values",
+    "suppress_field": "Left blank on purpose",
+    "crosswalk": "Value crosswalks",
+    "reference_standard": "Reference standards",
+    "file_classification": "File classification",
+}
+
+
+@router.get("/by-object")
+async def learned_by_object(_: User = Depends(get_current_user)):
+    """What the tool has learned, grouped by the Oracle object it applies to.
+
+    The flat registry is unusable once it passes a few hundred rows — and it gets
+    there fast, because a single gold file can contribute hundreds of "leave this
+    blank" rules. Nobody wants to scroll 978 rows to answer "what do we know about
+    Supplier?". This is that answer.
+    """
+    items = await LearnedMapping.find_all().to_list()
+
+    groups: dict[str, dict] = {}
+    for i in items:
+        obj = (i.target_object or "").strip() or "Not tied to an object"
+        g = groups.setdefault(obj, {
+            "target_object": obj,
+            "total": 0,
+            "by_kind": {},
+            "sources": set(),
+            "last_captured": None,
+        })
+        g["total"] += 1
+        k = i.kind or "other"
+        g["by_kind"][k] = g["by_kind"].get(k, 0) + 1
+        if i.captured_from:
+            g["sources"].add(i.captured_from)
+        if i.captured_at and (g["last_captured"] is None or i.captured_at > g["last_captured"]):
+            g["last_captured"] = i.captured_at
+
+    out = []
+    for g in groups.values():
+        out.append({
+            "target_object": g["target_object"],
+            "total": g["total"],
+            "kinds": [
+                {"kind": k, "label": _KIND_LABELS.get(k, k.replace("_", " ").title()), "count": c}
+                for k, c in sorted(g["by_kind"].items(), key=lambda kv: -kv[1])
+            ],
+            "sources": sorted(g["sources"]),
+            "last_captured": g["last_captured"],
+        })
+    # Real objects first, biggest first; the catch-all bucket always last.
+    out.sort(key=lambda r: (r["target_object"] == "Not tied to an object", -r["total"]))
+    return {"objects": out, "total": len(items)}
 
 
 @router.get("/stats", response_model=LearningStats)

@@ -462,9 +462,25 @@ export const DashboardApi = {
   kpis: () => api.get<DashboardKpis>("/dashboard/kpis").then(r => r.data),
 };
 
+/** What the tool has learned about one Oracle object. */
+export interface LearnedObjectGroup {
+  target_object: string;
+  total: number;
+  kinds: { kind: string; label: string; count: number }[];
+  sources: string[];
+  last_captured?: string | null;
+}
+
 export const LearningApi = {
-  list: (params?: { kind?: string; category?: string; project_id?: string }) =>
+  list: (params?: {
+    kind?: string; category?: string; project_id?: string;
+    target_object?: string; q?: string; limit?: number;
+  }) =>
     api.get<LearnedMapping[]>("/learned-mappings", { params }).then(r => r.data),
+  /** Learnings grouped by the object they apply to — the way people actually look for them. */
+  byObject: () =>
+    api.get<{ objects: LearnedObjectGroup[]; total: number }>("/learned-mappings/by-object")
+      .then(r => r.data),
   stats: (params?: { project_id?: string }) =>
     api.get<LearningStats>("/learned-mappings/stats", { params }).then(r => r.data),
   capture: (body: Partial<LearnedMapping>) =>
