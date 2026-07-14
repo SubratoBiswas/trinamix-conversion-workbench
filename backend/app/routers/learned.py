@@ -96,6 +96,91 @@ _KIND_LABELS = {
 }
 
 
+# A curated set of common Oracle Fusion Cloud FBDI import objects, grouped by
+# module. Used to populate the object picker so a consultant can key a mapping to
+# an object even before its template is loaded. It's suggestion-only — the field
+# stays free text — so breadth here is pure upside.
+_CANONICAL_OBJECTS: dict[str, list[str]] = {
+    "Procurement": [
+        "Supplier", "Supplier Address", "Supplier Site", "Supplier Site Assignment",
+        "Supplier Contacts", "Supplier Bank Account", "Purchase Order",
+        "Purchase Agreement", "Requisition", "Receipt",
+    ],
+    "Inventory / SCM": [
+        "Item", "Item Category", "Item Category Assignment", "Item Cross Reference",
+        "Item Structure", "Item Organization Assignment", "Item Cost",
+        "Unit of Measure", "Inventory Organization", "Subinventory", "Locator",
+        "On-hand Balance", "Cycle Count",
+    ],
+    "Order Management": [
+        "Sales Order", "Price List", "Pricing Charge",
+    ],
+    "Receivables": [
+        "Customer", "Customer Account", "Customer Site", "Customer Contact",
+        "Customer Account Site", "AR Invoice", "AR Receipt", "AutoInvoice",
+    ],
+    "Payables": [
+        "Payables Invoice", "Payment Term", "Payment", "Tax Rate",
+    ],
+    "General Ledger": [
+        "Journal", "GL Balance", "Chart of Accounts Value", "Budget",
+        "Account Combination",
+    ],
+    "Assets": [
+        "Fixed Asset", "Asset Category",
+    ],
+    "Cash Management": [
+        "Bank", "Bank Branch", "Bank Account",
+    ],
+    "Projects": [
+        "Project", "Project Task", "Project Budget", "Project Expenditure",
+    ],
+    "HCM": [
+        "Worker", "Assignment", "Department", "Job", "Position", "Location", "Grade",
+    ],
+}
+
+
+@router.get("/known-objects")
+async def known_objects(_: User = Depends(get_current_user)):
+    """Objects a mapping row can be keyed to.
+
+    The union of: the curated canonical Oracle FBDI object list, the business
+    objects of every loaded template (authoritative — these are what the tool can
+    actually target), and every object that already carries a learned rule. Sorted,
+    de-duped case-insensitively, canonical/template casing wins over ad-hoc.
+    """
+    from app.models.fbdi import FBDITemplate
+
+    # Preserve the first (canonical) casing seen for each normalized key.
+    best: dict[str, str] = {}
+
+    def add(name: str | None):
+        if not name:
+            return
+        n = name.strip()
+        if not n:
+            return
+        best.setdefault(n.lower(), n)
+
+    for group in _CANONICAL_OBJECTS.values():
+        for o in group:
+            add(o)
+    for t in await FBDITemplate.find_all().to_list():
+        add(t.business_object)
+    for o in await LearnedMapping.distinct("target_object"):
+        add(o)
+
+    grouped = {
+        module: [o for o in objs if o.lower() in best]
+        for module, objs in _CANONICAL_OBJECTS.items()
+    }
+    return {
+        "objects": sorted(best.values(), key=str.lower),
+        "grouped": grouped,
+    }
+
+
 @router.post("/import-mappings")
 async def import_mappings(
     files: list[UploadFile] = File(...),

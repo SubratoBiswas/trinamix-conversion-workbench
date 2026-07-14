@@ -539,6 +539,12 @@ export const LearningApi = {
   byObject: () =>
     api.get<{ objects: LearnedObjectGroup[]; total: number }>("/learned-mappings/by-object")
       .then(r => r.data),
+  /** Every object a mapping row can be keyed to: canonical Oracle FBDI objects +
+   *  loaded templates + already-learned objects. Used to populate the object picker. */
+  knownObjects: () =>
+    api.get<{ objects: string[]; grouped: Record<string, string[]> }>(
+      "/learned-mappings/known-objects"
+    ).then(r => r.data),
   /** Import one or more source→target mapping workbooks as reusable column mappings. */
   importMappings: (
     files: File[],

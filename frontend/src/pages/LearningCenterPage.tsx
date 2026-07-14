@@ -249,6 +249,7 @@ export const LearningCenterPage: React.FC = () => {
   const [openObject, setOpenObject] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [knownObjects, setKnownObjects] = useState<string[]>([]);
 
   const refresh = async (pid?: string) => {
     const params = pid ? { project_id: pid } : undefined;
@@ -264,6 +265,7 @@ export const LearningCenterPage: React.FC = () => {
     void refresh();
     ProjectsApi.list().then(setProjects).catch(() => {});
     LearningApi.catalogStatus().then(setCatalog).catch(() => setCatalog(null));
+    LearningApi.knownObjects().then(r => setKnownObjects(r.objects)).catch(() => {});
   }, []);
 
   if (!stats || !groups) return <PageLoader label="Loading what the tool has learned…" />;
@@ -356,7 +358,11 @@ export const LearningCenterPage: React.FC = () => {
 
       <MappingImportModal
         open={importOpen}
-        objects={groups.map(g => g.target_object).filter(o => o !== "Not tied to an object")}
+        objects={
+          knownObjects.length
+            ? knownObjects
+            : groups.map(g => g.target_object).filter(o => o !== "Not tied to an object")
+        }
         onClose={() => setImportOpen(false)}
         onDone={() => void refresh(selectedProjectId || undefined)}
       />
