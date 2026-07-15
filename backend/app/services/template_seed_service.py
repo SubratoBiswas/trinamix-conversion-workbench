@@ -139,3 +139,69 @@ async def seed_fbdi_templates() -> dict:
         logger.info("template_seed: seeded %d, skipped %d existing, failed %d",
                     seeded, skipped, failed)
     return {"seeded": seeded, "skipped": skipped, "failed": failed}
+
+
+async def ensure_customer_multisheet() -> dict:
+    """Guarantee the real 19-sheet Customer Import exists and Customer conversions
+    point at it — automatically, at startup.
+
+    A flat synthetic "Customer Import" (one sheet) can occupy the name+object and
+    make the idempotent seed SKIP the real HZ_IMP file, so conversions end up on a
+    flat template and generate a flat file. This repairs that without any button:
+    force-seed the real bundled template when no multi-sheet Customer template
+    exists, then re-point flat-template conversions onto it. Re-pointing only
+    changes template_id (cheap) — the stale mappings are cleared so a later Re-run
+    AI rebuilds them against the real 19 sheets. No inline AI mapping, so it can't
+    time out.
+
+    Idempotent: once a multi-sheet Customer template exists and conversions point at
+    it, every subsequent boot is a no-op.
+    """
+    from app.models.conversion import Conversion
+    from app.models.mapping import MappingSuggestion
+
+    def _is_customer(t) -> bool:
+        bo = (t.business_object or "").strip().lower()
+        if bo:
+            return bo == "customer"
+        return (t.name or "").strip().lower() in ("customer import", "customerimport")
+
+    templates = await FBDITemplate.find_all().to_list()
+    cust = [t for t in templates if _is_customer(t)]
+    counts: dict = {}
+    for t in cust:
+        counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+
+    real = max(cust, key=lambda t: counts.get(t.id, 0)) if cust else None
+    seeded = False
+    if real is None or counts.get(real.id, 0) < 5:
+        bundled = _DIR / "CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm"
+        if not bundled.exists():
+            return {"note": "bundled customer template missing", "seeded": False}
+        ok = await _seed_one(bundled, "Customer Import (HZ_IMP)",
+                             "Financials / Receivables", "Customer")
+        if not ok:
+            return {"note": "failed to seed real customer template", "seeded": False}
+        seeded = True
+        templates = await FBDITemplate.find_all().to_list()
+        cust = [t for t in templates if _is_customer(t)]
+        for t in cust:
+            counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+        real = max(cust, key=lambda t: counts.get(t.id, 0))
+
+    flat_ids = {t.id for t in cust if t.id != real.id and counts.get(t.id, 0) < 5}
+    repointed = 0
+    if flat_ids:
+        for c in await Conversion.find_all().to_list():
+            if c.template_id in flat_ids:
+                await c.set({"template_id": real.id})
+                # Clear stale mappings (they referenced the flat template's fields);
+                # Re-run AI on the conversion rebuilds them against the real sheets.
+                await MappingSuggestion.find(MappingSuggestion.conversion_id == c.id).delete()
+                repointed += 1
+
+    if seeded or repointed:
+        logger.info("customer template repair: seeded_real=%s, repointed=%d conversions",
+                    seeded, repointed)
+    return {"seeded_real_template": seeded, "real_sheets": counts.get(real.id) if real else 0,
+            "conversions_repointed": repointed}

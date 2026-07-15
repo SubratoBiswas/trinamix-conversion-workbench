@@ -52,6 +52,15 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("fbdi template seed failed")
     try:
+        # Auto-repair: guarantee the real 19-sheet Customer Import exists and that
+        # Customer conversions point at it (not a flat synthetic namesake). Cheap +
+        # idempotent — no inline AI mapping, so it never blocks or times out.
+        from app.services.template_seed_service import ensure_customer_multisheet
+        r = await ensure_customer_multisheet()
+        log.info("startup seed — customer template repair: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer template repair failed")
+    try:
         from app.services.catalog_seed_service import seed_mapping_catalog
         r = await seed_mapping_catalog()
         log.info("startup seed — mapping catalog: %s", r)
