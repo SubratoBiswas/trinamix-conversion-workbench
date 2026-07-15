@@ -465,6 +465,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         "hzimp" in _safe_sheet_name(s.sheet_name).lower().replace("_", "")
         for s in sheets_with_fields
     )
+    # Item Import (Product Hub) is the same shape: ONE backbone interface table
+    # (EGP_SYSTEM_ITEMS_INTERFACE) plus ~16 optional child tables (revisions,
+    # categories, relationships, supplier, cost, EFF…) that the gold leaves blank
+    # unless the source genuinely carries that content. Same over-population rule.
+    _is_item = ("item" in (obj_name or "").lower()) or any(
+        "egpsystemitems" in _safe_sheet_name(s.sheet_name).lower().replace("_", "")
+        for s in sheets_with_fields
+    )
 
     # Shared customer linkage config (source system code + batch), and a reference
     # series derived ONCE from the party sheet so every interface table links
@@ -516,17 +524,25 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         "hzimppartiest", "hzimppartysitest", "hzimppartysiteusest", "hzimplocationst",
         "hzimpaccountst", "hzimpacctsitest", "hzimpacctsiteusest", "racustomerprofilesintall",
     }
+    _ITEM_BACKBONE = {"egpsystemitemsinterface"}
+    # The backbone for THIS object — the sheet(s) that always carry data. Only
+    # the linked Customer/Item fan-outs suppress their optional child sheets;
+    # every other object writes all its sheets exactly as before.
+    _backbone_keys = _CUST_BACKBONE if _is_customer else (_ITEM_BACKBONE if _is_item else set())
+    _suppress_optional = _is_customer or _is_item
     _mapped_field_ids = {
         tid for tid, m in _best_m.items()
         if getattr(m, "source_column", None) and (m.status not in ("not_applicable", "rejected"))
     }
 
     def _sheet_carries_data(s) -> bool:
-        if not _is_customer:
+        if not _suppress_optional:
             return True
         key = re.sub(r"[^a-z0-9]", "", (s.sheet_name or "").lower())
-        if key in _CUST_BACKBONE:
+        if key in _backbone_keys:
             return True
+        # An optional child table emits data only when a real source column is
+        # actually mapped into it; otherwise it's written headers-only (empty tab).
         return any(f.id in _mapped_field_ids for f in fields_by_sheet.get(s.id, []))
 
     def _headers_only(sfields: list) -> pd.DataFrame:
