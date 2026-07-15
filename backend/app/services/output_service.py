@@ -416,66 +416,88 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         for s in sheets_with_fields
     )
 
-    def _apply_cust(rendered: dict) -> None:
-        if not _is_customer:
+    # Shared customer linkage config (source system code + batch), and a reference
+    # series derived ONCE from the party sheet so every interface table links
+    # consistently. Computed up front so we can then process sheets one at a time.
+    _cust_src = str(
+        getattr(conversion, "source_system_code", None)
+        or getattr(conversion, "source_erp", None)
+        or "LEGACY"
+    ).upper().replace(" ", "_")
+    _cust_batch = f"CONV-{str(conversion.id)[-6:].upper()}"
+
+    def _cust_ref() -> list:
+        if not _is_customer or not sheets_with_fields:
+            return []
+        try:
+            from app.services.customer_structure_service import reference_series
+            party = next((s for s in sheets_with_fields
+                          if "parties" in _safe_sheet_name(s.sheet_name).lower()), None)
+            base = _finalize(fields_by_sheet[party.id]) if party else _finalize(
+                fields_by_sheet[sheets_with_fields[0].id])
+            n = len(base)
+            ref = reference_series(base, n, _cust_src)
+            del base
+            return ref
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _cust_apply(frame) -> None:
+        if not _is_customer or not _ref_cache:
             return
         try:
-            from app.services.customer_structure_service import apply_customer_structure
-            src_sys = (
-                getattr(conversion, "source_system_code", None)
-                or getattr(conversion, "source_erp", None)
-                or "LEGACY"
-            )
-            apply_customer_structure(
-                rendered, source_system=str(src_sys).upper().replace(" ", "_"),
-                batch_id=f"CONV-{str(conversion.id)[-6:].upper()}", level="account",
-            )
-        except Exception:  # noqa: BLE001 — never fail the file on the structure pass
+            from app.services.customer_structure_service import apply_to_frame
+            apply_to_frame(frame, source_system=_cust_src, batch_id=_cust_batch,
+                           ref=_ref_cache, level="account")
+        except Exception:  # noqa: BLE001
             pass
 
+    _ref_cache: list = []
+
     def _write_all() -> tuple[str, str, int, int]:
-        """Serialize the finalized frames to disk. Runs in a worker thread so the
-        write never blocks the event loop. CSV (the bundle's default) writes one
-        file per interface sheet into a .zip — an order of magnitude faster and
-        lighter than openpyxl, which is what let a 19-sheet Customer load time out.
-        XLSX keeps the shipped populated-template format for single-file downloads.
+        """Serialize to disk, STREAMING one interface sheet at a time so peak memory
+        stays at ~one sheet — not all 19 at once, which OOM'd the worker on a large
+        Customer load. Runs in a worker thread so it never blocks the event loop.
+        CSV (the bundle default, and the format a real FBDI load ingests) writes one
+        file per sheet into a .zip; XLSX keeps the shipped populated-template format.
         """
+        nonlocal _ref_cache
         total_rows = 0
         total_cols = 0
         multi = bool(sheets_with_fields)
+        _ref_cache = _cust_ref()
 
         if fmt == "xlsx":
             name = f"{obj_name}_{ts}.xlsx"
             path = out_dir / name
             with pd.ExcelWriter(path, engine="openpyxl") as xw:
                 if multi:
-                    rendered = {s.sheet_name: _finalize(fields_by_sheet[s.id]) for s in sheets_with_fields}
-                    _apply_cust(rendered)
                     for s in sheets_with_fields:
-                        sdf = rendered[s.sheet_name]
+                        sdf = _finalize(fields_by_sheet[s.id])
+                        _cust_apply(sdf)
                         sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                         total_rows = max(total_rows, len(sdf))
                         total_cols += len(sdf.columns)
+                        del sdf
                 else:
                     fdf = _finalize(fields) if fields else _apply_control_defaults(df)
                     fdf.to_excel(xw, index=False, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
                     total_rows, total_cols = len(fdf), len(fdf.columns)
             return name, str(path), total_rows, total_cols
 
-        # CSV — fast path. Multi-sheet objects (Customer/Item) become a .zip with
-        # one CSV per interface table; single-sheet objects a plain .csv.
+        # CSV
         if multi and len(sheets_with_fields) > 1:
             import zipfile as _zip
             name = f"{obj_name}_{ts}.zip"
             path = out_dir / name
-            rendered = {s.sheet_name: _finalize(fields_by_sheet[s.id]) for s in sheets_with_fields}
-            _apply_cust(rendered)
             with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
                 for i, s in enumerate(sheets_with_fields, 1):
-                    sdf = rendered[s.sheet_name]
+                    sdf = _finalize(fields_by_sheet[s.id])
+                    _cust_apply(sdf)
                     zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False))
                     total_rows = max(total_rows, len(sdf))
                     total_cols += len(sdf.columns)
+                    del sdf
             return name, str(path), total_rows, total_cols
 
         sfields = fields_by_sheet[sheets_with_fields[0].id] if multi else fields

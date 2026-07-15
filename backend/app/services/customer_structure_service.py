@@ -95,50 +95,63 @@ def apply_customer_structure(
 
     report: dict[str, dict] = {}
     for name, fr in sheet_frames.items():
-        cols = list(fr.columns)
-        touched: list[str] = []
-        rows = len(fr)
-        rref = ref[:rows] if len(ref) >= rows else ref + [f"{i + 100000}" for i in range(len(ref), rows)]
-
-        def setcol(col: str | None, value: Any):
-            if col is not None:
-                fr[col] = value
-                touched.append(col)
-
-        # Batch id everywhere it exists.
-        setcol(_find(cols, "batch"), batch_id)
-
-        # Party level key.
-        setcol(_find(cols, "party", "original", "system", "reference"), rref)
-        po = _find(cols, "party", "original", "system")
-        # guard: "...reference" also contains "system"; only set the bare OS column
-        if po and _norm(po) == _norm("Party Original System"):
-            setcol(po, source_system)
-
-        # Customer Account level.
-        ca_ref = _find(cols, "customer", "account", "source", "system", "reference")
-        ca_os = _find(cols, "customer", "account", "source", "system")
-        if ca_os and _norm(ca_os) == _norm("Customer Account Source System"):
-            if level == "party":
-                setcol(ca_os, _ACCOUNT_SENTINEL)
-                setcol(ca_ref, _ACCOUNT_SENTINEL)
-            else:
-                setcol(ca_os, source_system)
-                setcol(ca_ref, rref)
-
-        # Account Site level.
-        as_ref = _find(cols, "account", "site", "source", "system", "reference")
-        as_os = _find(cols, "account", "site", "source", "system")
-        if as_os and _norm(as_os) == _norm("Account Site Source System"):
-            if level == "site":
-                setcol(as_os, source_system)
-                setcol(as_ref, rref)
-            else:
-                # party/account level → leave the site columns blank (Oracle rule).
-                setcol(as_os, "")
-                setcol(as_ref, "")
-
+        touched = apply_to_frame(fr, source_system=source_system, batch_id=batch_id,
+                                 ref=ref, level=level)
         if touched:
-            report[name] = {"rows": rows, "filled": sorted(set(touched))}
-
+            report[name] = {"rows": len(fr), "filled": touched}
     return report
+
+
+def reference_series(frame: "pd.DataFrame", n_rows: int, source_system: str) -> list[str]:
+    """Public wrapper: the per-row linkage reference derived once from the party
+    frame, reused by every sheet so parent and child rows agree. Used by the
+    streaming generator, which finalizes one sheet at a time to bound memory."""
+    return _reference_series(frame, n_rows, source_system)
+
+
+def apply_to_frame(
+    fr: "pd.DataFrame", *, source_system: str, batch_id: str,
+    ref: list[str], level: str = "account",
+) -> list[str]:
+    """Fill the linkage + sentinel columns on ONE interface frame, in place, using
+    a shared reference. Returns the columns touched. Splitting this out lets the
+    output writer process sheets one at a time instead of holding all 19 in memory
+    (which OOM'd the worker on a large Customer load)."""
+    cols = list(fr.columns)
+    touched: list[str] = []
+    rows = len(fr)
+    rref = ref[:rows] if len(ref) >= rows else ref + [f"{i + 100000}" for i in range(len(ref), rows)]
+
+    def setcol(col: str | None, value: Any):
+        if col is not None:
+            fr[col] = value
+            touched.append(col)
+
+    setcol(_find(cols, "batch"), batch_id)
+
+    setcol(_find(cols, "party", "original", "system", "reference"), rref)
+    po = _find(cols, "party", "original", "system")
+    if po and _norm(po) == _norm("Party Original System"):
+        setcol(po, source_system)
+
+    ca_ref = _find(cols, "customer", "account", "source", "system", "reference")
+    ca_os = _find(cols, "customer", "account", "source", "system")
+    if ca_os and _norm(ca_os) == _norm("Customer Account Source System"):
+        if level == "party":
+            setcol(ca_os, _ACCOUNT_SENTINEL)
+            setcol(ca_ref, _ACCOUNT_SENTINEL)
+        else:
+            setcol(ca_os, source_system)
+            setcol(ca_ref, rref)
+
+    as_ref = _find(cols, "account", "site", "source", "system", "reference")
+    as_os = _find(cols, "account", "site", "source", "system")
+    if as_os and _norm(as_os) == _norm("Account Site Source System"):
+        if level == "site":
+            setcol(as_os, source_system)
+            setcol(as_ref, rref)
+        else:
+            setcol(as_os, "")
+            setcol(as_ref, "")
+
+    return sorted(set(touched))
