@@ -46,6 +46,77 @@ async def upload_template(
     return await _detail_payload(tpl)
 
 
+@router.post("/customer/repoint")
+async def repoint_customer_conversions(
+    delete_flat: bool = False,
+    user: User = Depends(get_current_user),
+):
+    """Move Customer conversions off a flat template onto the real 19-sheet FBDI.
+
+    The tool can end up with two Customer templates: the real Oracle Customer Import
+    (HZ_IMP_* interface tables, ~19 sheets) and a flat synthetic one (a single
+    'Import' sheet from the built-in standard fields). A conversion pointed at the
+    flat one produces a flat file no matter how good the gold/AI/learnings are —
+    because those fill values, they don't change structure. This re-points such
+    conversions to the real template and re-runs mapping so the fields line up.
+    """
+    from app.models.conversion import Conversion
+    from app.services.mapping_service import run_mapping_suggestions
+
+    # All customer templates, with their sheet counts.
+    templates = await FBDITemplate.find_all().to_list()
+    cust = [t for t in templates
+            if (t.business_object or "").strip().lower() == "customer"
+            or "customer" in (t.name or "").lower()]
+    if not cust:
+        raise HTTPException(404, "No customer templates found.")
+
+    counts: dict = {}
+    for t in cust:
+        counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+
+    real = max(cust, key=lambda t: counts.get(t.id, 0))
+    if counts.get(real.id, 0) < 5:
+        raise HTTPException(
+            422,
+            "Couldn't find the real multi-sheet Customer Import template. Upload / "
+            "seed 'Customer Import' (the HZ_IMP 19-sheet .xlsm) first, then retry.",
+        )
+    flat = [t for t in cust if t.id != real.id]
+    flat_ids = {t.id for t in flat}
+
+    repointed = 0
+    remapped = 0
+    conversions = await Conversion.find_all().to_list()
+    for c in conversions:
+        if c.template_id in flat_ids:
+            await c.set({"template_id": real.id})
+            repointed += 1
+            try:
+                res = await run_mapping_suggestions(c)
+                remapped += len(res)
+            except Exception:  # noqa: BLE001
+                pass
+
+    deleted = 0
+    if delete_flat and repointed >= 0:
+        for t in flat:
+            # Only delete a genuinely flat template (few sheets) — never the real one.
+            if counts.get(t.id, 0) < 5:
+                await FBDISheet.find(FBDISheet.template_id == t.id).delete()
+                await FBDIField.find(FBDIField.template_id == t.id).delete()
+                await t.delete()
+                deleted += 1
+
+    return {
+        "real_template": {"id": str(real.id), "name": real.name, "sheets": counts.get(real.id)},
+        "flat_templates_found": len(flat),
+        "conversions_repointed": repointed,
+        "mappings_regenerated": remapped,
+        "flat_templates_deleted": deleted,
+    }
+
+
 @router.get("/lookups/status")
 async def lookups_status(_: User = Depends(get_current_user)):
     """Which Oracle lookup types the loaded templates need, and which we hold codes for."""

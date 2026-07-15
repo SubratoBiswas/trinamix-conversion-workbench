@@ -88,6 +88,15 @@ export const FbdiApi = {
   reparseAll: () => api.post<{ reparsed: number; results: Array<{ id: string; name: string; status: string; fields: number }> }>("/fbdi/reparse-all").then(r => r.data),
   seedStandardFields: (id: string) =>
     api.post<{ seeded: number; existing: number; schema_matched?: string; message: string }>(`/fbdi/templates/${id}/seed-standard-fields`).then(r => r.data),
+  /** Move Customer conversions off a flat template onto the real 19-sheet Customer Import. */
+  repointCustomer: (deleteFlat = false) =>
+    api.post<{
+      real_template: { id: string; name: string; sheets: number };
+      flat_templates_found: number;
+      conversions_repointed: number;
+      mappings_regenerated: number;
+      flat_templates_deleted: number;
+    }>("/fbdi/customer/repoint", null, { params: { delete_flat: deleteFlat } }).then(r => r.data),
   /** Which Oracle lookup types the templates need vs. which we hold codes for. */
   lookupStatus: () =>
     api.get<LookupStatus>("/fbdi/lookups/status").then(r => r.data),

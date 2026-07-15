@@ -414,10 +414,36 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     out_path = out_dir / out_name
     total_rows = 0
     total_cols = 0
+    # Customer Import is a linked 19-table load: children point at parents through
+    # the Source System + Source System Reference columns, which no source extract
+    # provides. Generate that glue (batch id, ORIG_SYSTEM keys, -1/blank sentinels
+    # per level) across the interface sheets — the same structural filling the
+    # Supplier fan-out already does.
+    _is_customer = ("customer" in (obj_name or "").lower()) or any(
+        "hzimp" in _safe_sheet_name(s.sheet_name).lower().replace("_", "")
+        for s in sheets_with_fields
+    )
+
     with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
         if sheets_with_fields:
+            rendered = {s.sheet_name: _finalize(fields_by_sheet[s.id]) for s in sheets_with_fields}
+            if _is_customer:
+                try:
+                    from app.services.customer_structure_service import apply_customer_structure
+                    src_sys = (
+                        getattr(conversion, "source_system_code", None)
+                        or getattr(conversion, "source_erp", None)
+                        or "LEGACY"
+                    )
+                    batch = f"CONV-{str(conversion.id)[-6:].upper()}"
+                    apply_customer_structure(
+                        rendered, source_system=str(src_sys).upper().replace(" ", "_"),
+                        batch_id=batch, level="account",
+                    )
+                except Exception:  # noqa: BLE001 — never fail the file on the structure pass
+                    pass
             for s in sheets_with_fields:
-                sdf = _finalize(fields_by_sheet[s.id])
+                sdf = rendered[s.sheet_name]
                 sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                 total_rows = max(total_rows, len(sdf))
                 total_cols += len(sdf.columns)

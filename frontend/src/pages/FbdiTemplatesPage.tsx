@@ -40,6 +40,7 @@ export const FbdiTemplatesPage: React.FC = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reparsingId, setReparsingId] = useState<string | null>(null);
   const [reparsingAll, setReparsingAll] = useState(false);
+  const [repointing, setRepointing] = useState(false);
   const [reparseResult, setReparseResult] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
@@ -80,6 +81,26 @@ export const FbdiTemplatesPage: React.FC = () => {
     } catch (e: any) {
       setReparseResult("Reparse failed: " + (e?.response?.data?.detail || e?.message));
     } finally { setReparsingAll(false); }
+  };
+  const handleRepointCustomer = async () => {
+    if (!window.confirm(
+      "Move Customer conversions from a flat template onto the real 19-sheet Customer " +
+      "Import, and re-run their mapping?\n\nUse this when the Customer output comes out as " +
+      "one flat sheet instead of the HZ_IMP interface tables."
+    )) return;
+    setRepointing(true);
+    setReparseResult(null);
+    try {
+      const r = await FbdiApi.repointCustomer();
+      setReparseResult(
+        `Customer target fixed → "${r.real_template.name}" (${r.real_template.sheets} sheets). ` +
+        `${r.conversions_repointed} conversion(s) re-pointed, ${r.mappings_regenerated} mappings regenerated. ` +
+        `Re-run AI / regenerate to see the 19-sheet output.`
+      );
+      refresh();
+    } catch (e: any) {
+      setReparseResult("Fix Customer target failed: " + (e?.response?.data?.detail || e?.message));
+    } finally { setRepointing(false); }
   };
   useEffect(() => { refresh(); }, []);
 
@@ -122,6 +143,9 @@ export const FbdiTemplatesPage: React.FC = () => {
         }
         right={
           <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={handleRepointCustomer} loading={repointing}>
+              <RefreshCw className="h-4 w-4" /> Fix Customer target
+            </Button>
             <Button variant="secondary" onClick={handleReparseAll} loading={reparsingAll}>
               <RefreshCw className="h-4 w-4" /> Reparse All
             </Button>
