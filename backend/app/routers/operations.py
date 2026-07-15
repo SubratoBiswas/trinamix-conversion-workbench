@@ -39,18 +39,81 @@ async def _require_conversion(conversion_id: str) -> Conversion:
 output_router = APIRouter(prefix="/api/conversions", tags=["output"])
 
 
-@output_router.post("/{conversion_id}/generate-output", response_model=ConvertedOutputOut)
+async def _run_generation(conversion_id: str, fmt: str) -> None:
+    """Background worker: build the FBDI artifact off the request thread and record
+    the outcome on the conversion, so the UI can poll instead of holding a long HTTP
+    request (which the free-tier gateway kills at ~100s → surfaces as a CORS error)."""
+    try:
+        c = await Conversion.get(PydanticObjectId(conversion_id))
+        if not c:
+            return
+        await generate_output_artifact(c, fmt=fmt)
+        await c.set({"output_status": "ready", "output_error": None,
+                     "updated_at": datetime.utcnow()})
+    except Exception as exc:  # noqa: BLE001
+        try:
+            c = await Conversion.get(PydanticObjectId(conversion_id))
+            if c:
+                await c.set({"output_status": "failed", "output_error": str(exc)[:500]})
+        except Exception:
+            pass
+
+
+@output_router.post("/{conversion_id}/generate-output")
 async def generate_output(
     conversion_id: str,
     fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    wait: bool = Query(False, description="Block until done (legacy). Default is async."),
     _: User = Depends(get_current_user),
 ):
+    """Kick off FBDI generation. By default this returns immediately with
+    status='generating' and the work runs in the background — the client polls
+    /generation-status and downloads when ready. Heavy multi-sheet objects
+    (Customer/Item) otherwise blow the gateway timeout. Pass wait=true for the old
+    synchronous behaviour (used internally by the bundle build)."""
+    import asyncio
+
     c = await _require_conversion(conversion_id)
     is_ebs = getattr(c, "source_type", "dataset") == "ebs"
     if not c.template_id or (not is_ebs and not c.dataset_id):
         raise HTTPException(400, "Conversion is not fully bound")
-    out = await generate_output_artifact(c, fmt=fmt)
-    return {**out.model_dump(), "id": str(out.id), "conversion_id": str(out.conversion_id)}
+
+    if wait:
+        out = await generate_output_artifact(c, fmt=fmt)
+        return {**out.model_dump(), "id": str(out.id),
+                "conversion_id": str(out.conversion_id), "status": "ready"}
+
+    await c.set({"output_status": "generating", "output_error": None,
+                 "output_started_at": datetime.utcnow()})
+    asyncio.create_task(_run_generation(conversion_id, fmt))
+    return {"status": "generating", "conversion_id": conversion_id}
+
+
+@output_router.get("/{conversion_id}/generation-status")
+async def generation_status(conversion_id: str, _: User = Depends(get_current_user)):
+    """Poll target for background generation. Returns generating/ready/failed and,
+    when ready, the newest artifact so the client can download it."""
+    c = await _require_conversion(conversion_id)
+    status = c.output_status or "idle"
+
+    # If a background task was lost (worker restart / OOM kill) the status can be
+    # stuck on "generating" forever — treat a stale one as failed so the UI recovers.
+    if status == "generating" and c.output_started_at:
+        age = (datetime.utcnow() - c.output_started_at).total_seconds()
+        if age > 600:
+            status = "failed"
+            await c.set({"output_status": "failed",
+                         "output_error": "Generation timed out or the worker restarted. Try again."})
+
+    out = None
+    if status == "ready":
+        latest = await ConvertedOutput.find(
+            ConvertedOutput.conversion_id == c.id
+        ).sort("-generated_at").first_or_none()
+        if latest:
+            out = {"id": str(latest.id), "file_name": latest.output_file_name,
+                   "row_count": latest.row_count, "column_count": latest.column_count}
+    return {"status": status, "error": c.output_error, "output": out}
 
 
 @output_router.get("/{conversion_id}/output-preview", response_model=OutputPreviewOut)

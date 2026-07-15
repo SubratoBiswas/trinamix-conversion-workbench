@@ -492,7 +492,7 @@ export const ConversionDetailPage: React.FC = () => {
                 variant="secondary"
                 loading={busy === "output"}
                 onClick={() => runOp("output",
-                  () => OutputApi.generate(cid, "csv"),
+                  () => OutputApi.generateAndWait(cid, "csv"),
                   "Output generated"
                 )}
               >

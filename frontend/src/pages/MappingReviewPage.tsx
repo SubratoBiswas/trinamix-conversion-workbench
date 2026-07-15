@@ -372,12 +372,17 @@ export const MappingReviewPage: React.FC = () => {
     if (!pid) return;
     setGenerating(true);
     try {
-      const out = await OutputApi.generate(pid, "csv");
+      // Async generation: kick it off, poll until ready (nothing hits the gateway
+      // timeout), then download. Heavy objects like the 19-sheet Customer build in
+      // the background and can take a while — surface elapsed time so it's not silent.
+      const out = await OutputApi.generateAndWait(pid, "csv", (sec) => {
+        if (sec >= 3) setToast(`Generating FBDI output… ${sec}s`);
+      });
       const fallback = `${(project?.target_object || project?.name || "fbdi").replace(/[^\w.-]+/g, "_")}.csv`;
       await OutputApi.download(pid, out.file_name || fallback);
       flash("FBDI output generated and downloaded.");
     } catch (e: any) {
-      flash(e?.response?.data?.detail || "Failed to generate output");
+      flash(e?.message || e?.response?.data?.detail || "Failed to generate output");
     } finally { setGenerating(false); }
   };
 

@@ -66,8 +66,14 @@ export const OutputPreviewPage: React.FC = () => {
 
   const generate = async () => {
     setGenerating(true);
-    try { await OutputApi.generate(pid, "csv"); await refresh(); }
-    finally { setGenerating(false); }
+    try {
+      // Async: kick off + poll until the artifact is ready (nothing blocks the
+      // request thread, so heavy multi-sheet objects can't hit the gateway timeout).
+      await OutputApi.generateAndWait(pid, "csv");
+      await refresh();
+    } catch (e: any) {
+      alert(e?.message || "Couldn't generate the output. Please try again.");
+    } finally { setGenerating(false); }
   };
 
   if (!project) return <PageLoader />;

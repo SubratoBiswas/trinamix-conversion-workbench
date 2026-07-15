@@ -437,8 +437,39 @@ export const QualityApi = {
 };
 
 export const OutputApi = {
+  /** Kick off generation (async by default) — returns immediately with status. */
   generate: (conversionId: string, fmt: "csv" | "xlsx" = "csv") =>
-    api.post<ConvertedOutput>(`/conversions/${conversionId}/generate-output`, null, { params: { fmt } }).then(r => r.data),
+    api.post<{ status: string; conversion_id: string }>(
+      `/conversions/${conversionId}/generate-output`, null, { params: { fmt } },
+    ).then(r => r.data),
+  generationStatus: (conversionId: string) =>
+    api.get<{
+      status: "idle" | "generating" | "ready" | "failed";
+      error?: string | null;
+      output?: { id: string; file_name: string; row_count: number; column_count: number } | null;
+    }>(`/conversions/${conversionId}/generation-status`).then(r => r.data),
+  /** Start generation, then poll until it's ready or fails. Returns the artifact
+   *  info on success; throws with the backend error message on failure. Heavy
+   *  multi-sheet objects (Customer/Item) build in the background this way so the
+   *  request can't hit the gateway timeout. */
+  generateAndWait: async (
+    conversionId: string,
+    fmt: "csv" | "xlsx" = "csv",
+    onTick?: (elapsedSec: number) => void,
+  ): Promise<{ id: string; file_name: string; row_count: number; column_count: number }> => {
+    await api.post(`/conversions/${conversionId}/generate-output`, null, { params: { fmt } });
+    const start = Date.now();
+    // Poll up to ~8 minutes; generation of a 19-sheet object on a small instance
+    // can take a while, but it's off the request thread so nothing times out.
+    for (let i = 0; i < 160; i++) {
+      await new Promise(res => setTimeout(res, 3000));
+      const s = await OutputApi.generationStatus(conversionId);
+      onTick?.(Math.round((Date.now() - start) / 1000));
+      if (s.status === "ready" && s.output) return s.output;
+      if (s.status === "failed") throw new Error(s.error || "Generation failed");
+    }
+    throw new Error("Generation is taking unusually long — check back shortly.");
+  },
   list: (conversionId: string) =>
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: string, limit = 50) =>

@@ -25,6 +25,12 @@ class Conversion(Document):
     #   "fbdi_download" = generate an FBDI file the user uploads to Fusion manually
     #   "fusion_load"   = load directly via ERP Integration (default)
     output_mode: str = "fusion_load"
+    # Background output generation job state, so heavy multi-sheet objects can build
+    # off the request thread (the request returns immediately; the UI polls).
+    #   None → never generated async · "generating" · "ready" · "failed"
+    output_status: Optional[str] = None
+    output_error: Optional[str] = None
+    output_started_at: Optional[datetime] = None
     created_by: str = "admin"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

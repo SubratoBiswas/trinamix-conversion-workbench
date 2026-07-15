@@ -143,10 +143,10 @@ export const ProjectOverviewPage: React.FC = () => {
   const downloadFbdi = async (c: Conversion) => {
     setDl(String(c.id));
     try {
-      await OutputApi.generate(String(c.id), "csv");
+      await OutputApi.generateAndWait(String(c.id), "csv");
       await OutputApi.download(String(c.id), `${(c as any).template_name || c.name}.csv`);
-    } catch {
-      flash("Approve this conversion's mapping first, then download the FBDI file.");
+    } catch (e: any) {
+      flash(e?.message || "Approve this conversion's mapping first, then download the FBDI file.");
     } finally { setDl(null); }
   };
   // Generate + download every bound conversion's FBDI file for this engagement
@@ -195,7 +195,7 @@ export const ProjectOverviewPage: React.FC = () => {
             try { await MappingApi.suggest(key); } catch { /* keep going */ }
           }
           setStage(key, "generating");
-          await OutputApi.generate(key, "csv");
+          await OutputApi.generateAndWait(key, "csv");
           setStage(key, "done");
         } catch {
           setStage(key, "error");
