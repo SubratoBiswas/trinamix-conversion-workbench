@@ -65,9 +65,15 @@ async def repoint_customer_conversions(
 
     # All customer templates, with their sheet counts.
     templates = await FBDITemplate.find_all().to_list()
-    cust = [t for t in templates
-            if (t.business_object or "").strip().lower() == "customer"
-            or "customer" in (t.name or "").lower()]
+    # Match the Customer OBJECT exactly — not "Customer Return" / "Credit Profile"
+    # whose names merely contain "customer". Fall back to name only when a template
+    # has no business object at all.
+    def _is_customer(t) -> bool:
+        bo = (t.business_object or "").strip().lower()
+        if bo:
+            return bo == "customer"
+        return (t.name or "").strip().lower() in ("customer import", "customerimport")
+    cust = [t for t in templates if _is_customer(t)]
     if not cust:
         raise HTTPException(404, "No customer templates found.")
 
@@ -75,13 +81,38 @@ async def repoint_customer_conversions(
     for t in cust:
         counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
 
-    real = max(cust, key=lambda t: counts.get(t.id, 0))
-    if counts.get(real.id, 0) < 5:
-        raise HTTPException(
-            422,
-            "Couldn't find the real multi-sheet Customer Import template. Upload / "
-            "seed 'Customer Import' (the HZ_IMP 19-sheet .xlsm) first, then retry.",
-        )
+    real = max(cust, key=lambda t: counts.get(t.id, 0)) if cust else None
+
+    # The real HZ_IMP Customer Import may never have loaded: a flat synthetic
+    # namesake (business object "Customer", one "Import" sheet) already occupied the
+    # name, so the idempotent seed SKIPPED the bundled 19-sheet file. If no
+    # multi-sheet customer template exists, force-seed the bundled one from disk now
+    # — that's what makes this button self-sufficient instead of erroring.
+    seeded_now = False
+    if real is None or counts.get(real.id, 0) < 5:
+        from pathlib import Path as _P
+        from app.services.template_seed_service import _DIR, _seed_one
+        bundled = _P(_DIR) / "CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm"
+        if not bundled.exists():
+            raise HTTPException(
+                422,
+                "The real 19-sheet Customer Import isn't loaded and the bundled copy "
+                "wasn't found on the server. Upload CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm "
+                "on this page, then retry.",
+            )
+        ok = await _seed_one(bundled, "Customer Import (HZ_IMP)", "Financials / Receivables", "Customer")
+        if not ok:
+            raise HTTPException(500, "Couldn't parse the bundled Customer Import template.")
+        seeded_now = True
+        # Re-read templates and recompute the real one (now the 19-sheet upload).
+        templates = await FBDITemplate.find_all().to_list()
+        cust = [t for t in templates
+                if (t.business_object or "").strip().lower() == "customer"
+                or "customer" in (t.name or "").lower()]
+        for t in cust:
+            counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+        real = max(cust, key=lambda t: counts.get(t.id, 0))
+
     flat = [t for t in cust if t.id != real.id]
     flat_ids = {t.id for t in flat}
 
@@ -110,6 +141,7 @@ async def repoint_customer_conversions(
 
     return {
         "real_template": {"id": str(real.id), "name": real.name, "sheets": counts.get(real.id)},
+        "seeded_real_template": seeded_now,
         "flat_templates_found": len(flat),
         "conversions_repointed": repointed,
         "mappings_regenerated": remapped,

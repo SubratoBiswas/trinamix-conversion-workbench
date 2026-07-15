@@ -96,6 +96,7 @@ export const FbdiApi = {
       conversions_repointed: number;
       mappings_regenerated: number;
       flat_templates_deleted: number;
+      seeded_real_template?: boolean;
     }>("/fbdi/customer/repoint", null, { params: { delete_flat: deleteFlat } }).then(r => r.data),
   /** Which Oracle lookup types the templates need vs. which we hold codes for. */
   lookupStatus: () =>

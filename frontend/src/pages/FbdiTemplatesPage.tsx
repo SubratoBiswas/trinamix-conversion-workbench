@@ -93,9 +93,10 @@ export const FbdiTemplatesPage: React.FC = () => {
     try {
       const r = await FbdiApi.repointCustomer();
       setReparseResult(
+        (r.seeded_real_template ? "Loaded the real 19-sheet Customer Import from the bundled file. " : "") +
         `Customer target fixed → "${r.real_template.name}" (${r.real_template.sheets} sheets). ` +
         `${r.conversions_repointed} conversion(s) re-pointed, ${r.mappings_regenerated} mappings regenerated. ` +
-        `Re-run AI / regenerate to see the 19-sheet output.`
+        `Now open the Customer conversion, Re-run AI, and regenerate to get the 19-sheet output.`
       );
       refresh();
     } catch (e: any) {
