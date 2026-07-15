@@ -326,19 +326,31 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
 
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
     from app.models.fbdi import FBDISheet
+
+    # How many target fields this object has — used to gate the two DB-heavy passes
+    # below. A 19-sheet Customer/Item load has ~1200 fields; re-applying every
+    # learned rule and re-capturing learnings across all of them on each generate is
+    # hundreds of Mongo round-trips that made the request HANG on a small instance.
+    _field_count = await FBDIField.find(
+        FBDIField.template_id == conversion.template_id
+    ).count() if conversion.template_id else 0
+    _heavy = _field_count > 300
+
     # Force-apply the object's stored gold reference standard BEFORE building the
-    # output, so the generated file always reflects the learned column mappings,
-    # constant defaults, and suppressions — even if this conversion's mappings
-    # were approved by the AI before gold was on file. This is what guarantees a
-    # stored standard is actually applied (fixes "gold saved but not applied").
-    try:
-        from app.services.learning_service import apply_learned_to_conversion
-        _pre_maps = await MappingSuggestion.find(
-            MappingSuggestion.conversion_id == conversion.id
-        ).to_list()
-        await apply_learned_to_conversion(conversion, _pre_maps, force=True)
-    except Exception:
-        pass  # best-effort — never block output generation on the learning pass
+    # output, so the file reflects the learned mappings/defaults/suppressions even
+    # if the conversion was mapped before gold was on file (fixes "gold saved but
+    # not applied"). Skipped for heavy multi-sheet objects: their mappings already
+    # carry the applied gold (it's applied at map time), and re-applying it here is
+    # what made generation hang — the persisted mappings are the source of truth.
+    if not _heavy:
+        try:
+            from app.services.learning_service import apply_learned_to_conversion
+            _pre_maps = await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == conversion.id
+            ).to_list()
+            await apply_learned_to_conversion(conversion, _pre_maps, force=True)
+        except Exception:
+            pass  # best-effort — never block output generation on the learning pass
     df, _ = await build_converted_dataframe(conversion)
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
@@ -516,14 +528,17 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     )
     await artefact.insert()
     await conversion.set({"status": "output_generated", "updated_at": datetime.utcnow()})
-    # Learning capture: a successful output means these mappings/defaults worked —
-    # persist the trustworthy ones as reusable object-level learnings so the next
-    # conversion of this object reuses them and needs less AI (best-effort).
-    try:
-        from app.services.learning_service import capture_learnings_from_conversion
-        await capture_learnings_from_conversion(conversion)
-    except Exception:
-        pass
+    # Learning capture: persist the trustworthy mappings/defaults as reusable
+    # object-level learnings (best-effort). Skipped for heavy multi-sheet objects —
+    # capturing across ~1200 fields is hundreds of Mongo upserts per generate and
+    # contributes nothing to the file that was just written; it's what made the
+    # request hang. Their learnings are already captured when gold is applied.
+    if not _heavy:
+        try:
+            from app.services.learning_service import capture_learnings_from_conversion
+            await capture_learnings_from_conversion(conversion)
+        except Exception:
+            pass
     return artefact
 
 
