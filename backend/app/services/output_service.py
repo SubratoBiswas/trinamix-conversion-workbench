@@ -484,6 +484,35 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
 
     _ref_cache: list = []
 
+    # Gap-1: which interface sheets should carry DATA rows. A naive fan-out wrote
+    # 5,599 rows into ALL 19 sheets, so optional entity tables (Contacts,
+    # Relationships, Classifications, Pay Method…) got thousands of rows of pure
+    # linkage glue with no real content — junk Oracle would reject. Rule, matching
+    # the gold file: the party/account/site/profile BACKBONE always emits; every
+    # other sheet emits only when a real source column is actually mapped into it.
+    # Suppressed sheets are still written as headers-only (0 rows) so the file set
+    # stays complete, exactly like the empty tabs in a hand-filled template.
+    _CUST_BACKBONE = {
+        "hzimppartiest", "hzimppartysitest", "hzimppartysiteusest", "hzimplocationst",
+        "hzimpaccountst", "hzimpacctsitest", "hzimpacctsiteusest", "racustomerprofilesintall",
+    }
+    _mapped_field_ids = {
+        tid for tid, m in _best_m.items()
+        if getattr(m, "source_column", None) and (m.status not in ("not_applicable", "rejected"))
+    }
+
+    def _sheet_carries_data(s) -> bool:
+        if not _is_customer:
+            return True
+        key = re.sub(r"[^a-z0-9]", "", (s.sheet_name or "").lower())
+        if key in _CUST_BACKBONE:
+            return True
+        return any(f.id in _mapped_field_ids for f in fields_by_sheet.get(s.id, []))
+
+    def _headers_only(sfields: list) -> pd.DataFrame:
+        cols = _dedup([_header_label(f) for f in sfields])
+        return pd.DataFrame(columns=cols)
+
     def _write_all() -> tuple[str, str, int, int]:
         """Serialize to disk, STREAMING one interface sheet at a time so peak memory
         stays at ~one sheet — not all 19 at once, which OOM'd the worker on a large
@@ -503,8 +532,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
             with pd.ExcelWriter(path, engine="openpyxl") as xw:
                 if multi:
                     for s in sheets_with_fields:
-                        sdf = _finalize(fields_by_sheet[s.id])
-                        _cust_apply(sdf)
+                        if _sheet_carries_data(s):
+                            sdf = _finalize(fields_by_sheet[s.id])
+                            _cust_apply(sdf)
+                        else:
+                            sdf = _headers_only(fields_by_sheet[s.id])
                         sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                         total_rows = max(total_rows, len(sdf))
                         total_cols += len(sdf.columns)
@@ -522,8 +554,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
             path = out_dir / name
             with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
                 for i, s in enumerate(sheets_with_fields, 1):
-                    sdf = _finalize(fields_by_sheet[s.id])
-                    _cust_apply(sdf)
+                    if _sheet_carries_data(s):
+                        sdf = _finalize(fields_by_sheet[s.id])
+                        _cust_apply(sdf)
+                    else:
+                        sdf = _headers_only(fields_by_sheet[s.id])
                     zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False))
                     total_rows = max(total_rows, len(sdf))
                     total_cols += len(sdf.columns)
