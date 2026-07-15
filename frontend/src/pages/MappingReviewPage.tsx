@@ -461,6 +461,24 @@ export const MappingReviewPage: React.FC = () => {
     loadAll();
   };
 
+  // Set a FIXED value on a field — a constant the user types (e.g. Tax Org Type =
+  // CORPORATION, Supplier Type = SUPPLIER, Business Relationship = SPEND_AUTHORIZED,
+  // Country = US). It's written to every row, clears any source mapping, and is
+  // marked "overridden" so gold/AI/learnings never overwrite it. Passing an empty
+  // value clears the fixed value and frees the field to be mapped/AI'd again.
+  const setFixedValue = async (m: MappingSuggestion, value: string) => {
+    const v = value.trim();
+    await MappingApi.update(m.id, {
+      source_column: null as any,
+      default_value: v || (null as any),
+      suggested_transformation: null as any,
+      status: v ? "overridden" : "suggested",
+      comment: v ? `Fixed value set by user: ${v}` : "Fixed value cleared",
+    });
+    flash(v ? `Fixed value set: “${v}”` : "Fixed value cleared");
+    loadAll();
+  };
+
   // Drag-to-map: dropping a source column onto a target field binds it. We
   // update that target's existing suggestion row (created by AI mapping) and
   // mark it "overridden" so it reads as a deliberate manual mapping.
@@ -1097,6 +1115,7 @@ export const MappingReviewPage: React.FC = () => {
             onOverride={(m, newSrc) => override(m, newSrc)}
             onAddCustomRule={(m) => { setRuleAuthorMapping(m); setRuleAuthorOpen(true); }}
             onResetDefault={(fn) => resetGoldDefaults([fn], false)}
+            onSetFixedValue={(m, v) => setFixedValue(m, v)}
           />
         )}
 
@@ -2562,8 +2581,11 @@ const MappingInspector: React.FC<{
   onOverride: (m: MappingSuggestion, src: string) => void;
   onAddCustomRule: (m: MappingSuggestion) => void;
   onResetDefault?: (fieldName: string) => void;
+  onSetFixedValue?: (m: MappingSuggestion, value: string) => void;
   targetObject?: string | null;
-}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, targetObject }) => {
+}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, onSetFixedValue, targetObject }) => {
+  const [fixedVal, setFixedVal] = useState("");
+  useEffect(() => { setFixedVal(mapping.source_column ? "" : (mapping.default_value ?? "")); }, [mapping.id]);
   const [editingOverride, setEditingOverride] = useState(false);
   const [override, setOverride] = useState(mapping.source_column || "");
   const [vmRefresh, setVmRefresh] = useState(0);
@@ -2639,6 +2661,52 @@ const MappingInspector: React.FC<{
               >
                 Remove default
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Fixed value — write a constant into every row for this field. Use for
+            codes the user maintains by hand (Country = AE, Supplier Type =
+            SUPPLIER, Business Relationship = SPEND_AUTHORIZED, etc.). Setting a
+            fixed value clears the source column so the constant wins over AI. */}
+        {onSetFixedValue && (
+          <div className="mt-4 rounded-md border border-brand/30 bg-brand-subtle/20 px-3 py-2.5 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wider text-brand-dark">
+                <Edit2 className="h-3 w-3" /> Fixed value
+              </span>
+              {!mapping.source_column && mapping.default_value && (
+                <Pill tone="brand">currently “{mapping.default_value}”</Pill>
+              )}
+            </div>
+            <div className="mt-1 text-[11px] leading-snug text-ink-muted">
+              Write one constant into this column for every row (e.g. a country
+              or code you maintain by hand). This overrides AI and clears the
+              source column.
+            </div>
+            <div className="mt-2 flex items-center gap-1.5">
+              <input
+                className="input !h-8 flex-1 !text-xs"
+                placeholder="e.g. AE, CORPORATION, SPEND_AUTHORIZED"
+                value={fixedVal}
+                onChange={(e) => setFixedVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && fixedVal.trim()) onSetFixedValue(mapping, fixedVal); }}
+              />
+              <button
+                onClick={() => onSetFixedValue(mapping, fixedVal)}
+                disabled={!fixedVal.trim()}
+                className="shrink-0 rounded-md border border-brand/50 bg-brand px-2.5 py-1 text-[11px] font-medium text-white hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Set fixed value
+              </button>
+              {!mapping.source_column && mapping.default_value && (
+                <button
+                  onClick={() => { setFixedVal(""); onSetFixedValue(mapping, ""); }}
+                  className="shrink-0 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-ink-muted hover:bg-canvas"
+                >
+                  Clear
+                </button>
+              )}
             </div>
           </div>
         )}
