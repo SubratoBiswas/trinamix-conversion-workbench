@@ -249,13 +249,16 @@ _CONTROL_DEFAULTS: dict[str, str] = {
     # merge across objects (a supplier sheet has no "Transaction Type" column,
     # an item sheet has no "Supplier Type", etc.). Keys are lower-case with any
     # trailing "*" already stripped (matcher strips "*").
-    # --- Supplier import (POZ_SUPPLIERS_INT) — confirmed vs the gold output ---
+    # --- Supplier import (POZ_SUPPLIERS_INT) — analyst-confirmed lookup codes.
+    # Oracle expects the internal code casing here, not the display label:
+    # Tax Org Type = CORPORATION, Supplier Type = SUPPLIER, Business
+    # Relationship = SPEND_AUTHORIZED (so sites/POs can transact immediately).
     "import action": "CREATE",
     "batch id": "900001",
-    "tax organization type": "Corporation",
-    "organization type": "Corporation",
-    "supplier type": "Supplier",
-    "business relationship": "PROSPECTIVE",
+    "tax organization type": "CORPORATION",
+    "organization type": "CORPORATION",
+    "supplier type": "SUPPLIER",
+    "business relationship": "SPEND_AUTHORIZED",
     "federal reportable": "N",
     "delivery channel": "EMAIL",
     # --- Supplier address (POZ_SUPPLIER_ADDRESSES_INT) ---
@@ -300,6 +303,13 @@ _SEQ_FIELDS: set[str] = {
     "partynumber", "customeraccountnumber", "customernumber",  # customer
 }
 
+# Sequence fields where a REAL source value must win over the running number.
+# The analyst confirmed the supplier's legacy "Number" is the number of record,
+# so when the source maps one in we keep it and only auto-number the blanks. The
+# customer party/account keys stay authoritative sequences because the 19-sheet
+# linkage glue references that generated running number.
+_SEQ_PREFER_SOURCE: set[str] = {"suppliernumber", "supplierpartynumber"}
+
 # Control fields that are CONSTANTS in the Oracle gold templates. These are set
 # AUTHORITATIVELY — the standard value is written even if auto-map filled the
 # column with a (usually wrong) source guess, e.g. Address Name / Supplier Site
@@ -329,9 +339,19 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
             continue
         keyc = key.replace(" ", "")
         if keyc in _SEQ_FIELDS:
-            # Running key column — authoritative: Fusion needs a clean sequential
-            # id, not whatever source column auto-map happened to guess.
-            df[col] = [str(seq_start + i) for i in range(n)]
+            if keyc in _SEQ_PREFER_SOURCE:
+                # Supplier number: keep the mapped legacy "Number" where present,
+                # only auto-number the rows the source left blank.
+                cur = df[col].astype(str).str.strip()
+                blanks = {"", "nan", "none", "null", "na", "<na>"}
+                df[col] = [
+                    cur.iat[i] if cur.iat[i].lower() not in blanks else str(seq_start + i)
+                    for i in range(n)
+                ]
+            else:
+                # Running key column — authoritative: Fusion needs a clean
+                # sequential id, not whatever source column auto-map guessed.
+                df[col] = [str(seq_start + i) for i in range(n)]
         elif key in _AUTHORITATIVE:
             # Gold-constant control field — always write the standard value,
             # overriding any wrong auto-mapped source guess.

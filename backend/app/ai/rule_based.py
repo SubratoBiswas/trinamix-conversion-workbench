@@ -41,6 +41,16 @@ SEMANTIC_DICT: dict[str, tuple[str, ...]] = {
     "email": ("email", "mail"),
     "phone": ("phone", "tel", "mobile", "cell"),
     "category": ("cat", "category", "class", "group", "type"),
+    # Supplier master vocabulary — maps NetSuite/legacy vendor exports onto the
+    # POZ supplier interface fields the analysts flagged as unmapped. Kept tight
+    # to avoid false hits (e.g. no generic "type"/"channel" that would steal
+    # Payment/Delivery Method from unrelated columns).
+    "taxpayer": ("taxpayer", "tax", "taxid", "taxnumber", "tin", "vat", "pan",
+                 "ein", "federaltax", "taxregistration", "fiscalcode"),
+    "tax": ("tax", "taxpayer", "taxid", "taxnumber", "tin", "vat", "pan", "gst"),
+    "payment": ("payment", "pay", "paymethod", "paymentmethod", "payable"),
+    "remittance": ("remittance", "remit", "remitto", "remitadvice"),
+    "fax": ("fax", "facsimile"),
     "lifecycle": ("lifecycle", "phase", "stage"),
     # Party / account vocabulary — maps ERP export columns (companyname, entityid,
     # entitynumber, altname, fullname, legalname) onto Fusion Party*/CustomerAccount*
@@ -66,6 +76,9 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 def _tokenize(text: str) -> list[str]:
     if not text:
         return []
+    # Collapse "E-mail" / "e mail" → "email" so Oracle's hyphenated "Remittance
+    # E-mail" matches a source "Email" column (otherwise it splits to e + mail).
+    text = re.sub(r"\be[\s\-]?mail\b", "email", text, flags=re.IGNORECASE)
     # split snake_case, camelCase, AND acronym→word boundaries.
     # Acronym boundary first so "UOMCode" -> "UOM Code", "BaseUOMFlag" ->
     # "Base UOM Flag" — otherwise an acronym+Word target name collapses to a
@@ -301,6 +314,19 @@ def score_pair(
     lov_score, lov_reason = _lov_affinity(src, tgt)
     # 6. required priority bonus when type/name overlap exists
     bonus = 0.05 if (tgt.required and (name_score or sem_score)) else 0.0
+    # 6b. exact-identity bonus — a source column named exactly like the target
+    # (or exactly its head noun) is a strong, literal signal that should beat a
+    # merely semantic match. This is what makes a legacy "Number" column win
+    # "Supplier Number" over a foreign-system "Coupa Supplier ID" (which only
+    # matches via supplier+id synonyms). Triggers on exact string equality only,
+    # so false positives are limited to genuinely same-named columns.
+    identity = 0.0
+    if src_tokens and tgt_tokens:
+        if set(src_tokens) == set(tgt_tokens):
+            identity = 0.20                                   # full-name identity
+        elif len(src_tokens) == 1 and src_tokens[0] == tgt_tokens[-1]:
+            identity = 0.12                                   # head-noun identity
+    bonus += identity
     # 7. fill rate — a well-populated source column produces real output; a
     # near-empty one yields blank cells.
     fill = max(0.0, min(1.0, 1.0 - (src.null_percent or 0.0) / 100.0))
