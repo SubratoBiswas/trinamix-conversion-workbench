@@ -131,22 +131,13 @@ async def download_all_outputs(
             if not c.template_id or (not is_ebs and not c.dataset_id):
                 skipped.append(c.name)
                 continue
-            # Ensure the conversion is mapped BEFORE generating. A just-created
-            # conversion whose background auto-map hasn't finished yet would
-            # otherwise export headers with no data (a partial zip). Running
-            # mapping here when none exist also applies the reusable learned
-            # standards (via apply_learned_to_conversion), so the bundle is
-            # complete regardless of when the user clicks download.
-            try:
-                from app.models.mapping import MappingSuggestion
-                have = await MappingSuggestion.find(
-                    MappingSuggestion.conversion_id == c.id
-                ).count()
-                if have == 0:
-                    from app.services.mapping_service import run_mapping_suggestions
-                    await run_mapping_suggestions(c)
-            except Exception:
-                pass
+            # NOTE: we deliberately do NOT run full AI mapping here. Doing it inline
+            # for every unmapped conversion is what made this bundle time out on a
+            # big engagement (one 60s request running AI + generating 19-sheet xlsx
+            # files). generate_output_artifact already force-applies the learned
+            # standards, and CSV output is written per-sheet in a worker thread, so
+            # the bundle stays fast. A brand-new conversion with no mappings simply
+            # exports its structure + defaults; the user re-runs AI on it when ready.
             try:
                 art = await generate_output_artifact(c, fmt=fmt)
             except Exception:

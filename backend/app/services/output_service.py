@@ -406,14 +406,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         sdf.columns = [hdr.get(c, c) for c in sdf.columns]
         return sdf
 
-    # Emit a POPULATED .xlsx template — the interface sheet(s) with headers +
-    # data, matching the Oracle template format the team ships (not stripped
-    # CSVs). Control columns the source didn't map get sensible defaults + a
-    # running key number so the file is load-ready.
-    out_name = f"{obj_name}_{ts}.xlsx"
-    out_path = out_dir / out_name
-    total_rows = 0
-    total_cols = 0
     # Customer Import is a linked 19-table load: children point at parents through
     # the Source System + Source System Reference columns, which no source extract
     # provides. Generate that glue (batch id, ORIG_SYSTEM keys, -1/blank sentinels
@@ -424,34 +416,77 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         for s in sheets_with_fields
     )
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
-        if sheets_with_fields:
+    def _apply_cust(rendered: dict) -> None:
+        if not _is_customer:
+            return
+        try:
+            from app.services.customer_structure_service import apply_customer_structure
+            src_sys = (
+                getattr(conversion, "source_system_code", None)
+                or getattr(conversion, "source_erp", None)
+                or "LEGACY"
+            )
+            apply_customer_structure(
+                rendered, source_system=str(src_sys).upper().replace(" ", "_"),
+                batch_id=f"CONV-{str(conversion.id)[-6:].upper()}", level="account",
+            )
+        except Exception:  # noqa: BLE001 — never fail the file on the structure pass
+            pass
+
+    def _write_all() -> tuple[str, str, int, int]:
+        """Serialize the finalized frames to disk. Runs in a worker thread so the
+        write never blocks the event loop. CSV (the bundle's default) writes one
+        file per interface sheet into a .zip — an order of magnitude faster and
+        lighter than openpyxl, which is what let a 19-sheet Customer load time out.
+        XLSX keeps the shipped populated-template format for single-file downloads.
+        """
+        total_rows = 0
+        total_cols = 0
+        multi = bool(sheets_with_fields)
+
+        if fmt == "xlsx":
+            name = f"{obj_name}_{ts}.xlsx"
+            path = out_dir / name
+            with pd.ExcelWriter(path, engine="openpyxl") as xw:
+                if multi:
+                    rendered = {s.sheet_name: _finalize(fields_by_sheet[s.id]) for s in sheets_with_fields}
+                    _apply_cust(rendered)
+                    for s in sheets_with_fields:
+                        sdf = rendered[s.sheet_name]
+                        sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
+                        total_rows = max(total_rows, len(sdf))
+                        total_cols += len(sdf.columns)
+                else:
+                    fdf = _finalize(fields) if fields else _apply_control_defaults(df)
+                    fdf.to_excel(xw, index=False, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
+                    total_rows, total_cols = len(fdf), len(fdf.columns)
+            return name, str(path), total_rows, total_cols
+
+        # CSV — fast path. Multi-sheet objects (Customer/Item) become a .zip with
+        # one CSV per interface table; single-sheet objects a plain .csv.
+        if multi and len(sheets_with_fields) > 1:
+            import zipfile as _zip
+            name = f"{obj_name}_{ts}.zip"
+            path = out_dir / name
             rendered = {s.sheet_name: _finalize(fields_by_sheet[s.id]) for s in sheets_with_fields}
-            if _is_customer:
-                try:
-                    from app.services.customer_structure_service import apply_customer_structure
-                    src_sys = (
-                        getattr(conversion, "source_system_code", None)
-                        or getattr(conversion, "source_erp", None)
-                        or "LEGACY"
-                    )
-                    batch = f"CONV-{str(conversion.id)[-6:].upper()}"
-                    apply_customer_structure(
-                        rendered, source_system=str(src_sys).upper().replace(" ", "_"),
-                        batch_id=batch, level="account",
-                    )
-                except Exception:  # noqa: BLE001 — never fail the file on the structure pass
-                    pass
-            for s in sheets_with_fields:
-                sdf = rendered[s.sheet_name]
-                sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
-                total_rows = max(total_rows, len(sdf))
-                total_cols += len(sdf.columns)
-        else:
-            fdf = _finalize(fields) if fields else _apply_control_defaults(df)
-            fdf.to_excel(xw, index=False, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
-            total_rows = len(fdf)
-            total_cols = len(fdf.columns)
+            _apply_cust(rendered)
+            with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
+                for i, s in enumerate(sheets_with_fields, 1):
+                    sdf = rendered[s.sheet_name]
+                    zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False))
+                    total_rows = max(total_rows, len(sdf))
+                    total_cols += len(sdf.columns)
+            return name, str(path), total_rows, total_cols
+
+        sfields = fields_by_sheet[sheets_with_fields[0].id] if multi else fields
+        fdf = _finalize(sfields) if sfields else _apply_control_defaults(df)
+        name = f"{obj_name}_{ts}.csv"
+        path = out_dir / name
+        fdf.to_csv(path, index=False)
+        return name, str(path), len(fdf), len(fdf.columns)
+
+    out_name, out_path_str, total_rows, total_cols = await asyncio.to_thread(_write_all)
+    out_path = Path(out_path_str)
     artefact = ConvertedOutput(
         conversion_id=conversion.id, output_file_path=str(out_path),
         output_file_name=out_name, row_count=total_rows, column_count=total_cols,
