@@ -456,6 +456,7 @@ async def reset_defaults(
 async def _reset_defaults_impl(conversion_id: str, body: "ResetDefaultsIn") -> dict:
     from app.models.fbdi import FBDIField
     from app.models.learned import LearnedMapping
+    from app.models.mapping import MappingSuggestion
     from app.services.learning_service import _business_object_for
     from app.services.mapping_service import run_mapping_suggestions
 
