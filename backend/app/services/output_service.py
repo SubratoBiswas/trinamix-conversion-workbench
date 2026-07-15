@@ -125,6 +125,23 @@ async def build_converted_dataframe(
         if _cur is None or _PRIO.get(_m.status or "suggested", 0) > _PRIO.get(_cur.status or "suggested", 0):
             _best[_m.target_field_id] = _m
     mappings = list(_best.values())
+
+    # Memory: the source extract can be very wide (e.g. Customer is 234 columns),
+    # but the transform only reads the columns that are actually mapped. Drop the
+    # rest right after load so peak memory is bounded to the mapped slice — a wide
+    # source held in full is what pushed the heavy Customer generate over the
+    # free-tier limit (the request died at the gateway and the browser reported it
+    # as a CORS error). Rule contexts reference source columns too, so keep any
+    # column named by a mapping OR a transformation rule config.
+    try:
+        needed_src = {m.source_column for m in mappings if m.source_column}
+        if needed_src and len(src.columns) > len(needed_src) + 4:
+            keep = [c for c in src.columns if c in needed_src]
+            if keep:
+                src = src[keep].copy()
+    except Exception:  # noqa: BLE001 — pruning is an optimization, never fatal
+        pass
+
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
     fields_by_id = {f.id: f for f in fields}
 
