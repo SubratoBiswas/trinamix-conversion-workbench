@@ -83,6 +83,15 @@ async def _run_seeds_background() -> None:
         log.info("startup seed — item field mappings: %s", r)
     except Exception:  # noqa: BLE001
         log.exception("item field mapping seed failed")
+    try:
+        # Analyst-confirmed NextPower Supplier mappings (NetSuite SS Vendors + Arena
+        # eBOS → the 6 supplier interface objects), incl. Business Relationship
+        # value-map — so supplier conversions auto-map from either source.
+        from app.services.catalog_seed_service import seed_supplier_field_mappings
+        r = await seed_supplier_field_mappings()
+        log.info("startup seed — supplier field mappings: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier field mapping seed failed")
 
     try:
         # Mine allowed_values / lookup_type out of the descriptions of templates

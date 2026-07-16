@@ -338,11 +338,16 @@ _SEQ_PREFER_SOURCE: set[str] = {"suppliernumber", "supplierpartynumber"}
 # currency) or correctly source-mapped (names, addresses, tax ids, web site).
 _AUTHORITATIVE: set[str] = {
     "import action", "batch id",
-    "tax organization type", "organization type", "supplier type",
-    "business relationship", "federal reportable", "delivery channel",
+    "federal reportable", "delivery channel",
     "address name", "pay", "ordering", "rfq or bidding",
     "supplier site", "user account action",
 }
+# Tax Organization Type, Supplier Type and Business Relationship were previously
+# forced constants. Per the analyst supplier mapping doc they are value-MAPPED from
+# source (Entity Type, Category, Vendor Approval Status → e.g. Approved =
+# SPEND_AUTHORIZED). So they are NO LONGER authoritative: when the source maps them
+# (with a crosswalk) that value wins; the _CONTROL_DEFAULTS constant now only fills
+# the column when the source left it entirely blank (a safe fallback).
 
 
 def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,

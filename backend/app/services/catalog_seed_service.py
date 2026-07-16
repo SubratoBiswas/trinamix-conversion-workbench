@@ -29,6 +29,9 @@ _CATALOG = _DATA / "mapping_catalog.json"
 # separately). Seeded the same way so an item file from any of the five source
 # systems (Arena EBOS/Ratana Lee/Anaplan, SyteLine, NetSuite) auto-maps.
 _ITEM_MAPPINGS = _DATA / "item_field_mappings.json"
+# Analyst-authored NextPower Supplier Field Mapping doc (v3): NetSuite "SS
+# Vendors" + Arena eBOS → the 6 Oracle supplier interface objects.
+_SUPPLIER_MAPPINGS = _DATA / "supplier_field_mappings.json"
 
 
 async def _seed_catalog_file(path: Path, captured_from: str) -> dict:
@@ -65,13 +68,17 @@ async def _seed_catalog_file(path: Path, captured_from: str) -> dict:
             resolved_value=tgt_field,
             target_object=tgt_obj,
             target_field=tgt_field,
-            rule_type=None,
-            rule_config={
+            # A row may carry a transformation (e.g. VALUE_MAP for Business
+            # Relationship: Approved -> SPEND_AUTHORIZED). When it does, the
+            # rule_config IS the transform config; otherwise rule_config holds
+            # provenance metadata and no transform runs.
+            rule_type=r.get("rule_type"),
+            rule_config=(r.get("rule_config") if r.get("rule_type") else {
                 "source_column": src_field,
                 "source_label": r.get("source_label"),
                 "fbdi_sheet": r.get("fbdi_sheet"),
                 "confidence": r.get("confidence"),
-            },
+            }),
             source_erp=r.get("source_system"),
             captured_from=captured_from,
         ).insert()
@@ -91,3 +98,10 @@ async def seed_mapping_catalog() -> dict:
 async def seed_item_field_mappings() -> dict:
     """Analyst-confirmed NextPower Item standard-field mappings (all 5 sources)."""
     return await _seed_catalog_file(_ITEM_MAPPINGS, "NXT item field mapping doc")
+
+
+async def seed_supplier_field_mappings() -> dict:
+    """Analyst-confirmed NextPower Supplier mappings (NetSuite SS Vendors + eBOS)
+    across the 6 supplier interface objects, incl. the Business Relationship
+    value-map."""
+    return await _seed_catalog_file(_SUPPLIER_MAPPINGS, "NXT supplier field mapping doc")

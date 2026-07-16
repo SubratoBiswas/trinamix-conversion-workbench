@@ -1,0 +1,1259 @@
+[
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Supplier Name",
+    "source_field": "Name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Supplier Name",
+    "source_field": "name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Supplier Name New",
+    "source_field": "long_name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Supplier Number",
+    "source_field": "Number",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Supplier Number",
+    "source_field": "vend_num",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Alternate Name",
+    "source_field": "Legal Name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Tax Organization Type",
+    "source_field": "Entity Type",
+    "source_label": "Corporation",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Supplier Type",
+    "source_field": "Category",
+    "source_label": "Supplier",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Business Relationship",
+    "source_field": "Vendor Approval Status",
+    "source_label": "SPEND_AUTHORIZED",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High",
+    "rule_type": "VALUE_MAP",
+    "rule_config": {
+      "Approved": "SPEND_AUTHORIZED",
+      "default": "PROSPECTIVE",
+      "case_insensitive": true
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Parent Supplier",
+    "source_field": "Parent Vendor Id",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Alias",
+    "source_field": "Print As",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "D-U-N-S Number",
+    "source_field": "External ID",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Customer Number",
+    "source_field": "Account Number",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Corporate Web Site",
+    "source_field": "Web Address",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Corporate Web Site",
+    "source_field": "internet_url",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Taxpayer Country",
+    "source_field": "Country",
+    "source_label": "US",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Taxpayer Country",
+    "source_field": "country",
+    "source_label": "US",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Taxpayer ID",
+    "source_field": "Taxpayer ID",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Taxpayer ID",
+    "source_field": "Tax ID",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Federal reportable",
+    "source_field": "1099 Eligible",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Tax Reporting Name",
+    "source_field": "Legal Name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Withholding Tax Group",
+    "source_field": "Default WT Code",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Tax Registration Number",
+    "source_field": "CNPJ",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Payment Method",
+    "source_field": "Vendor Payment Method",
+    "source_label": "ACH",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Pay Each Document Alone",
+    "source_field": "Pay Each Document Alone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Remittance E-mail",
+    "source_field": "Email",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Remittance Fax",
+    "source_field": "Fax",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Supplier Name",
+    "source_field": "Name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Supplier Name",
+    "source_field": "name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Address Name",
+    "source_field": "Address Label",
+    "source_label": "Shogyo main",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Country",
+    "source_field": "Billing Country",
+    "source_label": "United States",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Country",
+    "source_field": "country",
+    "source_label": "United States",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 1",
+    "source_field": "Billing Address 1",
+    "source_label": "6851 Jerico Tpke",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 1",
+    "source_field": "addr##1",
+    "source_label": "6851 Jerico Tpke",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 2",
+    "source_field": "Billing Address 2",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 2",
+    "source_field": "addr##2",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 3",
+    "source_field": "Billing Address 3",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 3",
+    "source_field": "addr##3",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Address Line 4",
+    "source_field": "addr##4",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "City",
+    "source_field": "Billing City",
+    "source_label": "Syosset",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "City",
+    "source_field": "city",
+    "source_label": "Syosset",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "State",
+    "source_field": "Billing State",
+    "source_label": "NY",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "State",
+    "source_field": "state",
+    "source_label": "NY",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Province",
+    "source_field": "Billing State",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "County",
+    "source_field": "county",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Postal code",
+    "source_field": "Billing Zip",
+    "source_label": "11791",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Postal code",
+    "source_field": "zip",
+    "source_label": "11791",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Addressee",
+    "source_field": "Billing Addressee",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Language",
+    "source_field": "Language",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Phone",
+    "source_field": "Address Phone",
+    "source_label": "9219111",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Fax",
+    "source_field": "fax_num",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "E-Mail",
+    "source_field": "Email",
+    "source_label": "erubin@shogyo.com",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "E-Mail",
+    "source_field": "external_email_addr",
+    "source_label": "erubin@shogyo.com",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Pay Each Document Alone",
+    "source_field": "Pay Each Document Alone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Payment Reason",
+    "source_field": "Pre-Advice Details",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Remittance E-Mail",
+    "source_field": "Email",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Remittance Fax",
+    "source_field": "Fax",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Supplier Name",
+    "source_field": "Name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Supplier Name",
+    "source_field": "name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Address Name",
+    "source_field": "Address Label",
+    "source_label": "Shogyo main",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Customer Number",
+    "source_field": "Account Number",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Enable B2B Messaging",
+    "source_field": "Enable For EDI",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Communication Method",
+    "source_field": "Email Transactions",
+    "source_label": "EMAIL",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "E-Mail",
+    "source_field": "Email",
+    "source_label": "erubin@shogyo.com",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "E-Mail",
+    "source_field": "external_email_addr",
+    "source_label": "erubin@shogyo.com",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "source_label": "9213777",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Fax",
+    "source_field": "fax_num",
+    "source_label": "9213777",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Country of Origin",
+    "source_field": "Country",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Over-receipt Tolerance",
+    "source_field": "Vendor Bill - Item Receipt Quantity Tolerance",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Currency",
+    "source_field": "Currency",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Amount Limit",
+    "source_field": "Credit Limit",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Currency",
+    "source_field": "Currency",
+    "source_label": "US Dollar",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Quantity Tolerances",
+    "source_field": "Vendor Bill - Item Receipt Quantity Tolerance",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Amount Tolerance",
+    "source_field": "Vendor Bill - Item Receipt Amount Tolerance",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Hold All Invoices",
+    "source_field": "pay_hold",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Hold By",
+    "source_field": "pay_hold_user",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Hold Date",
+    "source_field": "pay_hold_date",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Hold Reason",
+    "source_field": "pay_hold_reason",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Terms",
+    "source_field": "Terms",
+    "source_label": "Net 30",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Tax Registration Number-Obsoleted",
+    "source_field": "CNPJ",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Method",
+    "source_field": "Vendor Payment Method",
+    "source_label": "ACH",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Reason",
+    "source_field": "Pre-Advice Details",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Remittance E-Mail",
+    "source_field": "Email",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Remittance Fax",
+    "source_field": "Fax",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Channel",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Channel",
+    "source_field": "external_email_addr",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Pay Each Document Alone",
+    "source_field": "Pay Each Document Alone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Supplier Name",
+    "source_field": "Name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "Supplier Name",
+    "source_field": "name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Prefix",
+    "source_field": "Mr.",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "First Name",
+    "source_field": "First Name",
+    "source_label": "Evan",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Middle Name",
+    "source_field": "Middle Name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Last Name",
+    "source_field": "Last Name",
+    "source_label": "Rubin",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Job Title",
+    "source_field": "Job Title",
+    "source_label": "Vice President of Sales",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Administrative Contact",
+    "source_field": "Primary Contact",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "E-Mail",
+    "source_field": "Email",
+    "source_label": "erubin@shogyo.com",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "E-Mail",
+    "source_field": "external_email_addr",
+    "source_label": "erubin@shogyo.com",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Phone",
+    "source_field": "Phone",
+    "source_label": "9219111",
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "Fax",
+    "source_field": "fax_num",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Mobile",
+    "source_field": "Mobile",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "User Account Action",
+    "source_field": "Login Access",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Contacts",
+    "target_field": "Address Name",
+    "source_field": "Address Label",
+    "source_label": "Shogyo main",
+    "fbdi_sheet": "POZ_SUPP_CONTACT_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Supplier Name",
+    "source_field": "Name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Supplier Name",
+    "source_field": "name",
+    "source_label": "Shogyo International Corp",
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Withholding Tax Group",
+    "source_field": "Default WT Code",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Liability Distribution",
+    "source_field": "Default Payables Account",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Prepayment Distribution",
+    "source_field": "Default Expense Account",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "*Supplier Number",
+    "source_field": "Number",
+    "source_label": "C-002235",
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "*Supplier Number",
+    "source_field": "vend_num",
+    "source_label": "C-002235",
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "*Pay Each Document Alone",
+    "source_field": "Pay Each Document Alone",
+    "source_label": "N",
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Payment Method Code",
+    "source_field": "Vendor Payment Method",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Delivery Channel Code",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Remit Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Remit Advice Email",
+    "source_field": "Email",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "Remit Advice Email",
+    "source_field": "external_email_addr",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Remit Advice Fax",
+    "source_field": "Fax",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "Remit Advice Fax",
+    "source_field": "fax_num",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Payment Reason Comments",
+    "source_field": "Pre-Advice Details",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "**Bank Name",
+    "source_field": "Bank Name",
+    "source_label": "JP Morgan Chase Bank, N.A.",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "**Bank Name",
+    "source_field": "Bank Name",
+    "source_label": "JP Morgan Chase Bank, N.A.",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "**Branch Name",
+    "source_field": "IL Branch Name",
+    "source_label": "021000021",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "**Branch Name",
+    "source_field": "Bank ID",
+    "source_label": "021000021",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "*Account Country Code",
+    "source_field": "Country",
+    "source_label": "US",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Account Name",
+    "source_field": "Bank Account Name",
+    "source_label": "Adobe, Inc.",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "Account Name",
+    "source_field": "Bank Acct Name",
+    "source_label": "Adobe, Inc.",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "*Account Number",
+    "source_field": "Bank Account Number",
+    "source_label": "100081931",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "*Account Number",
+    "source_field": "WIRE ID",
+    "source_label": "100081931",
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Account Currency Code",
+    "source_field": "Currency",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "IBAN",
+    "source_field": "IBAN",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "IBAN",
+    "source_field": "WIRE ID",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Banks",
+    "target_field": "Exchange Rate",
+    "source_field": "Current Currency Exchange Rate",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  }
+]
