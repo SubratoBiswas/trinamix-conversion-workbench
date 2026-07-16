@@ -394,6 +394,14 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     targets = await _target_fields_for(template)
     provider = get_mapping_provider()
     pname = getattr(provider, "name", "")
+    # Heavy fan-out templates (19-sheet Customer ~1250 fields, 17-sheet Item ~1365)
+    # have hundreds of structural/EFF slots with NO possible source column. Sending
+    # that whole residual to the LLM in one synchronous batch blows the ~100s
+    # gateway and the mapping request fails with ZERO mappings saved ("not mapping
+    # at all"). For heavy templates, resolve deterministically + from the learning
+    # library/gold only and SKIP the AI residual — the sourceless slots correctly
+    # stay gaps, and the fields that matter are covered by rule match + learnings.
+    _heavy = len(targets) > 300
     # Deterministic-first: the rule-based matcher (name similarity + LOV coverage
     # + sample patterns) is free and confidently maps most columns. Only the
     # targets it CAN'T place confidently are sent to the LLM — this cuts AI
@@ -430,7 +438,7 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
             weak.append(t)
 
     ai_by_id: dict = {}
-    if weak and pname in ("anthropic", "openai"):
+    if weak and not _heavy and pname in ("anthropic", "openai"):
         if pname == "anthropic":
             from app.ai.llm_provider import anthropic_suggest_batched
             from app.config import settings
