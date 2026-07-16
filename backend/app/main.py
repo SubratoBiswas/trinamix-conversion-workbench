@@ -61,6 +61,15 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("customer template repair failed")
     try:
+        # Same repair for Item: guarantee the real 17-sheet EGP_SYSTEM_ITEMS
+        # template exists and Item conversions point at it (not a flat synthetic
+        # namesake seeded from the generic itemmasterimport schema).
+        from app.services.template_seed_service import ensure_item_multisheet
+        r = await ensure_item_multisheet()
+        log.info("startup seed — item template repair: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("item template repair failed")
+    try:
         from app.services.catalog_seed_service import seed_mapping_catalog
         r = await seed_mapping_catalog()
         log.info("startup seed — mapping catalog: %s", r)
