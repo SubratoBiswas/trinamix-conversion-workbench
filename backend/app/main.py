@@ -66,6 +66,14 @@ async def _run_seeds_background() -> None:
         log.info("startup seed — mapping catalog: %s", r)
     except Exception:  # noqa: BLE001
         log.exception("mapping_catalog seed failed")
+    try:
+        # Analyst-confirmed NextPower Item standard-field mappings (Arena/SyteLine/
+        # NetSuite/Anaplan → Oracle item columns) so item conversions auto-map.
+        from app.services.catalog_seed_service import seed_item_field_mappings
+        r = await seed_item_field_mappings()
+        log.info("startup seed — item field mappings: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("item field mapping seed failed")
 
     try:
         # Mine allowed_values / lookup_type out of the descriptions of templates

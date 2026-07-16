@@ -22,16 +22,22 @@ from app.models.learned import LearnedMapping
 
 logger = logging.getLogger(__name__)
 
-_CATALOG = Path(__file__).resolve().parent.parent / "data" / "mapping_catalog.json"
+_DATA = Path(__file__).resolve().parent.parent / "data"
+_CATALOG = _DATA / "mapping_catalog.json"
+# Analyst-authored NextPower Item Field Mapping Document, distilled to the
+# standard-field source→Oracle column mappings (the EFF rows are handled
+# separately). Seeded the same way so an item file from any of the five source
+# systems (Arena EBOS/Ratana Lee/Anaplan, SyteLine, NetSuite) auto-maps.
+_ITEM_MAPPINGS = _DATA / "item_field_mappings.json"
 
 
-async def seed_mapping_catalog() -> dict:
-    if not _CATALOG.exists():
-        return {"seeded": 0, "skipped": 0, "note": "catalog file not found"}
+async def _seed_catalog_file(path: Path, captured_from: str) -> dict:
+    if not path.exists():
+        return {"seeded": 0, "skipped": 0, "note": f"{path.name} not found"}
     try:
-        rows = json.loads(_CATALOG.read_text(encoding="utf-8"))
+        rows = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("mapping_catalog: could not read catalog: %s", exc)
+        logger.warning("catalog seed: could not read %s: %s", path.name, exc)
         return {"seeded": 0, "skipped": 0, "error": str(exc)}
 
     seeded = skipped = 0
@@ -67,11 +73,21 @@ async def seed_mapping_catalog() -> dict:
                 "confidence": r.get("confidence"),
             },
             source_erp=r.get("source_system"),
-            captured_from="metadata catalog",
+            captured_from=captured_from,
         ).insert()
         seeded += 1
 
     if seeded or skipped:
-        logger.info("mapping_catalog: seeded %d, skipped %d existing (of %d rows)",
-                    seeded, skipped, len(rows))
+        logger.info("%s: seeded %d, skipped %d existing (of %d rows)",
+                    path.name, seeded, skipped, len(rows))
     return {"seeded": seeded, "skipped": skipped, "total": len(rows)}
+
+
+async def seed_mapping_catalog() -> dict:
+    """Standard public-schema source→FBDI catalog."""
+    return await _seed_catalog_file(_CATALOG, "metadata catalog")
+
+
+async def seed_item_field_mappings() -> dict:
+    """Analyst-confirmed NextPower Item standard-field mappings (all 5 sources)."""
+    return await _seed_catalog_file(_ITEM_MAPPINGS, "NXT item field mapping doc")
