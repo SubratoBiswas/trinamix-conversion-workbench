@@ -249,8 +249,18 @@ def _suggest_transformation(
         if any(any(ch.islower() for ch in s) for s in samples):
             return {"rule_type": "UPPERCASE", "config": {}, "description": "Force uppercase for code field"}
 
-    # Item number / id with dashes → strip hyphens (matches FBDI convention)
-    if any(k in target_name for k in ("item", "number", "id")) and any("-" in s for s in samples):
+    # Strip hyphens from a bare identifier — but NARROWLY. Oracle Product Hub
+    # preserves hyphens in item numbers, part numbers and class/category codes
+    # (gold shows Item Class "Prefab-Build", part numbers like "SH-2.10.RBK"), and
+    # a hyphen is meaningful in names/descriptions/codes too. So never auto-strip
+    # for the item-master field families or any name/description/status/type — only
+    # for a plain "*Number"/"*Id" key that carries none of those tokens.
+    _hyphen_block = ("item", "part", "class", "categor", "catalog", "group",
+                     "name", "description", "status", "type", "lifecycle",
+                     "revision", "uom", "unit")
+    if (any(k in target_name for k in ("number", "id"))
+            and not any(k in target_name for k in _hyphen_block)
+            and any("-" in s for s in samples)):
         return {"rule_type": "REMOVE_HYPHEN", "config": {}, "description": "Strip hyphens from identifier"}
 
     # Date format conversion to FBDI standard YYYY/MM/DD

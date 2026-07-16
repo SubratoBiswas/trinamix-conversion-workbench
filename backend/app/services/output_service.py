@@ -231,6 +231,26 @@ def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
     return df
 
 
+# Sentinel strings that legacy/SQL exports (SyteLine, NetSuite saved searches,
+# etc.) write for "no value". Loaded verbatim into Oracle they'd become the
+# literal text "NULL"/"N/A" instead of an empty cell, so blank them at generate.
+_NULL_SENTINELS = {"null", "(null)", "#n/a", "n/a", "nan", "none", "\\n"}
+
+
+def _blank_null_sentinels(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace whole-cell null sentinels (case-insensitive) with empty strings.
+    Whole-cell match only, so a real value like a description containing the word
+    is never touched."""
+    for col in df.columns:
+        s = df[col]
+        if s.dtype != object:
+            continue
+        mask = s.astype(str).str.strip().str.lower().isin(_NULL_SENTINELS)
+        if mask.any():
+            df.loc[mask, col] = ""
+    return df
+
+
 def _dedup(cols: list[str]) -> list[str]:
     seen: set[str] = set()
     return [c for c in cols if not (c in seen or seen.add(c))]
@@ -448,6 +468,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
         sdf = df.reindex(columns=cols, fill_value="")
+        # Blank legacy null sentinels BEFORE control defaults so a column the
+        # source filled entirely with "NULL" is treated as empty and gets its
+        # standard default, not the literal text.
+        sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
         sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys)
         hdr: dict[str, str] = {}
