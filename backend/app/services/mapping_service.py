@@ -354,6 +354,23 @@ async def mapping_candidates(
 
 
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
+    # Self-heal: an Item conversion created AFTER the last restart can sit on a flat
+    # single-sheet template (a source-named "... Item Import" that got the generic
+    # 26-column itemmasterimport schema). ensure_item_multisheet runs only at startup,
+    # so a conversion created between restarts is never repaired and would generate a
+    # flat file. Run the idempotent repair HERE, right before mapping, so this
+    # conversion is re-pointed onto the real 17-sheet Item template and its mappings
+    # build against the real interface sheets — making generate emit the full FBDI.
+    try:
+        from app.services.template_seed_service import ensure_item_multisheet
+        from app.models.conversion import Conversion as _Conv
+        await ensure_item_multisheet()
+        _fresh = await _Conv.get(conversion.id)
+        if _fresh is not None:
+            conversion = _fresh
+    except Exception:  # noqa: BLE001 — never block mapping on the repair
+        pass
+
     template = await FBDITemplate.get(conversion.template_id)
 
     # Determine source columns: EBS live query or static dataset
