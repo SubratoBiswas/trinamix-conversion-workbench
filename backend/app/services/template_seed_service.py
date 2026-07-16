@@ -224,14 +224,25 @@ async def ensure_item_multisheet() -> dict:
     from app.models.conversion import Conversion
     from app.models.mapping import MappingSuggestion
 
+    # Child item objects that are their OWN templates — must NOT be swept into the
+    # main Item Master repair (they map to different interface tables).
+    _ITEM_CHILD = ("cost", "categor", "revision", "relationship", "association",
+                   "spec", "structure", "attachment", "trading", "supplier",
+                   "organization", "cross", "price", "uom")
+
     def _is_item(t) -> bool:
         bo = (t.business_object or "").strip().lower()
-        if bo:
-            return bo == "item"
-        return (t.name or "").strip().lower() in (
-            "item import", "itemimport", "item master", "item master import",
-            "itemimporttemplate",
-        )
+        nm = (t.name or "").strip().lower()
+        # Never treat a child item object as the item master.
+        if any(k in bo for k in _ITEM_CHILD) or any(k in nm for k in _ITEM_CHILD):
+            return False
+        if bo in ("item", "item master"):
+            return True
+        # Match ANY item-master template by name — including source-prefixed flats
+        # like "SyteLine ERP Item Import" or "NetSuite Item Master" that the narrow
+        # exact-name list missed. Requires an item + import/master token.
+        return ("item" in nm) and ("import" in nm or "master" in nm
+                                   or "egp_system_items" in nm or nm == "item")
 
     templates = await FBDITemplate.find_all().to_list()
     items = [t for t in templates if _is_item(t)]
