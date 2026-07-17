@@ -32,6 +32,16 @@ _ITEM_MAPPINGS = _DATA / "item_field_mappings.json"
 # Analyst-authored NextPower Supplier Field Mapping doc (v3): NetSuite "SS
 # Vendors" + Arena eBOS → the 6 Oracle supplier interface objects.
 _SUPPLIER_MAPPINGS = _DATA / "supplier_field_mappings.json"
+# Analyst-authored NextPower Customer FBDI Field Mapping doc (V1): NetSuite
+# customer export → the 19-sheet Oracle Fusion Customer Import (HZ_IMP/RA). The
+# distinct source→target pairs (account/party keys + name/tax/email/phone/credit)
+# propagate by field name across every interface sheet they appear in.
+_CUSTOMER_MAPPINGS = _DATA / "customer_field_mappings.json"
+# Analyst-authored NextPower Employee HDL Field Mapping doc (v3): Workday worker
+# export → Oracle HCM via HDL. Only the true source-driven columns are seeded
+# here (target_object "Employee HDL"); HDL constants, composite SourceSystemId
+# keys and value maps are applied by the HDL generator from the loader schema.
+_EMPLOYEE_HDL_MAPPINGS = _DATA / "employee_hdl_field_mappings.json"
 
 
 async def _seed_catalog_file(path: Path, captured_from: str) -> dict:
@@ -105,3 +115,17 @@ async def seed_supplier_field_mappings() -> dict:
     across the 6 supplier interface objects, incl. the Business Relationship
     value-map."""
     return await _seed_catalog_file(_SUPPLIER_MAPPINGS, "NXT supplier field mapping doc")
+
+
+async def seed_customer_field_mappings() -> dict:
+    """Analyst-confirmed NextPower Customer mappings (NetSuite → Fusion Customer
+    Import). Key references (entitynumber/entityid) plus name/tax/email/phone/
+    credit; propagate by field name across the 19 HZ_IMP/RA interface sheets."""
+    return await _seed_catalog_file(_CUSTOMER_MAPPINGS, "NXT customer field mapping doc")
+
+
+async def seed_employee_hdl_field_mappings() -> dict:
+    """Analyst-confirmed NextPower Employee HDL mappings (Workday → Oracle HCM).
+    Source-driven worker columns only; HDL constants, SourceSystemId keys and
+    value maps are filled by the HDL generator from the loader schema."""
+    return await _seed_catalog_file(_EMPLOYEE_HDL_MAPPINGS, "NXT employee HDL field mapping doc")

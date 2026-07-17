@@ -390,6 +390,19 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
     from app.models.fbdi import FBDISheet
 
+    # HDL divert: HCM objects (Employee HDL) are not FBDI — they load as
+    # pipe-delimited .dat files, so they go to the dedicated HDL generator instead
+    # of the CSV/XLSX fan-out below. Detected by the template's business object.
+    _tpl_for_route = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+    try:
+        from app.services.hdl_output_service import is_hdl_conversion, generate_hdl_artifact
+    except ImportError:
+        is_hdl_conversion = None  # type: ignore
+    # Scope the import guard to the import only — a real error inside the HDL
+    # generator must surface, not silently fall through to the FBDI path.
+    if is_hdl_conversion and is_hdl_conversion(_tpl_for_route, conversion):
+        return await generate_hdl_artifact(conversion)
+
     # How many target fields this object has — used to gate the two DB-heavy passes
     # below. A 19-sheet Customer/Item load has ~1200 fields; re-applying every
     # learned rule and re-capturing learnings across all of them on each generate is

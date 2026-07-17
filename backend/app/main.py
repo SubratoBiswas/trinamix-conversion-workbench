@@ -92,6 +92,29 @@ async def _run_seeds_background() -> None:
         log.info("startup seed — supplier field mappings: %s", r)
     except Exception:  # noqa: BLE001
         log.exception("supplier field mapping seed failed")
+    try:
+        # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
+        # Fusion Customer Import): account/party key references + name/tax/email/
+        # phone/credit, propagated by field name across the interface sheets.
+        from app.services.catalog_seed_service import seed_customer_field_mappings
+        r = await seed_customer_field_mappings()
+        log.info("startup seed — customer field mappings: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer field mapping seed failed")
+    try:
+        # HCM Employee HDL loader: seed the .dat template (components + attributes)
+        # so it's a first-class conversion target, then its Workday source mappings.
+        from app.services.hdl_seed_service import ensure_employee_hdl
+        r = await ensure_employee_hdl()
+        log.info("startup seed — employee HDL template: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("employee HDL template seed failed")
+    try:
+        from app.services.catalog_seed_service import seed_employee_hdl_field_mappings
+        r = await seed_employee_hdl_field_mappings()
+        log.info("startup seed — employee HDL field mappings: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("employee HDL field mapping seed failed")
 
     try:
         # Mine allowed_values / lookup_type out of the descriptions of templates
