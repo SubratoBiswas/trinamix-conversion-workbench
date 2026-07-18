@@ -70,7 +70,8 @@ async def run_validation(conversion: Conversion) -> list[ValidationIssue]:
     fields = await FBDIField.find(FBDIField.template_id == conversion.template_id).to_list() if conversion.template_id else []
     target_meta = [
         {"field_name": f.field_name, "required": bool(f.required), "data_type": f.data_type,
-         "max_length": f.max_length, "format_mask": f.format_mask}
+         "max_length": f.max_length, "format_mask": f.format_mask,
+         "allowed_values": getattr(f, "allowed_values", None) or []}
         for f in fields if f.field_name in df.columns
     ]
     raw_issues = run_validation_checks(converted_rows, target_meta)

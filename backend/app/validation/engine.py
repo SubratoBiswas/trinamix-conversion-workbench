@@ -20,6 +20,54 @@ def _is_numeric(v: str) -> bool:
     return bool(re.match(r"^-?\d+(?:\.\d+)?$", v.strip()))
 
 
+def _to_num(v: str):
+    s = (v or "").strip().replace(",", "")
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _norm_name(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+# Field-name hints. Text fields that must NOT hold a bare number (Item Class Name,
+# description, …); numeric fields that must NOT go negative (quantities, on-hand).
+_TEXT_NAME_HINTS = ("name", "description", "desc")
+_NONNEG_HINTS = ("quantity", "qty", "on hand", "onhand", "stock", "weight",
+                 "volume", "count", "min order", "max order", "lot size")
+
+
+def _allowed_value_set(meta: dict[str, Any]) -> set[str] | None:
+    """Accepted enumerated values for a field (codes + meanings, lower-cased), or
+    None when the field isn't a value-set/LOV column or its codes aren't known."""
+    av = meta.get("allowed_values") or []
+    if not av:
+        return None
+    out: set[str] = set()
+    for a in av:
+        for k in ("code", "meaning", "value"):
+            val = a.get(k) if isinstance(a, dict) else None
+            if val is not None and str(val).strip():
+                out.add(str(val).strip().lower())
+    return out or None
+
+
+def _minmax_pairs(by_name: dict[str, dict]) -> list[tuple[str, str]]:
+    """Detect (minimum_field, maximum_field) pairs sharing a base name, e.g.
+    'Minimum Order Quantity' / 'Maximum Order Quantity'."""
+    mins: dict[str, str] = {}
+    maxs: dict[str, str] = {}
+    for fname in by_name:
+        n = _norm_name(fname)
+        if n.startswith("minimum ") or n.startswith("min "):
+            mins[n.split(" ", 1)[1]] = fname
+        elif n.startswith("maximum ") or n.startswith("max "):
+            maxs[n.split(" ", 1)[1]] = fname
+    return [(mins[b], maxs[b]) for b in mins if b in maxs]
+
+
 def _is_date(v: str) -> bool:
     s = v.strip()
     return any(re.match(p, s) for p in (
@@ -170,6 +218,7 @@ def run_validation_checks(
     """
     issues: list[dict[str, Any]] = []
     by_name = {f["field_name"]: f for f in target_fields}
+    minmax = _minmax_pairs(by_name)
 
     for idx, row in enumerate(converted_rows, start=1):
         for fname, meta in by_name.items():
@@ -209,7 +258,9 @@ def run_validation_checks(
                     "impacted_count": 1,
                 })
 
-            if "number" in dt or "decimal" in dt:
+            nname = _norm_name(fname)
+
+            if "number" in dt or "decimal" in dt or "integer" in dt:
                 if not _is_numeric(sval):
                     issues.append({
                         "category": "validation",
@@ -222,6 +273,45 @@ def run_validation_checks(
                         "auto_fixable": False,
                         "impacted_count": 1,
                     })
+                else:
+                    # Negative value in a field that can't be negative (quantities,
+                    # on-hand, weight, min/max order). Catches bad source/transform.
+                    num = _to_num(sval)
+                    if num is not None and num < 0 and any(h in nname for h in _NONNEG_HINTS):
+                        issues.append({
+                            "category": "validation", "row_number": idx, "field_name": fname,
+                            "issue_type": "Negative Value Not Allowed", "severity": "error",
+                            "message": f"Row {idx}: '{fname}' = {sval} is negative; this field must be >= 0.",
+                            "suggested_fix": "Fix the source value or the transform (ABS / clamp).",
+                            "auto_fixable": False, "impacted_count": 1,
+                        })
+
+            # Enumerated / value-set column: value must be an Oracle-supported code.
+            allowed = _allowed_value_set(meta)
+            if allowed is not None and stripped.lower() not in allowed:
+                issues.append({
+                    "category": "validation", "row_number": idx, "field_name": fname,
+                    "issue_type": "Value Not In Value Set", "severity": "error",
+                    "message": f"Row {idx}: '{fname}' = '{sval}' is not an accepted value "
+                               f"(expected one of {len(allowed)} Oracle-supported codes).",
+                    "suggested_fix": "Map via a value crosswalk to a supported code.",
+                    "auto_fixable": False, "impacted_count": 1,
+                })
+
+            # A bare number sitting in a text 'name'/'description' field (e.g. Item
+            # Class Name = 501020) — almost always a mis-map or wrong source column.
+            is_text = (dt in ("", "text", "string", "char", "varchar", "varchar2")) \
+                and not any(k in dt for k in ("number", "decimal", "integer", "date"))
+            if is_text and _is_numeric(sval) and any(h in nname for h in _TEXT_NAME_HINTS) \
+                    and "number" not in nname and "id" not in nname.split():
+                issues.append({
+                    "category": "validation", "row_number": idx, "field_name": fname,
+                    "issue_type": "Numeric Value In Text Field", "severity": "warning",
+                    "message": f"Row {idx}: '{fname}' = '{sval}' is purely numeric in a text field "
+                               f"— likely a mis-mapped source column.",
+                    "suggested_fix": "Re-check the source column mapped to this field.",
+                    "auto_fixable": False, "impacted_count": 1,
+                })
 
             if dt == "date":
                 fmt = meta.get("format_mask") or "%Y/%m/%d"
@@ -242,4 +332,20 @@ def run_validation_checks(
                         "auto_fixable": False,
                         "impacted_count": 1,
                     })
+
+    # Related-field business logic: a Minimum must not exceed its Maximum (e.g.
+    # Minimum Order Quantity <= Maximum Order Quantity) — catches both being blindly
+    # set to the same or reversed source.
+    for min_f, max_f in minmax:
+        for idx, row in enumerate(converted_rows, start=1):
+            a = _to_num(str(row.get(min_f, "") or ""))
+            b = _to_num(str(row.get(max_f, "") or ""))
+            if a is not None and b is not None and a > b:
+                issues.append({
+                    "category": "validation", "row_number": idx, "field_name": max_f,
+                    "issue_type": "Min Greater Than Max", "severity": "error",
+                    "message": f"Row {idx}: '{min_f}' ({a:g}) exceeds '{max_f}' ({b:g}).",
+                    "suggested_fix": "Correct the source values or the mapping for these two fields.",
+                    "auto_fixable": False, "impacted_count": 1,
+                })
     return issues

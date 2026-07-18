@@ -353,6 +353,88 @@ async def mapping_candidates(
     return out
 
 
+def _looks_numeric(s) -> bool:
+    s = str(s or "").strip()
+    if not s:
+        return False
+    t = s[1:] if s[:1] in "+-" else s
+    t = t.replace(",", "")
+    return t.replace(".", "", 1).isdigit()
+
+
+def _source_is_numeric(sc) -> bool:
+    """Best-effort: is this source column numeric? Prefer the profiled type, else
+    look at its sampled distinct values."""
+    t = (getattr(sc, "inferred_type", None) or getattr(sc, "data_type", None) or "").lower()
+    if t:
+        return any(k in t for k in ("int", "num", "decimal", "float", "double"))
+    vals = getattr(sc, "distinct_values", None) or []
+    vals = [v for v in vals if str(v).strip()][:50]
+    return bool(vals) and all(_looks_numeric(v) for v in vals)
+
+
+# Text fields that must not hold a bare number (Item Class Name, descriptions).
+_TEXT_NAME_TOKENS = ("name", "description", "desc")
+
+
+def _guard_item_mappings(results: list, targets_by_id: dict, sources: list) -> dict:
+    """Conservative, Oracle-aware sanity pass on Item mappings before save.
+
+    (a) Type guard: a numeric source mapped into a text NAME/DESCRIPTION field is
+        almost certainly wrong (e.g. an Item Class *code* dropped into Item Class
+        *Name*) — drop it so generate leaves the field for a correct mapping/default.
+    (b) Anti-copy: when one source column is proposed for several fields, keep the
+        highest-confidence target and flag the rest for review rather than blindly
+        copying the same value across multiple Oracle columns.
+    Mutations are best-effort (some result objects may be immutable)."""
+    num_src = {getattr(s, "name", None): _source_is_numeric(s) for s in sources}
+    dropped = flagged = 0
+
+    def _set(r, **kw):
+        for k, v in kw.items():
+            try:
+                setattr(r, k, v)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # (a) type guard
+    for r in results:
+        sc = getattr(r, "source_column", None)
+        if not sc:
+            continue
+        tgt = targets_by_id.get(str(getattr(r, "target_field_id", "")))
+        if tgt is None:
+            continue
+        tname = (getattr(tgt, "field_name", "") or "").lower()
+        is_text_name = any(tok in tname for tok in _TEXT_NAME_TOKENS) and "number" not in tname
+        if is_text_name and num_src.get(sc):
+            _set(r, source_column=None, confidence=0.0, review_required=1,
+                 reason="Auto-guard: dropped a numeric source from a text name/description field "
+                        "(likely a code mis-mapped into a *Name* column).")
+            dropped += 1
+
+    # (b) anti-copy: same source used by more than one field
+    best_by_src: dict = {}
+    for r in results:
+        sc = getattr(r, "source_column", None)
+        if not sc:
+            continue
+        cur = best_by_src.get(sc)
+        if cur is None or (getattr(r, "confidence", 0) or 0) > (getattr(cur, "confidence", 0) or 0):
+            best_by_src[sc] = r
+    for r in results:
+        sc = getattr(r, "source_column", None)
+        if not sc or best_by_src.get(sc) is r:
+            continue
+        _set(r, review_required=1,
+             reason=((getattr(r, "reason", "") or "") +
+                     " | Review: this source column is also mapped to another field — "
+                     "confirm it belongs here rather than being copied across columns."))
+        flagged += 1
+
+    return {"dropped": dropped, "flagged": flagged}
+
+
 async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggestion]:
     # Self-heal: an Item conversion created AFTER the last restart can sit on a flat
     # single-sheet template (a source-named "... Item Import" that got the generic
@@ -480,6 +562,16 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
         r_rule = rule_by_id.get(rid)
         ai_results.append(r_ai if (r_ai and r_ai.source_column) else (r_rule or r_ai))
     ai_results = [r for r in ai_results if r is not None]
+
+    # Item quality guard (Product Hub): before saving, apply Oracle-aware sanity so
+    # the AI/rule matcher doesn't blindly populate the wrong attribute:
+    #  • drop a numeric source landing in a text name/description field
+    #    (e.g. a code in "Item Class Name");
+    #  • flag one source column being copied across several unrelated fields;
+    # so downstream generate produces business-valid data, not fuzzy noise.
+    _bo = (template.business_object or "").strip().lower() if template else ""
+    if _bo in ("item", "item master"):
+        _guard_item_mappings(ai_results, {str(t.id): t for t in targets}, sources)
 
     existing = {
         m.target_field_id: m
