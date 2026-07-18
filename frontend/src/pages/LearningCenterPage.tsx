@@ -4,8 +4,8 @@ import {
   Download, EyeOff, FileSpreadsheet, Layers, Search, Sparkles, Trash2, TrendingUp,
   Upload, X, Zap,
 } from "lucide-react";
-import { LearningApi, ProjectsApi } from "@/api";
-import type { CatalogStatus, LearnedObjectGroup, MappingImportResult } from "@/api";
+import { ClientsApi, LearningApi, ProjectsApi } from "@/api";
+import type { CatalogStatus, ClientSummary, LearnedObjectGroup, MappingImportResult } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, Modal, PageLoader, PageTitle, Pill, Spinner,
 } from "@/components/ui/Primitives";
@@ -250,12 +250,14 @@ export const LearningCenterPage: React.FC = () => {
   const [backfilling, setBackfilling] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [knownObjects, setKnownObjects] = useState<string[]>([]);
+  const [clients, setClients] = useState<ClientSummary[]>([]);
+  const [clientFilter, setClientFilter] = useState<string>("");  // "" = all, "global", or a client id
 
-  const refresh = async (pid?: string) => {
+  const refresh = async (pid?: string, cf: string = clientFilter) => {
     const params = pid ? { project_id: pid } : undefined;
     const [s, g] = await Promise.all([
       LearningApi.stats(params),
-      LearningApi.byObject(),
+      LearningApi.byObject(cf || undefined),
     ]);
     setStats(s);
     setGroups(g.objects);
@@ -264,6 +266,7 @@ export const LearningCenterPage: React.FC = () => {
   useEffect(() => {
     void refresh();
     ProjectsApi.list().then(setProjects).catch(() => {});
+    ClientsApi.list().then(r => setClients(r.clients)).catch(() => {});
     LearningApi.catalogStatus().then(setCatalog).catch(() => setCatalog(null));
     LearningApi.knownObjects().then(r => setKnownObjects(r.objects)).catch(() => {});
   }, []);
@@ -286,6 +289,25 @@ export const LearningCenterPage: React.FC = () => {
             <Button variant="secondary" onClick={() => setImportOpen(true)}>
               <Upload className="mr-1 h-4 w-4" /> Import mappings
             </Button>
+            {clients.length > 0 && (
+              <select
+                value={clientFilter}
+                onChange={e => {
+                  const cf = e.target.value;
+                  setClientFilter(cf);
+                  setStats(null); setGroups(null);
+                  void refresh(selectedProjectId || undefined, cf);
+                }}
+                title="Filter by client — client-scoped learnings plus anything global"
+                className="h-9 rounded-md border border-line bg-white pl-3 pr-8 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              >
+                <option value="">All clients</option>
+                <option value="global">Global only</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}{c.is_default ? " (default)" : ""}</option>
+                ))}
+              </select>
+            )}
             {projects.length > 0 && (
               <select
                 value={selectedProjectId}
@@ -343,6 +365,7 @@ export const LearningCenterPage: React.FC = () => {
               <ObjectRow
                 key={g.target_object}
                 group={g}
+                clientFilter={clientFilter}
                 open={openObject === g.target_object}
                 onToggle={() =>
                   setOpenObject(openObject === g.target_object ? null : g.target_object)
@@ -374,10 +397,11 @@ export const LearningCenterPage: React.FC = () => {
 
 const ObjectRow: React.FC<{
   group: LearnedObjectGroup;
+  clientFilter: string;
   open: boolean;
   onToggle: () => void;
   onChanged: () => void;
-}> = ({ group, open, onToggle, onChanged }) => {
+}> = ({ group, clientFilter, open, onToggle, onChanged }) => {
   const kinds = useMemo(
     () =>
       [...group.kinds].sort(
@@ -423,15 +447,15 @@ const ObjectRow: React.FC<{
         )}
       </button>
 
-      {open && <ObjectDetail group={group} onChanged={onChanged} />}
+      {open && <ObjectDetail group={group} clientFilter={clientFilter} onChanged={onChanged} />}
     </div>
   );
 };
 
 // ------------------------------------------------------------- object detail
 
-const ObjectDetail: React.FC<{ group: LearnedObjectGroup; onChanged: () => void }> = ({
-  group, onChanged,
+const ObjectDetail: React.FC<{ group: LearnedObjectGroup; clientFilter: string; onChanged: () => void }> = ({
+  group, clientFilter, onChanged,
 }) => {
   const [rows, setRows] = useState<LearnedMapping[] | null>(null);
   const [kind, setKind] = useState<string>(() => {
@@ -451,6 +475,7 @@ const ObjectDetail: React.FC<{ group: LearnedObjectGroup; onChanged: () => void 
     const data = await LearningApi.list({
       target_object: objParam,
       kind,
+      client_id: clientFilter || undefined,
       q: q.trim() || undefined,
     });
     // The API can't filter the catch-all bucket server-side (its rows have no

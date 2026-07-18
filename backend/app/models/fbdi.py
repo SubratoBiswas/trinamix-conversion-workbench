@@ -8,6 +8,11 @@ class FBDITemplate(Document):
     name: str
     module: Optional[str] = None
     business_object: Optional[str] = None
+    # Tenant scope. The bundled Oracle FBDI/HDL templates are is_global=True (they
+    # are Oracle-standard, client-agnostic). A client could upload a bespoke
+    # template scoped to itself (client_id set, is_global=False).
+    client_id: Optional[PydanticObjectId] = None
+    is_global: bool = False
     tier: str = "T1"
     phase: str = "Blueprint"
     required_field_count: int = 0
@@ -90,6 +95,10 @@ class GoldStandard(Document):
     target_object: Optional[str] = None
     template_id: Optional[PydanticObjectId] = None
     template_name: Optional[str] = None
+    # Tenant scope. A gold reference standard is a client's approved output, so it
+    # is client-scoped (is_global=False, client_id set). Never global.
+    client_id: Optional[PydanticObjectId] = None
+    is_global: bool = False
 
     file_name: Optional[str] = None
     content: Optional[bytes] = None

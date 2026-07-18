@@ -77,6 +77,7 @@ async def _seed_one(path: Path, name: str, module: str, business_object: str) ->
         name=name,
         module=module,
         business_object=business_object,
+        is_global=True,  # bundled Oracle-standard templates apply to every client
         version="1.0",
         required_field_count=sum(1 for f in parsed["fields"] if f.get("required")),
         file_name=stored_name,

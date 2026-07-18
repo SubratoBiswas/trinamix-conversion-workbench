@@ -1,0 +1,227 @@
+[
+  {
+    "_note": "BEST-GUESS source columns (verify against the All Vendors extract): 'Email Transactions', 'Fax Transactions', 'Phone', 'Fax', 'Default WT Code'. Rules use exact FBDI target field names parsed from the supplier templates.",
+
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": "Derived: Email Transactions=Yes -> EMAIL, Fax Transactions=Yes -> FAX, else blank.",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "Medium",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
+        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "source_label": "Same Email/Fax Transaction derivation as Delivery Method.",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "Medium",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
+        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Use withholding tax",
+    "source_field": "Default WT Code",
+    "source_label": "Analyst: Use Withholding Tax should map to the Default WT Code column.",
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "Medium"
+  },
+
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": "Derived: Email Transactions=Yes -> EMAIL, Fax Transactions=Yes -> FAX, else blank.",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
+        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "source_label": "Same Email/Fax Transaction derivation as Delivery Method.",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
+        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Phone Country Code",
+    "source_field": "Phone",
+    "source_label": "Split from the single Phone column (E.164-style).",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "country"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Phone Area Code",
+    "source_field": "Phone",
+    "source_label": "Split from the single Phone column.",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "area"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Phone Extension",
+    "source_field": "Phone",
+    "source_label": "Split from the single Phone column (ext/x suffix).",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "extension"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Phone",
+    "source_field": "Phone",
+    "source_label": "Local subscriber number (country/area/ext stripped).",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "number"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax Country Code",
+    "source_field": "Fax",
+    "source_label": "Split from the single Fax column.",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "country"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax Area Code",
+    "source_field": "Fax",
+    "source_label": "Split from the single Fax column.",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "area"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "source_label": "Local fax number (country/area stripped).",
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "number"}
+  },
+
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "source_label": "Derived: Email Transactions=Yes -> EMAIL, Fax Transactions=Yes -> FAX, else blank.",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "Medium",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
+        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "source_label": "Same Email/Fax Transaction derivation as Delivery Method.",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "Medium",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
+        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax Country Code",
+    "source_field": "Fax",
+    "source_label": "Split from the single Fax column.",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "country"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax Area Code",
+    "source_field": "Fax",
+    "source_label": "Split from the single Fax column.",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "area"}
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "source_label": "Local fax number (country/area stripped).",
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "Medium",
+    "rule_type": "PHONE_PART",
+    "rule_config": {"part": "number"}
+  }
+]

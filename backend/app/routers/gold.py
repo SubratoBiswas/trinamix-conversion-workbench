@@ -28,6 +28,7 @@ def _out(g: GoldStandard) -> dict:
         "id": str(g.id),
         "name": g.name,
         "target_object": g.target_object,
+        "client_id": str(g.client_id) if getattr(g, "client_id", None) else None,
         "template_id": str(g.template_id) if g.template_id else None,
         "template_name": g.template_name,
         "file_name": g.file_name,
@@ -47,8 +48,13 @@ def _out(g: GoldStandard) -> dict:
 
 
 @router.get("")
-async def list_gold(_: User = Depends(get_current_user)):
+async def list_gold(
+    client_id: str | None = None,
+    _: User = Depends(get_current_user),
+):
     golds = await GoldStandard.find_all().sort("-uploaded_at").to_list()
+    if client_id:
+        golds = [g for g in golds if str(getattr(g, "client_id", "")) == client_id]
     return {
         "items": [_out(g) for g in golds],
         # Objects whose gold rules are live but whose original file predates the

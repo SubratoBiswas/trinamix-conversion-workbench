@@ -16,6 +16,7 @@ def get_client() -> AsyncIOMotorClient:
 async def init_db() -> None:
     from beanie import init_beanie
     from app.models.user import User
+    from app.models.client import Client
     from app.models.project import Project
     from app.models.conversion import Conversion
     from app.models.dataset import Dataset, DatasetColumnProfile

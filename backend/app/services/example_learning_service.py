@@ -123,7 +123,8 @@ async def _upsert_mapping(conversion, field, *, source_column, default_value, co
         ).insert()
 
 
-async def _save_reference_standard(target_object, field, *, source_column, default_value, suppress=False):
+async def _save_reference_standard(target_object, field, *, source_column, default_value,
+                                   suppress=False, client_id=None):
     """Persist a reusable, OBJECT-LEVEL learned rule so a brand-new conversion of
     the same object auto-applies it on Generate Set — the learning engine's
     ``apply_learned_to_conversion`` re-reads these when auto-mapping.
@@ -150,6 +151,7 @@ async def _save_reference_standard(target_object, field, *, source_column, defau
         LearnedMapping.kind == kind,
         LearnedMapping.target_object == target_object,
         LearnedMapping.target_field == field.field_name,
+        LearnedMapping.client_id == client_id,
     )
     doc = {
         "kind": kind,
@@ -160,6 +162,7 @@ async def _save_reference_standard(target_object, field, *, source_column, defau
         "target_field": field.field_name,
         "rule_type": rtype,
         "rule_config": {"source_column": source_column, "default_value": default_value},
+        "client_id": client_id, "is_global": False,
         "captured_from": "gold example",
         "captured_at": datetime.utcnow(),
     }

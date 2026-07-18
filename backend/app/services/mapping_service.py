@@ -435,11 +435,14 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     learned_targets: set[str] = set()
     try:
         from app.models.learned import LearnedMapping
+        from app.services.client_service import client_id_for_conversion, scope_query
         bo = (template.business_object if template else None) or conversion.target_object
         if bo:
+            _scope = await scope_query(await client_id_for_conversion(conversion))
             for lm in await LearnedMapping.find({
                 "target_object": bo,
                 "kind": {"$in": ["column_mapping", "suppress_field"]},
+                **_scope,
             }).to_list():
                 if lm.target_field:
                     learned_targets.add(lm.target_field)

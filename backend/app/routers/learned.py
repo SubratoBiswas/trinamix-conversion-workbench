@@ -56,11 +56,12 @@ async def list_learned(
     category: Optional[str] = Query(None),
     project_id: Optional[str] = Query(None),
     target_object: Optional[str] = Query(None),
+    client_id: Optional[str] = Query(None, description="Client scope: a client id, or 'global'"),
     q: Optional[str] = Query(None, description="Free-text match on field / value"),
     limit: int = Query(0, ge=0, le=5000),
     _: User = Depends(get_current_user),
 ):
-    filters = []
+    filters: list = []
     if kind:
         filters.append(LearnedMapping.kind == kind)
     if category:
@@ -69,6 +70,14 @@ async def list_learned(
         filters.append(LearnedMapping.project_id == PydanticObjectId(project_id))
     if target_object:
         filters.append(LearnedMapping.target_object == target_object)
+    # Client scope: 'global' → only global rows; a client id → that client + global.
+    if client_id == "global":
+        filters.append({"is_global": True})
+    elif client_id:
+        try:
+            filters.append({"$or": [{"is_global": True}, {"client_id": PydanticObjectId(client_id)}]})
+        except Exception:
+            raise HTTPException(400, "Invalid client_id")
     query = LearnedMapping.find(*filters)
     items = await query.sort("-captured_at").to_list()
 
@@ -241,15 +250,23 @@ async def import_mappings(
 
 
 @router.get("/by-object")
-async def learned_by_object(_: User = Depends(get_current_user)):
+async def learned_by_object(
+    client_id: Optional[str] = Query(None, description="Client scope: a client id, or 'global'"),
+    _: User = Depends(get_current_user),
+):
     """What the tool has learned, grouped by the Oracle object it applies to.
 
     The flat registry is unusable once it passes a few hundred rows — and it gets
     there fast, because a single gold file can contribute hundreds of "leave this
     blank" rules. Nobody wants to scroll 978 rows to answer "what do we know about
-    Supplier?". This is that answer.
+    Supplier?". This is that answer. Optionally scoped to a client (+ global).
     """
     items = await LearnedMapping.find_all().to_list()
+    if client_id == "global":
+        items = [i for i in items if getattr(i, "is_global", False)]
+    elif client_id:
+        items = [i for i in items
+                 if getattr(i, "is_global", False) or str(getattr(i, "client_id", "")) == client_id]
 
     groups: dict[str, dict] = {}
     for i in items:

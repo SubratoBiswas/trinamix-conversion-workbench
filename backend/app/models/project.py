@@ -1,7 +1,7 @@
 """Project model."""
 from datetime import datetime, date
 from typing import List, Optional
-from beanie import Document
+from beanie import Document, PydanticObjectId
 from pydantic import Field
 
 PROJECT_STATUSES = ("planning","in_progress","ready_for_uat","complete","on_hold")
@@ -12,7 +12,8 @@ SOURCE_SYSTEMS = ("netsuite", "oracle_ebs", "sap", "dynamics", "manual")
 class Project(Document):
     name: str
     description: Optional[str] = None
-    client: Optional[str] = None
+    client: Optional[str] = None                       # legacy free-text label
+    client_id: Optional[PydanticObjectId] = None       # tenant this project belongs to
     target_environment: Optional[str] = None
     go_live_date: Optional[date] = None
     owner: str = "admin"

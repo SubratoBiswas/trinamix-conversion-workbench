@@ -45,16 +45,23 @@ async def _business_object_for(conversion: Conversion) -> str | None:
 
 
 async def _upsert_learned(kind, business_object, field_name, *, original, resolved,
-                          rule_type=None, rule_config=None, captured_from="auto-capture"):
+                          rule_type=None, rule_config=None, captured_from="auto-capture",
+                          client_id=None):
     """Upsert one reusable object-level learned rule. Never downgrades a rule
     captured from a gold example / prompt / accepted crosswalk with an
-    auto-captured one (human/gold signals outrank auto-capture)."""
+    auto-captured one (human/gold signals outrank auto-capture).
+
+    Captured learnings are CLIENT-SCOPED (is_global=False, client_id set) — they
+    encode one client's source data, so they must not leak to other clients. The
+    existing-row lookup is keyed by client too, so two clients keep independent
+    rules for the same object/field."""
     if not business_object or not field_name:
         return False
     existing = await LearnedMapping.find_one(
         LearnedMapping.kind == kind,
         LearnedMapping.target_object == business_object,
         LearnedMapping.target_field == field_name,
+        LearnedMapping.client_id == client_id,
     )
     if existing and existing.captured_from in ("gold example", "prompt", "value-map-accept") \
             and captured_from == "auto-capture":
@@ -65,6 +72,7 @@ async def _upsert_learned(kind, business_object, field_name, *, original, resolv
         "original_value": str(original), "resolved_value": str(resolved),
         "target_object": business_object, "target_field": field_name,
         "rule_type": rule_type, "rule_config": rule_config or {},
+        "client_id": client_id, "is_global": False,
         "captured_from": captured_from, "captured_at": datetime.utcnow(),
     }
     if existing:
@@ -84,6 +92,8 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
     business_object = await _business_object_for(conversion)
     if not business_object or not conversion.template_id:
         return {"captured": 0}
+    from app.services.client_service import client_id_for_conversion
+    _cid = await client_id_for_conversion(conversion)
     fields = {f.id: f.field_name for f in await FBDIField.find(
         FBDIField.template_id == conversion.template_id).to_list()}
     maps = await MappingSuggestion.find(
@@ -105,18 +115,20 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
         trustworthy = (m.status in ("approved", "overridden")) or ((m.confidence or 0) >= 0.60)
         if m.status == "not_applicable":
             if await _upsert_learned("suppress_field", business_object, fname,
-                                     original="(blank)", resolved="", rule_type="suppress"):
+                                     original="(blank)", resolved="", rule_type="suppress",
+                                     client_id=_cid):
                 n += 1
         elif m.source_column and trustworthy:
             st = m.suggested_transformation or {}
             if await _upsert_learned("column_mapping", business_object, fname,
                                      original=m.source_column, resolved=fname,
-                                     rule_type=st.get("rule_type"), rule_config=st.get("config")):
+                                     rule_type=st.get("rule_type"), rule_config=st.get("config"),
+                                     client_id=_cid):
                 n += 1
         elif m.default_value and trustworthy:
             if await _upsert_learned("example_default", business_object, fname,
                                      original="(default)", resolved=m.default_value,
-                                     rule_type="default"):
+                                     rule_type="default", client_id=_cid):
                 n += 1
     return {"captured": n, "object": business_object}
 
@@ -138,12 +150,16 @@ def _category_for(rule_type: str | None) -> str:
 
 async def _upsert(*, kind, category, original_value, resolved_value,
                   target_object=None, target_field=None, rule_type=None,
-                  rule_config=None, project_id=None, captured_from, captured_by) -> LearnedMapping:
+                  rule_config=None, project_id=None, captured_from, captured_by,
+                  client_id=None) -> LearnedMapping:
+    # Client-scoped (is_global=False): an interactively captured rule encodes one
+    # client's source data. Dedup is keyed by client too, so clients stay separate.
     query = {
         "kind": kind,
         "target_object": target_object,
         "target_field": target_field,
         "rule_type": rule_type,
+        "client_id": client_id,
     }
     norm_orig = _normalize(original_value)
     existing = await LearnedMapping.find(query).to_list()
@@ -153,7 +169,7 @@ async def _upsert(*, kind, category, original_value, resolved_value,
                 "resolved_value": resolved_value, "rule_config": rule_config or {},
                 "captured_from": captured_from, "captured_by": captured_by,
                 "captured_at": datetime.utcnow(),
-                "project_id": project_id,
+                "project_id": project_id, "client_id": client_id, "is_global": False,
             })
             return lm
     lm = LearnedMapping(
@@ -161,6 +177,7 @@ async def _upsert(*, kind, category, original_value, resolved_value,
         resolved_value=resolved_value, target_object=target_object,
         target_field=target_field, rule_type=rule_type, rule_config=rule_config or {},
         project_id=project_id, captured_from=captured_from, captured_by=captured_by,
+        client_id=client_id, is_global=False,
     )
     await lm.insert()
     return lm
@@ -190,12 +207,14 @@ async def record_learning_from_mapping(
         rule_type = mapping.suggested_transformation.get("rule_type")
         rule_config = mapping.suggested_transformation.get("config", {})
     captured_from = f"{conversion.name} -- {target_field}"
+    from app.services.client_service import client_id_for_conversion
+    _cid = await client_id_for_conversion(conversion)
     lm = await _upsert(
         kind="column_mapping", category="Column Mapping Alias",
         original_value=mapping.source_column, resolved_value=target_field,
         target_object=business_object, target_field=target_field,
         rule_type=rule_type, rule_config=rule_config,
-        project_id=conversion.project_id,
+        project_id=conversion.project_id, client_id=_cid,
         captured_from=captured_from, captured_by=captured_by,
     )
     if rule_type and _is_master_key_field(business_object, target_field):
@@ -204,7 +223,7 @@ async def record_learning_from_mapping(
             original_value=target_field, resolved_value=target_field,
             target_object=business_object, target_field=target_field,
             rule_type=rule_type, rule_config=rule_config,
-            project_id=conversion.project_id,
+            project_id=conversion.project_id, client_id=_cid,
             captured_from=captured_from, captured_by=captured_by,
         )
     return lm
@@ -224,12 +243,14 @@ async def record_learning_from_rule(
     if not target_field:
         return None
     captured_from = f"{conversion.name} -- {target_field} (manual)"
+    from app.services.client_service import client_id_for_conversion
+    _cid = await client_id_for_conversion(conversion)
     lm = await _upsert(
         kind="rule", category=_category_for(rule.rule_type),
         original_value=rule.source_column or "", resolved_value=target_field,
         target_object=business_object, target_field=target_field,
         rule_type=rule.rule_type, rule_config=rule.rule_config or {},
-        project_id=conversion.project_id,
+        project_id=conversion.project_id, client_id=_cid,
         captured_from=captured_from, captured_by=captured_by,
     )
     if _is_master_key_field(business_object, target_field):
@@ -238,7 +259,7 @@ async def record_learning_from_rule(
             original_value=target_field, resolved_value=target_field,
             target_object=business_object, target_field=target_field,
             rule_type=rule.rule_type, rule_config=rule.rule_config or {},
-            project_id=conversion.project_id,
+            project_id=conversion.project_id, client_id=_cid,
             captured_from=captured_from, captured_by=captured_by,
         )
     return lm
@@ -261,11 +282,15 @@ async def apply_learned_to_conversion(
     business_object = await _business_object_for(conversion)
     if not business_object:
         return 0
+    # Tenant scope: only this client's learnings + anything global. Prevents a
+    # future client inheriting NextPower's source-system mappings.
+    from app.services.client_service import client_id_for_conversion, scope_query
+    _scope = await scope_query(await client_id_for_conversion(conversion))
     learned = await LearnedMapping.find({
-        "kind": "column_mapping", "target_object": business_object
+        "kind": "column_mapping", "target_object": business_object, **_scope
     }).to_list()
     suppressed = await LearnedMapping.find({
-        "kind": "suppress_field", "target_object": business_object
+        "kind": "suppress_field", "target_object": business_object, **_scope
     }).to_list()
     if not learned and not suppressed:
         return 0
@@ -339,7 +364,7 @@ async def apply_learned_to_conversion(
     # them WITHOUT the user re-uploading the gold file. Only fills targets that
     # are still "suggested" (i.e. not covered by a learned column mapping above).
     defaults = await LearnedMapping.find({
-        "kind": "example_default", "target_object": business_object
+        "kind": "example_default", "target_object": business_object, **_scope
     }).to_list()
     if defaults:
         by_default: dict[str, LearnedMapping] = {}

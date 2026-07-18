@@ -38,6 +38,7 @@ import { RuleLibraryPage } from "@/pages/RuleLibraryPage";
 import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
+import { ClientsPage } from "@/pages/ClientsPage";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const token = useAuth((s) => s.token);
@@ -68,6 +69,9 @@ const App: React.FC = () => {
         <Route path="fbdi"                   element={<FbdiTemplatesPage />} />
         <Route path="fbdi/:id"               element={<FbdiTemplateDetailPage />} />
         <Route path="gold"                   element={<GoldStandardsPage />} />
+
+        {/* Clients (tenants) */}
+        <Route path="clients"                element={<ClientsPage />} />
 
         {/* Engagements */}
         <Route path="projects"               element={<ProjectsPage />} />

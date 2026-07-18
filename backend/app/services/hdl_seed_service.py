@@ -58,6 +58,7 @@ async def ensure_employee_hdl() -> dict:
             name=_TEMPLATE_NAME,
             module=_MODULE,
             business_object=HDL_BUSINESS_OBJECT,
+            is_global=True,  # Oracle-standard HDL template applies to every client
             version="1.0",
             required_field_count=sum(
                 1 for _, _, fields in comps for f in fields if f.get("required")

@@ -34,6 +34,7 @@ from app.routers import cutover_slice6 as cutover_slice6_router
 from app.routers import copilot as copilot_router
 from app.routers import fusion as fusion_router
 from app.routers import settings as settings_router
+from app.routers import clients as clients_router
 
 
 async def _run_seeds_background() -> None:
@@ -45,6 +46,15 @@ async def _run_seeds_background() -> None:
     idempotent, so running them concurrently with live traffic is safe.
     """
     log = logging.getLogger(__name__)
+    try:
+        # Tenant bootstrap: ensure the NextPower (default) client exists and tag all
+        # pre-multi-tenant data (templates+catalog global; everything else NextPower).
+        # Idempotent — a no-op once tagged.
+        from app.services.client_service import run_client_scope_migration
+        r = await run_client_scope_migration()
+        log.info("startup seed — client scope migration: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("client scope migration failed")
     try:
         from app.services.template_seed_service import seed_fbdi_templates
         r = await seed_fbdi_templates()
@@ -92,6 +102,14 @@ async def _run_seeds_background() -> None:
         log.info("startup seed — supplier field mappings: %s", r)
     except Exception:  # noqa: BLE001
         log.exception("supplier field mapping seed failed")
+    try:
+        # Analyst-confirmed supplier transforms (Raman feedback): Delivery Method/
+        # Channel derivation, Phone/Fax split, Use Withholding Tax <- Default WT Code.
+        from app.services.catalog_seed_service import seed_supplier_transform_mappings
+        r = await seed_supplier_transform_mappings()
+        log.info("startup seed — supplier transform rules: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier transform seed failed")
     try:
         # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
         # Fusion Customer Import): account/party key references + name/tax/email/
@@ -200,5 +218,6 @@ app.include_router(source_connections_router.router)
 app.include_router(cutover_slice6_router.router)
 app.include_router(copilot_router.router)
 app.include_router(settings_router.router)
+app.include_router(clients_router.router)
 app.include_router(fusion_router.router)
 app.include_router(fusion_router.conv_router)

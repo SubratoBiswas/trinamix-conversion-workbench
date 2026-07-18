@@ -40,6 +40,28 @@ export const AuthApi = {
   me: () => api.get<User>("/auth/me").then(r => r.data),
 };
 
+// ─── Clients (tenants) ───
+export interface ClientSummary {
+  id: string;
+  name: string;
+  code?: string | null;
+  description?: string | null;
+  is_default: boolean;
+  active: boolean;
+  counts: { learnings: number; gold: number; projects: number; templates: number };
+}
+export const ClientsApi = {
+  list: () =>
+    api.get<{ clients: ClientSummary[]; global: { learnings: number; templates: number } }>("/clients")
+      .then(r => r.data),
+  create: (body: { name: string; code?: string; description?: string }) =>
+    api.post<ClientSummary>("/clients", body).then(r => r.data),
+  update: (
+    id: string,
+    body: Partial<{ name: string; code: string; description: string; active: boolean; is_default: boolean }>,
+  ) => api.patch<ClientSummary>(`/clients/${id}`, body).then(r => r.data),
+};
+
 export const DatasetsApi = {
   list: () => api.get<Dataset[]>("/datasets").then(r => r.data),
   get: (id: string) => api.get<DatasetDetail>(`/datasets/${id}`).then(r => r.data),
@@ -587,12 +609,14 @@ export interface LearnedObjectGroup {
 export const LearningApi = {
   list: (params?: {
     kind?: string; category?: string; project_id?: string;
-    target_object?: string; q?: string; limit?: number;
+    target_object?: string; client_id?: string; q?: string; limit?: number;
   }) =>
     api.get<LearnedMapping[]>("/learned-mappings", { params }).then(r => r.data),
-  /** Learnings grouped by the object they apply to — the way people actually look for them. */
-  byObject: () =>
-    api.get<{ objects: LearnedObjectGroup[]; total: number }>("/learned-mappings/by-object")
+  /** Learnings grouped by the object they apply to — the way people actually look for them.
+   *  Optionally scoped to a client id (or the literal "global"). */
+  byObject: (clientId?: string) =>
+    api.get<{ objects: LearnedObjectGroup[]; total: number }>("/learned-mappings/by-object",
+      { params: clientId ? { client_id: clientId } : undefined })
       .then(r => r.data),
   /** Every object a mapping row can be keyed to: canonical Oracle FBDI objects +
    *  loaded templates + already-learned objects. Used to populate the object picker. */

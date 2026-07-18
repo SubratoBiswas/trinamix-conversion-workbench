@@ -14,7 +14,7 @@ import type { InheritedStandard, ReferenceStandard } from "@/api";
 import { RuleAuthorModal } from "@/components/transforms/RuleAuthorModal";
 import CodedValuesPanel from "@/components/transforms/CodedValuesPanel";
 import {
-  Button, Card, CardBody, EmptyState, PageLoader, PageTitle, Pill, Spinner,
+  Button, Card, CardBody, EmptyState, Modal, PageLoader, PageTitle, Pill, Spinner,
 } from "@/components/ui/Primitives";
 import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
 import { buildRecommendations, type Recommendation } from "@/lib/recommendations";
@@ -152,6 +152,8 @@ export const MappingReviewPage: React.FC = () => {
   // pre-bound to the inspected mapping.
   const [ruleAuthorOpen, setRuleAuthorOpen] = useState(false);
   const [ruleAuthorMapping, setRuleAuthorMapping] = useState<MappingSuggestion | null>(null);
+  // Split-one-source-into-many / combine-many-into-one column mapping modal.
+  const [compositeOpen, setCompositeOpen] = useState(false);
 
   // Load all conversions + engagements on mount. We deliberately do NOT
   // auto-select a conversion: with none selected the page shows a project-wise
@@ -840,6 +842,17 @@ export const MappingReviewPage: React.FC = () => {
             <span className="ml-1 text-xs">Reset gold defaults</span>
           </button>
 
+          <Button
+            onClick={() => setCompositeOpen(true)}
+            variant="secondary"
+            className="!h-8"
+            disabled={!pid || targetFields.length === 0}
+            title="Split one source column into several fields (e.g. phone → country/area/number), or combine several source columns into one"
+          >
+            <ArrowLeftRight className="h-3.5 w-3.5" />
+            <span className="ml-1 text-xs">Split / combine</span>
+          </Button>
+
           <Button onClick={suggest} loading={running} variant="primary" className="!h-8">
             <Sparkles className="h-3.5 w-3.5" />
             {mappings.length ? "Re-run AI" : "Run AI Mapping"}
@@ -1153,7 +1166,220 @@ export const MappingReviewPage: React.FC = () => {
           onSaved={() => { setRuleAuthorOpen(false); flash("Rule saved & added to library"); }}
         />
       )}
+
+      {pid && (
+        <CompositeMappingModal
+          open={compositeOpen}
+          conversionId={pid}
+          sourceColumns={sourceColumns}
+          targetFields={targetFields}
+          mappings={mappings}
+          onClose={() => setCompositeOpen(false)}
+          onDone={async (msg) => { setCompositeOpen(false); flash(msg); await loadAll(); }}
+        />
+      )}
     </div>
+  );
+};
+
+// ─── Split / combine columns ─────────────────────────────────────────────────
+// One source column → several target fields (phone → country/area/extension/
+// number, or a delimited value → parts), or several source columns → one target
+// (CONCAT). Wires the mapping + its transform via the existing MappingApi so it
+// flows straight into Generate.
+const CompositeMappingModal: React.FC<{
+  open: boolean;
+  conversionId: number;
+  sourceColumns: DatasetColumnProfile[];
+  targetFields: FBDIField[];
+  mappings: MappingSuggestion[];
+  onClose: () => void;
+  onDone: (msg: string) => void | Promise<void>;
+}> = ({ open, conversionId, sourceColumns, targetFields, mappings, onClose, onDone }) => {
+  const [mode, setMode] = useState<"split" | "combine">("split");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // split
+  const [srcCol, setSrcCol] = useState("");
+  const [preset, setPreset] = useState<"phone" | "delimiter">("phone");
+  const [phoneParts, setPhoneParts] = useState<Record<string, string>>({}); // part -> target field id
+  const [sep, setSep] = useState("-");
+  const [splitRows, setSplitRows] = useState<{ fieldId: string; index: number }[]>([{ fieldId: "", index: 0 }]);
+
+  // combine
+  const [combineTarget, setCombineTarget] = useState("");
+  const [combineCols, setCombineCols] = useState<string[]>([]);
+  const [combineSep, setCombineSep] = useState(" ");
+
+  React.useEffect(() => {
+    if (open) {
+      setMode("split"); setErr(null); setSrcCol(""); setPreset("phone");
+      setPhoneParts({}); setSep("-"); setSplitRows([{ fieldId: "", index: 0 }]);
+      setCombineTarget(""); setCombineCols([]); setCombineSep(" ");
+    }
+  }, [open]);
+
+  const colName = (c: DatasetColumnProfile) => (c as any).column_name ?? (c as any).name ?? "";
+  const mapByField = new Map(mappings.map((m) => [String(m.target_field_id), m]));
+
+  const applyOne = async (fieldId: string, sourceColumn: string, rule_type: string, config: any) => {
+    const existing = mapByField.get(String(fieldId));
+    if (existing) {
+      await MappingApi.update(String(existing.id), {
+        source_column: sourceColumn, status: "overridden",
+        suggested_transformation: { rule_type, config } as any,
+      });
+    } else {
+      await MappingApi.addRule(String(conversionId), {
+        target_field_id: fieldId, source_column: sourceColumn, rule_type, rule_config: config,
+      });
+    }
+  };
+
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      if (mode === "split") {
+        if (!srcCol) throw new Error("Pick the source column to split.");
+        let n = 0;
+        if (preset === "phone") {
+          for (const [part, fid] of Object.entries(phoneParts)) {
+            if (!fid) continue;
+            await applyOne(fid, srcCol, "PHONE_PART", { part });
+            n++;
+          }
+          if (!n) throw new Error("Assign at least one phone part to a target field.");
+        } else {
+          for (const row of splitRows) {
+            if (!row.fieldId) continue;
+            await applyOne(row.fieldId, srcCol, "SPLIT", { separator: sep, index: row.index });
+            n++;
+          }
+          if (!n) throw new Error("Add at least one part → target field.");
+        }
+        await onDone(`Split ${srcCol} into ${n} field${n === 1 ? "" : "s"}.`);
+      } else {
+        if (!combineTarget) throw new Error("Pick the target field to combine into.");
+        if (combineCols.length < 2) throw new Error("Pick at least two source columns to combine.");
+        await applyOne(combineTarget, combineCols[0], "CONCAT", { columns: combineCols, separator: combineSep });
+        await onDone(`Combined ${combineCols.length} columns into the target field.`);
+      }
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? e?.message ?? "Could not apply.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fieldSelect = (value: string, onChange: (v: string) => void, placeholder: string) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-md border border-line px-2 py-1.5 text-xs">
+      <option value="">{placeholder}</option>
+      {targetFields.map((f) => <option key={String(f.id)} value={String(f.id)}>{f.field_name}</option>)}
+    </select>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} size="lg" title="Split / combine columns"
+      footer={<>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button onClick={() => void submit()} loading={busy}>Apply</Button>
+      </>}>
+      <div className="space-y-4 text-sm">
+        <div className="flex gap-1.5">
+          {(["split", "combine"] as const).map((mo) => (
+            <button key={mo} onClick={() => setMode(mo)}
+              className={cn("rounded-md border px-3 py-1 text-xs",
+                mode === mo ? "border-brand bg-brand text-white" : "border-line text-ink-muted hover:text-ink")}>
+              {mo === "split" ? "One source → many fields" : "Many sources → one field"}
+            </button>
+          ))}
+        </div>
+
+        {mode === "split" ? (
+          <>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Source column to split</div>
+              <select value={srcCol} onChange={(e) => setSrcCol(e.target.value)}
+                className="w-full rounded-md border border-line px-2 py-1.5 text-xs">
+                <option value="">Choose a source column…</option>
+                {sourceColumns.map((c) => <option key={colName(c)} value={colName(c)}>{colName(c)}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-1.5">
+              {(["phone", "delimiter"] as const).map((p) => (
+                <button key={p} onClick={() => setPreset(p)}
+                  className={cn("rounded-md border px-2.5 py-1 text-[11px]",
+                    preset === p ? "border-brand bg-brand-subtle text-brand-dark" : "border-line text-ink-muted")}>
+                  {p === "phone" ? "Phone / Fax parts" : "Split by delimiter"}
+                </button>
+              ))}
+            </div>
+            {preset === "phone" ? (
+              <div className="space-y-2">
+                <p className="text-[11px] text-ink-muted">Assign each phone part to its FBDI field (leave blank to skip).</p>
+                {(["country", "area", "extension", "number"] as const).map((part) => (
+                  <div key={part} className="flex items-center gap-2">
+                    <span className="w-24 text-xs capitalize text-ink-muted">{part}</span>
+                    {fieldSelect(phoneParts[part] || "", (v) => setPhoneParts((s) => ({ ...s, [part]: v })), "— target field —")}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-24 text-xs text-ink-muted">Delimiter</span>
+                  <input value={sep} onChange={(e) => setSep(e.target.value)}
+                    className="w-24 rounded-md border border-line px-2 py-1.5 text-xs" />
+                </div>
+                {splitRows.map((row, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-24 text-xs text-ink-muted">Part #{row.index}</span>
+                    {fieldSelect(row.fieldId, (v) => setSplitRows((rows) => rows.map((r, j) => j === i ? { ...r, fieldId: v } : r)), "— target field —")}
+                    <input type="number" value={row.index}
+                      onChange={(e) => setSplitRows((rows) => rows.map((r, j) => j === i ? { ...r, index: Number(e.target.value) } : r))}
+                      className="w-16 rounded-md border border-line px-2 py-1.5 text-xs" />
+                  </div>
+                ))}
+                <Button variant="ghost" onClick={() => setSplitRows((r) => [...r, { fieldId: "", index: r.length }])}>+ Add part</Button>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Combine into target field</div>
+              {fieldSelect(combineTarget, setCombineTarget, "Choose the FBDI field…")}
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Source columns (in order)</div>
+              <div className="max-h-40 space-y-1 overflow-auto rounded-md border border-line p-2">
+                {sourceColumns.map((c) => {
+                  const name = colName(c);
+                  const idx = combineCols.indexOf(name);
+                  return (
+                    <label key={name} className="flex items-center gap-2 text-xs">
+                      <input type="checkbox" checked={idx >= 0}
+                        onChange={(e) => setCombineCols((cols) => e.target.checked ? [...cols, name] : cols.filter((x) => x !== name))} />
+                      <span className="font-mono text-ink">{name}</span>
+                      {idx >= 0 && <span className="text-[10px] text-ink-subtle">#{idx + 1}</span>}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-ink-muted">Separator</span>
+              <input value={combineSep} onChange={(e) => setCombineSep(e.target.value)}
+                className="w-24 rounded-md border border-line px-2 py-1.5 text-xs" />
+            </div>
+          </>
+        )}
+
+        {err && <div className="rounded-lg border border-danger/30 bg-danger-subtle p-2.5 text-xs text-danger">{err}</div>}
+      </div>
+    </Modal>
   );
 };
 

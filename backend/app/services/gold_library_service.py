@@ -225,6 +225,10 @@ async def create_gold_standard(
             uploaded_by=user_email,
             match_confidence=confidence,
         )
+        # Gold is a client's approved output → client-scoped (grouped by client in
+        # the library). Defaults to the bootstrap client until the UI passes one.
+        from app.services.client_service import default_client_id
+        gold.client_id = await default_client_id()
 
         if template is None:
             gold.status = "unmatched"

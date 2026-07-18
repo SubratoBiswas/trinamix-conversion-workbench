@@ -38,8 +38,30 @@ async def _get_reference_standards(target_object: str | None) -> dict:
 _TRANSFORM_CHUNK_ROWS = 25_000
 
 
+def _rule_referenced_columns(rules: list[dict]) -> set[str]:
+    """Source columns a rule reads OTHER than the cell's own mapped column —
+    CASE_WHEN/CONDITIONAL ``if_column`` and CONCAT/COALESCE ``columns``. These must
+    survive source-column pruning and be present in the per-row context, otherwise a
+    derivation from a non-mapped column (e.g. Delivery Method from Email/Fax
+    Transaction flags) silently sees blanks."""
+    cols: set[str] = set()
+    for r in rules or []:
+        cfg = r.get("config") or {}
+        rt = (r.get("rule_type") or "").upper()
+        if rt in ("CONCAT", "COALESCE"):
+            cols.update(c for c in (cfg.get("columns") or []) if c)
+        elif rt == "CONDITIONAL" and cfg.get("if_column"):
+            cols.add(cfg["if_column"])
+        elif rt == "CASE_WHEN":
+            for br in cfg.get("branches") or []:
+                if br.get("if_column"):
+                    cols.add(br["if_column"])
+    return cols
+
+
 def _transform_frame(
     src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
+    context_cols: set[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -47,6 +69,10 @@ def _transform_frame(
     cross-row state — running it per chunk and concatenating is byte-identical to
     running it on the whole frame. Sequence numbering and whole-column-blank
     control defaults are applied later on the full frame in ``_apply_control_defaults``.
+
+    ``context_cols`` are extra source columns (referenced by CASE_WHEN/CONCAT/
+    COALESCE rules but not themselves a mapped cell) that must appear in the per-row
+    context so those rules can read them.
     """
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
@@ -55,6 +81,7 @@ def _transform_frame(
         m.source_column for m in sorted_mappings
         if m.source_column and m.source_column in src.columns
     }
+    ctx_all = list(needed_cols | {c for c in (context_cols or set()) if c in src.columns})
     col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
     records: list[dict] | None = None
     for m in sorted_mappings:
@@ -70,8 +97,7 @@ def _transform_frame(
             src_vals = col_cache[m.source_column]
             if rules:
                 if records is None:
-                    ctx_cols = [c for c in needed_cols if c in src.columns]
-                    records = src[ctx_cols].to_dict("records") if ctx_cols else src.to_dict("records")
+                    records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
                 col_values = []
                 for i in range(n_rows):
                     v = apply_pipeline(rules, src_vals[i], row=records[i])
@@ -134,8 +160,18 @@ async def build_converted_dataframe(
     # free-tier limit (the request died at the gateway and the browser reported it
     # as a CORS error). Rule contexts reference source columns too, so keep any
     # column named by a mapping OR a transformation rule config.
+    # Columns referenced by a seeded/applied transform (CASE_WHEN if_column,
+    # CONCAT/COALESCE columns) arrive on the mapping's suggested_transformation and
+    # may not be a mapped cell themselves — keep them so the derivation can read them.
+    _ref_from_sugg: set[str] = set()
+    for _m in mappings:
+        _st = getattr(_m, "suggested_transformation", None)
+        if _st:
+            _ref_from_sugg |= _rule_referenced_columns(
+                [{"rule_type": _st.get("rule_type"), "config": _st.get("config", {})}]
+            )
     try:
-        needed_src = {m.source_column for m in mappings if m.source_column}
+        needed_src = {m.source_column for m in mappings if m.source_column} | _ref_from_sugg
         if needed_src and len(src.columns) > len(needed_src) + 4:
             keep = [c for c in src.columns if c in needed_src]
             if keep:
@@ -157,6 +193,12 @@ async def build_converted_dataframe(
                 {"rule_type": r.rule_type, "config": r.rule_config or {}}
             )
 
+    # Extra per-row context columns for rule evaluation: suggested-transform refs
+    # (kept above) plus any referenced by explicit transformation-rule pipelines.
+    _ctx_cols: set[str] = set(_ref_from_sugg)
+    for _rules in pipelines.values():
+        _ctx_cols |= _rule_referenced_columns(_rules)
+
     # Order mappings by target field sequence once (metadata — cheap, row-count
     # independent). The heavy per-column transform runs on row CHUNKS in a worker
     # thread (asyncio.to_thread) so it (a) never blocks the event loop / other
@@ -170,14 +212,14 @@ async def build_converted_dataframe(
     n_total = len(src)
     if n_total <= _TRANSFORM_CHUNK_ROWS:
         out_df, lineage = await asyncio.to_thread(
-            _transform_frame, src, sorted_mappings, fields_by_id, pipelines
+            _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols
         )
     else:
         parts: list[pd.DataFrame] = []
         lineage = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
-            odf, lin = await asyncio.to_thread(_transform_frame, chunk, sorted_mappings, fields_by_id, pipelines)
+            odf, lin = await asyncio.to_thread(_transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols)
             parts.append(odf)
             if not lineage:
                 lineage = lin
@@ -254,6 +296,27 @@ def _blank_null_sentinels(df: pd.DataFrame) -> pd.DataFrame:
 def _dedup(cols: list[str]) -> list[str]:
     seen: set[str] = set()
     return [c for c in cols if not (c in seen or seen.add(c))]
+
+
+# Supplier email masking: on a test / migration supplier load, real e-mail
+# addresses in the file can make Oracle fire supplier/contact notifications. We
+# neutralise them by prefixing "xx" (so "ap@x.com" -> "xxap@x.com", an invalid
+# address that won't route). Applied to any email-named column of a Supplier
+# object at generate. Idempotent (won't double-prefix) and skips blanks.
+_SUPPLIER_EMAIL_PREFIX = "xx"
+
+
+def _mask_supplier_emails(df: pd.DataFrame, prefix: str = _SUPPLIER_EMAIL_PREFIX) -> pd.DataFrame:
+    for col in df.columns:
+        key = re.sub(r"[^a-z0-9]", "", str(col).lower())
+        if "email" not in key:
+            continue
+        s = df[col].astype(str)
+        mask = s.str.strip().ne("") & ~s.str.strip().str.lower().isin(_NULL_SENTINELS) \
+            & ~s.str.startswith(prefix)
+        if mask.any():
+            df.loc[mask, col] = prefix + s[mask]
+    return df
 
 
 def _safe_sheet_name(s: str) -> str:
@@ -492,6 +555,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
         sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys)
+        # Supplier safety: neutralise e-mail columns so a migration/test load can't
+        # trigger real supplier notifications. Runs while columns are still keyed by
+        # field_name (before the header rename below).
+        if _is_supplier:
+            sdf = _mask_supplier_emails(sdf)
         hdr: dict[str, str] = {}
         for f in sfields:
             hdr.setdefault(f.field_name, _header_label(f))
@@ -513,6 +581,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
     # unless the source genuinely carries that content. Same over-population rule.
     _is_item = ("item" in (obj_name or "").lower()) or any(
         "egpsystemitems" in _safe_sheet_name(s.sheet_name).lower().replace("_", "")
+        for s in sheets_with_fields
+    )
+    # Supplier object (Import / Address / Site / Contacts / Banks) — drives the
+    # e-mail masking in _finalize. Matches the object name or a POZ_/supplier sheet.
+    _is_supplier = ("supplier" in (obj_name or "").lower()) or any(
+        _safe_sheet_name(s.sheet_name).lower().startswith("poz_")
+        or "supplier" in _safe_sheet_name(s.sheet_name).lower()
         for s in sheets_with_fields
     )
 

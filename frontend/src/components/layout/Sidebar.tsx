@@ -4,7 +4,7 @@ import {
   Home, Database, FileSpreadsheet, Boxes, Workflow as WfIcon,
   Sparkles, ListChecks, ShieldCheck, Cloud, Network, BookOpen,
   Library, ArrowLeftRight, BadgeCheck, Eye, AlertTriangle, Layers,
-  CircleDot, Activity, Award,
+  CircleDot, Activity, Award, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversionsApi, ProjectsApi } from "@/api";
@@ -36,6 +36,7 @@ const GROUPS: NavGroup[] = [
   {
     label: "Conversion Workbench",
     items: [
+      { to: "/clients", label: "Clients", icon: Building2 },
       { to: "/projects", label: "Projects", icon: Boxes },
       { to: "/conversions", label: "Conversion Objects", icon: Layers },
       { to: "/workflows", label: "Dataflows", icon: WfIcon },

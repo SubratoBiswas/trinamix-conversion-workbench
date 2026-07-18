@@ -141,12 +141,16 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     by_fid = {m.target_field_id: m for m in maps}
     target_object = conversion.target_object or ""
 
-    # Reusable constants captured from gold examples for this object.
+    # Reusable constants captured from gold examples for this object — scoped to
+    # this conversion's client (+ global) so another client's defaults don't show.
     learned: dict[str, str] = {}
     if target_object:
+        from app.services.client_service import client_id_for_conversion, scope_query
+        _scope = await scope_query(await client_id_for_conversion(conversion))
         async for lm in LearnedMapping.find(
             LearnedMapping.kind == "example_default",
             LearnedMapping.target_object == target_object,
+            _scope,
         ):
             if lm.target_field and lm.resolved_value:
                 learned[_norm(lm.target_field)] = lm.resolved_value

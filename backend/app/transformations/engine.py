@@ -294,6 +294,69 @@ def apply_rule(
             return ctx.get("current_user", "")
         return value
 
+    if rt == "PREFIX":
+        # Prepend a fixed string. Used e.g. to neutralise supplier emails ("xx" +
+        # addr) so a test/migration load can't trigger real notifications. Skips
+        # blanks and is idempotent (won't double-prefix).
+        s = _to_str(value)
+        if cfg.get("skip_blank", True) and s.strip() == "":
+            return value
+        pre = _to_str(cfg.get("prefix", ""))
+        if pre and cfg.get("skip_if_present", True) and s.startswith(pre):
+            return s
+        return pre + s
+
+    if rt == "SUFFIX":
+        s = _to_str(value)
+        if cfg.get("skip_blank", True) and s.strip() == "":
+            return value
+        suf = _to_str(cfg.get("suffix", ""))
+        if suf and cfg.get("skip_if_present", True) and s.endswith(suf):
+            return s
+        return s + suf
+
+    if rt == "PHONE_PART":
+        # Split a single phone/fax string into its Oracle parts. Handles the common
+        # legacy forms: "+91 22 1234567", "+1 (415) 555-0100 x23", "0044-20-7946-0000".
+        # config: {"part": "country" | "area" | "number" | "extension"}. Deterministic
+        # (no per-format regex config needed); unknown/degenerate inputs return "".
+        part = (cfg.get("part") or "number").lower()
+        raw = _to_str(value).strip()
+        if not raw:
+            return ""
+        # 1) pull an extension off the end, if any.
+        ext = ""
+        mext = re.search(r"(?i)(?:ext|extn|extension|x)\.?\s*(\d{1,6})\s*$", raw)
+        if mext:
+            ext = mext.group(1)
+            raw = raw[:mext.start()].strip()
+        if part == "extension":
+            return ext
+        has_plus = raw.lstrip().startswith("+") or raw.lstrip().startswith("00")
+        # 2) tokenize into digit groups (preserving order); a leading 00 is an
+        # international prefix, treat like '+'.
+        body = raw.lstrip()
+        if body.startswith("00"):
+            body = body[2:]
+            has_plus = True
+        groups = re.findall(r"\d+", body)
+        if not groups:
+            return ""
+        country = area = ""
+        rest = list(groups)
+        if has_plus:
+            country = rest.pop(0)
+        if part == "country":
+            return country
+        # area code = the next group when there are still >=2 groups left (so a
+        # bare local number isn't misread as an area code).
+        if len(rest) >= 2:
+            area = rest.pop(0)
+        if part == "area":
+            return area
+        # number = whatever remains, concatenated.
+        return "".join(rest)
+
     if rt == "CROSSWALK_LOOKUP":
         # Look up ``value`` in a named crosswalk that the caller has loaded
         # into ctx['crosswalks'][<name>] as a {source_value: target_value} dict.

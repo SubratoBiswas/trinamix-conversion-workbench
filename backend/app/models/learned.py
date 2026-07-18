@@ -15,6 +15,12 @@ class LearnedMapping(Document):
     target_field: Optional[str] = None
     rule_type: Optional[str] = None
     rule_config: Optional[dict] = None
+    # Tenant scope. A client-scoped learning applies only to conversions of that
+    # client; a global learning (is_global=True, client_id=None) applies to all
+    # clients. Legacy rows with neither set are treated as the default client by
+    # the scoping query (back-compat) until the migration tags them.
+    client_id: Optional[PydanticObjectId] = None
+    is_global: bool = False
     project_id: Optional[PydanticObjectId] = None
     captured_from: Optional[str] = None
     captured_by: Optional[str] = None
