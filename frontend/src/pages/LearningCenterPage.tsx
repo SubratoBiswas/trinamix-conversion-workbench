@@ -252,6 +252,7 @@ export const LearningCenterPage: React.FC = () => {
   const [knownObjects, setKnownObjects] = useState<string[]>([]);
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientFilter, setClientFilter] = useState<string>("");  // "" = all, "global", or a client id
+  const [targetFilter, setTargetFilter] = useState<string>("");  // "" = all target objects, else an object name
 
   const refresh = async (pid?: string, cf: string = clientFilter) => {
     const params = pid ? { project_id: pid } : undefined;
@@ -308,6 +309,19 @@ export const LearningCenterPage: React.FC = () => {
                 ))}
               </select>
             )}
+            {groups && groups.length > 0 && (
+              <select
+                value={targetFilter}
+                onChange={e => setTargetFilter(e.target.value)}
+                title="Filter by target FBDI object"
+                className="h-9 rounded-md border border-line bg-white pl-3 pr-8 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              >
+                <option value="">All target FBDI</option>
+                {groups.map(g => (
+                  <option key={g.target_object} value={g.target_object}>{g.target_object}</option>
+                ))}
+              </select>
+            )}
             {projects.length > 0 && (
               <select
                 value={selectedProjectId}
@@ -361,7 +375,7 @@ export const LearningCenterPage: React.FC = () => {
             subtitle="Each object carries its own rules. They're applied automatically whenever you generate that object — no re-teaching."
           />
           <CardBody className="p-0">
-            {groups.map(g => (
+            {groups.filter(g => !targetFilter || g.target_object === targetFilter).map(g => (
               <ObjectRow
                 key={g.target_object}
                 group={g}

@@ -33,19 +33,33 @@ class ClientPatch(BaseModel):
     is_default: bool | None = None
 
 
+async def _safe_count(query) -> int:
+    """A count that never raises — a single failing sub-query must not 500 the
+    whole clients page (and get masked as a CORS error in the browser)."""
+    try:
+        return await query.count()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 async def _counts(client_id) -> dict:
     return {
-        "learnings": await LearnedMapping.find(LearnedMapping.client_id == client_id).count(),
-        "gold": await GoldStandard.find(GoldStandard.client_id == client_id).count(),
-        "projects": await Project.find(Project.client_id == client_id).count(),
-        "templates": await FBDITemplate.find(FBDITemplate.client_id == client_id).count(),
+        "learnings": await _safe_count(LearnedMapping.find(LearnedMapping.client_id == client_id)),
+        "gold": await _safe_count(GoldStandard.find(GoldStandard.client_id == client_id)),
+        "projects": await _safe_count(Project.find(Project.client_id == client_id)),
+        "templates": await _safe_count(FBDITemplate.find(FBDITemplate.client_id == client_id)),
     }
 
 
 @router.get("")
 async def list_clients(_: User = Depends(get_current_user)):
-    await ensure_default_client()
-    clients = await Client.find_all().to_list()
+    # Whole body guarded: a runtime error here previously surfaced in the browser as
+    # an opaque CORS failure (Starlette serves 500s outside the CORS middleware).
+    try:
+        await ensure_default_client()
+        clients = await Client.find_all().to_list()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, f"Clients are still initialising — retry shortly ({exc}).")
     out = []
     for c in clients:
         out.append({
@@ -55,8 +69,8 @@ async def list_clients(_: User = Depends(get_current_user)):
         })
     # Global (client-agnostic) knowledge counts — shown as its own group.
     glob = {
-        "learnings": await LearnedMapping.find(LearnedMapping.is_global == True).count(),  # noqa: E712
-        "templates": await FBDITemplate.find(FBDITemplate.is_global == True).count(),  # noqa: E712
+        "learnings": await _safe_count(LearnedMapping.find(LearnedMapping.is_global == True)),  # noqa: E712
+        "templates": await _safe_count(FBDITemplate.find(FBDITemplate.is_global == True)),  # noqa: E712
     }
     return {"clients": out, "global": glob}
 
