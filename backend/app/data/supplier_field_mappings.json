@@ -224,26 +224,8 @@
   {
     "source_system": "netsuite",
     "target_object": "Supplier",
-    "target_field": "Delivery Channel",
-    "source_field": "Email Transactions",
-    "source_label": null,
-    "fbdi_sheet": "POZ_SUPPLIERS_INT",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier",
     "target_field": "Pay Each Document Alone",
     "source_field": "Pay Each Document Alone",
-    "source_label": null,
-    "fbdi_sheet": "POZ_SUPPLIERS_INT",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier",
-    "target_field": "Delivery Method",
-    "source_field": "Email Transactions",
     "source_label": null,
     "fbdi_sheet": "POZ_SUPPLIERS_INT",
     "confidence": "High"
@@ -512,15 +494,6 @@
   {
     "source_system": "netsuite",
     "target_object": "Supplier Address",
-    "target_field": "Delivery Channel",
-    "source_field": "Email Transactions",
-    "source_label": null,
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Address",
     "target_field": "Pay Each Document Alone",
     "source_field": "Pay Each Document Alone",
     "source_label": null,
@@ -532,15 +505,6 @@
     "target_object": "Supplier Address",
     "target_field": "Payment Reason",
     "source_field": "Pre-Advice Details",
-    "source_label": null,
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Address",
-    "target_field": "Delivery Method",
-    "source_field": "Email Transactions",
     "source_label": null,
     "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
     "confidence": "High"
@@ -782,26 +746,8 @@
   {
     "source_system": "netsuite",
     "target_object": "Supplier Site",
-    "target_field": "Delivery Channel",
-    "source_field": "Email Transactions",
-    "source_label": null,
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Site",
     "target_field": "Payment Reason",
     "source_field": "Pre-Advice Details",
-    "source_label": null,
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Site",
-    "target_field": "Delivery Method",
-    "source_field": "Email Transactions",
     "source_label": null,
     "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
     "confidence": "High"
@@ -1072,24 +1018,6 @@
     "target_object": "Supplier Banks",
     "target_field": "Payment Method Code",
     "source_field": "Vendor Payment Method",
-    "source_label": null,
-    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Banks",
-    "target_field": "Delivery Channel Code",
-    "source_field": "Email Transactions",
-    "source_label": null,
-    "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Banks",
-    "target_field": "Remit Delivery Method",
-    "source_field": "Email Transactions",
     "source_label": null,
     "fbdi_sheet": "IBY_TEMP_EXT_PAYEES",
     "confidence": "High"
