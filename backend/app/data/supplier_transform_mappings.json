@@ -1,82 +1,386 @@
 [
   {
-    "_note": "BEST-GUESS source columns (verify against the All Vendors extract): 'Email Transactions', 'Fax Transactions', 'Phone', 'Fax', 'Default WT Code'. Rules use exact FBDI target field names parsed from the supplier templates.",
-
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Delivery Method",
+    "source_field": "Delivery Method",
+    "confidence": "High"
+  },
+  {
     "source_system": "netsuite",
     "target_object": "Supplier",
     "target_field": "Delivery Method",
     "source_field": "Email Transactions",
-    "source_label": "Derived: Email Transactions=Yes -> EMAIL, Fax Transactions=Yes -> FAX, else blank.",
-    "fbdi_sheet": "POZ_SUPPLIERS_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "CASE_WHEN",
     "rule_config": {
       "branches": [
-        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
-        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+        {
+          "if_column": "Email Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "EMAIL"
+        },
+        {
+          "if_column": "Fax Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "FAX"
+        }
       ],
       "default": ""
     }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Delivery Channel",
+    "source_field": "Delivery Channel",
+    "confidence": "High"
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier",
     "target_field": "Delivery Channel",
     "source_field": "Email Transactions",
-    "source_label": "Same Email/Fax Transaction derivation as Delivery Method.",
-    "fbdi_sheet": "POZ_SUPPLIERS_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "CASE_WHEN",
     "rule_config": {
       "branches": [
-        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
-        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+        {
+          "if_column": "Email Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "EMAIL"
+        },
+        {
+          "if_column": "Fax Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "FAX"
+        }
       ],
       "default": ""
     }
   },
   {
-    "source_system": "netsuite",
-    "target_object": "Supplier",
-    "target_field": "Use withholding tax",
-    "source_field": "Default WT Code",
-    "source_label": "Analyst: Use Withholding Tax should map to the Default WT Code column.",
-    "fbdi_sheet": "POZ_SUPPLIERS_INT",
-    "confidence": "Medium"
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Delivery Method",
+    "source_field": "Delivery Method",
+    "confidence": "High"
   },
-
   {
     "source_system": "netsuite",
     "target_object": "Supplier Address",
     "target_field": "Delivery Method",
     "source_field": "Email Transactions",
-    "source_label": "Derived: Email Transactions=Yes -> EMAIL, Fax Transactions=Yes -> FAX, else blank.",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "CASE_WHEN",
     "rule_config": {
       "branches": [
-        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
-        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+        {
+          "if_column": "Email Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "EMAIL"
+        },
+        {
+          "if_column": "Fax Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "FAX"
+        }
       ],
       "default": ""
     }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Delivery Channel",
+    "source_field": "Delivery Channel",
+    "confidence": "High"
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Address",
     "target_field": "Delivery Channel",
     "source_field": "Email Transactions",
-    "source_label": "Same Email/Fax Transaction derivation as Delivery Method.",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "CASE_WHEN",
     "rule_config": {
       "branches": [
-        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
-        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
+        {
+          "if_column": "Email Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "EMAIL"
+        },
+        {
+          "if_column": "Fax Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "FAX"
+        }
       ],
       "default": ""
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Method",
+    "source_field": "Delivery Method",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Method",
+    "source_field": "Email Transactions",
+    "confidence": "High",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {
+          "if_column": "Email Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "EMAIL"
+        },
+        {
+          "if_column": "Fax Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "FAX"
+        }
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Channel",
+    "source_field": "Delivery Channel",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Delivery Channel",
+    "source_field": "Email Transactions",
+    "confidence": "High",
+    "rule_type": "CASE_WHEN",
+    "rule_config": {
+      "branches": [
+        {
+          "if_column": "Email Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "EMAIL"
+        },
+        {
+          "if_column": "Fax Transactions",
+          "op": "regex",
+          "value": "(?i)^(y|yes|true|1|x)$",
+          "then": "FAX"
+        }
+      ],
+      "default": ""
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Remittance E-mail",
+    "source_field": "Remittance E-Mail",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Remittance E-mail",
+    "source_field": "Email",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Remittance Fax",
+    "source_field": "Remittance Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Remittance Fax",
+    "source_field": "Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Remittance E-Mail",
+    "source_field": "Remittance E-Mail",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Remittance E-Mail",
+    "source_field": "Email",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Remittance Fax",
+    "source_field": "Remittance Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Remittance Fax",
+    "source_field": "Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Remittance E-Mail",
+    "source_field": "Remittance E-Mail",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Remittance E-Mail",
+    "source_field": "Email",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Remittance Fax",
+    "source_field": "Remittance Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Remittance Fax",
+    "source_field": "Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Fax Country Code",
+    "source_field": "Fax Country Code",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax Country Code",
+    "source_field": "Fax",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "country"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Fax Area Code",
+    "source_field": "Fax Area Code",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax Area Code",
+    "source_field": "Fax",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "area"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "number"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Fax Country Code",
+    "source_field": "Fax Country Code",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax Country Code",
+    "source_field": "Fax",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "country"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Fax Area Code",
+    "source_field": "Fax Area Code",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax Area Code",
+    "source_field": "Fax",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "area"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Site",
+    "target_field": "Fax",
+    "source_field": "Fax",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "number"
     }
   },
   {
@@ -84,144 +388,190 @@
     "target_object": "Supplier Address",
     "target_field": "Phone Country Code",
     "source_field": "Phone",
-    "source_label": "Split from the single Phone column (E.164-style).",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "PHONE_PART",
-    "rule_config": {"part": "country"}
+    "rule_config": {
+      "part": "country"
+    }
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Address",
     "target_field": "Phone Area Code",
     "source_field": "Phone",
-    "source_label": "Split from the single Phone column.",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "PHONE_PART",
-    "rule_config": {"part": "area"}
+    "rule_config": {
+      "part": "area"
+    }
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Address",
     "target_field": "Phone Extension",
     "source_field": "Phone",
-    "source_label": "Split from the single Phone column (ext/x suffix).",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "PHONE_PART",
-    "rule_config": {"part": "extension"}
+    "rule_config": {
+      "part": "extension"
+    }
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Address",
     "target_field": "Phone",
     "source_field": "Phone",
-    "source_label": "Local subscriber number (country/area/ext stripped).",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
+    "confidence": "High",
     "rule_type": "PHONE_PART",
-    "rule_config": {"part": "number"}
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Address",
-    "target_field": "Fax Country Code",
-    "source_field": "Fax",
-    "source_label": "Split from the single Fax column.",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
-    "rule_type": "PHONE_PART",
-    "rule_config": {"part": "country"}
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Address",
-    "target_field": "Fax Area Code",
-    "source_field": "Fax",
-    "source_label": "Split from the single Fax column.",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
-    "rule_type": "PHONE_PART",
-    "rule_config": {"part": "area"}
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Address",
-    "target_field": "Fax",
-    "source_field": "Fax",
-    "source_label": "Local fax number (country/area stripped).",
-    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
-    "confidence": "Medium",
-    "rule_type": "PHONE_PART",
-    "rule_config": {"part": "number"}
-  },
-
-  {
-    "source_system": "netsuite",
-    "target_object": "Supplier Site",
-    "target_field": "Delivery Method",
-    "source_field": "Email Transactions",
-    "source_label": "Derived: Email Transactions=Yes -> EMAIL, Fax Transactions=Yes -> FAX, else blank.",
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "Medium",
-    "rule_type": "CASE_WHEN",
     "rule_config": {
-      "branches": [
-        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
-        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
-      ],
-      "default": ""
+      "part": "number"
     }
   },
   {
     "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Use withholding tax",
+    "source_field": "Default WT Code",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
     "target_object": "Supplier Site",
-    "target_field": "Delivery Channel",
-    "source_field": "Email Transactions",
-    "source_label": "Same Email/Fax Transaction derivation as Delivery Method.",
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "Medium",
-    "rule_type": "CASE_WHEN",
-    "rule_config": {
-      "branches": [
-        {"if_column": "Email Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "EMAIL"},
-        {"if_column": "Fax Transactions", "op": "regex", "value": "(?i)^(y|yes|true|1|x)$", "then": "FAX"}
-      ],
-      "default": ""
-    }
+    "target_field": "Invoice Currency",
+    "source_field": "Invoice Currency",
+    "confidence": "High"
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Site",
-    "target_field": "Fax Country Code",
-    "source_field": "Fax",
-    "source_label": "Split from the single Fax column.",
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "Medium",
-    "rule_type": "PHONE_PART",
-    "rule_config": {"part": "country"}
+    "target_field": "Invoice Currency",
+    "source_field": "Currency",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Currency",
+    "source_field": "Payment Currency",
+    "confidence": "High"
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Site",
-    "target_field": "Fax Area Code",
-    "source_field": "Fax",
-    "source_label": "Split from the single Fax column.",
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "Medium",
-    "rule_type": "PHONE_PART",
-    "rule_config": {"part": "area"}
+    "target_field": "Payment Currency",
+    "source_field": "Currency",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Terms",
+    "source_field": "Payment Terms",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Channel",
+    "source_field": "Invoice Channel",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Match Approval Level",
+    "source_field": "Match Approval Level",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Payment Method",
+    "source_field": "Payment Method",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier",
+    "target_field": "Payment Method",
+    "source_field": "Vendor Payment Method",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Payment Reason",
+    "source_field": "Payment Reason",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Inactive Date",
+    "source_field": "Inactive Date",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Customer Number",
+    "source_field": "Customer Number",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Method",
+    "source_field": "Payment Method",
+    "confidence": "High"
   },
   {
     "source_system": "netsuite",
     "target_object": "Supplier Site",
-    "target_field": "Fax",
-    "source_field": "Fax",
-    "source_label": "Local fax number (country/area stripped).",
-    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "Medium",
-    "rule_type": "PHONE_PART",
-    "rule_config": {"part": "number"}
+    "target_field": "Payment Method",
+    "source_field": "Vendor Payment Method",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Reason",
+    "source_field": "Payment Reason",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Inactive Date",
+    "source_field": "Inactive Date",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Customer Number",
+    "source_field": "Customer Number",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Inactive Date",
+    "source_field": "Inactive Date",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Payment Reason",
+    "source_field": "Payment Reason",
+    "confidence": "High"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Supplier Address",
+    "target_field": "Province",
+    "source_field": "State/Province",
+    "confidence": "High"
   }
 ]

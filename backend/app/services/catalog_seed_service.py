@@ -136,17 +136,19 @@ async def seed_item_field_mappings() -> dict:
 async def seed_supplier_field_mappings() -> dict:
     """Analyst-confirmed NextPower Supplier mappings (NetSuite SS Vendors + eBOS)
     across the 6 supplier interface objects, incl. the Business Relationship
-    value-map."""
+    value-map. GLOBAL: supplier source→FBDI mapping is source-system knowledge
+    (NetSuite / eBOS conventions), reusable for every client and future project."""
     return await _seed_catalog_file(_SUPPLIER_MAPPINGS, "NXT supplier field mapping doc",
-                                    client_id=await _nextpower_client_id())
+                                    is_global=True)
 
 
 async def seed_supplier_transform_mappings() -> dict:
     """Analyst-confirmed supplier transforms: Delivery Method/Channel derivation
-    (CASE_WHEN on Email/Fax Transaction flags), Phone/Fax split (PHONE_PART), and
-    Use Withholding Tax <- Default WT Code, across Supplier / Address / Site."""
+    (CASE_WHEN on Email/Fax Transaction flags), Phone/Fax split (PHONE_PART),
+    Use Withholding Tax <- Default WT Code, and the eBOS direct 1:1 rows — GLOBAL
+    so every client / future project gets them for both source vocabularies."""
     return await _seed_catalog_file(_SUPPLIER_TRANSFORMS, "NXT supplier transform rules",
-                                    client_id=await _nextpower_client_id())
+                                    is_global=True)
 
 
 async def seed_customer_field_mappings() -> dict:

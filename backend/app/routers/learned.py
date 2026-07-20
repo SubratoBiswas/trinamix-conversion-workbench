@@ -430,6 +430,19 @@ async def reseed_catalog(_: User = Depends(get_current_user)):
     return await seed_mapping_catalog()
 
 
+@router.post("/reseed-supplier")
+async def reseed_supplier(_: User = Depends(get_current_user)):
+    """Force the supplier field + transform seeds on demand (idempotent, additive,
+    GLOBAL). Lets us apply the analyst supplier rules without waiting for the
+    startup task, and confirm they landed."""
+    from app.services.catalog_seed_service import (
+        seed_supplier_field_mappings, seed_supplier_transform_mappings,
+    )
+    fields = await seed_supplier_field_mappings()
+    transforms = await seed_supplier_transform_mappings()
+    return {"field_mappings": fields, "transforms": transforms}
+
+
 @router.post("/backfill-projects")
 async def backfill_project_ids(_: User = Depends(get_current_user)):
     """

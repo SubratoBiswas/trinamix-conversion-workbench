@@ -299,6 +299,12 @@ async def apply_learned_to_conversion(
     for lm in learned:
         if lm.target_field:
             by_target.setdefault(lm.target_field, []).append(lm)
+    # Precedence: an explicit source→target mapping (analyst doc / transform /
+    # steering) OUTRANKS an old gold "leave this blank" suppression for the same
+    # field. Without this, a gold file that left e.g. Delivery Method or D-U-N-S
+    # empty would keep suppressing them even after the analyst mapped them. So drop
+    # any suppression whose field also has a column mapping — the mapping wins.
+    suppressed_targets -= set(by_target.keys())
     src_index: dict[str, str] = {}
     if conversion.dataset_id:
         cols = await DatasetColumnProfile.find(
