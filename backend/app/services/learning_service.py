@@ -299,6 +299,19 @@ async def apply_learned_to_conversion(
     for lm in learned:
         if lm.target_field:
             by_target.setdefault(lm.target_field, []).append(lm)
+    # When a field has several candidate mappings, try the ones that carry a real
+    # VALUE TRANSFORM (PHONE_PART, CASE_WHEN, VALUE_MAP, SPLIT…) first. A transform
+    # is a deliberate rule; a plain alias or a gold "direct_map" is just a guessed
+    # column. Without this, a direct_map (e.g. Phone <- "Address Phone", an empty
+    # column) can beat the intended PHONE_PART split of the populated "Phone" column
+    # and blank the output. Ties keep original order.
+    _STRONG_TRANSFORMS = {
+        "PHONE_PART", "CASE_WHEN", "VALUE_MAP", "DATE_FORMAT", "SPLIT", "CONCAT",
+        "COALESCE", "CONDITIONAL", "REGEX_EXTRACT", "REGEX_REPLACE", "SUBSTRING",
+        "PREFIX", "SUFFIX", "ARITHMETIC", "NUMBER_FORMAT", "CROSSWALK_LOOKUP", "PAD",
+    }
+    for _lst in by_target.values():
+        _lst.sort(key=lambda lm: 0 if (lm.rule_type or "").upper() in _STRONG_TRANSFORMS else 1)
     # Precedence: an explicit source→target mapping (analyst doc / transform /
     # steering) OUTRANKS an old gold "leave this blank" suppression for the same
     # field. Without this, a gold file that left e.g. Delivery Method or D-U-N-S
