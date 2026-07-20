@@ -108,7 +108,8 @@ def _matches(template: FBDITemplate, step: dict) -> bool:
     return True
 
 
-def _find_template_for_step(step: dict, templates: list[FBDITemplate]) -> FBDITemplate | None:
+def _find_template_for_step(step: dict, templates: list[FBDITemplate],
+                            prefer_richest: bool = False) -> FBDITemplate | None:
     matches = [t for t in templates if _matches(t, step)]
     if not matches:
         return None
@@ -125,7 +126,17 @@ def _find_template_for_step(step: dict, templates: list[FBDITemplate]) -> FBDITe
         bo = (t.business_object or "").strip().lower()
         exact_name = 1 if name in (label, obj) else 0
         exact_bo = 1 if bo in (label, obj) else 0
-        return (exact_name, exact_bo, 1 if t.status == "parsed" else 0, t.required_field_count or 0)
+        parsed = 1 if t.status == "parsed" else 0
+        rich = t.required_field_count or 0
+        # Single-workbook objects (Customer/Item/AP/AR/GL) MUST resolve to the full
+        # multi-sheet FBDI workbook, never a thin same-named stub. Rank the parsed,
+        # field-rich workbook FIRST and treat an exact name only as a tiebreaker —
+        # otherwise a 20-field "Customer Import" stub beats the 1250-field
+        # "Customer Import (HZ_IMP)" workbook purely because its name matches the
+        # step label exactly, and the fan-out binds to the wrong template.
+        if prefer_richest:
+            return (parsed, rich, exact_name, exact_bo)
+        return (exact_name, exact_bo, parsed, rich)
 
     matches.sort(key=_rank, reverse=True)
     return matches[0]
@@ -162,8 +173,9 @@ async def generate_object_template_set(
     resolved_objects: list[str] = []
     now = datetime.utcnow()
 
+    prefer_richest = key in SINGLE_TEMPLATE_OBJECTS
     for i, step in enumerate(steps, start=1):
-        tpl = _find_template_for_step(step, templates)
+        tpl = _find_template_for_step(step, templates, prefer_richest=prefer_richest)
         if not tpl:
             missing.append({"label": step["label"], "load_order": i})
             continue

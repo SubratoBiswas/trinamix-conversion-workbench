@@ -375,6 +375,9 @@ def _source_is_numeric(sc) -> bool:
 
 # Text fields that must not hold a bare number (Item Class Name, descriptions).
 _TEXT_NAME_TOKENS = ("name", "description", "desc")
+# Boolean Y/N indicator fields that must not receive a numeric amount source
+# (e.g. a Credit Limit *amount* fuzzy-mapped into the "Credit Hold" flag).
+_FLAG_FIELD_TOKENS = ("hold", "flag", "indicator")
 
 
 def _guard_item_mappings(results: list, targets_by_id: dict, sources: list) -> dict:
@@ -411,6 +414,15 @@ def _guard_item_mappings(results: list, targets_by_id: dict, sources: list) -> d
             _set(r, source_column=None, confidence=0.0, review_required=1,
                  reason="Auto-guard: dropped a numeric source from a text name/description field "
                         "(likely a code mis-mapped into a *Name* column).")
+            dropped += 1
+            continue
+        # A numeric amount fuzzy-mapped into a Y/N flag field (e.g. Credit Limit
+        # amount landing in "Credit Hold") is almost certainly wrong — drop it.
+        is_flag = any(tok in tname for tok in _FLAG_FIELD_TOKENS) and "number" not in tname
+        if is_flag and num_src.get(sc):
+            _set(r, source_column=None, confidence=0.0, review_required=1,
+                 reason="Auto-guard: dropped a numeric source from a Y/N flag field "
+                        "(an amount/number does not belong in a *Hold/Flag* column).")
             dropped += 1
 
     # (b) anti-copy: same source used by more than one field
@@ -570,7 +582,7 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     #  • flag one source column being copied across several unrelated fields;
     # so downstream generate produces business-valid data, not fuzzy noise.
     _bo = (template.business_object or "").strip().lower() if template else ""
-    if _bo in ("item", "item master"):
+    if _bo in ("item", "item master", "customer"):
         _guard_item_mappings(ai_results, {str(t.id): t for t in targets}, sources)
 
     existing = {
