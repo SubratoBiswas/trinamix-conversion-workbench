@@ -93,22 +93,29 @@ def _transform_frame(
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
         dv = m.default_value
-        if m.source_column and m.source_column in col_cache:
+        has_src = bool(m.source_column) and m.source_column in col_cache
+        if rules:
+            # A transform rule (CASE_WHEN / COALESCE / CONCAT / …) can derive its
+            # value from OTHER columns via the per-row context, so it must run even
+            # when THIS target has no single source_column. The rule — including its
+            # own configured default (e.g. a CASE_WHEN default of "") — is
+            # authoritative: we do NOT overlay the mapping-level default_value on a
+            # rule result, so an intentional blank is never clobbered by a stray
+            # constant default (which was turning a Delivery Channel/Method
+            # CASE_WHEN into a constant "EMAIL" whenever source_column was null).
+            if records is None:
+                records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
+            src_vals = col_cache[m.source_column] if has_src else None
+            col_values = [
+                apply_pipeline(rules, (src_vals[i] if src_vals is not None else ""), row=records[i])
+                for i in range(n_rows)
+            ]
+        elif has_src:
             src_vals = col_cache[m.source_column]
-            if rules:
-                if records is None:
-                    records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
-                col_values = []
-                for i in range(n_rows):
-                    v = apply_pipeline(rules, src_vals[i], row=records[i])
-                    if (v is None or str(v).strip() == "") and dv is not None:
-                        v = dv
-                    col_values.append(v)
-            else:
-                col_values = [
-                    (dv if (v is None or str(v).strip() == "") and dv is not None else v)
-                    for v in src_vals
-                ]
+            col_values = [
+                (dv if (v is None or str(v).strip() == "") and dv is not None else v)
+                for v in src_vals
+            ]
         else:
             col_values = [dv or ""] * n_rows
         out_cols[tgt.field_name] = col_values
