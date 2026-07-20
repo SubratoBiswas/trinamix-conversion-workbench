@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    client: Optional[str] = None
+    client: Optional[str] = None                 # legacy free-text label
+    client_id: Optional[str] = None              # tenant this project belongs to
     target_environment: Optional[str] = None
     go_live_date: Optional[date] = None
     owner: Optional[str] = None
@@ -25,6 +26,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     client: Optional[str] = None
+    client_id: Optional[str] = None              # reassign the project's tenant
     target_environment: Optional[str] = None
     go_live_date: Optional[date] = None
     owner: Optional[str] = None
@@ -49,6 +51,8 @@ class ProjectOut(BaseModel):
     name: str
     description: Optional[str] = None
     client: Optional[str] = None
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
     target_environment: Optional[str] = None
     go_live_date: Optional[date] = None
     owner: Optional[str] = None

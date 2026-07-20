@@ -97,6 +97,8 @@ export interface Project {
   name: string;
   description?: string | null;
   client?: string | null;
+  client_id?: string | null;
+  client_name?: string | null;
   target_environment?: string | null;
   go_live_date?: string | null;
   owner?: string | null;

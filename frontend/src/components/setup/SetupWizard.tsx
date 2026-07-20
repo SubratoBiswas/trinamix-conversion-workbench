@@ -5,7 +5,8 @@ import {
   ShieldCheck, Sparkles, Lock, AlertCircle, Workflow, Layers, Boxes,
   UploadCloud, X,
 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, DiscoveryApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
+import { ClientsApi, ConversionsApi, DatasetsApi, DiscoveryApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
+import type { ClientSummary } from "@/api";
 import {
   Button, Card, CardBody, Pill,
 } from "@/components/ui/Primitives";
@@ -29,6 +30,7 @@ import type { FusionModule, Project, SourceSystem } from "@/types";
 type EngagementDetails = {
   name: string;
   client: string;
+  client_id: string;          // tenant this project (and its learnings) belong to
   target_environment: string;
   description: string;
   go_live_date: string | null;
@@ -173,10 +175,13 @@ export const SetupWizard: React.FC = () => {
   const [sourceSystems, setSourceSystems] = useState<SourceSystem[]>([]);
   const [fusionModules, setFusionModules] = useState<FusionModule[]>([]);
   const [details, setDetails] = useState<EngagementDetails>({
-    name: "", client: "", target_environment: "Oracle Fusion SCM Cloud",
+    name: "", client: "", client_id: "", target_environment: "Oracle Fusion SCM Cloud",
     description: "", go_live_date: null,
     status: "planning", phase: "blueprint",
   });
+  // Tenants (clients) the engagement can belong to. Its learnings/gold/templates
+  // will scope to the picked client so they never leak across clients.
+  const [clients, setClients] = useState<ClientSummary[]>([]);
   const [sourceCode, setSourceCode] = useState<string>("");
   // File-based source: extract files uploaded during setup. When present, the
   // engagement's conversions are created from these files (not the module catalog).
@@ -200,6 +205,16 @@ export const SetupWizard: React.FC = () => {
     SourceSystemsApi.list().then(setSourceSystems).catch(() => setSourceSystems([]));
     FusionModulesApi.list().then(setFusionModules).catch(() => setFusionModules([]));
     ConversionsApi.objectTypes().then(setObjectCatalog).catch(() => setObjectCatalog([]));
+    // Load clients and default the picker to the default (bootstrap) tenant so a
+    // one-client shop needs no extra clicks, while multi-client shops can switch.
+    ClientsApi.list()
+      .then((r) => {
+        const cs = r.clients || [];
+        setClients(cs);
+        const def = cs.find((c) => c.is_default) || cs[0];
+        if (def) setDetails((d) => (d.client_id ? d : { ...d, client_id: def.id }));
+      })
+      .catch(() => setClients([]));
   }, []);
 
   // When the source flips, reset auth_type and the metadata/credential
@@ -315,6 +330,7 @@ export const SetupWizard: React.FC = () => {
       } = {
         name: details.name,
         client: details.client || undefined,
+        client_id: details.client_id || undefined,
         target_environment: details.target_environment || undefined,
         description: details.description || undefined,
         go_live_date: details.go_live_date || undefined,
@@ -430,7 +446,7 @@ export const SetupWizard: React.FC = () => {
       <Stepper step={step} />
 
       {step === 1 && (
-        <Step1Details details={details} setDetails={setDetails} />
+        <Step1Details details={details} setDetails={setDetails} clients={clients} />
       )}
       {step === 2 && (
         <Step2Source
@@ -569,6 +585,7 @@ export const SetupWizard: React.FC = () => {
           allModules={fusionModules}
           isFileMode={isFileMode}
           fileSummary={fileSummary}
+          clientName={clients.find((c) => c.id === details.client_id)?.name}
         />
       )}
 
@@ -657,7 +674,8 @@ const Stepper: React.FC<{ step: number }> = ({ step }) => {
 const Step1Details: React.FC<{
   details: EngagementDetails;
   setDetails: (d: EngagementDetails) => void;
-}> = ({ details, setDetails }) => (
+  clients: ClientSummary[];
+}> = ({ details, setDetails, clients }) => (
   <Card>
     <CardBody>
       <SectionTitle icon={<Building2 className="h-4 w-4" />}>Engagement details</SectionTitle>
@@ -670,8 +688,27 @@ const Step1Details: React.FC<{
             onChange={(e) => setDetails({ ...details, name: e.target.value })}
           />
         </Field>
+        <Field label="Client workspace (tenant)">
+          <select
+            className="input"
+            value={details.client_id}
+            onChange={(e) => setDetails({ ...details, client_id: e.target.value })}
+          >
+            {clients.length === 0 && <option value="">Loading clients…</option>}
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}{c.is_default ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-ink-muted">
+            Everything this engagement learns — column mappings, defaults, suppressions —
+            is saved to this client and auto-applied to its future conversions, never shared
+            with other clients. Add clients on the Clients page.
+          </p>
+        </Field>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <Field label="Client">
+          <Field label="Client name (label)">
             <input
               className="input" placeholder="Acme Corp"
               value={details.client}
@@ -1291,7 +1328,8 @@ const Step5Review: React.FC<{
   allModules: FusionModule[];
   isFileMode?: boolean;
   fileSummary?: { key: string; fileName: string; objectLabel: string; convLabels: string[] }[];
-}> = ({ details, sourceSystem, conn, selectedModules, allModules, isFileMode, fileSummary = [] }) => {
+  clientName?: string;
+}> = ({ details, sourceSystem, conn, selectedModules, allModules, isFileMode, fileSummary = [], clientName }) => {
   const scopedModules = allModules.filter((m) => selectedModules.includes(m.code));
   const uniqueObjects = new Set<string>();
   scopedModules.forEach((m) => m.objects.forEach((o) => uniqueObjects.add(o.target_object)));
@@ -1303,6 +1341,7 @@ const Step5Review: React.FC<{
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
           <ReviewBlock title="Engagement">
             <ReviewRow k="Name"  v={details.name} />
+            <ReviewRow k="Client workspace" v={clientName || "Default"} />
             <ReviewRow k="Client" v={details.client || "—"} />
             <ReviewRow k="Target" v={details.target_environment || "—"} />
             <ReviewRow k="Go-live" v={details.go_live_date || "—"} />

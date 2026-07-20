@@ -15,7 +15,7 @@ from app.services.auth_service import get_current_user
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-def _project_out(p: Project, convs: list) -> ProjectOut:
+def _project_out(p: Project, convs: list, client_name: Optional[str] = None) -> ProjectOut:
     """Build a ProjectOut with conversion roll-ups (no DB access).
 
     Status definitions are kept identical to ProjectOverviewPage so the project
@@ -28,6 +28,8 @@ def _project_out(p: Project, convs: list) -> ProjectOut:
     failed = sum(1 for c in convs if c.status == "failed")
     data = p.model_dump()
     data["id"] = str(p.id)
+    data["client_id"] = str(p.client_id) if p.client_id else None
+    data["client_name"] = client_name
     data["conversion_count"] = len(convs)
     data["planning_count"] = planning
     data["in_progress_count"] = in_progress
@@ -36,9 +38,21 @@ def _project_out(p: Project, convs: list) -> ProjectOut:
     return ProjectOut(**data)
 
 
+async def _client_name_for(p: Project) -> Optional[str]:
+    """Resolve the display name of a project's tenant (best-effort)."""
+    if not p.client_id:
+        return None
+    try:
+        from app.models.client import Client
+        c = await Client.get(p.client_id)
+        return c.name if c else None
+    except Exception:  # noqa: BLE001 — never break the response on a tenant lookup
+        return None
+
+
 async def _hydrate(p: Project) -> ProjectOut:
     convs = await Conversion.find(Conversion.project_id == p.id).to_list()
-    return _project_out(p, convs)
+    return _project_out(p, convs, await _client_name_for(p))
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -50,7 +64,16 @@ async def list_projects(_: User = Depends(get_current_user)):
     by_proj: dict = {}
     for c in all_convs:
         by_proj.setdefault(c.project_id, []).append(c)
-    return [_project_out(p, by_proj.get(p.id, [])) for p in projects]
+    # Resolve tenant display names in one query rather than one per project.
+    client_names: dict = {}
+    try:
+        from app.models.client import Client
+        for c in await Client.find_all().to_list():
+            client_names[c.id] = c.name
+    except Exception:  # noqa: BLE001 — names are cosmetic; never fail the list
+        pass
+    return [_project_out(p, by_proj.get(p.id, []), client_names.get(p.client_id))
+            for p in projects]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -70,6 +93,21 @@ async def create_project(payload: ProjectCreate, user: User = Depends(get_curren
     data.setdefault("owner", user.email)
     data.setdefault("created_at", datetime.utcnow())
     data.setdefault("updated_at", datetime.utcnow())
+    # Tenant: use the picked client, else fall back to the bootstrap (default)
+    # client so EVERY project is explicitly tenant-tagged. This is what lets each
+    # project's captured learnings attach to the right client automatically — an
+    # untagged project would have its captures resolve only for the default tenant.
+    raw_cid = data.pop("client_id", None)
+    resolved_cid = None
+    if raw_cid:
+        try:
+            resolved_cid = PydanticObjectId(raw_cid)
+        except Exception:  # noqa: BLE001 — bad id -> fall back to default below
+            resolved_cid = None
+    if resolved_cid is None:
+        from app.services.client_service import default_client_id
+        resolved_cid = await default_client_id()
+    data["client_id"] = resolved_cid
     p = Project(**data)
     await p.insert()
 
@@ -130,6 +168,16 @@ async def update_project(
     if not p:
         raise HTTPException(404, "Project not found")
     update_data = payload.model_dump(exclude_unset=True)
+    # Reassigning the tenant: accept a client id string and store it as ObjectId.
+    if "client_id" in update_data:
+        raw = update_data.pop("client_id")
+        if raw:
+            try:
+                update_data["client_id"] = PydanticObjectId(raw)
+            except Exception:  # noqa: BLE001
+                raise HTTPException(400, "Invalid client_id")
+        else:
+            update_data["client_id"] = None
     update_data["updated_at"] = datetime.utcnow()
     await p.set(update_data)
     return await _hydrate(p)
