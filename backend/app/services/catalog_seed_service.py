@@ -63,56 +63,65 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
         logger.warning("catalog seed: could not read %s: %s", path.name, exc)
         return {"seeded": 0, "skipped": 0, "error": str(exc)}
 
-    seeded = skipped = 0
+    seeded = updated = deduped = skipped = 0
     for r in rows:
         tgt_obj = (r.get("target_object") or "").strip()
         tgt_field = (r.get("target_field") or "").strip()
         src_field = (r.get("source_field") or "").strip()
         if not (tgt_obj and tgt_field and src_field):
             continue
-        # Additive + non-destructive: skip if a rule already maps this
-        # source field → target field for this object WITHIN THE SAME SCOPE
-        # (a global row and a client row for the same field can coexist).
-        existing = await LearnedMapping.find_one(
+        rule_type = r.get("rule_type")
+        rule_config = (r.get("rule_config") if rule_type else {
+            "source_column": src_field, "source_label": r.get("source_label"),
+            "fbdi_sheet": r.get("fbdi_sheet"), "confidence": r.get("confidence"),
+        })
+        # UPSERT-with-upgrade (scope-agnostic): find every prior row that maps this
+        # source→target for this object, regardless of scope. Earlier seed runs may
+        # have written a PLAIN row (no rule_type) or a wrongly-scoped copy that then
+        # BLOCKS this seed's correct CASE_WHEN/PHONE_PART/is_global version. So we
+        # heal in place: upgrade the first match to the seed's rule + scope, and
+        # delete the rest as duplicates. Makes reseed self-correcting + de-duping.
+        matches = await LearnedMapping.find(
             LearnedMapping.kind == "column_mapping",
             LearnedMapping.target_object == tgt_obj,
             LearnedMapping.target_field == tgt_field,
             LearnedMapping.original_value == src_field,
-            LearnedMapping.client_id == client_id,
-            LearnedMapping.is_global == is_global,
-        )
-        if existing:
-            skipped += 1
+        ).to_list()
+        if matches:
+            keep = matches[0]
+            upd: dict = {}
+            if rule_type and keep.rule_type != rule_type:
+                upd["rule_type"] = rule_type
+                upd["rule_config"] = rule_config
+            if is_global and not keep.is_global:
+                upd["is_global"] = True
+                upd["client_id"] = None
+            elif client_id is not None and keep.client_id != client_id and not keep.is_global:
+                upd["client_id"] = client_id
+            if upd:
+                await keep.set(upd)
+                updated += 1
+            else:
+                skipped += 1
+            for extra in matches[1:]:
+                await extra.delete()
+                deduped += 1
             continue
         await LearnedMapping(
-            kind="column_mapping",
-            category="Column Mapping Alias",
-            original_value=src_field,
-            resolved_value=tgt_field,
-            target_object=tgt_obj,
-            target_field=tgt_field,
-            client_id=client_id,
-            is_global=is_global,
-            # A row may carry a transformation (e.g. VALUE_MAP for Business
-            # Relationship: Approved -> SPEND_AUTHORIZED). When it does, the
-            # rule_config IS the transform config; otherwise rule_config holds
-            # provenance metadata and no transform runs.
-            rule_type=r.get("rule_type"),
-            rule_config=(r.get("rule_config") if r.get("rule_type") else {
-                "source_column": src_field,
-                "source_label": r.get("source_label"),
-                "fbdi_sheet": r.get("fbdi_sheet"),
-                "confidence": r.get("confidence"),
-            }),
-            source_erp=r.get("source_system"),
-            captured_from=captured_from,
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=src_field, resolved_value=tgt_field,
+            target_object=tgt_obj, target_field=tgt_field,
+            client_id=client_id, is_global=is_global,
+            rule_type=rule_type, rule_config=rule_config,
+            source_erp=r.get("source_system"), captured_from=captured_from,
         ).insert()
         seeded += 1
 
-    if seeded or skipped:
-        logger.info("%s: seeded %d, skipped %d existing (of %d rows)",
-                    path.name, seeded, skipped, len(rows))
-    return {"seeded": seeded, "skipped": skipped, "total": len(rows)}
+    if seeded or updated or deduped or skipped:
+        logger.info("%s: seeded %d, upgraded %d, de-duped %d, skipped %d (of %d rows)",
+                    path.name, seeded, updated, deduped, skipped, len(rows))
+    return {"seeded": seeded, "updated": updated, "deduped": deduped,
+            "skipped": skipped, "total": len(rows)}
 
 
 async def _nextpower_client_id():
