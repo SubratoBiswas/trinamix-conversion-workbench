@@ -49,7 +49,10 @@ async def default_client_id() -> Optional[PydanticObjectId]:
     global _default_id
     if _default_id is not None:
         return _default_id
-    c = await Client.find_one(Client.is_default == True)  # noqa: E712
+    try:
+        c = await Client.find_one(Client.is_default == True)  # noqa: E712
+    except Exception:  # noqa: BLE001 — never let tenant lookup break mapping/generate
+        return None
     _default_id = c.id if c else None
     return _default_id
 

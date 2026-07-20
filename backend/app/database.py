@@ -45,7 +45,7 @@ async def init_db() -> None:
     await init_beanie(
         database=client[settings.MONGODB_DB],
         document_models=[
-            User, Project, Conversion,
+            User, Client, Project, Conversion,
             Dataset, DatasetColumnProfile,
             FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
             GoldStandard,

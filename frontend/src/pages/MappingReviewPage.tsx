@@ -2109,8 +2109,9 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   // drag — drives the drop-zone highlight for the drag-to-map gesture.
   const [dragSource, setDragSource] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<number | null>(null);
-  // Live text filter for the source-column list.
+  // Live text filters for the source-column and target-FBDI lists.
   const [srcQuery, setSrcQuery] = useState("");
+  const [tgtQuery, setTgtQuery] = useState("");
   // Refs to source/target cards keyed by name/id so we can read their DOM positions
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const targetRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -2143,7 +2144,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
     setLines(next);
   };
 
-  useLayoutEffect(() => { recalc(); }, [mappings, visibleTargetIds, sourceColumns, targetFields, srcQuery]);
+  useLayoutEffect(() => { recalc(); }, [mappings, visibleTargetIds, sourceColumns, targetFields, srcQuery, tgtQuery]);
 
   // Recalc on scroll/resize — both the source and target lists scroll independently
   const onScroll = () => recalc();
@@ -2182,6 +2183,16 @@ const MappingCanvas: React.FC<CanvasProps> = ({
     if (a.required !== b.required) return a.required ? -1 : 1;
     return a.sequence - b.sequence;
   }), [targetFields]);
+
+  // Apply the live target filter (field name or data type match).
+  const shownTargets = useMemo(() => {
+    const q = tgtQuery.trim().toLowerCase();
+    if (!q) return sortedTargets;
+    return sortedTargets.filter((f) =>
+      (f.field_name || "").toLowerCase().includes(q) ||
+      (f.data_type || "").toLowerCase().includes(q)
+    );
+  }, [sortedTargets, tgtQuery]);
 
   return (
     <div ref={canvasRef} className="relative flex flex-1 overflow-hidden bg-canvas">
@@ -2333,10 +2344,21 @@ const MappingCanvas: React.FC<CanvasProps> = ({
       {/* Target FBDI fields */}
       <div className="flex w-[360px] flex-col border-l border-line bg-white">
         <div className="border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-          Target FBDI · {sortedTargets.length}
+          Target FBDI · {shownTargets.length}{tgtQuery && <span className="text-ink-subtle"> / {sortedTargets.length}</span>}
+        </div>
+        <div className="border-b border-line bg-white px-2 py-1.5">
+          <input
+            value={tgtQuery}
+            onChange={(e) => setTgtQuery(e.target.value)}
+            placeholder="Filter target FBDI fields…"
+            className="w-full rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+          />
         </div>
         <div className="flex-1 overflow-y-auto p-2" onScroll={onScroll}>
-          {sortedTargets.map((f) => {
+          {shownTargets.length === 0 && (
+            <div className="px-2 py-6 text-center text-[11px] text-ink-subtle">No target fields match “{tgtQuery}”.</div>
+          )}
+          {shownTargets.map((f) => {
             const mapping = mappings.find((m) => m.target_field_id === f.id);
             const visible = visibleTargetIds.has(f.id);
             return (
