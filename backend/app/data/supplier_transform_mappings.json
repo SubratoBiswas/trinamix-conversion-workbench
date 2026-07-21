@@ -557,5 +557,76 @@
    "default": ""
   },
   "_note": "analyst: Login Access No must not render as None; Yes create-account code to be confirmed vs Oracle LOV"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Address",
+  "target_field": "Inactive Date",
+  "source_field": "Inactive",
+  "confidence": "High",
+  "rule_type": "CONDITIONAL_DATE",
+  "rule_config": {
+   "condition": "Inactive = Yes",
+   "value": "SYSDATE",
+   "else": "null"
+  },
+  "_note": "analyst correction: Address Inactive Date derives from Inactive flag (was wrongly matched to Date Created), mirrors Supplier Site"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Site",
+  "target_field": "Enable B2B Messaging",
+  "source_field": "Enable For EDI",
+  "confidence": "High",
+  "rule_type": "MAP_BOOLEAN",
+  "rule_config": {
+   "true_values": [
+    "Yes",
+    "Y",
+    "1",
+    "true"
+   ],
+   "false_values": [
+    "No",
+    "N",
+    "0",
+    "false"
+   ]
+  },
+  "_note": "analyst: Enable B2B <- Enable For EDI"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Site",
+  "target_field": "Payment Hold Date",
+  "source_field": "DVC Last Screening Date & Time",
+  "confidence": "High",
+  "_note": "analyst-confirmed keep (undocumented in Excel)"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Supplier Site",
+  "target_field": "Communication Method",
+  "source_field": "Email Transactions",
+  "confidence": "High",
+  "rule_type": "CASE_WHEN",
+  "rule_config": {
+   "branches": [
+    {
+     "if_column": "Email Transactions",
+     "op": "regex",
+     "value": "(?i)^(y|yes|true|1|x)$",
+     "then": "EMAIL"
+    },
+    {
+     "if_column": "Fax Transactions",
+     "op": "regex",
+     "value": "(?i)^(y|yes|true|1|x)$",
+     "then": "FAX"
+    }
+   ],
+   "default": ""
+  },
+  "_note": "analyst: same email/fax derivation as Delivery Channel - Email Transactions=Yes->EMAIL, Fax Transactions=Yes->FAX, else blank"
  }
 ]
