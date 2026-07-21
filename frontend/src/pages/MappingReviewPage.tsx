@@ -1703,6 +1703,14 @@ const MappingTableView: React.FC<{
       .finally(() => setAltLoading(false));
   }, [conversionId]);
 
+  // Field names that occur on more than one interface sheet (e.g. "Item Number"
+  // is the linking key on all 16 item tables). We badge those with their sheet so
+  // they don't read as the same field mapped repeatedly.
+  const dupNames = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const f of targetFields) c.set(f.field_name, (c.get(f.field_name) || 0) + 1);
+    return new Set([...c].filter(([, n]) => n > 1).map(([k]) => k));
+  }, [targetFields]);
   const mapByTarget = useMemo(() => {
     // Keep the HIGHEST-PRIORITY mapping per target field. The backend can return
     // more than one row for a target (e.g. a stale "suggested" plus a human
@@ -1983,7 +1991,12 @@ const MappingTableView: React.FC<{
                 </td>
                 {/* Target */}
                 <td className="px-3 py-2">
-                  <div className="font-medium text-ink">{f.field_name}</div>
+                  <div className="font-medium text-ink">
+                    {f.field_name}
+                    {f.sheet_name && dupNames.has(f.field_name) && (
+                      <span className="ml-1.5 rounded bg-canvas px-1 py-0.5 font-mono text-[9px] font-normal text-ink-subtle" title={`Interface sheet: ${f.sheet_name}`}>{f.sheet_name}</span>
+                    )}
+                  </div>
                   <div className="mt-0.5 text-[10px] text-ink-subtle">{f.data_type || "Character"}</div>
                 </td>
                 {/* Required */}
@@ -2125,6 +2138,13 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   const [dropTargetId, setDropTargetId] = useState<number | null>(null);
   // Live text filters for the source-column and target-FBDI lists.
   const [srcQuery, setSrcQuery] = useState("");
+  // Field names present on more than one interface sheet (e.g. "Item Number") —
+  // badged with their sheet so repeats read as distinct per-sheet keys.
+  const dupNames = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const f of targetFields) c.set(f.field_name, (c.get(f.field_name) || 0) + 1);
+    return new Set([...c].filter(([, n]) => n > 1).map(([k]) => k));
+  }, [targetFields]);
   const [tgtQuery, setTgtQuery] = useState("");
   // Refs to source/target cards keyed by name/id so we can read their DOM positions
   const sourceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -2409,6 +2429,9 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <div className="truncate text-[12px] font-semibold text-ink">{f.field_name}</div>
+                      {f.sheet_name && dupNames.has(f.field_name) && (
+                        <span className="shrink-0 rounded bg-canvas px-1 py-0.5 font-mono text-[9px] font-normal text-ink-subtle" title={`Interface sheet: ${f.sheet_name}`}>{f.sheet_name}</span>
+                      )}
                       {f.required && (
                         <span className="rounded bg-danger-subtle px-1 py-0.5 font-mono text-[9px] font-bold text-danger">REQ</span>
                       )}

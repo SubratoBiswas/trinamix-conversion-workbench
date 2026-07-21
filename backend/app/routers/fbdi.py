@@ -117,10 +117,19 @@ async def get_template(template_id: str, _: User = Depends(get_current_user)):
 
 @router.get("/templates/{template_id}/fields", response_model=list[FBDIFieldOut])
 async def list_template_fields(template_id: str, _: User = Depends(get_current_user)):
-    fields = await FBDIField.find(
-        FBDIField.template_id == PydanticObjectId(template_id)
-    ).sort("sequence").to_list()
-    return [_fld_out(f) for f in fields]
+    tid = PydanticObjectId(template_id)
+    # Interface sheet name per field, so the UI can disambiguate fields that share
+    # a name across sheets (e.g. "Item Number" is the linking key on all 16 item
+    # interface tables — without this it looks like the same field repeated).
+    _sname = {s.id: s.sheet_name for s in
+              await FBDISheet.find(FBDISheet.template_id == tid).to_list()}
+    fields = await FBDIField.find(FBDIField.template_id == tid).sort("sequence").to_list()
+    out = []
+    for f in fields:
+        d = _fld_out(f)
+        d["sheet_name"] = _sname.get(f.sheet_id)
+        out.append(d)
+    return out
 
 
 @router.delete("/templates/{template_id}", status_code=204)

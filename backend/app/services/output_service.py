@@ -375,7 +375,9 @@ _CONTROL_DEFAULTS: dict[str, str] = {
     "bill-to bu": "Nextpower LLC Business Unit",
     # --- Supplier contacts (POZ_SUP_CONTACTS) ---
     "administrative contact": "Y",
-    "user account action": "NONE",
+    # "user account action" removed — it is VALUE-MAPPED per row from Login Access
+    # (Yes -> CREATE_USER_ACCOUNT, No -> blank). A blanket constant "NONE" here was
+    # forcing every row to NONE (authoritative overwrite) so "No" rendered as NONE.
     # --- Item (Product Hub) — sensible defaults; confirm vs a reference ---
     "transaction type": "SYNC",
     "item class": "Root Item Class",
@@ -421,7 +423,9 @@ _AUTHORITATIVE: set[str] = {
     # "delivery channel" removed — it is per-row derived (Email/Fax -> EMAIL/FAX/
     # blank), not a forced constant.
     "address name", "pay", "ordering", "rfq or bidding",
-    "supplier site", "user account action",
+    "supplier site",
+    # "user account action" removed — per-row VALUE_MAP from Login Access must win
+    # (No -> blank, not the forced constant "NONE").
 }
 # Tax Organization Type, Supplier Type and Business Relationship were previously
 # forced constants. Per the analyst supplier mapping doc they are value-MAPPED from

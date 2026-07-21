@@ -8,6 +8,7 @@ class FBDIFieldOut(BaseModel):
     id: str
     template_id: str
     sheet_id: str
+    sheet_name: str | None = None   # interface sheet this field lives on (for disambiguation)
     field_name: str
     display_name: str | None = None
     description: str | None = None

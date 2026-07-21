@@ -56,6 +56,7 @@ export interface FBDIField {
   id: number;
   template_id: number;
   sheet_id: number;
+  sheet_name?: string | null;
   field_name: string;
   display_name: string | null;
   description: string | null;

@@ -633,6 +633,18 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     except Exception:  # noqa: BLE001 — blocklist is best-effort, never break mapping
         pass
 
+    # Heal any duplicate rows a prior re-run race may have left, so re-mapping
+    # self-corrects and ``existing`` is one row per target field.
+    try:
+        _removed = await dedupe_conversion_mappings(conversion.id)
+        if _removed:
+            import logging as _lg
+            _lg.getLogger(__name__).info(
+                "dedupe: removed %d duplicate mapping rows for conversion %s",
+                _removed, conversion.id)
+    except Exception:  # noqa: BLE001 — heal is best-effort, never break mapping
+        pass
+
     existing = {
         m.target_field_id: m
         for m in await MappingSuggestion.find(
@@ -668,6 +680,83 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     from app.services.learning_service import apply_learned_to_conversion
     await apply_learned_to_conversion(conversion, saved)
     return saved
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-mapping collapse / heal
+#
+# A re-run race on the suggest-mapping endpoint (two overlapping calls that both
+# see an empty "existing" set) can insert a SECOND MappingSuggestion for the same
+# (conversion, target field). Symptoms the analyst hit: a field the human
+# REJECTED still shows/exports as "suggested" (the stale twin), and one target
+# appears many times in the canvas/CSV. There is no unique index on
+# (conversion_id, target_field_id), so we collapse defensively on read and heal
+# physically at map time / on demand. The strongest HUMAN decision always wins.
+# ---------------------------------------------------------------------------
+_MAP_STATUS_PRIORITY = {
+    "overridden": 5, "approved": 4, "rejected": 3, "not_applicable": 2,
+    "suggested": 1, "": 0,
+}
+
+
+def _map_ts(m) -> float:
+    d = getattr(m, "updated_at", None) or getattr(m, "created_at", None)
+    try:
+        return d.timestamp() if d else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _dedup_key(m):
+    # strongest human status, then a row that actually carries a source, then freshest
+    return (
+        _MAP_STATUS_PRIORITY.get((getattr(m, "status", "") or ""), 0),
+        1 if getattr(m, "source_column", None) else 0,
+        _map_ts(m),
+    )
+
+
+def collapse_mapping_dupes(items: list) -> list:
+    """Return one mapping per target_field_id (strongest per ``_dedup_key``),
+    preserving first-occurrence order. Non-destructive — for read/export paths."""
+    best: dict = {}
+    for m in items:
+        k = str(m.target_field_id)
+        cur = best.get(k)
+        if cur is None or _dedup_key(m) > _dedup_key(cur):
+            best[k] = m
+    seen: set = set()
+    out: list = []
+    for m in items:
+        k = str(m.target_field_id)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(best[k])
+    return out
+
+
+async def dedupe_conversion_mappings(conversion_id) -> int:
+    """Physically delete duplicate MappingSuggestion docs for the same
+    (conversion, target field), keeping the strongest. Returns count removed."""
+    from collections import defaultdict
+    cid = (conversion_id if isinstance(conversion_id, PydanticObjectId)
+           else PydanticObjectId(str(conversion_id)))
+    rows = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == cid
+    ).to_list()
+    groups: dict = defaultdict(list)
+    for m in rows:
+        groups[str(m.target_field_id)].append(m)
+    removed = 0
+    for _k, ms in groups.items():
+        if len(ms) < 2:
+            continue
+        ms.sort(key=_dedup_key, reverse=True)
+        for extra in ms[1:]:
+            await extra.delete()
+            removed += 1
+    return removed
 
 
 async def enrich_mapping_with_samples(
