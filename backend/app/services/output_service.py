@@ -760,6 +760,19 @@ async def get_output_preview(conversion: Conversion, limit: int = 50) -> dict[st
     # file (tens of thousands of rows) just to display 50.
     df, lineage = await build_converted_dataframe(conversion, max_rows=limit)
     head = df.head(limit)
+    # Mirror the finalize-stage supplier e-mail masking here so the PREVIEW matches
+    # the downloaded FBDI file. Generation applies the "xx" e-mail mask inside
+    # _finalize (which the preview path skips), so without this the preview showed
+    # raw e-mails even though the real output is masked — misleading anyone checking
+    # the "don't trigger supplier notifications" rule from the preview.
+    try:
+        _tpl = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+        _obj = ((_tpl.business_object if _tpl else None)
+                or getattr(conversion, "target_object", "") or "")
+        if "supplier" in _obj.lower():
+            head = _mask_supplier_emails(head.copy())
+    except Exception:  # noqa: BLE001 — preview must never fail on a cosmetic mask
+        pass
     total = int(len(df))
     if conversion.dataset_id:
         ds = await Dataset.get(conversion.dataset_id)
