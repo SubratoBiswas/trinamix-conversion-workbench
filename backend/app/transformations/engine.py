@@ -278,6 +278,64 @@ def apply_rule(
                 continue
         return default
 
+    if rt == "MAP_BOOLEAN":
+        # Normalise a boolean-ish source value to a fixed pair of output codes.
+        # config: {"true_values":[...], "false_values":[...],
+        #          "true_output":"Y", "false_output":"N", "default":""}.
+        # Comparison is case-insensitive & trimmed; blank source -> default.
+        s = _to_str(value).strip()
+        if s == "":
+            return cfg.get("default", "")
+        low = s.lower()
+        trues = [str(x).strip().lower() for x in (cfg.get("true_values") or ["yes", "y", "1", "true"])]
+        falses = [str(x).strip().lower() for x in (cfg.get("false_values") or ["no", "n", "0", "false"])]
+        if low in trues:
+            return cfg.get("true_output", "Y")
+        if low in falses:
+            return cfg.get("false_output", "N")
+        return cfg.get("default", "")
+
+    if rt == "CONDITIONAL_DATE":
+        # Emit a date when a condition on another column holds, else a blank/other
+        # value. config: {"condition": "COL = VAL", "value": "SYSDATE"|literal,
+        #                 "else": "null"|literal}. Reads the referenced column from
+        # ``row`` directly (does not rely on the target cell). Used e.g. Inactive
+        # Date <- Inactive: Inactive=Yes -> today's date (FBDI %Y%m%d), else blank.
+        now = ctx.get("now") or datetime.utcnow()
+
+        def _resolve_date_token(tok: Any) -> str:
+            s = _to_str(tok).strip()
+            low = s.lower()
+            if low in ("null", "none", ""):
+                return ""
+            if low in ("sysdate", "today", "now"):
+                return now.strftime("%Y%m%d")
+            return s
+
+        cond = _to_str(cfg.get("condition", "")).strip()
+        matched = False
+        if cond and row is not None:
+            m = re.match(r"^\s*(.+?)\s*(!=|<>|>=|<=|=|>|<)\s*(.*?)\s*$", cond)
+            if m:
+                col_c, op_c, rhs = m.group(1), m.group(2), m.group(3)
+                left = _to_str(row.get(col_c, "")).strip().lower()
+                right = rhs.strip().lower()
+                if op_c == "=":
+                    matched = left == right
+                elif op_c in ("!=", "<>"):
+                    matched = left != right
+                else:
+                    lf, rf = _to_float(left), _to_float(right)
+                    if lf is not None and rf is not None:
+                        matched = {">": lf > rf, "<": lf < rf,
+                                   ">=": lf >= rf, "<=": lf <= rf}[op_c]
+            else:
+                # Bare column name -> truthy when the referenced cell is non-blank.
+                matched = not _is_blank(row.get(cond, ""))
+        if matched:
+            return _resolve_date_token(cfg.get("value", "SYSDATE"))
+        return _resolve_date_token(cfg.get("else", cfg.get("otherwise", "null")))
+
     if rt == "COMPUTED":
         source = (cfg.get("source") or "today").lower()
         fmt = cfg.get("format")

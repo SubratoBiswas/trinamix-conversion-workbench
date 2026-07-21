@@ -578,22 +578,25 @@
   "target_field": "Enable B2B Messaging",
   "source_field": "Enable For EDI",
   "confidence": "High",
-  "rule_type": "MAP_BOOLEAN",
+  "rule_type": "CASE_WHEN",
   "rule_config": {
-   "true_values": [
-    "Yes",
-    "Y",
-    "1",
-    "true"
+   "branches": [
+    {
+     "if_column": "Enable For EDI",
+     "op": "regex",
+     "value": "(?i)^(y|yes|true|1|x)$",
+     "then": "Y"
+    },
+    {
+     "if_column": "Enable For EDI",
+     "op": "regex",
+     "value": "(?i)^(n|no|false|0)$",
+     "then": "N"
+    }
    ],
-   "false_values": [
-    "No",
-    "N",
-    "0",
-    "false"
-   ]
+   "default": ""
   },
-  "_note": "analyst: Enable B2B <- Enable For EDI"
+  "_note": "analyst: Enable B2B <- Enable For EDI. CASE_WHEN reads the source column directly (like Delivery Channel) so it works regardless of base value-landing; Yes->Y, No->N, blank->blank."
  },
  {
   "source_system": "netsuite",
