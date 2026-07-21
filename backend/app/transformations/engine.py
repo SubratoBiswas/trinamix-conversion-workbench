@@ -297,20 +297,37 @@ def apply_rule(
 
     if rt == "CONDITIONAL_DATE":
         # Emit a date when a condition on another column holds, else a blank/other
-        # value. config: {"condition": "COL = VAL", "value": "SYSDATE"|literal,
-        #                 "else": "null"|literal}. Reads the referenced column from
-        # ``row`` directly (does not rely on the target cell). Used e.g. Inactive
-        # Date <- Inactive: Inactive=Yes -> today's date (FBDI %Y%m%d), else blank.
+        # value. Supports two config schemas seen in the catalog:
+        #   {"condition":"COL = VAL", "value":"SYSDATE"|<col>|literal, "else":"null"|...}
+        #   {"condition":"COL = VAL", "then_value":..., "else_value":...}
+        # A token may be SYSDATE/today/now (-> today, FBDI %Y%m%d), null/None (-> blank),
+        # the name of another column (-> that column's date value, normalised), or a
+        # literal. Reads referenced columns from ``row`` directly. e.g. Inactive Date
+        # <- Inactive: Inactive=Yes -> today's date, else blank.
         now = ctx.get("now") or datetime.utcnow()
 
+        def _norm_date(s: str) -> str:
+            for fmt_in in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y",
+                           "%Y%m%d", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+                           "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(s, fmt_in).strftime("%Y%m%d")
+                except ValueError:
+                    continue
+            return s
+
         def _resolve_date_token(tok: Any) -> str:
+            if tok is None:
+                return ""
             s = _to_str(tok).strip()
             low = s.lower()
             if low in ("null", "none", ""):
                 return ""
             if low in ("sysdate", "today", "now"):
                 return now.strftime("%Y%m%d")
-            return s
+            if row is not None and s in row:  # token is another column's name
+                return _norm_date(_to_str(row.get(s, "")).strip())
+            return _norm_date(s)
 
         cond = _to_str(cfg.get("condition", "")).strip()
         matched = False
@@ -332,9 +349,11 @@ def apply_rule(
             else:
                 # Bare column name -> truthy when the referenced cell is non-blank.
                 matched = not _is_blank(row.get(cond, ""))
-        if matched:
-            return _resolve_date_token(cfg.get("value", "SYSDATE"))
-        return _resolve_date_token(cfg.get("else", cfg.get("otherwise", "null")))
+        val_tok = cfg.get("value")
+        if val_tok is None:
+            val_tok = cfg.get("then_value", "SYSDATE")
+        else_tok = cfg.get("else", cfg.get("else_value", cfg.get("otherwise", "null")))
+        return _resolve_date_token(val_tok if matched else else_tok)
 
     if rt == "COMPUTED":
         source = (cfg.get("source") or "today").lower()
