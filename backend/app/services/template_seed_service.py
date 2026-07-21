@@ -281,3 +281,65 @@ async def ensure_item_multisheet() -> dict:
                     seeded, repointed)
     return {"seeded_real_template": seeded, "real_sheets": counts.get(real.id) if real else 0,
             "conversions_repointed": repointed}
+
+
+async def ensure_bom_multisheet() -> dict:
+    """Guarantee the real multi-sheet BOM / Item Structure workbook exists — at
+    startup, on any database.
+
+    Same skip trap as Customer/Item: a thin pre-seeded "BomImport" (one sheet,
+    business_object "BOM") occupies the object, so the idempotent template seed
+    SKIPS the real 4-sheet ItemStructureImportTemplate (EGP_STRUCTURES_INTERFACE /
+    EGP_COMPONENTS_INTERFACE / EGP_SUB_COMPS_INTERFACE / EGP_REF_DESGS_INTERFACE).
+    BOM conversions then have nowhere to map the analyst BOM learnings. This
+    force-seeds the bundled workbook when no multi-sheet BOM template is present
+    and re-points any BOM conversion sitting on the thin template onto it. No
+    inline AI mapping, so it can't time out. Idempotent — a run where the rich
+    template already exists is a no-op (won't create a duplicate)."""
+    from app.models.conversion import Conversion
+    from app.models.mapping import MappingSuggestion
+
+    def _is_bom(t) -> bool:
+        bo = (t.business_object or "").strip().lower()
+        nm = (t.name or "").strip().lower()
+        return (bo in ("bom", "bill of materials", "bill of material")
+                or "bom" in nm or "item structure" in nm or "structures_interface" in nm)
+
+    templates = await FBDITemplate.find_all().to_list()
+    boms = [t for t in templates if _is_bom(t)]
+    counts: dict = {}
+    for t in boms:
+        counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+
+    real = max(boms, key=lambda t: counts.get(t.id, 0)) if boms else None
+    seeded = False
+    # The real Item Structure workbook has 4 interface sheets; a thin BomImport has
+    # 1. Seed the bundle whenever the richest BOM template we have is still flat.
+    if real is None or counts.get(real.id, 0) < 2:
+        bundled = _DIR / "BOMItemStructure_EGP_STRUCTURES_INT.xlsm"
+        if not bundled.exists():
+            return {"note": "bundled BOM template missing", "seeded": False}
+        ok = await _seed_one(bundled, "BOM Item Structure Import", "Product Hub / SCM", "BOM")
+        if not ok:
+            return {"note": "failed to seed real BOM template", "seeded": False}
+        seeded = True
+        templates = await FBDITemplate.find_all().to_list()
+        boms = [t for t in templates if _is_bom(t)]
+        for t in boms:
+            counts[t.id] = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+        real = max(boms, key=lambda t: counts.get(t.id, 0))
+
+    flat_ids = {t.id for t in boms if t.id != real.id and counts.get(t.id, 0) < 2}
+    repointed = 0
+    if flat_ids:
+        for c in await Conversion.find_all().to_list():
+            if c.template_id in flat_ids:
+                await c.set({"template_id": real.id})
+                await MappingSuggestion.find(MappingSuggestion.conversion_id == c.id).delete()
+                repointed += 1
+
+    if seeded or repointed:
+        logger.info("BOM template repair: seeded_real=%s, repointed=%d conversions",
+                    seeded, repointed)
+    return {"seeded_real_template": seeded, "real_sheets": counts.get(real.id) if real else 0,
+            "conversions_repointed": repointed}

@@ -134,6 +134,15 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("employee HDL field mapping seed failed")
     try:
+        # BOM / Item Structure: force-seed the real 4-sheet bundled workbook
+        # (EGP_STRUCTURES/COMPONENTS/SUB_COMPS/REF_DESGS_INTERFACE) so a from-scratch
+        # DB has it and BOM conversions don't get stuck on the thin BomImport.
+        from app.services.template_seed_service import ensure_bom_multisheet
+        r = await ensure_bom_multisheet()
+        log.info("startup seed — BOM Item Structure template: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("BOM template seed failed")
+    try:
         # Analyst-confirmed NextPower BOM / Item Structure mappings (Arena Tracker +
         # eBOS → EGP_STRUCTURES/COMPONENTS_INTERFACE): source→target columns for both
         # vocabularies plus the fixed constant defaults (Transaction Type=SYNC,
