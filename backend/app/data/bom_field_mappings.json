@@ -1,0 +1,17 @@
+[
+  { "source_system": "arena_tracker", "target_object": "BOM", "fbdi_sheet": "EGP_STRUCTURES_INTERFACE", "target_field": "Item Name", "source_field": "Item Group", "confidence": "High" },
+  { "source_system": "arena_tracker", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Component Item Name", "source_field": "Child_item_number", "confidence": "High" },
+  { "source_system": "arena_tracker", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Structure Item Name", "source_field": "Item Group", "confidence": "High" },
+  { "source_system": "arena_tracker", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Item Sequence", "source_field": "Find_number", "confidence": "High" },
+  { "source_system": "arena_tracker", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Quantity", "source_field": "Quantity", "confidence": "High" },
+
+  { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_STRUCTURES_INTERFACE", "target_field": "Item Name", "source_field": "parent_number", "confidence": "High" },
+  { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Component Item Name", "source_field": "child_number", "confidence": "High" },
+  { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Structure Item Name", "source_field": "parent_number", "confidence": "High" },
+  { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Item Sequence", "source_field": "lineNumber", "confidence": "High" },
+  { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Quantity", "source_field": "quantity", "confidence": "High" },
+
+  { "_constants": "Analyst-fixed constant defaults on EGP_STRUCTURES_INTERFACE, applied regardless of source system", "target_object": "BOM", "target_field": "Transaction Type", "constant": "SYNC" },
+  { "target_object": "BOM", "target_field": "Structure Name", "constant": "Primary" },
+  { "target_object": "BOM", "target_field": "Organization Code", "constant": "NXT_ITEM_ORG" }
+]

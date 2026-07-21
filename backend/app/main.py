@@ -133,6 +133,16 @@ async def _run_seeds_background() -> None:
         log.info("startup seed — employee HDL field mappings: %s", r)
     except Exception:  # noqa: BLE001
         log.exception("employee HDL field mapping seed failed")
+    try:
+        # Analyst-confirmed NextPower BOM / Item Structure mappings (Arena Tracker +
+        # eBOS → EGP_STRUCTURES/COMPONENTS_INTERFACE): source→target columns for both
+        # vocabularies plus the fixed constant defaults (Transaction Type=SYNC,
+        # Structure Name=Primary, Organization Code=NXT_ITEM_ORG).
+        from app.services.catalog_seed_service import seed_bom_field_mappings
+        r = await seed_bom_field_mappings()
+        log.info("startup seed — BOM field mappings: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("BOM field mapping seed failed")
 
     try:
         # Mine allowed_values / lookup_type out of the descriptions of templates

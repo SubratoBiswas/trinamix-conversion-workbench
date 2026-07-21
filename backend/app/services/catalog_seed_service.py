@@ -48,6 +48,12 @@ _CUSTOMER_MAPPINGS = _DATA / "customer_field_mappings.json"
 # here (target_object "Employee HDL"); HDL constants, composite SourceSystemId
 # keys and value maps are applied by the HDL generator from the loader schema.
 _EMPLOYEE_HDL_MAPPINGS = _DATA / "employee_hdl_field_mappings.json"
+# Analyst-authored NextPower BOM (Item Structure) FBDI mapping docs (Tracker +
+# eBOS): Arena BOM extracts → the Item Structure import workbook
+# (EGP_STRUCTURES_INTERFACE / EGP_COMPONENTS_INTERFACE). Source→target column
+# rows PLUS the analyst-fixed constant defaults (Transaction Type=SYNC,
+# Structure Name=Primary, Organization Code=NXT_ITEM_ORG).
+_BOM_MAPPINGS = _DATA / "bom_field_mappings.json"
 
 
 async def _seed_catalog_file(path: Path, captured_from: str, *,
@@ -174,3 +180,60 @@ async def seed_employee_hdl_field_mappings() -> dict:
     value maps are filled by the HDL generator from the loader schema."""
     return await _seed_catalog_file(_EMPLOYEE_HDL_MAPPINGS, "NXT employee HDL field mapping doc",
                                     client_id=await _nextpower_client_id())
+
+
+async def seed_bom_field_mappings() -> dict:
+    """Analyst-confirmed NextPower BOM (Item Structure) mappings, from the Tracker
+    + eBOS BOM FBDI docs. Two parts, both scoped to the NextPower client:
+
+    * source→target COLUMN rows (Item/Component/Structure item names, Item
+      Sequence, Quantity) for BOTH Arena source vocabularies — seeded via the
+      shared catalog upsert so a BOM file from either source auto-maps; and
+    * the analyst-fixed CONSTANT defaults on EGP_STRUCTURES_INTERFACE
+      (Transaction Type=SYNC, Structure Name=Primary, Organization Code=
+      NXT_ITEM_ORG) — seeded as ``example_default`` learnings (rows carry a
+      ``constant`` instead of a ``source_field``, which the column seeder skips).
+    Idempotent: constants are find-or-upgraded, never duplicated.
+    """
+    import json as _json
+    nid = await _nextpower_client_id()
+    # (1) source→target column mappings (rows with a source_field)
+    res = await _seed_catalog_file(_BOM_MAPPINGS, "NXT BOM field mapping doc", client_id=nid)
+    # (2) constant defaults (rows with a "constant" and no source_field)
+    const_seeded = const_kept = 0
+    try:
+        rows = _json.loads(_BOM_MAPPINGS.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        rows = []
+    for r in rows:
+        const = r.get("constant")
+        tgt_obj = (r.get("target_object") or "").strip()
+        tgt_field = (r.get("target_field") or "").strip()
+        if const is None or not (tgt_obj and tgt_field):
+            continue
+        existing = await LearnedMapping.find(
+            LearnedMapping.kind == "example_default",
+            LearnedMapping.target_object == tgt_obj,
+            LearnedMapping.target_field == tgt_field,
+        ).first_or_none()
+        if existing:
+            upd = {}
+            if existing.resolved_value != str(const):
+                upd["resolved_value"] = str(const)
+            if existing.client_id != nid and not existing.is_global:
+                upd["client_id"] = nid
+            if upd:
+                await existing.set(upd)
+            const_kept += 1
+            continue
+        await LearnedMapping(
+            kind="example_default", category="Default Value",
+            original_value="(constant)", resolved_value=str(const),
+            target_object=tgt_obj, target_field=tgt_field,
+            client_id=nid, is_global=False,
+            captured_from="NXT BOM field mapping doc",
+        ).insert()
+        const_seeded += 1
+    res["constants_seeded"] = const_seeded
+    res["constants_kept"] = const_kept
+    return res
