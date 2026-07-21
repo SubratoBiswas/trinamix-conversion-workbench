@@ -14,6 +14,17 @@ from app.models.mapping import MappingSuggestion
 from app.models.conversion import Conversion
 from app.parsers import parse_tabular
 
+import re as _re
+_NORMALIZE_RE = _re.compile(r"[^a-z0-9]")
+
+
+def _normalize(name) -> str:
+    """Collapse a column/field name to a case- and punctuation-insensitive key
+    (matches the catalog seeder + learning-engine normalisation)."""
+    if not name:
+        return ""
+    return _NORMALIZE_RE.sub("", str(name).lower())
+
 
 async def _source_columns_for(dataset: Dataset) -> list[SourceColumn]:
     profs = await DatasetColumnProfile.find(
@@ -584,6 +595,43 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     _bo = (template.business_object or "").strip().lower() if template else ""
     if _bo in ("item", "item master", "customer"):
         _guard_item_mappings(ai_results, {str(t.id): t for t in targets}, sources)
+
+    # Analyst "do-not-map" source columns: the analyst mapping docs deliberately
+    # EXCLUDE certain source columns (e.g. NetSuite custom custitem_* attributes on
+    # the item dump that AI otherwise over-maps). A learned ``ignore_source`` rule
+    # for this object + client names each such source column; drop any mapping that
+    # used one so the AI can't over-populate a field the analyst never mapped.
+    try:
+        from app.models.learned import LearnedMapping as _LM
+        from app.services.client_service import client_id_for_conversion as _cidc, scope_query as _sq
+        _obj = (template.business_object if template else None) or conversion.target_object
+        if _obj:
+            _scope2 = await _sq(await _cidc(conversion))
+            _blocked_rows = await _LM.find({
+                "kind": "ignore_source", "target_object": _obj, **_scope2
+            }).to_list()
+            _blocked = {_normalize(r.original_value) for r in _blocked_rows if r.original_value}
+            if _blocked:
+                _dropped = 0
+                for r in ai_results:
+                    sc = getattr(r, "source_column", None)
+                    if sc and _normalize(sc) in _blocked:
+                        try:
+                            r.source_column = None
+                            r.confidence = 0.0
+                            r.review_required = 1
+                            r.suggested_transformation = None
+                            r.reason = ("Analyst rule: this source column is on the "
+                                        "do-not-map list for this object and is left unmapped.")
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _dropped += 1
+                if _dropped:
+                    import logging as _lg
+                    _lg.getLogger(__name__).info(
+                        "do-not-map: dropped %d over-mapped source columns for %s", _dropped, _obj)
+    except Exception:  # noqa: BLE001 — blocklist is best-effort, never break mapping
+        pass
 
     existing = {
         m.target_field_id: m

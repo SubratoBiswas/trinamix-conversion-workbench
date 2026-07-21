@@ -152,6 +152,15 @@ async def _run_seeds_background() -> None:
         log.info("startup seed — BOM field mappings: %s", r)
     except Exception:  # noqa: BLE001
         log.exception("BOM field mapping seed failed")
+    try:
+        # NextPower Item DO-NOT-MAP list: NetSuite custom source columns the analyst
+        # excluded (AI was over-mapping them). Seeded as ignore_source learnings so
+        # the mapper leaves those source columns unmapped for future Item imports.
+        from app.services.catalog_seed_service import seed_item_donotmap_columns
+        r = await seed_item_donotmap_columns()
+        log.info("startup seed — item do-not-map columns: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("item do-not-map seed failed")
 
     try:
         # Mine allowed_values / lookup_type out of the descriptions of templates

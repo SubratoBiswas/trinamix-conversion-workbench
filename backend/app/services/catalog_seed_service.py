@@ -54,6 +54,11 @@ _EMPLOYEE_HDL_MAPPINGS = _DATA / "employee_hdl_field_mappings.json"
 # rows PLUS the analyst-fixed constant defaults (Transaction Type=SYNC,
 # Structure Name=Primary, Organization Code=NXT_ITEM_ORG).
 _BOM_MAPPINGS = _DATA / "bom_field_mappings.json"
+# Analyst DO-NOT-MAP list for NextPower Item: NetSuite source columns (the
+# yellow-highlighted custom custitem_* attributes) that AI over-maps but the item
+# mapping doc excludes. Seeded as ``ignore_source`` learnings so the mapper never
+# uses them as a source for any Item field.
+_ITEM_DONOTMAP = _DATA / "item_donotmap_columns.json"
 
 
 async def _seed_catalog_file(path: Path, captured_from: str, *,
@@ -180,6 +185,48 @@ async def seed_employee_hdl_field_mappings() -> dict:
     value maps are filled by the HDL generator from the loader schema."""
     return await _seed_catalog_file(_EMPLOYEE_HDL_MAPPINGS, "NXT employee HDL field mapping doc",
                                     client_id=await _nextpower_client_id())
+
+
+async def seed_item_donotmap_columns() -> dict:
+    """Seed the NextPower Item DO-NOT-MAP source columns as ``ignore_source``
+    learnings (client-scoped to NextPower, target_object 'Item'). The mapping
+    engine drops any Item mapping whose source column is on this list, so AI can't
+    over-populate fields from source columns the analyst deliberately excluded
+    (the yellow-highlighted NetSuite custitem_* attributes). Idempotent."""
+    import json as _json
+    if not _ITEM_DONOTMAP.exists():
+        return {"seeded": 0, "note": "item_donotmap_columns.json not found"}
+    try:
+        doc = _json.loads(_ITEM_DONOTMAP.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    obj = (doc.get("target_object") or "Item").strip()
+    cols = [c for c in (doc.get("columns") or []) if isinstance(c, str) and c.strip()]
+    nid = await _nextpower_client_id()
+    seeded = kept = 0
+    for col in cols:
+        col = col.strip()
+        existing = await LearnedMapping.find(
+            LearnedMapping.kind == "ignore_source",
+            LearnedMapping.target_object == obj,
+            LearnedMapping.original_value == col,
+        ).first_or_none()
+        if existing:
+            if existing.client_id != nid and not existing.is_global:
+                await existing.set({"client_id": nid})
+            kept += 1
+            continue
+        await LearnedMapping(
+            kind="ignore_source", category="Do Not Map Source",
+            original_value=col, resolved_value="",
+            target_object=obj, target_field=None,
+            client_id=nid, is_global=False,
+            source_erp=doc.get("source_system"),
+            captured_from="NXT item over-map feedback (NetSuite do-not-map list)",
+        ).insert()
+        seeded += 1
+    logger.info("item do-not-map: seeded %d, kept %d (of %d cols)", seeded, kept, len(cols))
+    return {"seeded": seeded, "kept": kept, "total": len(cols), "target_object": obj}
 
 
 async def seed_bom_field_mappings() -> dict:
