@@ -86,7 +86,13 @@ def _transform_frame(
     records: list[dict] | None = None
     for m in sorted_mappings:
         tgt = fields_by_id.get(m.target_field_id)
-        if not tgt or m.status == "not_applicable":
+        if not tgt:
+            continue
+        # A not_applicable ("leave blank") field is normally skipped — UNLESS the
+        # user attached an explicit default_value (e.g. Invoice Match Option =
+        # "Receipt"). An explicit default is intent to populate, so emit it as a
+        # constant instead of blanking the column.
+        if m.status == "not_applicable" and not (m.default_value and str(m.default_value).strip()):
             continue
         rules = list(pipelines.get(tgt.id, []))
         if m.suggested_transformation and not rules and m.status != "rejected":
@@ -532,6 +538,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         _fbyid[tid].field_name.strip().lower().rstrip("*").strip()
         for tid, _m in _best_m.items()
         if _m.status == "not_applicable" and tid in _fbyid and _fbyid[tid].field_name
+        # An explicit default_value on the field is intent to POPULATE it (e.g. an
+        # analyst set Invoice Match Option = "Receipt"), so it must not be suppressed
+        # even though the mapping is not_applicable (no source column).
+        and not (getattr(_m, "default_value", None) and str(_m.default_value).strip())
     }
 
     fmt = fmt.lower()

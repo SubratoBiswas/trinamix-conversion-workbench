@@ -229,6 +229,51 @@ async def seed_item_donotmap_columns() -> dict:
     return {"seeded": seeded, "kept": kept, "total": len(cols), "target_object": obj}
 
 
+_SUPPLIER_DEFAULTS = _DATA / "supplier_default_values.json"
+
+
+async def seed_supplier_default_values() -> dict:
+    """Analyst-approved constant defaults for NextPower supplier objects (e.g.
+    Supplier Site Invoice Match Option = 'Receipt'), seeded as ``example_default``
+    learnings scoped to the NextPower client so future NextPower supplier
+    conversions populate them automatically. Idempotent."""
+    import json as _json
+    if not _SUPPLIER_DEFAULTS.exists():
+        return {"seeded": 0, "note": "supplier_default_values.json not found"}
+    try:
+        rows = _json.loads(_SUPPLIER_DEFAULTS.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    nid = await _nextpower_client_id()
+    seeded = kept = 0
+    for r in rows:
+        const = r.get("constant")
+        tgt_obj = (r.get("target_object") or "").strip()
+        tgt_field = (r.get("target_field") or "").strip()
+        if const is None or not (tgt_obj and tgt_field):
+            continue
+        existing = await LearnedMapping.find(
+            LearnedMapping.kind == "example_default",
+            LearnedMapping.target_object == tgt_obj,
+            LearnedMapping.target_field == tgt_field,
+        ).first_or_none()
+        if existing:
+            if existing.resolved_value != str(const) or (existing.client_id != nid and not existing.is_global):
+                await existing.set({"resolved_value": str(const), "client_id": nid})
+            kept += 1
+            continue
+        await LearnedMapping(
+            kind="example_default", category="Default Value",
+            original_value="(constant)", resolved_value=str(const),
+            target_object=tgt_obj, target_field=tgt_field,
+            client_id=nid, is_global=False,
+            captured_from="NXT supplier analyst default",
+        ).insert()
+        seeded += 1
+    logger.info("supplier default values: seeded %d, kept %d", seeded, kept)
+    return {"seeded": seeded, "kept": kept, "total": len(rows)}
+
+
 async def seed_bom_field_mappings() -> dict:
     """Analyst-confirmed NextPower BOM (Item Structure) mappings, from the Tracker
     + eBOS BOM FBDI docs. Two parts, both scoped to the NextPower client:

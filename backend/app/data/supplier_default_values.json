@@ -1,0 +1,4 @@
+[
+  { "_note": "Analyst-approved constant default values for NextPower supplier objects, seeded as example_default learnings so future NextPower supplier conversions apply them automatically (they populate even when the field has no source column).",
+    "target_object": "Supplier Site", "target_field": "Invoice Match Option", "constant": "Receipt" }
+]

@@ -1492,8 +1492,13 @@ const PrecedenceBar: React.FC<{
   effectiveDefaults: Record<string, string>;
 }> = ({ mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults }) => {
   const { counts, total } = useMemo(() => {
+    const _PRIO: Record<string, number> = { overridden: 4, approved: 3, not_applicable: 2, rejected: 1, suggested: 0 };
     const mapByTarget = new Map<string, MappingSuggestion>();
-    for (const m of mappings) mapByTarget.set(String(m.target_field_id), m);
+    for (const m of mappings) {
+      const k = String(m.target_field_id);
+      const cur = mapByTarget.get(k);
+      if (!cur || (_PRIO[m.status ?? "suggested"] ?? 0) > (_PRIO[cur.status ?? "suggested"] ?? 0)) mapByTarget.set(k, m);
+    }
     const c: Record<LayerKey, number> = {
       gold: 0, learned: 0, workbook: 0, manual: 0,
       deterministic: 0, default: 0, ai: 0, suppressed: 0, unmapped: 0,
@@ -1699,8 +1704,17 @@ const MappingTableView: React.FC<{
   }, [conversionId]);
 
   const mapByTarget = useMemo(() => {
+    // Keep the HIGHEST-PRIORITY mapping per target field. The backend can return
+    // more than one row for a target (e.g. a stale "suggested" plus a human
+    // "rejected"/"approved"); last-write-wins let a suggested row shadow a rejected
+    // one, so a rejected mapping was still shown/exported as "suggested".
+    const PRIO: Record<string, number> = { overridden: 4, approved: 3, not_applicable: 2, rejected: 1, suggested: 0 };
     const m: Record<string, MappingSuggestion> = {};
-    for (const x of mappings) m[String(x.target_field_id)] = x;
+    for (const x of mappings) {
+      const k = String(x.target_field_id);
+      const cur = m[k];
+      if (!cur || (PRIO[x.status ?? "suggested"] ?? 0) > (PRIO[cur.status ?? "suggested"] ?? 0)) m[k] = x;
+    }
     return m;
   }, [mappings]);
 

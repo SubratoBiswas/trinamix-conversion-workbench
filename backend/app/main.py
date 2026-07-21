@@ -111,6 +111,14 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("supplier transform seed failed")
     try:
+        # Analyst-approved NextPower supplier constant defaults (e.g. Supplier Site
+        # Invoice Match Option = Receipt) as example_default learnings.
+        from app.services.catalog_seed_service import seed_supplier_default_values
+        r = await seed_supplier_default_values()
+        log.info("startup seed — supplier default values: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier default values seed failed")
+    try:
         # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
         # Fusion Customer Import): account/party key references + name/tax/email/
         # phone/credit, propagated by field name across the interface sheets.

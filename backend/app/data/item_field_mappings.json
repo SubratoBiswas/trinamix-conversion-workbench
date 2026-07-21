@@ -1,488 +1,495 @@
 [
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "item_number",
-    "source_label": "SH-2.10.RBK.BLK.00008",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "User Item Type",
-    "source_field": "assemblyType",
-    "source_label": "NOT_AN_ASSEMBLY",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Description",
-    "source_field": "description",
-    "source_label": "Andrew Gorman",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Lifecycle Phase",
-    "source_field": "lifecyclePhase.name",
-    "source_label": "True",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "number",
-    "source_label": "True",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Purchased",
-    "source_field": "offTheShelf",
-    "source_label": "BOM,SOLV,BAR D,10AWG,EXTENDER",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Make or Buy",
-    "source_field": "procurementType",
-    "source_label": "False",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Revision",
-    "source_field": "revisionNumber",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Item Status",
-    "source_field": "status",
-    "source_label": "False",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Primary Unit of Measure",
-    "source_field": "uom",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Unit Weight",
-    "source_field": "attr.ITEM WEIGHT (kg)",
-    "source_label": "TRUE",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Planning Method",
-    "source_field": "attr.Relevant for Supply Chain Planning",
-    "source_label": "Wire Harness Assembly",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ebos",
-    "target_object": "Item",
-    "target_field": "Template Name",
-    "source_field": "attr.EBOS Routing Templates",
-    "source_label": "NX-Restricted",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "Arena Item",
-    "source_label": ".16S8SHC3",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Description",
-    "source_field": "description",
-    "source_label": "SCREW,SHCS,ISO\u00a04762,M1.6-0.35\u00a0X\u00a08,SST\u00a030",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Primary Unit of Measure",
-    "source_field": "u_m",
-    "source_label": "EA",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Fixed Lead Time",
-    "source_field": "lead_time",
-    "source_label": "20",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Standard Lot Size",
-    "source_field": "lot_size",
-    "source_label": "1",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Make or Buy",
-    "source_field": "p_m_t_code",
-    "source_label": "P",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Stocked",
-    "source_field": "stocked",
-    "source_label": "1",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Revision",
-    "source_field": "revision",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Unit Weight",
-    "source_field": "unit_weight",
-    "source_label": "0",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Weight Unit of Measure",
-    "source_field": "weight_units",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Variable Lead Time",
-    "source_field": "var_lead",
-    "source_label": "0",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Default Buyer",
-    "source_field": "buyer",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Length",
-    "source_field": "length",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Width",
-    "source_field": "width",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Height",
-    "source_field": "height",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "syteline",
-    "target_object": "Item",
-    "target_field": "Dimension Unit of Measure",
-    "source_field": "dimension_u_m",
-    "source_label": "NULL",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Description",
-    "source_field": "displayname",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "fullname",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Item Status",
-    "source_field": "isinactive",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "itemid",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "User Item Type",
-    "source_field": "itemtype",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Organization Code",
-    "source_field": "location",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Primary Unit of Measure",
-    "source_field": "unitstype",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Unit Weight",
-    "source_field": "weight",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Item",
-    "target_field": "Weight Unit of Measure",
-    "source_field": "weightunit",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Long Description",
-    "source_field": "Description",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Description",
-    "source_field": "Item Name",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "Item Number",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Revision",
-    "source_field": "Revision",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Primary Unit of Measure",
-    "source_field": "Unit of Measure",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Customer Ordered",
-    "source_field": "Available for Sales",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_ratanalee",
-    "target_object": "Item",
-    "target_field": "Item Class Name",
-    "source_field": "GROUP",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Item Number",
-    "source_field": "Part Number",
-    "source_label": "1000042-ASS",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Revision",
-    "source_field": "revision_number",
-    "source_label": "1",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Description",
-    "source_field": "Part Description",
-    "source_label": "Gen 2.2, Array Pier, W6x6.2 (50ksi-4mils",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Unit Weight",
-    "source_field": "Weight",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Length",
-    "source_field": "Length",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Lifecycle Phase",
-    "source_field": "lifecycle_status",
-    "source_label": "Prototype",
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Primary Unit of Measure",
-    "source_field": "unit_of_measure",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Customer Orders Enabled",
-    "source_field": "available_for_sales",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  },
-  {
-    "source_system": "arena_anaplan",
-    "target_object": "Item",
-    "target_field": "Item Class Name",
-    "source_field": "group",
-    "source_label": null,
-    "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
-    "confidence": "High"
-  }
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "item_number",
+  "source_label": "SH-2.10.RBK.BLK.00008",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "User Item Type",
+  "source_field": "assemblyType",
+  "source_label": "NOT_AN_ASSEMBLY",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Description",
+  "source_field": "description",
+  "source_label": "Andrew Gorman",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Lifecycle Phase",
+  "source_field": "lifecyclePhase.name",
+  "source_label": "True",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "number",
+  "source_label": "True",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Purchased",
+  "source_field": "offTheShelf",
+  "source_label": "BOM,SOLV,BAR D,10AWG,EXTENDER",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Make or Buy",
+  "source_field": "procurementType",
+  "source_label": "False",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Revision",
+  "source_field": "revisionNumber",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Item Status",
+  "source_field": "status",
+  "source_label": "False",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "uom",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Unit Weight",
+  "source_field": "attr.ITEM WEIGHT (kg)",
+  "source_label": "TRUE",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Planning Method",
+  "source_field": "attr.Relevant for Supply Chain Planning",
+  "source_label": "Wire Harness Assembly",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ebos",
+  "target_object": "Item",
+  "target_field": "Template Name",
+  "source_field": "attr.EBOS Routing Templates",
+  "source_label": "NX-Restricted",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "Arena Item",
+  "source_label": ".16S8SHC3",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Description",
+  "source_field": "description",
+  "source_label": "SCREW,SHCS,ISO 4762,M1.6-0.35 X 8,SST 30",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "u_m",
+  "source_label": "EA",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Fixed Lead Time",
+  "source_field": "lead_time",
+  "source_label": "20",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Standard Lot Size",
+  "source_field": "lot_size",
+  "source_label": "1",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Make or Buy",
+  "source_field": "p_m_t_code",
+  "source_label": "P",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Stocked",
+  "source_field": "stocked",
+  "source_label": "1",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Revision",
+  "source_field": "revision",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Unit Weight",
+  "source_field": "unit_weight",
+  "source_label": "0",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Weight Unit of Measure",
+  "source_field": "weight_units",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Variable Lead Time",
+  "source_field": "var_lead",
+  "source_label": "0",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Default Buyer",
+  "source_field": "buyer",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Length",
+  "source_field": "length",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Width",
+  "source_field": "width",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Height",
+  "source_field": "height",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "Dimension Unit of Measure",
+  "source_field": "dimension_u_m",
+  "source_label": "NULL",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Description",
+  "source_field": "displayname",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "fullname",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Status",
+  "source_field": "isinactive",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "itemid",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "User Item Type",
+  "source_field": "itemtype",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Organization Code",
+  "source_field": "location",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "unitstype",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Unit Weight",
+  "source_field": "weight",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "netsuite",
+  "target_object": "Item",
+  "target_field": "Weight Unit of Measure",
+  "source_field": "weightunit",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Long Description",
+  "source_field": "Description",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Description",
+  "source_field": "Item Name",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "Item Number",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Revision",
+  "source_field": "Revision",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "Unit of Measure",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Customer Ordered",
+  "source_field": "Available for Sales",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_ratanalee",
+  "target_object": "Item",
+  "target_field": "Item Class Name",
+  "source_field": "GROUP",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Item Number",
+  "source_field": "Part Number",
+  "source_label": "1000042-ASS",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Revision",
+  "source_field": "revision_number",
+  "source_label": "1",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Description",
+  "source_field": "Part Description",
+  "source_label": "Gen 2.2, Array Pier, W6x6.2 (50ksi-4mils",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Unit Weight",
+  "source_field": "Weight",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Length",
+  "source_field": "Length",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Lifecycle Phase",
+  "source_field": "lifecycle_status",
+  "source_label": "Prototype",
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Primary Unit of Measure",
+  "source_field": "unit_of_measure",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Customer Orders Enabled",
+  "source_field": "available_for_sales",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "arena_anaplan",
+  "target_object": "Item",
+  "target_field": "Item Class Name",
+  "source_field": "group",
+  "source_label": null,
+  "fbdi_sheet": "EGP_SYSTEM_ITEMS_INTERFACE",
+  "confidence": "High"
+ },
+ {
+  "source_system": "syteline",
+  "target_object": "Item",
+  "target_field": "User Item Type",
+  "source_field": "matl_type",
+  "confidence": "High"
+ }
 ]
