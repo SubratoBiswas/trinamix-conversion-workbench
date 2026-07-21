@@ -445,6 +445,25 @@ export const MappingApi = {
         samples: { source: any; output: any; error?: string | null }[];
       }>(`/conversions/${conversionId}/rules/preview`, body)
       .then((r) => r.data),
+  // Plain-English → structured rule (the "Describe this rule in plain English" box).
+  translateRule: (
+    conversionId: string,
+    body: {
+      description: string;
+      target_field_id?: string;
+      source_column?: string;
+      sample_size?: number;
+    }
+  ) =>
+    api
+      .post<{
+        rule_type: string;
+        config: any;
+        explanation?: string;
+        ambiguities?: { phrase: string; interpreted_as: string; alternatives: string[] }[];
+        source?: "local" | "ai";
+      }>(`/conversions/${conversionId}/rules/translate`, body)
+      .then((r) => r.data),
 };
 
 export const QualityApi = {

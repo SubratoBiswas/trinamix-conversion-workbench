@@ -355,6 +355,33 @@ async def preview_rules(
     return PreviewResponse(samples=out)
 
 
+class TranslateRuleRequest(BaseModel):
+    description: str
+    target_field_id: Optional[str] = None
+    source_column: Optional[str] = None
+    sample_size: Optional[int] = 5
+
+
+@router.post("/conversions/{conversion_id}/rules/translate")
+async def translate_rule_endpoint(
+    conversion_id: str, payload: TranslateRuleRequest, _: User = Depends(get_current_user)
+):
+    """Turn a plain-English rule description into a structured transformation rule
+    ({rule_type, config, explanation, ambiguities, source}) for the Rule Author
+    modal's 'Describe this rule in plain English' box. Deterministic fast-path for
+    the common flag→code derivation, Claude API otherwise; never 500s."""
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    if not (payload.description or "").strip():
+        raise HTTPException(400, "Describe the rule in a sentence first.")
+    from app.services.rule_translation_service import translate_rule
+    return await translate_rule(
+        conv, payload.description,
+        target_field_id=payload.target_field_id, source_column=payload.source_column,
+    )
+
+
 @router.get("/conversions/{conversion_id}/rules", response_model=list[TransformationRuleOut])
 async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
     rules = await TransformationRule.find(
