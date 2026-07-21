@@ -356,7 +356,10 @@ _CONTROL_DEFAULTS: dict[str, str] = {
     "supplier type": "SUPPLIER",
     "business relationship": "SPEND_AUTHORIZED",
     "federal reportable": "N",
-    "delivery channel": "EMAIL",
+    # NOTE: "delivery channel" is intentionally NOT a control default — it is
+    # DERIVED per-row from the Email/Fax Transaction flags (CASE_WHEN: Email=Yes ->
+    # EMAIL, Fax=Yes -> FAX, else blank). A blanket constant here was forcing every
+    # row to EMAIL and overwriting the derivation.
     # --- Supplier address (POZ_SUPPLIER_ADDRESSES_INT) ---
     "address name": "PRIMARY",
     "pay": "Y",
@@ -414,7 +417,9 @@ _SEQ_PREFER_SOURCE: set[str] = {"suppliernumber", "supplierpartynumber"}
 # currency) or correctly source-mapped (names, addresses, tax ids, web site).
 _AUTHORITATIVE: set[str] = {
     "import action", "batch id",
-    "federal reportable", "delivery channel",
+    "federal reportable",
+    # "delivery channel" removed — it is per-row derived (Email/Fax -> EMAIL/FAX/
+    # blank), not a forced constant.
     "address name", "pay", "ordering", "rfq or bidding",
     "supplier site", "user account action",
 }

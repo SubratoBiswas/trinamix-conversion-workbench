@@ -391,7 +391,14 @@ async def apply_learned_to_conversion(
             if lm.target_field:
                 by_default.setdefault(lm.target_field, lm)
         for m in mappings:
-            if not _eligible(m):
+            # A learned constant default is explicit intent to POPULATE the field,
+            # so it also overrides a gold "not_applicable" suppression (not only
+            # still-"suggested" targets) — e.g. an analyst default of Invoice Match
+            # Option = Receipt must land even though the gold example left it blank.
+            # Human "overridden"/"rejected" choices are still respected.
+            if m.status in ("overridden", "rejected"):
+                continue
+            if not (_eligible(m) or m.status == "not_applicable"):
                 continue
             tgt_name = fields_map.get(m.target_field_id)
             if not tgt_name or tgt_name not in by_default:
