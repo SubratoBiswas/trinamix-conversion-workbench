@@ -142,8 +142,16 @@ async def create_dataset_from_upload(
     try:
         from app.services.dataset_file_store import store_dataset_bytes
         await store_dataset_bytes(ds.id, stored_name, Path(file_path).read_bytes())
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001
+        # Don't swallow this silently — if the durable copy of a large file fails,
+        # the dataset still profiles but a later Generate can't find the source
+        # ("re-upload the dataset"). Surface it in the logs so a partial/failed
+        # upload of a big extract is diagnosable instead of looking like a truncation.
+        import logging
+        logging.getLogger(__name__).exception(
+            "dataset %s (%s rows): durable GridFS copy failed — regeneration will need a re-upload",
+            ds.id, total_rows,
+        )
 
     # Bulk-insert column profiles in one round-trip instead of one per column
     # (200+ sequential inserts was a major upload-latency source at scale).
