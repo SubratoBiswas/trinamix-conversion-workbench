@@ -88,18 +88,27 @@ def _transform_frame(
         tgt = fields_by_id.get(m.target_field_id)
         if not tgt:
             continue
-        # A not_applicable ("leave blank") field is normally skipped — UNLESS the
-        # user attached an explicit default_value (e.g. Invoice Match Option =
-        # "Receipt"). An explicit default is intent to populate, so emit it as a
-        # constant instead of blanking the column.
-        if m.status == "not_applicable" and not (m.default_value and str(m.default_value).strip()):
+        # Statuses that DISCARD the mapped source column:
+        #   not_applicable — the gold/user marked the field "leave blank".
+        #   rejected       — the user threw the suggested source column away.
+        # Both are normally skipped entirely, UNLESS an explicit default_value was
+        # attached (e.g. Invoice Match Option = "Receipt"); an explicit default is
+        # intent to populate, so it is emitted as a CONSTANT.
+        # Critically, a discarded mapping must never read from source_column: it
+        # still wins the per-target dedup (so a stale "suggested" row can't
+        # resurrect it), and before this guard a "rejected" mapping was selected as
+        # the field's mapping and then still wrote that column's values into the
+        # FBDI — the UI and the mapping CSV said "rejected" while the output
+        # carried the rejected column.
+        _discarded = m.status in ("not_applicable", "rejected")
+        if _discarded and not (m.default_value and str(m.default_value).strip()):
             continue
         rules = list(pipelines.get(tgt.id, []))
         if m.suggested_transformation and not rules and m.status != "rejected":
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
         dv = m.default_value
-        has_src = bool(m.source_column) and m.source_column in col_cache
+        has_src = bool(m.source_column) and m.source_column in col_cache and not _discarded
         if rules:
             # A transform rule (CASE_WHEN / COALESCE / CONCAT / …) can derive its
             # value from OTHER columns via the per-row context, so it must run even

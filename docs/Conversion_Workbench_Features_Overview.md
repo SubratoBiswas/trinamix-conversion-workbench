@@ -119,7 +119,17 @@ Per-row rules applied at generation. Rule types include:
 
 ---
 
-## 13. On the roadmap
+## 13. Performance and scale
+
+- Built and tuned on 40 MB extracts of 100,000+ rows, so files of a few thousand rows are routine.
+- The row transform runs in **chunks of 25,000 rows**, each on a worker thread, then concatenated. Because the transforms are row-local, chunk-then-concat is byte-identical to a single pass while peak memory stays at about one chunk.
+- The heavy work (transform, coded-value enforcement, file write) runs off the event loop via `asyncio.to_thread`, so a large conversion doesn't block other users.
+- Generation is a background job the screen polls, so a big load never hits the gateway timeout.
+- Output is written one interface sheet at a time and freed before the next; the CSVs stream into a compressed zip.
+- Excel is read in read-only mode, CSV through the fast C parser; profiling uses a 3,000-row sample while the true row count comes from a cheap dimension read; column profiles are bulk-inserted.
+- Mapping is deterministic-first, and on 300+ field objects the AI pass is skipped, so most runs make few or no AI calls regardless of row count.
+
+## 14. On the roadmap
 
 - **Extensible Flexfields (EFF)** for Item — the majority of NextPower item attributes load as EFF (`EGO_ITEM_INTF_EFF_B/_TL`); design is scoped, pending the client's flexfield configuration export.
 - **Supplier value crosswalks** for Tax Org Type / Supplier Type once the real source-value lists are provided.
