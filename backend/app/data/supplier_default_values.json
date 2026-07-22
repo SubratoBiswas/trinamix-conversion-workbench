@@ -1,4 +1,44 @@
 [
-  { "_note": "Analyst-approved constant default values for NextPower supplier objects, seeded as example_default learnings so future NextPower supplier conversions apply them automatically (they populate even when the field has no source column).",
-    "target_object": "Supplier Site", "target_field": "Invoice Match Option", "constant": "Receipt" }
+  {
+    "_note": "Analyst-approved constant default values for NextPower supplier objects, seeded as example_default learnings so future NextPower supplier conversions apply them automatically (they populate even when the field has no source column).",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Match Option",
+    "constant": "Receipt"
+  },
+  {
+    "_note": "gold: 158/158 vendors \u2014 eBOS Vendors 04-27-2026",
+    "target_object": "Supplier",
+    "target_field": "Supplier Type",
+    "constant": "Standard"
+  },
+  {
+    "_note": "gold: 158/158 vendors \u2014 eBOS Vendors 04-27-2026",
+    "target_object": "Supplier",
+    "target_field": "Business Relationship*",
+    "constant": "SPEND_AUTHORIZED"
+  },
+  {
+    "_note": "gold: 158/158 vendors \u2014 eBOS Vendors 04-27-2026",
+    "target_object": "Supplier Site",
+    "target_field": "Invoice Currency",
+    "constant": "USD"
+  },
+  {
+    "_note": "gold: 158/158 vendors \u2014 eBOS Vendors 04-27-2026",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Currency",
+    "constant": "USD"
+  },
+  {
+    "_note": "gold: 159/159 rows \u2014 eBOS Vendors 04-27-2026",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Client BU*",
+    "constant": "NX US BU"
+  },
+  {
+    "_note": "gold: 159/159 rows \u2014 eBOS Vendors 04-27-2026",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Bill-to BU",
+    "constant": "NX US BU"
+  }
 ]

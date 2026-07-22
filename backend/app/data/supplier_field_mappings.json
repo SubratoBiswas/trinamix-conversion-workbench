@@ -1095,15 +1095,6 @@
     "confidence": "High"
   },
   {
-    "source_system": "arena_ebos",
-    "target_object": "Supplier Banks",
-    "target_field": "**Branch Name",
-    "source_field": "Bank ID",
-    "source_label": "021000021",
-    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
-    "confidence": "High"
-  },
-  {
     "source_system": "netsuite",
     "target_object": "Supplier Banks",
     "target_field": "*Account Country Code",
@@ -1167,21 +1158,266 @@
     "confidence": "High"
   },
   {
-    "source_system": "arena_ebos",
-    "target_object": "Supplier Banks",
-    "target_field": "IBAN",
-    "source_field": "WIRE ID",
-    "source_label": null,
-    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
-    "confidence": "High"
-  },
-  {
     "source_system": "netsuite",
     "target_object": "Supplier Banks",
     "target_field": "Exchange Rate",
     "source_field": "Current Currency Exchange Rate",
     "source_label": null,
     "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS ",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Supplier Name*",
+    "source_field": "name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Alternate Name",
+    "source_field": "name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Taxpayer ID",
+    "source_field": "tax_id",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High",
+    "rule_type": "REPLACE",
+    "rule_config": {
+      "find": " ",
+      "replace": ""
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier",
+    "target_field": "Tax Registration Number",
+    "source_field": "tax_id",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIERS_INT",
+    "confidence": "High",
+    "rule_type": "REPLACE",
+    "rule_config": {
+      "find": " ",
+      "replace": ""
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Supplier Name*",
+    "source_field": "name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Address Name *",
+    "source_field": "city",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Phone",
+    "source_field": "phone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High",
+    "rule_type": "REGEX_REPLACE",
+    "rule_config": {
+      "pattern": "(?i)^\\s*1[-.\\s]|\\s*(?:ext|extn|extension|x)\\.?\\s*\\d{1,6}\\s*$",
+      "replace": "",
+      "flags": "i"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "Phone Extension",
+    "source_field": "phone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "extension"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Address",
+    "target_field": "E-Mail",
+    "source_field": "contact",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_ADDRESSES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Supplier Name*",
+    "source_field": "name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Address Name",
+    "source_field": "city",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Supplier Site*",
+    "source_field": "city",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High",
+    "rule_type": "PREFIX",
+    "rule_config": {
+      "prefix": "BU "
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "E-Mail",
+    "source_field": "contact",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Terms",
+    "source_field": "terms_code",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site",
+    "target_field": "Payment Method",
+    "source_field": "pay_type",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Supplier Name*",
+    "source_field": "name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Site Assignment",
+    "target_field": "Supplier Site*",
+    "source_field": "city",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SITE_ASSIGNMENTS_INT",
+    "confidence": "High",
+    "rule_type": "PREFIX",
+    "rule_config": {
+      "prefix": "BU "
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "Supplier Name*",
+    "source_field": "name",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "E-Mail",
+    "source_field": "contact",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "Phone",
+    "source_field": "phone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High",
+    "rule_type": "REGEX_REPLACE",
+    "rule_config": {
+      "pattern": "(?i)^\\s*1[-.\\s]|\\s*(?:ext|extn|extension|x)\\.?\\s*\\d{1,6}\\s*$",
+      "replace": "",
+      "flags": "i"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Contacts",
+    "target_field": "Phone Extension",
+    "source_field": "phone",
+    "source_label": null,
+    "fbdi_sheet": "POZ_SUP_CONTACTS",
+    "confidence": "High",
+    "rule_type": "PHONE_PART",
+    "rule_config": {
+      "part": "extension"
+    }
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "**Bank Name",
+    "source_field": "bank_name",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "Account Name",
+    "source_field": "bank_acct_name",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS",
+    "confidence": "High"
+  },
+  {
+    "source_system": "arena_ebos",
+    "target_object": "Supplier Banks",
+    "target_field": "*Account Number",
+    "source_field": "wire_id_acct_num",
+    "source_label": null,
+    "fbdi_sheet": "IBY_TEMP_EXT_BANK_ACCTS",
     "confidence": "High"
   }
 ]

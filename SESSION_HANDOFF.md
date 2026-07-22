@@ -162,3 +162,72 @@ Generate with no re-mapping. Two things could have resurrected them and neither 
 `apply_learned_to_conversion._eligible()` accepts only `suggested` (or `approved` under
 force), never `rejected`; and the `_PRIO` dedup keeps `rejected` above a stale
 `suggested` row for the same target.
+
+---
+
+## eBOS/SyteLine supplier mappings + learning-engine field-match fix (2026-07-22)
+
+Source: `eBOS Vendors - 04-27-2026 (1).xlsx`. Six tabs; the useful ones are
+`Oracle-NetSuite_SyteLine` (3 header rows — Oracle field / NetSuite column / **eBOS
+column** — then 158 rows of expected Oracle output), `Data eBOS New` (the real 26-column
+vendor extract) and `Sheet1` (Oracle ← NetSuite ← eBOS reconciliation).
+
+### The latent bug this uncovered
+
+`apply_learned_to_conversion` matched the learned `target_field` to the template's
+`field_name` by **exact string**. Oracle decorates headers (`Supplier Name*`,
+`Address Name *`, `*Supplier Number`, `**Bank Name`) while the analyst docs write the
+plain name. So a whole class of seeded mappings sat in the library and never applied —
+in the column pass, the suppression pass and the constant-default pass alike. All three
+now do exact-match first, then a `_normalize()` fallback; a normalized key that would
+collide across two different template fields is dropped rather than guessed.
+
+### Verified rules (replayed through the real engine over the 158 gold rows)
+
+| Oracle field | eBOS column | rule | match |
+|---|---|---|---|
+| Supplier Name* / Supplier Number / Alternate Name | name, vend_num, name | direct | 100% |
+| Payment Method / Payment Terms | pay_type, terms_code | direct | 100% |
+| **Bank Name / *Account Number / Account Name | bank_name, wire_id_acct_num, bank_acct_name | direct | 100% |
+| Taxpayer ID, Tax Registration Number | tax_id | REPLACE " "→"" | 98.6 / 97.1% |
+| Postal code / State / City / Address Name | zip, state, city, city | direct | 97–99% |
+| Supplier Site* | city | PREFIX "BU " | 97.4% |
+| Phone Extension | phone | PHONE_PART extension | 7/7 |
+| Phone | phone | REGEX_REPLACE (strip trailing ext + leading "1-") | 55.7% exact, +50 rows differ only by separator |
+
+30 of 39 verifiable rules match gold at ≥95%.
+
+### Constants (NextPower-scoped `example_default`)
+
+Supplier Type=`Standard`, Business Relationship=`SPEND_AUTHORIZED`, Invoice/Payment
+Currency=`USD`, Client BU / Bill-to BU=`NX US BU`. Each is the single distinct value
+across all 158 gold rows. `Supplier Type=Standard` supersedes the generic `SUPPLIER`
+control default because `_CONTROL_DEFAULTS` only fills columns left *entirely* blank.
+
+### Rows the gold disproved (removed)
+
+* `**Branch Name ← Bank ID` — Bank ID is the routing number; gold leaves Branch Name empty.
+* `IBAN ← WIRE ID` — WIRE ID is the account number; gold leaves IBAN empty.
+* `Remit Advice Email ← internal_email_addr` — empty in all 158 gold rows.
+* Oracle `E-Mail` switched from `internal_email_addr` (internal AP mailbox, 10.5%) to
+  `contact` (42.8%).
+
+### Known gaps, deliberately NOT seeded
+
+* **Address compaction.** Gold splits `4141 Inland Empire Blvd, Suite 305` into Line 1 +
+  Line 2 and drops `c/o` / `Dept.` prefix lines. `addr##1 → Address Line 1` direct is
+  84.8%; any rule I could derive scored worse. Needs an analyst cleansing rule.
+* **Contact first/last name.** Gold names are hand-curated (`dale@…` → "Kurt"), not
+  derivable from the extract.
+* **Corporate Web Site.** `internet_url` is empty in this extract; the gold URLs were
+  supplied manually. Mapping kept — correct whenever the column is populated.
+* **Tax Org Type / Ship-to & Bill-to Location.** Owned by Finance in the sheet, no
+  reliable source column.
+
+### Reaching existing conversions
+
+Seeders run at startup and upsert-with-upgrade, and generation re-runs
+`apply_learned_to_conversion(force=True)` for every supplier template (all under the
+300-field heavy gate). Existing NextPower conversions therefore pick this up on the next
+**Regenerate** — no re-mapping, no re-upload. `overridden` / `rejected` choices are still
+respected.

@@ -312,12 +312,33 @@ async def apply_learned_to_conversion(
     }
     for _lst in by_target.values():
         _lst.sort(key=lambda lm: 0 if (lm.rule_type or "").upper() in _STRONG_TRANSFORMS else 1)
+    # Oracle decorates required/conditional headers with asterisks and stray spaces
+    # ("Supplier Name*", "Address Name *", "*Supplier Number", "**Bank Name"), and the
+    # analyst mapping docs write the plain name ("Supplier Name"). Matching the learned
+    # target_field to the template field_name by EXACT string therefore silently missed
+    # every decorated field — the mapping existed in the library and simply never
+    # applied. Keep exact match first (unambiguous), then fall back to the normalized
+    # name. Ambiguous normalized keys (two different template fields collapsing to the
+    # same key) are dropped from the fallback so we never guess.
+    by_target_norm: dict[str, list[LearnedMapping]] = {}
+    _norm_clash: set[str] = set()
+    for _tf, _lst in by_target.items():
+        k = _normalize(_tf)
+        if not k:
+            continue
+        if k in by_target_norm and by_target_norm[k] is not _lst:
+            _norm_clash.add(k)
+        by_target_norm.setdefault(k, []).extend(_lst)
+    for k in _norm_clash:
+        by_target_norm.pop(k, None)
+    _suppressed_norm = {_normalize(t) for t in suppressed_targets if _normalize(t)}
     # Precedence: an explicit source→target mapping (analyst doc / transform /
     # steering) OUTRANKS an old gold "leave this blank" suppression for the same
     # field. Without this, a gold file that left e.g. Delivery Method or D-U-N-S
     # empty would keep suppressing them even after the analyst mapped them. So drop
     # any suppression whose field also has a column mapping — the mapping wins.
     suppressed_targets -= set(by_target.keys())
+    _suppressed_norm -= set(by_target_norm.keys())
     src_index: dict[str, str] = {}
     if conversion.dataset_id:
         cols = await DatasetColumnProfile.find(
@@ -337,7 +358,7 @@ async def apply_learned_to_conversion(
         tgt_name = fields_map.get(m.target_field_id)
         if not tgt_name:
             continue
-        candidates = by_target.get(tgt_name)
+        candidates = by_target.get(tgt_name) or by_target_norm.get(_normalize(tgt_name))
         if not candidates:
             continue
         for lm in candidates:
@@ -363,12 +384,13 @@ async def apply_learned_to_conversion(
     # Suppression pass — fields the gold example left blank override the AI's
     # aggressive mapping: any still-"suggested" mapping for such a target is set
     # not_applicable so it stays empty at output.
-    if suppressed_targets:
+    if suppressed_targets or _suppressed_norm:
         for m in mappings:
             if not _eligible(m):
                 continue
             tgt_name = fields_map.get(m.target_field_id)
-            if tgt_name and tgt_name in suppressed_targets:
+            if tgt_name and (tgt_name in suppressed_targets
+                             or _normalize(tgt_name) in _suppressed_norm):
                 await m.set({
                     "source_column": None, "status": "not_applicable",
                     "review_required": 0, "approved_by": "learning-engine",
@@ -390,6 +412,20 @@ async def apply_learned_to_conversion(
         for lm in defaults:
             if lm.target_field:
                 by_default.setdefault(lm.target_field, lm)
+        # Same asterisk problem as the column pass: a default authored as
+        # "Business Relationship" must still land on the template's
+        # "Business Relationship*". Exact key first, normalized key as fallback.
+        by_default_norm: dict[str, LearnedMapping] = {}
+        _dclash: set[str] = set()
+        for _tf, _lm in by_default.items():
+            k = _normalize(_tf)
+            if not k:
+                continue
+            if k in by_default_norm and by_default_norm[k] is not _lm:
+                _dclash.add(k)
+            by_default_norm.setdefault(k, _lm)
+        for k in _dclash:
+            by_default_norm.pop(k, None)
         for m in mappings:
             # A learned constant default is explicit intent to POPULATE the field,
             # so it also overrides a gold "not_applicable" suppression (not only
@@ -401,9 +437,11 @@ async def apply_learned_to_conversion(
             if not (_eligible(m) or m.status == "not_applicable"):
                 continue
             tgt_name = fields_map.get(m.target_field_id)
-            if not tgt_name or tgt_name not in by_default:
+            if not tgt_name:
                 continue
-            lm = by_default[tgt_name]
+            lm = by_default.get(tgt_name) or by_default_norm.get(_normalize(tgt_name))
+            if lm is None:
+                continue
             val = (lm.rule_config or {}).get("default_value")
             if val in (None, ""):
                 val = lm.resolved_value
