@@ -656,6 +656,32 @@ export const LearningApi = {
       timeout: 300_000,
     }).then(r => r.data);
   },
+  /** Analyse mapping documents into a reviewable proposal. Writes nothing until applied. */
+  analyzeProposal: (
+    files: File[],
+    opts: { clientId?: string; targetObject?: string; sourceSystem?: string } = {},
+  ) => {
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    if (opts.clientId) fd.append("client_id", opts.clientId);
+    if (opts.targetObject) fd.append("target_object", opts.targetObject);
+    if (opts.sourceSystem) fd.append("source_system", opts.sourceSystem);
+    return api.post<{ proposals: any[] }>("/mapping-proposals/analyze", fd, {
+      timeout: 300_000,
+    }).then(r => r.data);
+  },
+  listProposals: (params?: { status?: string; client_id?: string }) =>
+    api.get<any[]>("/mapping-proposals", { params }).then(r => r.data),
+  getProposal: (id: string) =>
+    api.get<any>(`/mapping-proposals/${id}`).then(r => r.data),
+  decideProposal: (id: string, decision: string, rowNos?: number[]) =>
+    api.post<{ updated: number }>(`/mapping-proposals/${id}/decide`,
+      { decision, row_nos: rowNos }).then(r => r.data),
+  applyProposal: (id: string) =>
+    api.post<{ learnings_written: number; conversions_touched: number; objects: string[] }>(
+      `/mapping-proposals/${id}/apply`, {}, { timeout: 300_000 }).then(r => r.data),
+  discardProposal: (id: string) =>
+    api.delete(`/mapping-proposals/${id}`).then(r => r.data),
   stats: (params?: { project_id?: string }) =>
     api.get<LearningStats>("/learned-mappings/stats", { params }).then(r => r.data),
   capture: (body: Partial<LearnedMapping>) =>

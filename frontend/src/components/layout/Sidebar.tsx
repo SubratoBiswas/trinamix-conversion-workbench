@@ -58,6 +58,7 @@ const GROUPS: NavGroup[] = [
     label: "AI Engine",
     items: [
       { to: "/learning", label: "Learning Center", icon: BookOpen },
+      { to: "/mapping-documents", label: "Mapping Documents", icon: FileSpreadsheet },
       { to: "/rules", label: "Rule Library", icon: Library },
       { to: "/crosswalks", label: "Crosswalk Library", icon: ArrowLeftRight },
     ],

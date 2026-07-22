@@ -17,6 +17,7 @@ from app.routers import fbdi as fbdi_router
 from app.routers import fbdi_seed as fbdi_seed_router
 from app.routers import gold as gold_router
 from app.routers import learned as learned_router
+from app.routers import mapping_proposals as mapping_proposals_router
 from app.routers import mapping as mapping_router
 from app.routers import operations as ops_router
 from app.routers import projects as projects_router
@@ -235,6 +236,7 @@ app.include_router(cutover_router.router)
 app.include_router(mapping_router.router)
 app.include_router(quality_router.router)
 app.include_router(learned_router.router)
+app.include_router(mapping_proposals_router.router)
 app.include_router(ops_router.output_router)
 app.include_router(ops_router.load_router)
 app.include_router(ops_router.workflow_router)

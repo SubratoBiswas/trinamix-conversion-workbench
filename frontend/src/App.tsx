@@ -35,6 +35,7 @@ import { WorkflowBuilderPage } from "@/pages/WorkflowBuilderPage";
 import { AuditPage } from "@/pages/AuditPage";
 import { LearningCenterPage } from "@/pages/LearningCenterPage";
 import { RuleLibraryPage } from "@/pages/RuleLibraryPage";
+import { MappingDocumentsPage } from "@/pages/MappingDocumentsPage";
 import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
@@ -108,6 +109,7 @@ const App: React.FC = () => {
 
         {/* AI Engine */}
         <Route path="learning"               element={<LearningCenterPage />} />
+        <Route path="mapping-documents"      element={<MappingDocumentsPage />} />
         <Route path="rules"                  element={<RuleLibraryPage />} />
         <Route path="crosswalks"             element={<CrosswalkLibraryPage />} />
 

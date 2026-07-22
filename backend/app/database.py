@@ -26,6 +26,7 @@ async def init_db() -> None:
     )
     from app.models.mapping import MappingSuggestion
     from app.models.learned import LearnedMapping
+    from app.models.mapping_proposal import MappingProposal
     from app.models.transformation import TransformationRule, Crosswalk
     from app.models.output import ConvertedOutput
     from app.models.workflow import Workflow
@@ -49,7 +50,7 @@ async def init_db() -> None:
             Dataset, DatasetColumnProfile,
             FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
             GoldStandard,
-            MappingSuggestion, LearnedMapping,
+            MappingSuggestion, LearnedMapping, MappingProposal,
             TransformationRule, Crosswalk,
             ConvertedOutput, Workflow,
             LoadRun, LoadError,
