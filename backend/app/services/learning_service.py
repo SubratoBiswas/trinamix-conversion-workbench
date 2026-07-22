@@ -1,6 +1,7 @@
 """Capture and re-apply human-approved mapping decisions (async/Beanie)."""
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import Iterable
@@ -13,6 +14,8 @@ from app.models.fbdi import FBDIField, FBDITemplate
 from app.models.learned import LearnedMapping
 from app.models.mapping import MappingSuggestion
 from app.models.transformation import TransformationRule
+
+logger = logging.getLogger(__name__)
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
@@ -309,6 +312,12 @@ async def apply_learned_to_conversion(
         "PHONE_PART", "CASE_WHEN", "VALUE_MAP", "DATE_FORMAT", "SPLIT", "CONCAT",
         "COALESCE", "CONDITIONAL", "REGEX_EXTRACT", "REGEX_REPLACE", "SUBSTRING",
         "PREFIX", "SUFFIX", "ARITHMETIC", "NUMBER_FORMAT", "CROSSWALK_LOOKUP", "PAD",
+        # REPLACE / REMOVE_SPECIAL_CHARS were missing, and that silently cost data:
+        # the analyst rule "Taxpayer ID <- tax_id, strip spaces" sorted BELOW a plain
+        # alias for the same field, so the alias won and the FBDI shipped
+        # "7 5 -2 1 1 0 3 5 7" instead of "75-2110357". A REPLACE is just as
+        # deliberate a rule as a VALUE_MAP — rank it accordingly.
+        "REPLACE", "REMOVE_SPECIAL_CHARS", "MAP_BOOLEAN", "CONDITIONAL_DATE",
     }
     for _lst in by_target.values():
         _lst.sort(key=lambda lm: 0 if (lm.rule_type or "").upper() in _STRONG_TRANSFORMS else 1)
@@ -320,17 +329,28 @@ async def apply_learned_to_conversion(
     # applied. Keep exact match first (unambiguous), then fall back to the normalized
     # name. Ambiguous normalized keys (two different template fields collapsing to the
     # same key) are dropped from the fallback so we never guess.
+    # MERGE candidates under the normalized key — do not drop on collision.
+    #
+    # An earlier version dropped any normalized key that two different learned
+    # target_fields mapped onto, meaning to be cautious. That was wrong, and it
+    # blanked a REQUIRED field: the library holds both "Supplier Site*" <- city
+    # (PREFIX "BU ") from the analyst doc and "Supplier Site" <- "Address Label"
+    # from an older doc. Both normalize to "suppliersite", so the key was
+    # discarded; exact match then found only the "Address Label" row, whose source
+    # column does not exist in an eBOS extract, and Supplier Site shipped empty.
+    #
+    # A collision here is almost always two SPELLINGS OF THE SAME FIELD, not two
+    # different fields — Oracle's own headers repeat and get decorated differently
+    # across docs. Merging is safe because the loop below already discards any
+    # candidate whose source column is absent from the dataset, and the transform
+    # sort above puts deliberate rules ahead of plain aliases.
     by_target_norm: dict[str, list[LearnedMapping]] = {}
-    _norm_clash: set[str] = set()
     for _tf, _lst in by_target.items():
         k = _normalize(_tf)
-        if not k:
-            continue
-        if k in by_target_norm and by_target_norm[k] is not _lst:
-            _norm_clash.add(k)
-        by_target_norm.setdefault(k, []).extend(_lst)
-    for k in _norm_clash:
-        by_target_norm.pop(k, None)
+        if k:
+            by_target_norm.setdefault(k, []).extend(_lst)
+    for _lst in by_target_norm.values():
+        _lst.sort(key=lambda lm: 0 if (lm.rule_type or "").upper() in _STRONG_TRANSFORMS else 1)
     _suppressed_norm = {_normalize(t) for t in suppressed_targets if _normalize(t)}
     # Precedence: an explicit source→target mapping (analyst doc / transform /
     # steering) OUTRANKS an old gold "leave this blank" suppression for the same
@@ -399,6 +419,56 @@ async def apply_learned_to_conversion(
                     "updated_at": now,
                 })
                 auto_count += 1
+
+    # ── Mapping-document-only pass ────────────────────────────────────────────
+    # When an analyst mapping document exists for this object, it is AUTHORITATIVE:
+    # nothing may be sourced from a column the document does not sanction. The
+    # deterministic matcher and the AI otherwise keep inventing plausible-looking
+    # pairs that are simply wrong, and because a "suggested" mapping still exports
+    # unless someone rejects it by hand, those guesses reach the FBDI. Observed on a
+    # real eBOS vendor run: fax_num -> Account Currency Code, bank_code -> Fax Area
+    # Code, country -> Fax Country Code, fax_num -> Customer Number, vend_num ->
+    # ATTRIBUTE_NUMBER1. A fax number in a currency column fails the load outright.
+    #
+    # The allow-list is every (target field, source column) pair the learning
+    # library holds for this object — i.e. the seeded analyst docs, transform rules
+    # and gold-derived mappings. Anything still merely "suggested" whose pair is not
+    # on that list is set not_applicable, so it exports blank instead of wrong.
+    #
+    # Deliberately untouched: mappings with no source column (constants and control
+    # defaults such as Batch ID / Import Action), anything a human set
+    # (overridden / approved / rejected), and objects with too few learnings to
+    # constitute a document — a brand-new object with no doc must still map freely,
+    # otherwise the tool would produce nothing at all for it.
+    _MIN_DOC_ROWS = 5
+    allowed_pairs: set[tuple[str, str]] = set()
+    for lm in learned:
+        if lm.target_field and lm.original_value:
+            allowed_pairs.add((_normalize(lm.target_field), _normalize(lm.original_value)))
+    if len(allowed_pairs) >= _MIN_DOC_ROWS:
+        dropped = 0
+        for m in mappings:
+            if m.status != "suggested" or not m.source_column:
+                continue
+            tgt_name = fields_map.get(m.target_field_id)
+            if not tgt_name:
+                continue
+            if (_normalize(tgt_name), _normalize(m.source_column)) in allowed_pairs:
+                continue
+            await m.set({
+                "source_column": None, "status": "not_applicable",
+                "review_required": 0, "approved_by": "learning-engine",
+                "approved_at": now,
+                "reason": ("Not in the mapping document for this object — the analyst "
+                           "mapping document is authoritative, so unsanctioned "
+                           "source columns are left blank rather than guessed."),
+                "updated_at": now,
+            })
+            dropped += 1
+            auto_count += 1
+        if dropped:
+            logger.info("mapping-doc-only: dropped %d unsanctioned mappings for %s",
+                        dropped, business_object)
 
     # Constant-default pass — re-apply the constant values learned from gold
     # (kind="example_default") so a brand-new conversion of this object inherits

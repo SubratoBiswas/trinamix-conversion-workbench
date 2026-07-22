@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { Sparkles } from "lucide-react";
 import { AuthApi } from "@/api";
 import { useAuth } from "@/store/authStore";
@@ -11,7 +11,13 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const setAuth = useAuth((s) => s.setAuth);
+  const token = useAuth((s) => s.token);
   const nav = useNavigate();
+
+  // Already signed in (e.g. landed here from a stale link, or signed in on
+  // another tab)? Don't make the user re-enter credentials they already have —
+  // send them straight to the app.
+  if (token) return <Navigate to="/" replace />;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
