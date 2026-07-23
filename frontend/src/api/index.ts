@@ -424,15 +424,16 @@ export const MappingApi = {
    *  fast; a cold Render backend is retried once (POSTs are not auto-retried). */
   vetCandidates: async (
     conversionId: string,
-    opts?: { topN?: number; onlyUncertain?: boolean; targetFieldIds?: string[] },
+    opts?: { topN?: number; onlyUncertain?: boolean; targetFieldIds?: string[]; force?: boolean },
   ) => {
     const call = () => api.post<{
       groups: MappingCandidateGroup[];
       ai: Record<string, Record<string, { verdict: string; reason: string }>>;
-      vetted: number; sent: number; eligible?: number; capped?: boolean;
+      vetted: number; reused?: number; sent: number; eligible?: number;
+      capped?: boolean; already_done?: boolean;
     }>(
       `/conversions/${conversionId}/vet-candidates`,
-      { target_field_ids: opts?.targetFieldIds },
+      { target_field_ids: opts?.targetFieldIds, force: opts?.force },
       { params: { top_n: opts?.topN ?? 4, only_uncertain: opts?.onlyUncertain ?? true }, timeout: 120_000 },
     ).then(r => r.data);
     try {

@@ -1716,14 +1716,30 @@ const MappingTableView: React.FC<{
   const [altLoading, setAltLoading] = useState(true);
   const [vetting, setVetting] = useState(false);
   const [vetMsg, setVetMsg] = useState<string | null>(null);
+  const [alreadyVetted, setAlreadyVetted] = useState(false);
   useEffect(() => {
     if (!conversionId) return;
     setAltLoading(true);
     MappingApi.candidates(conversionId, { topN: 4 })
       .then((groups) => {
         const byId: Record<string, MappingCandidate[]> = {};
-        for (const g of groups) byId[String(g.target_field_id)] = g.candidates || [];
+        const cached: Record<string, Record<string, { verdict: string; reason: string }>> = {};
+        for (const g of groups) {
+          byId[String(g.target_field_id)] = g.candidates || [];
+          // candidates may already carry stored AI verdicts (from an earlier review)
+          for (const c of g.candidates || []) {
+            if (c.ai_verdict) {
+              (cached[String(g.target_field_id)] ||= {})[c.source_column] =
+                { verdict: c.ai_verdict, reason: c.ai_reason || "" };
+            }
+          }
+        }
         setAltByTarget(byId);
+        if (Object.keys(cached).length) {
+          onAiVerdicts?.(cached);              // seed the shared cache for the panel
+          setAlreadyVetted(true);
+          setVetMsg("AI review already done for this project — reasons are shown. No need to re-run.");
+        }
       })
       .catch(() => setAltByTarget({}))
       .finally(() => setAltLoading(false));
@@ -1755,8 +1771,11 @@ const MappingTableView: React.FC<{
       // publish to the shared cache so the detail panel shows these verdicts
       // for any field the toolbar just covered — no second click, no second call.
       onAiVerdicts?.(r.ai || {});
-      if (r.vetted > 0) {
-        setVetMsg(`AI reviewed ${r.vetted} uncertain option(s) in view. Reasons added to the table, panel and export.`);
+      if (Object.keys(r.ai || {}).length) setAlreadyVetted(true);
+      if (r.already_done) {
+        setVetMsg(`Already reviewed by AI — reasons shown for ${r.reused ?? 0} option(s). No tokens used.`);
+      } else if (r.vetted > 0) {
+        setVetMsg(`AI reviewed ${r.vetted} new option(s)${r.reused ? `, reused ${r.reused} already done` : ""}. Reasons added to the table, panel and export.`);
       } else if ((r.eligible ?? 0) === 0) {
         setVetMsg("No uncertain options in view — the shown options are already clear from the deterministic reasons.");
       } else {
@@ -2013,11 +2032,18 @@ const MappingTableView: React.FC<{
         <button
           onClick={vetWithAi}
           disabled={vetting || altLoading}
-          title="Ask AI to judge the uncertain alternatives and explain why each does or doesn't fit. Adds reasons to the table and the CSV export."
-          className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
+          title={alreadyVetted
+            ? "This project has already been reviewed by AI — reasons are shown. Click to review any newly-added options (already-done ones cost no tokens)."
+            : "Ask AI to judge the uncertain alternatives and explain why each does or doesn't fit. Adds reasons to the table and the CSV export."}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50",
+            alreadyVetted
+              ? "border-success/40 bg-success-subtle text-success hover:bg-success/10"
+              : "border-brand/40 bg-brand-subtle text-brand hover:bg-brand/10",
+          )}
         >
-          {vetting ? <Spinner /> : <Sparkles className="h-3 w-3" />}
-          {vetting ? "Reviewing…" : "Vet options with AI"}
+          {vetting ? <Spinner /> : alreadyVetted ? <Check className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
+          {vetting ? "Reviewing…" : alreadyVetted ? "AI review done" : "Vet options with AI"}
         </button>
         <button
           onClick={exportCsv}
@@ -2911,6 +2937,11 @@ const AlternativeCandidatesPanel: React.FC<{
   // verdict (it is one field — cheap), then fold the verdicts back in and re-sort
   // so the panel's recommendations reflect the AI review, not only the table.
   const vetThisField = async () => {
+    // Already reviewed? Don't spend tokens again — just say so.
+    if ((cands || []).some((c) => c.ai_verdict)) {
+      setVetMsg("This field was already reviewed by AI — reasons are shown.");
+      return;
+    }
     setVetting(true); setVetMsg(null);
     try {
       const r = await MappingApi.vetCandidates(conversionId, {
@@ -2940,15 +2971,26 @@ const AlternativeCandidatesPanel: React.FC<{
       {open && (
         <div className="px-3 pb-3">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <button
-              onClick={vetThisField}
-              disabled={vetting || loading}
-              title="Ask AI to judge these options and explain why each does or doesn't fit"
-              className="inline-flex items-center gap-1 rounded border border-brand/40 bg-brand-subtle px-2 py-0.5 text-[10px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
-            >
-              {vetting ? <Spinner /> : <Sparkles className="h-2.5 w-2.5" />}
-              {vetting ? "Reviewing…" : "Vet with AI"}
-            </button>
+            {(() => {
+              const done = (cands || []).some((c) => c.ai_verdict);
+              return (
+                <button
+                  onClick={vetThisField}
+                  disabled={vetting || loading}
+                  title={done
+                    ? "Already reviewed by AI — reasons are shown. No tokens will be used."
+                    : "Ask AI to judge these options and explain why each does or doesn't fit"}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold disabled:opacity-50",
+                    done ? "border-success/40 bg-success-subtle text-success"
+                      : "border-brand/40 bg-brand-subtle text-brand hover:bg-brand/10",
+                  )}
+                >
+                  {vetting ? <Spinner /> : done ? <Check className="h-2.5 w-2.5" /> : <Sparkles className="h-2.5 w-2.5" />}
+                  {vetting ? "Reviewing…" : done ? "AI review done" : "Vet with AI"}
+                </button>
+              );
+            })()}
             {vetMsg && <span className="text-[10px] text-ink-subtle">{vetMsg}</span>}
           </div>
           {loading ? (

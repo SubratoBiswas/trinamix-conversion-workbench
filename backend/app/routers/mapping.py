@@ -74,8 +74,10 @@ async def vet_candidates_endpoint(
     conv = await _require_conversion(conversion_id)
     top_n = max(1, min(top_n, 8))
     tfids = (payload or {}).get("target_field_ids") or None
+    force = bool((payload or {}).get("force"))
     return await vet_conversion_candidates(
-        conv, top_n=top_n, only_uncertain=only_uncertain, target_field_ids=tfids)
+        conv, top_n=top_n, only_uncertain=only_uncertain,
+        target_field_ids=tfids, force=force)
 
 
 @router.get("/conversions/{conversion_id}/mappings", response_model=list[MappingOut])

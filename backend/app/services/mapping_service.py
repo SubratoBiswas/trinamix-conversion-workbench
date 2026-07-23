@@ -344,6 +344,18 @@ async def mapping_candidates(
     if target_field_id:
         targets = [t for t in targets if str(t.id) == str(target_field_id)]
     from app.ai.semantic_guard import vet_candidate
+    # Load any AI verdicts previously stored for this conversion, so a return visit
+    # shows the reasons with no new model call. Keyed target_field_id -> source -> v.
+    from app.models.candidate_verdict import CandidateVerdict
+    stored: dict[str, dict[str, dict]] = {}
+    try:
+        for cv in await CandidateVerdict.find(
+            CandidateVerdict.conversion_id == conversion.id).to_list():
+            stored.setdefault(cv.target_field_id, {})[cv.source_column] = {
+                "verdict": cv.verdict, "reason": cv.reason}
+    except Exception:  # noqa: BLE001
+        stored = {}
+
     out: list[dict] = []
     for tgt in targets:
         # Over-fetch, then let the semantic guard demote nonsense before we cut to
@@ -360,7 +372,7 @@ async def mapping_candidates(
             merged = list(reasons)
             if not v["plausible"] and v["reason"]:
                 merged.insert(0, f"⚠ implausible: {v['reason']}")
-            scored.append({
+            cand = {
                 "source_column": src.name,
                 "confidence": adj,
                 "raw_confidence": score,
@@ -372,13 +384,25 @@ async def mapping_candidates(
                 "null_percent": round(src.null_percent or 0.0, 1),
                 "sample_values": [str(v2) for v2 in (src.sample_values or [])[:3]],
                 "reasons": merged,
-            })
-        # plausible first, then by adjusted score
-        scored.sort(key=lambda c: (0 if c["plausible"] else 1, -c["confidence"]))
+            }
+            sv = stored.get(str(tgt.id), {}).get(src.name)
+            if sv:
+                cand["ai_verdict"] = sv["verdict"]
+                cand["ai_reason"] = sv["reason"]
+            scored.append(cand)
+
+        # A stored AI 'wrong'/'unlikely' sinks hardest, then the guard's implausible,
+        # then by adjusted score — so a re-opened project shows the AI ranking too.
+        def _rank(c: dict) -> tuple:
+            av = c.get("ai_verdict")
+            ai_bad = 2 if av == "wrong" else 1 if av == "unlikely" else 0
+            return (ai_bad, 0 if c["plausible"] else 1, -c["confidence"])
+        scored.sort(key=_rank)
         out.append({
             "target_field_id": str(tgt.id),
             "target_field_name": tgt.field_name,
             "candidates": scored[:top_n],
+            "vetted": any(c.get("ai_verdict") for c in scored[:top_n]),
         })
     return out
 
