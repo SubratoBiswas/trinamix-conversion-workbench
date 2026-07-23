@@ -149,6 +149,9 @@ export const MappingReviewPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [fillingPage, setFillingPage] = useState(false);
+  // Precedence-layer filter (gold / learned / workbook / manual / deterministic /
+  // default / ai / suppressed / unmapped) — set by clicking a chip in the bar.
+  const [layerFilter, setLayerFilter] = useState<LayerKey | null>(null);
   // Canvas (drag-to-map graph) vs Table (row-per-field detail: required, how it
   // was mapped, transform, confidence, lower-probability alternatives, notes).
   const [viewMode, setViewMode] = useState<"canvas" | "table">("canvas");
@@ -425,11 +428,25 @@ export const MappingReviewPage: React.FC = () => {
   };
 
   // ── Filtering ──
+  const fieldById = useMemo(() => {
+    const m = new Map<string, FBDIField>();
+    for (const f of targetFields) m.set(String(f.id), f);
+    return m;
+  }, [targetFields]);
+
   const visibleMappings = useMemo(() => {
     return mappings.filter((m) => {
       const term = search.toLowerCase();
       if (term && !((m.target_field_name || "") + " " + (m.source_column || ""))
             .toLowerCase().includes(term)) return false;
+      // precedence-layer filter (from the "How each field is decided" bar)
+      if (layerFilter) {
+        const f = fieldById.get(String(m.target_field_id));
+        if (!f) return false;
+        const key = classifyLayer(m, f, effectiveDefaults,
+          ruleTargetIds.has(m.target_field_id) || ruleTargetIds.has(String(m.target_field_id) as any));
+        if (key !== layerFilter) return false;
+      }
       switch (filter) {
         case "required": return m.target_required;
         case "review":   return Boolean(m.review_required);
@@ -442,7 +459,7 @@ export const MappingReviewPage: React.FC = () => {
         default: return true;
       }
     });
-  }, [mappings, search, filter]);
+  }, [mappings, search, filter, layerFilter, fieldById, effectiveDefaults, ruleTargetIds]);
 
   const visibleTargetIds = useMemo(() => new Set(visibleMappings.map((m) => m.target_field_id)), [visibleMappings]);
 
@@ -931,12 +948,12 @@ export const MappingReviewPage: React.FC = () => {
 
         {/* Stats + filters — each KPI filters the list (canvas + table) */}
         <div className="mt-3 flex items-center gap-3">
-          <Stat label="Target fields"  value={stats.total}                       onClick={() => setFilter("all")}      active={filter === "all"} />
-          <Stat label="Auto-mapped"    value={stats.mapped}    tone="info"       onClick={() => setFilter("mapped")}   active={filter === "mapped"} />
-          <Stat label="Approved"       value={stats.approved}  tone="success"    onClick={() => setFilter("approved")} active={filter === "approved"} />
-          <Stat label="Required gaps"  value={stats.reqMissing} tone="danger"    onClick={() => setFilter("unmapped")} active={filter === "unmapped"} />
-          <Stat label="Learned"        value={stats.learned}   tone="brand"      onClick={() => setFilter("learned")}  active={filter === "learned"} />
-          <Stat label="From KB"        value={stats.kb}        tone="brand"      onClick={() => setFilter("kb")}       active={filter === "kb"} />
+          <Stat label="Target fields"  value={stats.total}                       onClick={() => { setFilter("all"); setLayerFilter(null); }}      active={filter === "all" && !layerFilter} />
+          <Stat label="Auto-mapped"    value={stats.mapped}    tone="info"       onClick={() => { setFilter("mapped"); setLayerFilter(null); }}   active={filter === "mapped"} />
+          <Stat label="Approved"       value={stats.approved}  tone="success"    onClick={() => { setFilter("approved"); setLayerFilter(null); }} active={filter === "approved"} />
+          <Stat label="Required gaps"  value={stats.reqMissing} tone="danger"    onClick={() => { setFilter("unmapped"); setLayerFilter(null); }} active={filter === "unmapped"} />
+          <Stat label="Learned"        value={stats.learned}   tone="brand"      onClick={() => { setFilter("learned"); setLayerFilter(null); }}  active={filter === "learned"} />
+          <Stat label="From KB"        value={stats.kb}        tone="brand"      onClick={() => { setFilter("kb"); setLayerFilter(null); }}       active={filter === "kb"} />
 
           <div className="flex-1" />
 
@@ -1126,6 +1143,8 @@ export const MappingReviewPage: React.FC = () => {
         visibleTargetIds={visibleTargetIds}
         ruleTargetIds={ruleTargetIds}
         effectiveDefaults={effectiveDefaults}
+        activeLayer={layerFilter}
+        onSelectLayer={(k) => { setLayerFilter(k); if (k) setFilter("all"); }}
       />
 
       {/* Body */}
@@ -1559,7 +1578,9 @@ const PrecedenceBar: React.FC<{
   visibleTargetIds: Set<string> | null;
   ruleTargetIds: Set<string>;
   effectiveDefaults: Record<string, string>;
-}> = ({ mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults }) => {
+  activeLayer?: LayerKey | null;
+  onSelectLayer?: (k: LayerKey | null) => void;
+}> = ({ mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults, activeLayer, onSelectLayer }) => {
   const { counts, total } = useMemo(() => {
     const _PRIO: Record<string, number> = { overridden: 4, approved: 3, not_applicable: 2, rejected: 1, suggested: 0 };
     const mapByTarget = new Map<string, MappingSuggestion>();
@@ -1614,29 +1635,39 @@ const PrecedenceBar: React.FC<{
           return (
             <React.Fragment key={k}>
               {i > 0 && <ChevronRight className="h-3 w-3 text-ink-subtle" />}
-              <span
-                title={meta.blurb}
+              <button
+                title={n > 0 ? `${meta.blurb} — click to filter` : meta.blurb}
+                disabled={n === 0}
+                onClick={() => onSelectLayer?.(activeLayer === k ? null : k)}
                 className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
-                  n > 0 ? "border-line bg-white text-ink" : "border-line/60 bg-transparent text-ink-subtle",
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition",
+                  activeLayer === k ? "border-brand bg-brand-subtle text-brand-dark ring-1 ring-brand/40"
+                    : n > 0 ? "border-line bg-white text-ink hover:border-brand/50"
+                    : "cursor-default border-line/60 bg-transparent text-ink-subtle",
                 )}
               >
                 <span className={cn("h-2 w-2 rounded-full", n > 0 ? LAYER_DOT[k] : "bg-line")} />
                 <span className="font-medium">{meta.label}</span>
                 <span className="tabular-nums">{n}</span>
-              </span>
+              </button>
             </React.Fragment>
           );
         })}
         {counts.suppressed > 0 && (
-          <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-line/60 px-2 py-0.5 text-[11px] text-ink-subtle" title={LAYER_META.suppressed.blurb}>
+          <button title={`${LAYER_META.suppressed.blurb} — click to filter`}
+            onClick={() => onSelectLayer?.(activeLayer === "suppressed" ? null : "suppressed")}
+            className={cn("ml-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition",
+              activeLayer === "suppressed" ? "border-brand bg-brand-subtle text-brand-dark ring-1 ring-brand/40" : "border-line/60 text-ink-subtle hover:border-brand/50")}>
             <span className="h-2 w-2 rounded-full bg-ink-subtle" /> Left blank {counts.suppressed}
-          </span>
+          </button>
         )}
         {counts.unmapped > 0 && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-line/60 px-2 py-0.5 text-[11px] text-ink-subtle" title={LAYER_META.unmapped.blurb}>
+          <button title={`${LAYER_META.unmapped.blurb} — click to filter`}
+            onClick={() => onSelectLayer?.(activeLayer === "unmapped" ? null : "unmapped")}
+            className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition",
+              activeLayer === "unmapped" ? "border-brand bg-brand-subtle text-brand-dark ring-1 ring-brand/40" : "border-line/60 text-ink-subtle hover:border-brand/50")}>
             <span className="h-2 w-2 rounded-full bg-line" /> Unmapped {counts.unmapped}
-          </span>
+          </button>
         )}
       </div>
 
