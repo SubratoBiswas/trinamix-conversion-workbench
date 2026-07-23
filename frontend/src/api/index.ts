@@ -718,13 +718,13 @@ export const LearningApi = {
   discardProposal: (id: string) =>
     api.delete(`/mapping-proposals/${id}`).then(r => r.data),
   // ── Manual template mapper ──────────────────────────────────────────────
-  manualContext: (targetObject: string, templateId?: string, clientId?: string) =>
-    api.get<{ target_object: string; learnt_count: number; gold_count: number;
+  manualContext: (targetObject: string, templateId?: string, clientId?: string, proposalId?: string) =>
+    api.get<{ target_object: string; learnt_count: number; gold_count: number; doc_count?: number;
       fields: Array<{ target_field: string; sheet_name?: string | null; required: boolean;
         learnt_source?: string | null; learnt_from?: string | null; learnt_rule?: string | null;
-        gold_source?: string | null }> }>(
+        gold_source?: string | null; doc_source?: string | null }> }>(
       "/manual-map/context",
-      { params: { target_object: targetObject, template_id: templateId, client_id: clientId } },
+      { params: { target_object: targetObject, template_id: templateId, client_id: clientId, proposal_id: proposalId } },
     ).then(r => r.data),
   manualVet: (pairs: Array<{ target_field: string; source_field: string }>, useAi = false) =>
     api.post<{ results: Array<{ target_field: string; source_field: string; plausible: boolean;
@@ -732,7 +732,7 @@ export const LearningApi = {
       "/manual-map/vet", { pairs, use_ai: useAi }, { timeout: useAi ? 120_000 : 30_000 },
     ).then(r => r.data),
   manualSave: (body: { client_id?: string; target_object: string; source_system?: string;
-    rows: Array<{ target_field: string; source_field: string; rule_type?: string; reason?: string; clear?: boolean }> }) =>
+    rows: Array<{ target_field: string; source_field: string; rule_type?: string; separator?: string; reason?: string; clear?: boolean }> }) =>
     api.post<{ saved: number; updated: number; cleared: number; conversions_touched: number }>(
       "/manual-map/save", body, { timeout: 180_000 }).then(r => r.data),
   stats: (params?: { project_id?: string }) =>

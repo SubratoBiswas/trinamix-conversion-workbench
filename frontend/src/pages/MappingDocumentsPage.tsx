@@ -434,23 +434,37 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [proposals, setProposals] = useState<any[]>([]);
+  const [proposalId, setProposalId] = useState("");
+  const [joinSep, setJoinSep] = useState(" ");
 
   useEffect(() => { FbdiApi.list().then(setTemplates).catch(() => {}); }, []);
 
   const chosen = templates.find((t) => t.id === templateId);
   const targetObject = chosen?.business_object || chosen?.name || "";
 
+  // offer uploaded documents that cover this object, so their proposal can prefill the grid
+  useEffect(() => {
+    if (!targetObject) { setProposals([]); return; }
+    LearningApi.listProposals().then((ps) =>
+      setProposals(ps.filter((p: any) => !p.target_object || String(p.target_object).toLowerCase() === targetObject.toLowerCase()))
+    ).catch(() => setProposals([]));
+  }, [targetObject]);
+
   const load = async () => {
     if (!templateId || !targetObject) return;
     setBusy(true); setMsg(null); setVerdicts({});
     try {
-      const ctx = await LearningApi.manualContext(targetObject, templateId, clientId || undefined);
+      const ctx = await LearningApi.manualContext(targetObject, templateId, clientId || undefined, proposalId || undefined);
       setFields(ctx.fields);
-      // prefill edits from the learnt source
+      // prefill: document's proposal wins (if chosen), else the learnt source
       const e: Record<string, { source: string; rule: string }> = {};
-      for (const f of ctx.fields) e[f.target_field] = { source: f.learnt_source || "", rule: f.learnt_rule || "" };
+      for (const f of ctx.fields) {
+        e[f.target_field] = { source: f.doc_source || f.learnt_source || "", rule: f.learnt_rule || "" };
+      }
       setEdits(e);
-      setMsg(`${ctx.fields.length} fields · ${ctx.learnt_count} already learnt · ${ctx.gold_count} seen in a previous gold output.`);
+      setMsg(`${ctx.fields.length} fields · ${ctx.learnt_count} already learnt · ${ctx.gold_count} in a previous gold output`
+        + (ctx.doc_count ? ` · ${ctx.doc_count} pre-filled from the document` : "") + ".");
     } catch (e: any) {
       setMsg(e?.response?.data?.detail || "Could not load the template fields.");
     } finally { setBusy(false); }
@@ -474,8 +488,16 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
 
   const save = async () => {
     const rows = fields
-      .map((f) => ({ target_field: f.target_field, source_field: (edits[f.target_field]?.source || "").trim(),
-                     rule_type: (edits[f.target_field]?.rule || "").trim() || undefined, reason: reason.trim() || undefined }))
+      .map((f) => {
+        const source = (edits[f.target_field]?.source || "").trim();
+        const multi = source.includes(",");
+        return {
+          target_field: f.target_field, source_field: source,
+          rule_type: (edits[f.target_field]?.rule || "").trim() || undefined,
+          separator: multi ? joinSep : undefined,
+          reason: reason.trim() || undefined,
+        };
+      })
       .filter((r) => r.source_field);
     if (!rows.length) { setMsg("Nothing to save — fill at least one source column."); return; }
     setBusy(true); setMsg(null);
@@ -503,6 +525,16 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
         <input className="rounded-lg border px-3 py-2 text-sm" placeholder="Source system (optional)" value={sys} onChange={(e) => setSys(e.target.value)} />
         <Button onClick={load} disabled={busy || !templateId}>{busy ? "Loading…" : "Load fields"}</Button>
       </div>
+      {proposals.length > 0 && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted">Prefill from an uploaded document:</span>
+          <select className="rounded-lg border px-3 py-1.5 text-sm" value={proposalId} onChange={(e) => setProposalId(e.target.value)}>
+            <option value="">— none (use learnt sources) —</option>
+            {proposals.map((p) => <option key={p.id} value={p.id}>{p.file_name}</option>)}
+          </select>
+          <span className="text-[11px] text-muted">then Load fields</span>
+        </div>
+      )}
       {msg && <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm">{msg}</div>}
 
       {fields.length > 0 && (
@@ -513,9 +545,18 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
               <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} /> include AI in check
             </label>
             <Button variant="secondary" disabled={busy} onClick={vet}><Sparkles size={14} /> Check mappings</Button>
+            <label className="flex items-center gap-1 text-xs text-muted">
+              join with
+              <input className="w-16 rounded border px-1.5 py-1 text-[11px]" value={joinSep} onChange={(e) => setJoinSep(e.target.value)} title="Separator used when a field has several source columns (CONCAT)" />
+            </label>
             <input className="min-w-48 flex-1 rounded-lg border px-3 py-1.5 text-sm" placeholder="Reason (recorded on save, optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
             <Button disabled={busy} onClick={save}>Save mappings</Button>
           </div>
+          <p className="text-[11px] text-muted">
+            One source can feed several fields — just type it into each row. Several sources can feed one
+            field — type them comma-separated (e.g. <code>First Name, Last Name</code>) and they save as a
+            combined value using the separator above.
+          </p>
 
           <div className="max-h-[30rem] overflow-auto rounded-lg border">
             <table className="w-full text-sm">
@@ -524,6 +565,7 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
                   <th className="px-3 py-2">Oracle field (destination)</th>
                   <th className="px-3 py-2">Source column</th>
                   <th className="px-3 py-2">Rule</th>
+                  <th className="px-3 py-2">Document</th>
                   <th className="px-3 py-2">Learning</th>
                   <th className="px-3 py-2">Prev. gold</th>
                   <th className="px-3 py-2">Check</th>
@@ -545,13 +587,25 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
                         <input
                           className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : ""}`}
                           value={ed.source}
-                          placeholder="legacy column…"
+                          placeholder="legacy column (comma-separate for many)…"
                           onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value } }))}
                         />
+                        {ed.source.includes(",") && (
+                          <div className="mt-0.5 text-[10px] text-violet-700">combines {ed.source.split(",").filter((s) => s.trim()).length} columns (CONCAT)</div>
+                        )}
                       </td>
                       <td className="px-3 py-1.5">
-                        <input className="w-24 rounded border px-2 py-1 text-[11px]" value={ed.rule} placeholder="—"
+                        <input className="w-24 rounded border px-2 py-1 text-[11px]" value={ed.rule}
+                               placeholder={ed.source.includes(",") ? "CONCAT" : "—"}
                                onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, rule: e.target.value } }))} />
+                      </td>
+                      <td className="px-3 py-1.5 text-xs">
+                        {f.doc_source
+                          ? <button className="text-emerald-700 hover:underline" title="Use the document's source"
+                                    onClick={() => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: f.doc_source } }))}>
+                              {f.doc_source}
+                            </button>
+                          : <span className="text-slate-300">—</span>}
                       </td>
                       <td className="px-3 py-1.5 text-xs">
                         {f.learnt_source

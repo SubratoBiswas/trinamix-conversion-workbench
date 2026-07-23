@@ -44,7 +44,11 @@ async def _context_for(client_id: Optional[PydanticObjectId], target_object: str
         cf = (lm.captured_from or "").lower()
         is_gold = "gold" in cf or "example_output" in cf or lm.kind in ("example_default", "reference_standard")
         if lm.kind == "column_mapping":
-            learnt.setdefault(k, {"source": lm.original_value, "from": lm.captured_from,
+            # a CONCAT learning carries all its source columns in rule_config; show
+            # them joined so a many-to-one mapping reloads with every column visible.
+            cols = (lm.rule_config or {}).get("columns") if isinstance(lm.rule_config, dict) else None
+            disp = ", ".join(cols) if cols and len(cols) > 1 else lm.original_value
+            learnt.setdefault(k, {"source": disp, "from": lm.captured_from,
                                   "rule_type": lm.rule_type, "id": str(lm.id)})
         if is_gold:
             gold.setdefault(k, {"source": lm.original_value if lm.kind == "column_mapping"
@@ -58,13 +62,25 @@ async def context(
     target_object: str,
     template_id: Optional[str] = None,
     client_id: Optional[str] = None,
+    proposal_id: Optional[str] = None,
     _: User = Depends(get_current_user),
 ):
     """Every target field of the template, each pre-filled with its current learnt
-    source and any previous-gold source, so the analyst edits from a starting point
-    rather than a blank grid."""
+    source, any previous-gold source, and — when proposal_id is given — what an
+    uploaded mapping document proposed for that field, so the analyst can adjust the
+    document's mapping by hand instead of starting from a blank grid."""
     cid = PydanticObjectId(client_id) if client_id else None
     learnt, gold = await _context_for(cid, target_object)
+
+    # optional: fold in what an uploaded document proposed for each field
+    doc: dict[str, str] = {}
+    if proposal_id:
+        from app.models.mapping_proposal import MappingProposal
+        prop = await MappingProposal.get(PydanticObjectId(proposal_id))
+        if prop:
+            for r in prop.rows:
+                if _n(r.target_object) == _n(target_object) and r.target_field:
+                    doc.setdefault(_n(r.target_field), r.override_source or r.source_field)
 
     fields: list[dict] = []
     if template_id:
@@ -78,9 +94,10 @@ async def context(
                 "learnt_from": (learnt.get(k) or {}).get("from"),
                 "learnt_rule": (learnt.get(k) or {}).get("rule_type"),
                 "gold_source": (gold.get(k) or {}).get("source"),
+                "doc_source": doc.get(k),
             })
     return {"target_object": target_object, "fields": fields,
-            "learnt_count": len(learnt), "gold_count": len(gold)}
+            "learnt_count": len(learnt), "gold_count": len(gold), "doc_count": len(doc)}
 
 
 @router.post("/vet")
@@ -149,7 +166,21 @@ async def save(payload: dict, user: User = Depends(get_current_user)):
                 await existing.delete()
                 cleared += 1
             continue
-        cfg = {"source_column": src, "confidence": "High"}
+
+        # MANY sources -> ONE destination. A comma-separated source means the field is
+        # built from several legacy columns, i.e. a CONCAT. Store the join rule with all
+        # columns; original_value is the FIRST column so the output gate that checks the
+        # source exists in the dataset still passes, while the rule reads them all.
+        parts = [p.strip() for p in src.split(",") if p.strip()]
+        if len(parts) > 1:
+            rule_type = rule_type or "CONCAT"
+            sep = r.get("separator")
+            sep = " " if sep is None else str(sep)
+            cfg = {"source_column": parts[0], "columns": parts, "separator": sep, "confidence": "High"}
+            src = parts[0]
+        else:
+            src = parts[0] if parts else src
+            cfg = {"source_column": src, "confidence": "High"}
         if existing is not None:
             await existing.set({
                 "original_value": src, "rule_type": rule_type, "rule_config": cfg,
