@@ -418,6 +418,13 @@ export const MappingApi = {
     api.get<MappingCandidateGroup[]>(`/conversions/${conversionId}/mapping-candidates`, {
       params: { top_n: opts?.topN ?? 5, target_field_id: opts?.targetFieldId },
     }).then(r => r.data),
+  /** On-demand AI verdict + reason for uncertain candidates. Returns groups plus
+   *  an ai map keyed target_field_id -> source_column -> {verdict, reason}. */
+  vetCandidates: (conversionId: string, opts?: { topN?: number; onlyUncertain?: boolean }) =>
+    api.post<{ groups: MappingCandidateGroup[]; ai: Record<string, Record<string, { verdict: string; reason: string }>>; vetted: number; sent: number }>(
+      `/conversions/${conversionId}/vet-candidates`, {},
+      { params: { top_n: opts?.topN ?? 4, only_uncertain: opts?.onlyUncertain ?? true }, timeout: 180_000 },
+    ).then(r => r.data),
   list: (conversionId: string) =>
     api.get<MappingSuggestion[]>(`/conversions/${conversionId}/mappings`).then(r => r.data),
   update: (mappingId: string, body: Partial<MappingSuggestion>) =>

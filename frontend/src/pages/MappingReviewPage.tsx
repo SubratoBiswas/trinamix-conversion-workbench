@@ -1690,6 +1690,8 @@ const MappingTableView: React.FC<{
   // show the runner-up source columns the matcher scored lower.
   const [altByTarget, setAltByTarget] = useState<Record<string, MappingCandidate[]>>({});
   const [altLoading, setAltLoading] = useState(true);
+  const [vetting, setVetting] = useState(false);
+  const [vetMsg, setVetMsg] = useState<string | null>(null);
   useEffect(() => {
     if (!conversionId) return;
     setAltLoading(true);
@@ -1702,6 +1704,30 @@ const MappingTableView: React.FC<{
       .catch(() => setAltByTarget({}))
       .finally(() => setAltLoading(false));
   }, [conversionId]);
+
+  // On demand: ask the model to judge the uncertain options and fold its verdict +
+  // reason back into the candidates, so the table and the CSV both carry them.
+  const vetWithAi = async () => {
+    if (!conversionId) return;
+    setVetting(true); setVetMsg(null);
+    try {
+      const r = await MappingApi.vetCandidates(conversionId, { topN: 4, onlyUncertain: true });
+      setAltByTarget((prev) => {
+        const next: Record<string, MappingCandidate[]> = { ...prev };
+        for (const g of r.groups) {
+          const verdicts = r.ai[String(g.target_field_id)] || {};
+          next[String(g.target_field_id)] = (g.candidates || []).map((c) => {
+            const v = verdicts[c.source_column];
+            return v ? { ...c, ai_verdict: v.verdict, ai_reason: v.reason } : c;
+          });
+        }
+        return next;
+      });
+      setVetMsg(`AI reviewed ${r.vetted} of ${r.sent} uncertain option(s). Reasons added to the table and export.`);
+    } catch {
+      setVetMsg("AI review is unavailable right now — the deterministic reasons are still shown.");
+    } finally { setVetting(false); }
+  };
 
   // Field names that occur on more than one interface sheet (e.g. "Item Number"
   // is the linking key on all 16 item tables). We badge those with their sheet so
@@ -1824,9 +1850,17 @@ const MappingTableView: React.FC<{
 
   const exportCsv = () => {
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // A candidate's reason: prefer an AI verdict, else the guard's cautions/reasons.
+    const optReason = (c: MappingCandidate): string => {
+      if (c.ai_reason) return `${c.ai_verdict ? c.ai_verdict + ": " : ""}${c.ai_reason}`;
+      if (c.plausible === false && c.caution) return `implausible — ${c.caution}`;
+      return (c.reasons || []).join("; ");
+    };
     const header = [
       "Source field", "Target FBDI field", "Required", "How it's mapped", "Transform",
-      "Confidence %", "Status", "Needs confirmation", "Why", "Other options (lower probability)", "Notes",
+      "Confidence %", "Status", "Needs confirmation", "Why",
+      "Other options (lower probability)", "Other options — reasons",
+      "Cautions (implausible options)", "Notes",
     ];
     const lines = rows.map((r) => [
       r.m?.source_column || (r.dv ? "(constant)" : ""),
@@ -1839,6 +1873,10 @@ const MappingTableView: React.FC<{
       r.confirm ? "YES" : "",
       r.confirm || "",
       r.alts.map((c) => `${c.source_column} (${Math.round((c.confidence ?? 0) * 100)}%)`).join(" | "),
+      // one reason per option, aligned to the "other options" column above
+      r.alts.map((c) => `${c.source_column}: ${optReason(c) || "weak name/type overlap only"}`).join(" | "),
+      r.alts.filter((c) => c.plausible === false)
+        .map((c) => `${c.source_column} — ${c.caution || "unlikely to be a real match"}`).join(" | "),
       r.isGap ? "Required field with no source and no default." : (r.m?.reason || ""),
     ].map(esc).join(","));
     const csv = [header.map(esc).join(","), ...lines].join("\n");
@@ -1933,6 +1971,16 @@ const MappingTableView: React.FC<{
         )}
 
         <div className="flex-1" />
+        {vetMsg && <span className="text-[10px] text-ink-subtle">{vetMsg}</span>}
+        <button
+          onClick={vetWithAi}
+          disabled={vetting || altLoading}
+          title="Ask AI to judge the uncertain alternatives and explain why each does or doesn't fit. Adds reasons to the table and the CSV export."
+          className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
+        >
+          {vetting ? <Spinner /> : <Sparkles className="h-3 w-3" />}
+          {vetting ? "Reviewing…" : "Vet options with AI"}
+        </button>
         <button
           onClick={exportCsv}
           title="Export the rows currently shown (respects filters and sort) as CSV"
@@ -2061,22 +2109,36 @@ const MappingTableView: React.FC<{
                     <span className="text-[10px] text-ink-subtle">—</span>
                   ) : (
                     <div className="flex flex-wrap gap-1">
-                      {alts.map((c) => (
-                        <button
-                          key={c.source_column}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (m) onOverride(m, c.source_column);
-                          }}
-                          title={`Re-map to ${c.source_column} — ${(c.reasons || []).join("; ") || "ranked alternative"}${
-                            c.sample_values?.length ? `\nSamples: ${c.sample_values.slice(0, 3).join(", ")}` : ""
-                          }`}
-                          className="inline-flex items-center gap-1 rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10px] text-ink-muted transition hover:border-brand hover:text-brand-dark"
-                        >
-                          {c.source_column}
-                          <span className="text-[9px] text-ink-subtle">{Math.round((c.confidence ?? 0) * 100)}%</span>
-                        </button>
-                      ))}
+                      {alts.map((c) => {
+                        const bad = c.plausible === false;
+                        const why = c.ai_reason
+                          ? `${c.ai_verdict ? c.ai_verdict + ": " : ""}${c.ai_reason}`
+                          : bad && c.caution ? `implausible — ${c.caution}`
+                          : (c.reasons || []).join("; ") || "ranked alternative";
+                        return (
+                          <button
+                            key={c.source_column}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (m) onOverride(m, c.source_column);
+                            }}
+                            title={`Re-map to ${c.source_column} — ${why}${
+                              c.sample_values?.length ? `\nSamples: ${c.sample_values.slice(0, 3).join(", ")}` : ""
+                            }`}
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] transition",
+                              bad
+                                ? "border-danger/40 bg-danger-subtle text-danger line-through decoration-danger/50 hover:border-danger"
+                                : "border-line bg-white text-ink-muted hover:border-brand hover:text-brand-dark",
+                            )}
+                          >
+                            {bad && <AlertTriangle className="h-2.5 w-2.5" />}
+                            {c.source_column}
+                            <span className="text-[9px] text-ink-subtle">{Math.round((c.confidence ?? 0) * 100)}%</span>
+                            {c.ai_reason && <Sparkles className="h-2.5 w-2.5 text-brand" />}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </td>

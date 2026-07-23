@@ -343,23 +343,42 @@ async def mapping_candidates(
     targets = await _target_fields_for(template)
     if target_field_id:
         targets = [t for t in targets if str(t.id) == str(target_field_id)]
+    from app.ai.semantic_guard import vet_candidate
     out: list[dict] = []
     for tgt in targets:
-        ranked = rank_candidates(sources, tgt, top_n=top_n)
+        # Over-fetch, then let the semantic guard demote nonsense before we cut to
+        # top_n — otherwise an implausible 25% option (employee_id -> Phone) can
+        # occupy a slot that a real, lower-scored candidate deserved.
+        ranked = rank_candidates(sources, tgt, top_n=max(top_n * 2, top_n + 3))
+        scored: list[dict] = []
+        for score, src, reasons in ranked:
+            if score <= 0:
+                continue
+            v = vet_candidate(src.name, list(src.sample_values or []),
+                              tgt.field_name, tgt.description)
+            adj = max(0.0, score - v["penalty"])
+            merged = list(reasons)
+            if not v["plausible"] and v["reason"]:
+                merged.insert(0, f"⚠ implausible: {v['reason']}")
+            scored.append({
+                "source_column": src.name,
+                "confidence": adj,
+                "raw_confidence": score,
+                "plausible": v["plausible"],
+                "source_category": v["source_category"],
+                "target_category": v["target_category"],
+                "caution": None if v["plausible"] else v["reason"],
+                "inferred_type": src.inferred_type,
+                "null_percent": round(src.null_percent or 0.0, 1),
+                "sample_values": [str(v2) for v2 in (src.sample_values or [])[:3]],
+                "reasons": merged,
+            })
+        # plausible first, then by adjusted score
+        scored.sort(key=lambda c: (0 if c["plausible"] else 1, -c["confidence"]))
         out.append({
             "target_field_id": str(tgt.id),
             "target_field_name": tgt.field_name,
-            "candidates": [
-                {
-                    "source_column": src.name,
-                    "confidence": score,
-                    "inferred_type": src.inferred_type,
-                    "null_percent": round(src.null_percent or 0.0, 1),
-                    "sample_values": [str(v) for v in (src.sample_values or [])[:3]],
-                    "reasons": reasons,
-                }
-                for score, src, reasons in ranked if score > 0
-            ],
+            "candidates": scored[:top_n],
         })
     return out
 

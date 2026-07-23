@@ -564,10 +564,18 @@ export type ConversionProject = Conversion;
 export interface MappingCandidate {
   source_column: string;
   confidence: number;
+  raw_confidence?: number;
+  plausible?: boolean;
+  source_category?: string;
+  target_category?: string;
+  caution?: string | null;
   inferred_type: string | null;
   null_percent: number;
   sample_values: string[];
   reasons: string[];
+  /** AI verdict, filled by the on-demand vetting pass. */
+  ai_verdict?: string;
+  ai_reason?: string;
 }
 
 /** Alternative candidates for a single target field. */
