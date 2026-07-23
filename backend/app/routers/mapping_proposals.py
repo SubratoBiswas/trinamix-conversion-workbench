@@ -136,6 +136,48 @@ async def decide(
     return {"updated": changed, "decision": decision}
 
 
+@router.post("/{proposal_id}/vet")
+async def vet_proposal(proposal_id: str, _: User = Depends(get_current_user)):
+    """AI-judge the proposed rows (conflicts first). Verdicts are stored on the
+    proposal, so a return visit shows them without re-spending tokens."""
+    p = await MappingProposal.get(PydanticObjectId(proposal_id))
+    if not p:
+        raise HTTPException(404, "Proposal not found.")
+    from app.services.mapping_ingest_service import vet_proposal_with_ai
+    res = await vet_proposal_with_ai(p)
+    return {**res, **_out(p)}
+
+
+@router.post("/{proposal_id}/override")
+async def override_row(
+    proposal_id: str,
+    payload: dict,
+    _: User = Depends(get_current_user),
+):
+    """Override a row's source with a MANDATORY reason. Sets the row approved so it
+    applies, and records the reason (surfaced in the learning's audit trail)."""
+    p = await MappingProposal.get(PydanticObjectId(proposal_id))
+    if not p:
+        raise HTTPException(404, "Proposal not found.")
+    if p.status == "applied":
+        raise HTTPException(400, "This proposal has already been applied.")
+    row_no = (payload or {}).get("row_no")
+    source = ((payload or {}).get("source") or "").strip()
+    reason = ((payload or {}).get("reason") or "").strip()
+    if not source:
+        raise HTTPException(400, "A source column is required to override.")
+    if not reason:
+        raise HTTPException(400, "A reason is required to override a mapping.")
+    row = next((r for r in p.rows if r.row_no == row_no), None)
+    if row is None:
+        raise HTTPException(404, "Row not found.")
+    row.override_source = source
+    row.override_reason = reason
+    row.decision = "approved"
+    await p.save()
+    return _out(p)
+
+
 @router.post("/{proposal_id}/apply")
 async def apply(proposal_id: str, user: User = Depends(get_current_user)):
     """Write approved rows to the library and roll them onto existing conversions."""

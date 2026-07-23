@@ -46,6 +46,26 @@ class ProposedMapping(BaseModel):
     conflict_reason: Optional[str] = None
     existing_learning_id: Optional[PydanticObjectId] = None
 
+    # already in the learning library (any status) — so the reviewer sees at a
+    # glance what is stored and won't be asked about it again.
+    is_learnt: bool = False
+    learnt_from: Optional[str] = None       # captured_from of the existing learning
+
+    # cross-reference to a previous gold output, if one covered this field.
+    gold_source: Optional[str] = None       # the source column / constant the gold used
+    gold_note: Optional[str] = None
+
+    # AI vetting of THIS row (does the proposed source fit the target; for a
+    # conflict, which of document vs library is more likely). Stored so it is not
+    # recomputed on a return visit.
+    ai_verdict: Optional[str] = None        # plausible | unlikely | wrong
+    ai_recommends: Optional[str] = None     # document | library | neither
+    ai_reason: Optional[str] = None
+
+    # manual override of the proposed source, with a MANDATORY reason.
+    override_source: Optional[str] = None
+    override_reason: Optional[str] = None
+
 
 class MappingProposal(Document):
     file_name: str

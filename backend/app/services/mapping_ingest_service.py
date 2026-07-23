@@ -262,7 +262,8 @@ async def analyze_mapping_file(
 
 
 async def _classify(proposal: MappingProposal) -> None:
-    """Compare each proposed row with what the library already believes."""
+    """Compare each proposed row with what the library already believes, and
+    cross-reference any previous gold output for the same field."""
     objects = {r.target_object for r in proposal.rows}
     from app.services.client_service import scope_query
     scope = await scope_query(proposal.client_id)
@@ -275,8 +276,37 @@ async def _classify(proposal: MappingProposal) -> None:
         if lm.target_field:
             by_target.setdefault((_n(lm.target_object), _n(lm.target_field)), []).append(lm)
 
+    # Previous gold output for these objects: mappings and constant defaults the tool
+    # derived from an uploaded known-good file (captured_from mentions "gold" or the
+    # kind is example_default / reference_standard). Lets the reviewer see what the
+    # last real load actually used for each field alongside the document's proposal.
+    gold_by_target: dict[tuple[str, str], LearnedMapping] = {}
+    try:
+        golds = await LearnedMapping.find({
+            "target_object": {"$in": list(objects)},
+            "kind": {"$in": ["column_mapping", "example_default", "reference_standard"]},
+            **scope,
+        }).to_list()
+        for lm in golds:
+            cf = (lm.captured_from or "").lower()
+            is_gold = ("gold" in cf or "example_output" in cf or lm.kind in ("example_default", "reference_standard"))
+            if is_gold and lm.target_field:
+                gold_by_target.setdefault((_n(lm.target_object), _n(lm.target_field)), lm)
+    except Exception:  # noqa: BLE001
+        gold_by_target = {}
+
+    def _gold(r) -> None:
+        g = gold_by_target.get((_n(r.target_object), _n(r.target_field)))
+        if g is not None:
+            r.gold_source = g.original_value if g.kind == "column_mapping" else (g.resolved_value or "(constant)")
+            r.gold_note = f"gold: {g.captured_from}" if g.captured_from else "from a previous gold output"
+
     for r in proposal.rows:
+        _gold(r)
         cands = by_target.get((_n(r.target_object), _n(r.target_field)), [])
+        if cands:
+            r.is_learnt = True
+            r.learnt_from = cands[0].captured_from
         if not cands:
             r.status = "new"
             proposal.count_new += 1
@@ -346,8 +376,14 @@ async def apply_proposal(proposal: MappingProposal, *, applied_by: str = "") -> 
             objects.add(r.target_object)
             continue          # already correct in the library; nothing to write
 
+        # A manual override wins over the document's proposed source, and its reason
+        # is recorded in captured_from so the audit trail shows WHY a human changed it.
+        src = r.override_source or r.source_field
+        captured = (f"manual override: {r.override_reason}"
+                    if r.override_source and r.override_reason
+                    else f"mapping document: {proposal.file_name}")
         cfg = r.rule_config if r.rule_type else {
-            "source_column": r.source_field, "fbdi_sheet": r.fbdi_sheet,
+            "source_column": src, "fbdi_sheet": r.fbdi_sheet,
             "confidence": "High", "notes": r.notes,
         }
         existing = None
@@ -355,21 +391,19 @@ async def apply_proposal(proposal: MappingProposal, *, applied_by: str = "") -> 
             existing = await LearnedMapping.get(r.existing_learning_id)
         if existing is not None:
             await existing.set({
-                "original_value": r.source_field, "rule_type": r.rule_type,
+                "original_value": src, "rule_type": r.rule_type,
                 "rule_config": cfg, "source_erp": r.source_system,
-                "captured_from": f"mapping document: {proposal.file_name}",
-                "captured_by": applied_by,
+                "captured_from": captured, "captured_by": applied_by,
             })
         else:
             await LearnedMapping(
                 kind="column_mapping", category="Column Mapping Alias",
-                original_value=r.source_field, resolved_value=r.target_field,
+                original_value=src, resolved_value=r.target_field,
                 target_object=r.target_object, target_field=r.target_field,
                 rule_type=r.rule_type, rule_config=cfg,
                 client_id=proposal.client_id, is_global=proposal.client_id is None,
                 source_erp=r.source_system,
-                captured_from=f"mapping document: {proposal.file_name}",
-                captured_by=applied_by,
+                captured_from=captured, captured_by=applied_by,
             ).insert()
         written += 1
         objects.add(r.target_object)
@@ -404,3 +438,73 @@ async def apply_proposal(proposal: MappingProposal, *, applied_by: str = "") -> 
     await proposal.save()
     return {"learnings_written": written, "conversions_touched": touched,
             "objects": sorted(objects)}
+
+
+async def vet_proposal_with_ai(proposal: MappingProposal, *, only_no_verdict: bool = True) -> dict:
+    """Ask the model to judge each row's proposed mapping.
+
+    For a plain row: does the source column plausibly feed the target field?
+    For a CONFLICT: which of the document's source vs the library's current source
+    is the more likely mapping? The verdict + a short reason is stored on the row so
+    a return visit does not re-spend tokens. Rows already carrying a verdict are
+    skipped unless only_no_verdict is False.
+    """
+    import json as _json
+    import re as _re
+
+    import httpx as _httpx
+
+    from app.config import settings as _settings
+
+    key = (_settings.ANTHROPIC_API_KEY or "").strip()
+    todo = [r for r in proposal.rows
+            if (r.status in ("conflict", "new"))
+            and not (only_no_verdict and r.ai_verdict)]
+    if not key or not todo:
+        return {"vetted": 0, "sent": len(todo)}
+
+    def _line(i: int, r) -> str:
+        base = (f'{i}. Object "{r.target_object}", Oracle field "{r.target_field}". '
+                f'Document maps it from source column "{r.source_field}".')
+        if r.status == "conflict" and r.current_source_field:
+            base += f' The library currently maps it from "{r.current_source_field}".'
+        if r.gold_source:
+            base += f' A previous gold load used "{r.gold_source}".'
+        return base
+
+    vetted = 0
+    for chunk_start in range(0, len(todo), 30):
+        chunk = todo[chunk_start:chunk_start + 30]
+        prompt = (
+            "You are validating data-migration mappings from a legacy HR/ERP/PLM system "
+            "into Oracle Fusion. For EACH item decide, by what the data MEANS, whether the "
+            "document's proposed source column genuinely populates that Oracle field. For a "
+            "conflict, also say which source (document or library) is the better mapping.\n\n"
+            + "\n".join(_line(i, r) for i, r in enumerate(chunk)) +
+            '\n\nReply ONLY with a JSON array, one object per item index: '
+            '[{"i":0,"verdict":"plausible|unlikely|wrong","recommends":"document|library|neither",'
+            '"reason":"one short sentence"}]. Keep reasons under 18 words.')
+        try:
+            async with _httpx.AsyncClient(timeout=55.0) as cx:
+                resp = await cx.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                             "content-type": "application/json"},
+                    json={"model": _settings.ANTHROPIC_MODEL, "max_tokens": 1500,
+                          "messages": [{"role": "user", "content": prompt}]})
+                resp.raise_for_status()
+                txt = "".join(b.get("text", "") for b in resp.json().get("content", [])
+                              if b.get("type") == "text")
+            m = _re.search(r"\[.*\]", txt, _re.S)
+            for row in (_json.loads(m.group(0)) if m else []):
+                idx = row.get("i")
+                if isinstance(idx, int) and 0 <= idx < len(chunk):
+                    tr = chunk[idx]
+                    tr.ai_verdict = str(row.get("verdict", "")).lower() or None
+                    tr.ai_recommends = str(row.get("recommends", "")).lower() or None
+                    tr.ai_reason = str(row.get("reason", "")).strip() or None
+                    vetted += 1
+        except Exception:                                       # noqa: BLE001
+            continue
+    await proposal.save()
+    return {"vetted": vetted, "sent": len(todo)}

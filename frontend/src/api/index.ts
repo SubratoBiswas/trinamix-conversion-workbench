@@ -707,6 +707,11 @@ export const LearningApi = {
   decideProposal: (id: string, decision: string, rowNos?: number[]) =>
     api.post<{ updated: number }>(`/mapping-proposals/${id}/decide`,
       { decision, row_nos: rowNos }).then(r => r.data),
+  vetProposal: (id: string) =>
+    api.post<any>(`/mapping-proposals/${id}/vet`, {}, { timeout: 180_000 }).then(r => r.data),
+  overrideProposalRow: (id: string, rowNo: number, source: string, reason: string) =>
+    api.post<any>(`/mapping-proposals/${id}/override`,
+      { row_no: rowNo, source, reason }).then(r => r.data),
   applyProposal: (id: string) =>
     api.post<{ learnings_written: number; conversions_touched: number; objects: string[] }>(
       `/mapping-proposals/${id}/apply`, {}, { timeout: 300_000 }).then(r => r.data),

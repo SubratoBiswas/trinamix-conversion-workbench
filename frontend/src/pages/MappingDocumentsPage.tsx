@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { UploadCloud, AlertTriangle, Check, X, Trash2, RefreshCw, FileSpreadsheet } from "lucide-react";
+import { UploadCloud, AlertTriangle, Check, X, Trash2, RefreshCw, FileSpreadsheet, Sparkles, Download } from "lucide-react";
 import { LearningApi, ClientsApi } from "@/api";
 import { Button } from "@/components/ui/Primitives";
 
 type Row = {
   row_no: number; target_object: string; target_field: string; source_field: string;
-  fbdi_sheet?: string | null; source_system?: string | null; rule_type?: string | null;
+  source_alternatives?: string[]; fbdi_sheet?: string | null; source_system?: string | null;
+  rule_type?: string | null;
   status: "new" | "unchanged" | "conflict"; decision: "pending" | "approved" | "rejected";
   current_source_field?: string | null; current_rule_type?: string | null;
   current_captured_from?: string | null; conflict_reason?: string | null;
+  is_learnt?: boolean; learnt_from?: string | null;
+  gold_source?: string | null; gold_note?: string | null;
+  ai_verdict?: string | null; ai_recommends?: string | null; ai_reason?: string | null;
+  override_source?: string | null; override_reason?: string | null;
+  notes?: string | null;
 };
 type Proposal = {
   id: string; file_name: string; target_object?: string | null; source_system?: string | null;
@@ -83,6 +89,63 @@ export const MappingDocumentsPage: React.FC = () => {
     } catch (e: any) {
       setMsg(e?.response?.data?.detail || "Could not apply.");
     } finally { setBusy(false); }
+  };
+
+  const [vetting, setVetting] = useState(false);
+  const vetWithAi = async () => {
+    if (!open) return;
+    setVetting(true); setMsg(null);
+    try {
+      const r = await LearningApi.vetProposal(open.id);
+      setOpen(await LearningApi.getProposal(open.id));
+      setMsg(r.vetted > 0 ? `AI reviewed ${r.vetted} row(s). Recommendations shown in the table.`
+        : "AI review returned nothing (already reviewed, or AI unavailable).");
+    } catch {
+      setMsg("AI review is unavailable right now.");
+    } finally { setVetting(false); }
+  };
+
+  const override = async (rowNo: number, currentSource: string) => {
+    if (!open) return;
+    const source = window.prompt("Override the source column for this field:", currentSource || "");
+    if (source === null || !source.trim()) return;
+    const reason = window.prompt("Reason for the override (required):", "");
+    if (reason === null || !reason.trim()) {
+      setMsg("Override cancelled — a reason is required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await LearningApi.overrideProposalRow(open.id, rowNo, source.trim(), reason.trim());
+      setOpen(await LearningApi.getProposal(open.id));
+      setMsg("Override recorded — it will apply with your reason in the audit trail.");
+    } catch (e: any) {
+      setMsg(e?.response?.data?.detail || "Could not override.");
+    } finally { setBusy(false); }
+  };
+
+  const exportCsv = () => {
+    if (!open) return;
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = [
+      "Object", "Oracle field (destination)", "Proposed source", "Alternatives",
+      "Status", "Already learnt", "Learnt from", "Currently mapped from",
+      "Previous gold", "AI verdict", "AI recommends", "AI reason", "Why it conflicts",
+      "Override source", "Override reason", "Decision", "Rule", "Source system", "Notes",
+    ];
+    const lines = (open.rows || []).map((r) => [
+      r.target_object, r.target_field, r.source_field, (r.source_alternatives || []).join(" | "),
+      r.status, r.is_learnt ? "YES" : "", r.learnt_from || "", r.current_source_field || "",
+      r.gold_source || "", r.ai_verdict || "", r.ai_recommends || "", r.ai_reason || "",
+      r.conflict_reason || "", r.override_source || "", r.override_reason || "",
+      r.decision, r.rule_type || "", r.source_system || "", r.notes || "",
+    ].map(esc).join(","));
+    const csv = [header.map(esc).join(","), ...lines].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `${open.file_name.replace(/\.[^.]+$/, "")}_mapping_review.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
   };
 
   const rows = useMemo(() => {
@@ -181,7 +244,13 @@ export const MappingDocumentsPage: React.FC = () => {
                 <AlertTriangle size={13} /> {pendingConflicts} contradiction(s) need a decision
               </span>
             )}
-            <div className="ml-auto flex gap-2">
+            <div className="ml-auto flex flex-wrap gap-2">
+              <Button variant="secondary" disabled={vetting || busy} onClick={vetWithAi}>
+                <Sparkles size={14} /> {vetting ? "Reviewing…" : "Vet with AI"}
+              </Button>
+              <Button variant="secondary" disabled={!open.rows?.length} onClick={exportCsv}>
+                <Download size={14} /> Export CSV
+              </Button>
               {open.status !== "applied" && (
                 <>
                   <Button variant="secondary" disabled={busy} onClick={() => decide("approved")}>
@@ -219,50 +288,108 @@ export const MappingDocumentsPage: React.FC = () => {
             )}
           </div>
 
-          <div className="max-h-[28rem] overflow-auto">
+          <div className="max-h-[30rem] overflow-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-50 text-left text-xs text-muted">
+              <thead className="sticky top-0 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-muted">
                 <tr>
                   <th className="px-4 py-2">Object</th>
-                  <th className="px-3 py-2">Oracle field</th>
-                  <th className="px-3 py-2">Proposed source</th>
-                  <th className="px-3 py-2">Currently</th>
-                  <th className="px-3 py-2">Why it conflicts</th>
+                  <th className="px-3 py-2">Source → Destination</th>
+                  <th className="px-3 py-2">Learning</th>
+                  <th className="px-3 py-2">Prev. gold</th>
+                  <th className="px-3 py-2">AI review</th>
+                  <th className="px-3 py-2">Why / conflict</th>
                   <th className="px-3 py-2">Decision</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r => (
+                {rows.map(r => {
+                  const effectiveSource = r.override_source || r.source_field;
+                  const verdictTone = r.ai_verdict === "wrong" ? "bg-rose-100 text-rose-700"
+                    : r.ai_verdict === "unlikely" ? "bg-amber-100 text-amber-800"
+                    : r.ai_verdict === "plausible" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500";
+                  return (
                   <tr key={r.row_no} className="border-t align-top">
-                    <td className="px-4 py-2 text-xs">{r.target_object}</td>
-                    <td className="px-3 py-2 font-medium">{r.target_field}</td>
-                    <td className="px-3 py-2 text-emerald-700">
-                      {r.source_field}{r.rule_type ? ` [${r.rule_type}]` : ""}
+                    <td className="px-4 py-2 text-xs">
+                      {r.target_object}
+                      {r.fbdi_sheet && <div className="text-[10px] text-slate-400">{r.fbdi_sheet}</div>}
                     </td>
-                    <td className="px-3 py-2 text-rose-700">{r.current_source_field || "—"}</td>
-                    <td className="px-3 py-2 text-xs text-muted">{r.conflict_reason || "—"}</td>
+                    {/* source → destination */}
                     <td className="px-3 py-2">
-                      {r.status !== "conflict"
-                        ? <Pill tone="bg-slate-100 text-slate-500">{r.status}</Pill>
-                        : open.status === "applied"
-                          ? <Pill tone="bg-slate-100 text-slate-600">{r.decision}</Pill>
-                          : (
-                            <div className="flex gap-1">
-                              <button onClick={() => decide("approved", [r.row_no])}
-                                      className={`rounded px-2 py-0.5 text-xs ${r.decision === "approved" ? "bg-emerald-600 text-white" : "bg-slate-100"}`}>
-                                Approve
-                              </button>
-                              <button onClick={() => decide("rejected", [r.row_no])}
-                                      className={`rounded px-2 py-0.5 text-xs ${r.decision === "rejected" ? "bg-rose-600 text-white" : "bg-slate-100"}`}>
-                                Reject
-                              </button>
-                            </div>
-                          )}
+                      <div className="flex items-center gap-1.5">
+                        <code className="rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-800">{effectiveSource}</code>
+                        <span className="text-slate-400">→</span>
+                        <span className="font-medium">{r.target_field}</span>
+                        {r.rule_type && <Pill tone="bg-violet-50 text-violet-700">{r.rule_type}</Pill>}
+                      </div>
+                      {r.override_source && (
+                        <div className="mt-0.5 text-[10px] text-violet-700">overridden — {r.override_reason}</div>
+                      )}
+                      {!!(r.source_alternatives?.length) && (
+                        <div className="mt-0.5 text-[10px] text-slate-400">alt: {r.source_alternatives!.join(", ")}</div>
+                      )}
+                    </td>
+                    {/* learning state */}
+                    <td className="px-3 py-2 text-xs">
+                      {r.is_learnt
+                        ? <div>
+                            <Pill tone="bg-indigo-50 text-indigo-700">already learnt</Pill>
+                            {r.learnt_from && <div className="mt-0.5 text-[10px] text-slate-400">{r.learnt_from}</div>}
+                          </div>
+                        : <span className="text-slate-400">new</span>}
+                    </td>
+                    {/* previous gold */}
+                    <td className="px-3 py-2 text-xs">
+                      {r.gold_source
+                        ? <span className="text-teal-700" title={r.gold_note || ""}>{r.gold_source}</span>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    {/* AI review */}
+                    <td className="px-3 py-2 text-xs">
+                      {r.ai_verdict
+                        ? <div>
+                            <Pill tone={verdictTone}>{r.ai_verdict}{r.ai_recommends ? ` · ${r.ai_recommends}` : ""}</Pill>
+                            {r.ai_reason && <div className="mt-0.5 text-[10px] text-slate-500">{r.ai_reason}</div>}
+                          </div>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    {/* why / conflict */}
+                    <td className="px-3 py-2 text-[11px] text-muted">
+                      {r.status === "conflict"
+                        ? <span><span className="text-rose-700">now: {r.current_source_field}</span> — {r.conflict_reason}</span>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    {/* decision + override */}
+                    <td className="px-3 py-2">
+                      <div className="flex flex-col gap-1">
+                        {r.status !== "conflict"
+                          ? <Pill tone="bg-slate-100 text-slate-500">{r.decision !== "pending" ? r.decision : r.status}</Pill>
+                          : open.status === "applied"
+                            ? <Pill tone="bg-slate-100 text-slate-600">{r.decision}</Pill>
+                            : (
+                              <div className="flex gap-1">
+                                <button onClick={() => decide("approved", [r.row_no])}
+                                        className={`rounded px-2 py-0.5 text-xs ${r.decision === "approved" ? "bg-emerald-600 text-white" : "bg-slate-100"}`}>
+                                  Approve
+                                </button>
+                                <button onClick={() => decide("rejected", [r.row_no])}
+                                        className={`rounded px-2 py-0.5 text-xs ${r.decision === "rejected" ? "bg-rose-600 text-white" : "bg-slate-100"}`}>
+                                  Reject
+                                </button>
+                              </div>
+                            )}
+                        {open.status !== "applied" && (
+                          <button onClick={() => override(r.row_no, effectiveSource)}
+                                  className="text-[10px] text-violet-700 hover:underline">
+                            Override…
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {!rows.length && (
-                  <tr><td colSpan={6} className="px-4 py-6 text-center text-sm text-muted">
+                  <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-muted">
                     Nothing in this view.
                   </td></tr>
                 )}
