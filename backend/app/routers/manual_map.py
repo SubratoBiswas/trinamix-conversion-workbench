@@ -259,6 +259,64 @@ async def suggest(payload: dict, _: User = Depends(get_current_user)):
     raise HTTPException(400, "mode must be one_to_many or many_to_one.")
 
 
+@router.post("/suggest-fill")
+async def suggest_fill(payload: dict, _: User = Depends(get_current_user)):
+    """Opt-in AI fill for UNMAPPED fields only.
+
+    The manual mapper never calls AI on its own — that is deliberate, so learnings,
+    gold and the document stay authoritative and AI can't over-map. This runs ONLY
+    when the analyst asks: for the target fields they pass (the blank ones), the
+    model picks the single best source column from the client's known columns, or
+    none. It never touches a field that already has a mapping.
+    """
+    import json as _json
+    import re as _re
+
+    import httpx as _httpx
+
+    from app.config import settings as _settings
+
+    key = (_settings.ANTHROPIC_API_KEY or "").strip()
+    if not key:
+        raise HTTPException(503, "AI is not configured on this environment.")
+    targets = [t for t in ((payload or {}).get("target_fields") or []) if t]
+    sources = [s for s in ((payload or {}).get("sources") or []) if s]
+    if not targets or not sources:
+        raise HTTPException(400, "target_fields and sources are required.")
+
+    out: list[dict] = []
+    for i in range(0, len(targets), 30):
+        chunk = targets[i:i + 30]
+        prompt = (
+            "You are filling gaps in a data-migration mapping. For EACH Oracle Fusion "
+            "target field, pick the SINGLE best source column from the candidate list "
+            "that would populate it, judged by what the data means. If nothing is a "
+            'genuine fit, return null for that field — do NOT force a match.\n\n'
+            f"Target fields: {_json.dumps(chunk)}\n"
+            f"Candidate source columns: {_json.dumps(sources)}\n\n"
+            'Reply ONLY with a JSON array: [{"target_field":"...","source":"col or null",'
+            '"reason":"under 12 words"}].')
+        try:
+            async with _httpx.AsyncClient(timeout=55.0) as cx:
+                r = await cx.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                             "content-type": "application/json"},
+                    json={"model": _settings.ANTHROPIC_MODEL, "max_tokens": 1500,
+                          "messages": [{"role": "user", "content": prompt}]})
+                r.raise_for_status()
+                txt = "".join(b.get("text", "") for b in r.json().get("content", [])
+                              if b.get("type") == "text")
+            m = _re.search(r"\[.*\]", txt, _re.S)
+            for row in (_json.loads(m.group(0)) if m else []):
+                if isinstance(row, dict) and row.get("target_field") and row.get("source"):
+                    out.append({"target_field": row["target_field"],
+                                "source": row["source"], "reason": row.get("reason", "")})
+        except Exception:  # noqa: BLE001
+            continue
+    return {"filled": out, "considered": len(targets)}
+
+
 @router.post("/save")
 async def save(payload: dict, user: User = Depends(get_current_user)):
     """Upsert manual mappings as client-scoped column_mapping learnings.

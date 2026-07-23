@@ -734,6 +734,10 @@ export const LearningApi = {
   manualSources: (clientId?: string, targetObject?: string) =>
     api.get<{ sources: string[] }>("/manual-map/sources",
       { params: { client_id: clientId, target_object: targetObject } }).then(r => r.data),
+  manualSuggestFill: (targetFields: string[], sources: string[]) =>
+    api.post<{ filled: Array<{ target_field: string; source: string; reason: string }>; considered: number }>(
+      "/manual-map/suggest-fill", { target_fields: targetFields, sources },
+      { timeout: 180_000 }).then(r => r.data),
   manualSuggestOneToMany: (source: string, targetFields: string[]) =>
     api.post<{ source: string; matches: Array<{ target_field: string; reason: string }> }>(
       "/manual-map/suggest", { mode: "one_to_many", source, target_fields: targetFields },

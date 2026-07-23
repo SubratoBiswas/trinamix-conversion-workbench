@@ -427,7 +427,7 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
   const [clientId, setClientId] = useState("");
   const [sys, setSys] = useState("");
   const [fields, setFields] = useState<any[]>([]);
-  const [edits, setEdits] = useState<Record<string, { source: string; rule: string; reason?: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { source: string; rule: string; reason?: string; ai?: boolean }>>({});
   const [verdicts, setVerdicts] = useState<Record<string, { plausible: boolean; reason: string; ai_verdict?: string; ai_reason?: string }>>({});
   const [reason, setReason] = useState("");
   const [useAi, setUseAi] = useState(false);
@@ -509,6 +509,34 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
     const why = window.prompt(`Reason for overriding "${f.target_field}" (required). Pick the source column from the list in the row first.`, ed.reason || "");
     if (why === null || !why.trim()) { setMsg("Override cancelled — a reason is required."); return; }
     setEdits((p) => ({ ...p, [f.target_field]: { ...ed, reason: why.trim() } }));
+  };
+
+  // Opt-in: fill ONLY the fields that have no source yet (no learning, gold, doc or
+  // typed value). Never overwrites an existing mapping.
+  const aiFillBlanks = async () => {
+    const blanks = fields.filter((f) => !(edits[f.target_field]?.source || "").trim());
+    if (!blanks.length) { setMsg("No blank fields to fill — everything already has a source."); return; }
+    if (!sourceList.length) { setMsg("No known source columns for this client yet — upload a dataset or a document first."); return; }
+    if (!window.confirm(`Ask AI to suggest a source for ${blanks.length} unmapped field(s)? It will not touch fields that already have a mapping.`)) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await LearningApi.manualSuggestFill(blanks.map((f) => f.target_field), sourceList);
+      if (!r.filled.length) { setMsg("AI did not find confident matches for the blank fields."); return; }
+      setEdits((p) => {
+        const next = { ...p };
+        for (const m of r.filled) {
+          // guard: only fill if still blank (don't clobber a value typed meanwhile)
+          if (!(next[m.target_field]?.source || "").trim()) {
+            const ed = next[m.target_field] || { source: "", rule: "" };
+            next[m.target_field] = { ...ed, source: m.source, ai: true };
+          }
+        }
+        return next;
+      });
+      setMsg(`AI suggested sources for ${r.filled.length} of ${blanks.length} blank field(s). Review the highlighted rows and Save.`);
+    } catch (e: any) {
+      setMsg(e?.response?.data?.detail || "AI fill unavailable.");
+    } finally { setBusy(false); }
   };
 
   // Many sources → one field, launched from the toolbar: pick the destination field
@@ -637,6 +665,9 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
             <Button variant="secondary" disabled={busy} onClick={aiManyToOneToolbar} title="Combine several source columns into one destination field (AI)">
               <Sparkles size={14} /> many sources → 1 field
             </Button>
+            <Button variant="secondary" disabled={busy} onClick={aiFillBlanks} title="Ask AI to suggest a source only for fields that are still unmapped — never overwrites existing mappings">
+              <Sparkles size={14} /> Fill blanks with AI
+            </Button>
             <label className="flex items-center gap-1 text-xs text-muted">
               join with
               <input className="w-16 rounded border px-1.5 py-1 text-[11px]" value={joinSep} onChange={(e) => setJoinSep(e.target.value)} title="Separator used when a field has several source columns (CONCAT)" />
@@ -685,11 +716,12 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
                         <div className="flex items-center gap-1.5">
                           <input
                             list="manual-source-columns"
-                            className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : changedLearnt(f) ? "border-violet-300 bg-violet-50" : ""}`}
+                            className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : ed.ai ? "border-amber-300 bg-amber-50" : changedLearnt(f) ? "border-violet-300 bg-violet-50" : ""}`}
                             value={ed.source}
                             placeholder="pick or type a source column…"
-                            onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value } }))}
+                            onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value, ai: false } }))}
                           />
+                          {ed.ai && <span className="shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold text-amber-800">AI</span>}
                           <button onClick={() => aiManyToOne(f)}
                                   title="Combine several source columns into this one field (AI)"
                                   className="shrink-0 text-[10px] font-medium text-brand hover:underline">
