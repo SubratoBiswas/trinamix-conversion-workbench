@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { UploadCloud, AlertTriangle, Check, X, Trash2, RefreshCw, FileSpreadsheet, Sparkles, Download } from "lucide-react";
-import { LearningApi, ClientsApi } from "@/api";
+import { LearningApi, ClientsApi, FbdiApi } from "@/api";
 import { Button } from "@/components/ui/Primitives";
 
 type Row = {
@@ -40,6 +40,7 @@ export const MappingDocumentsPage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState<"conflict" | "new" | "unchanged" | "all">("conflict");
+  const [mode, setMode] = useState<"upload" | "manual">("upload");
 
   const refresh = async () => setList(await LearningApi.listProposals());
 
@@ -161,12 +162,28 @@ export const MappingDocumentsPage: React.FC = () => {
       <div>
         <h1 className="text-2xl font-semibold">Mapping Documents</h1>
         <p className="text-sm text-muted">
-          Upload an analyst mapping workbook. It is analysed and compared against what the tool
-          already knows — anything that contradicts an existing mapping is held back for your
-          approval. Nothing reaches the library until you apply it.
+          Upload an analyst mapping workbook, or map a template by hand. Either way the result is
+          compared against what the tool already knows, and nothing reaches the library until you apply it.
         </p>
       </div>
 
+      {/* mode toggle */}
+      <div className="inline-flex rounded-lg border bg-white p-0.5 text-sm">
+        <button onClick={() => setMode("upload")}
+                className={`rounded-md px-3 py-1.5 ${mode === "upload" ? "bg-ink text-white" : "text-muted"}`}>
+          Upload document
+        </button>
+        <button onClick={() => setMode("manual")}
+                className={`rounded-md px-3 py-1.5 ${mode === "manual" ? "bg-ink text-white" : "text-muted"}`}>
+          Map manually
+        </button>
+      </div>
+
+      {mode === "manual" && (
+        <ManualMapper clients={clients} />
+      )}
+
+      {mode === "upload" && (<>
       {/* upload */}
       <div className="rounded-xl border bg-white p-4 space-y-3">
         <div className="grid gap-3 md:grid-cols-4">
@@ -397,6 +414,167 @@ export const MappingDocumentsPage: React.FC = () => {
             </table>
           </div>
         </div>
+      )}
+      </>)}
+    </div>
+  );
+};
+
+// ───────────────────── Manual template mapper ─────────────────────
+const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [templateId, setTemplateId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [sys, setSys] = useState("");
+  const [fields, setFields] = useState<any[]>([]);
+  const [edits, setEdits] = useState<Record<string, { source: string; rule: string }>>({});
+  const [verdicts, setVerdicts] = useState<Record<string, { plausible: boolean; reason: string; ai_verdict?: string; ai_reason?: string }>>({});
+  const [reason, setReason] = useState("");
+  const [useAi, setUseAi] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => { FbdiApi.list().then(setTemplates).catch(() => {}); }, []);
+
+  const chosen = templates.find((t) => t.id === templateId);
+  const targetObject = chosen?.business_object || chosen?.name || "";
+
+  const load = async () => {
+    if (!templateId || !targetObject) return;
+    setBusy(true); setMsg(null); setVerdicts({});
+    try {
+      const ctx = await LearningApi.manualContext(targetObject, templateId, clientId || undefined);
+      setFields(ctx.fields);
+      // prefill edits from the learnt source
+      const e: Record<string, { source: string; rule: string }> = {};
+      for (const f of ctx.fields) e[f.target_field] = { source: f.learnt_source || "", rule: f.learnt_rule || "" };
+      setEdits(e);
+      setMsg(`${ctx.fields.length} fields · ${ctx.learnt_count} already learnt · ${ctx.gold_count} seen in a previous gold output.`);
+    } catch (e: any) {
+      setMsg(e?.response?.data?.detail || "Could not load the template fields.");
+    } finally { setBusy(false); }
+  };
+
+  const vet = async () => {
+    const pairs = fields
+      .map((f) => ({ target_field: f.target_field, source_field: (edits[f.target_field]?.source || "").trim() }))
+      .filter((p) => p.source_field);
+    if (!pairs.length) return;
+    setBusy(true);
+    try {
+      const r = await LearningApi.manualVet(pairs, useAi);
+      const v: typeof verdicts = {};
+      for (const x of r.results) v[x.target_field] = x;
+      setVerdicts(v);
+      setMsg(`Checked ${r.results.length} pair(s)${useAi ? " with AI" : ""}.`);
+    } catch { setMsg("Vetting is unavailable right now."); }
+    finally { setBusy(false); }
+  };
+
+  const save = async () => {
+    const rows = fields
+      .map((f) => ({ target_field: f.target_field, source_field: (edits[f.target_field]?.source || "").trim(),
+                     rule_type: (edits[f.target_field]?.rule || "").trim() || undefined, reason: reason.trim() || undefined }))
+      .filter((r) => r.source_field);
+    if (!rows.length) { setMsg("Nothing to save — fill at least one source column."); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await LearningApi.manualSave({ client_id: clientId || undefined, target_object: targetObject, source_system: sys || undefined, rows });
+      setMsg(`Saved ${r.saved} new · updated ${r.updated} · ${r.conversions_touched} existing conversion(s) refreshed.`);
+    } catch (e: any) {
+      setMsg(e?.response?.data?.detail || "Could not save.");
+    } finally { setBusy(false); }
+  };
+
+  const shown = fields.filter((f) => !q || f.target_field.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div className="rounded-xl border bg-white p-4 space-y-3">
+      <div className="grid gap-3 md:grid-cols-4">
+        <select className="rounded-lg border px-3 py-2 text-sm" value={clientId} onChange={(e) => setClientId(e.target.value)}>
+          <option value="">Client — all (global)</option>
+          {clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select className="rounded-lg border px-3 py-2 text-sm" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+          <option value="">Choose FBDI template…</option>
+          {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.business_object ? ` · ${t.business_object}` : ""}</option>)}
+        </select>
+        <input className="rounded-lg border px-3 py-2 text-sm" placeholder="Source system (optional)" value={sys} onChange={(e) => setSys(e.target.value)} />
+        <Button onClick={load} disabled={busy || !templateId}>{busy ? "Loading…" : "Load fields"}</Button>
+      </div>
+      {msg && <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm">{msg}</div>}
+
+      {fields.length > 0 && (
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <input className="rounded-lg border px-3 py-1.5 text-sm" placeholder="Filter fields…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <label className="flex items-center gap-1.5 text-xs text-muted">
+              <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} /> include AI in check
+            </label>
+            <Button variant="secondary" disabled={busy} onClick={vet}><Sparkles size={14} /> Check mappings</Button>
+            <input className="min-w-48 flex-1 rounded-lg border px-3 py-1.5 text-sm" placeholder="Reason (recorded on save, optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <Button disabled={busy} onClick={save}>Save mappings</Button>
+          </div>
+
+          <div className="max-h-[30rem] overflow-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-muted">
+                <tr>
+                  <th className="px-3 py-2">Oracle field (destination)</th>
+                  <th className="px-3 py-2">Source column</th>
+                  <th className="px-3 py-2">Rule</th>
+                  <th className="px-3 py-2">Learning</th>
+                  <th className="px-3 py-2">Prev. gold</th>
+                  <th className="px-3 py-2">Check</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((f) => {
+                  const ed = edits[f.target_field] || { source: "", rule: "" };
+                  const v = verdicts[f.target_field];
+                  const bad = v && (v.plausible === false || v.ai_verdict === "wrong" || v.ai_verdict === "unlikely");
+                  return (
+                    <tr key={f.target_field} className="border-t align-top">
+                      <td className="px-3 py-1.5">
+                        <span className="font-medium">{f.target_field}</span>
+                        {f.required && <Pill tone="bg-rose-50 text-rose-700">req</Pill>}
+                        {f.sheet_name && <div className="text-[10px] text-slate-400">{f.sheet_name}</div>}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <input
+                          className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : ""}`}
+                          value={ed.source}
+                          placeholder="legacy column…"
+                          onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value } }))}
+                        />
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <input className="w-24 rounded border px-2 py-1 text-[11px]" value={ed.rule} placeholder="—"
+                               onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, rule: e.target.value } }))} />
+                      </td>
+                      <td className="px-3 py-1.5 text-xs">
+                        {f.learnt_source
+                          ? <span className="text-indigo-700" title={f.learnt_from || ""}>{f.learnt_source}</span>
+                          : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-1.5 text-xs">
+                        {f.gold_source ? <span className="text-teal-700">{f.gold_source}</span> : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-1.5 text-[11px]">
+                        {v
+                          ? <span className={bad ? "text-rose-700" : "text-emerald-700"}>
+                              {v.ai_reason || v.reason || (v.plausible ? "looks fine" : "check this")}
+                            </span>
+                          : <span className="text-slate-300">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
