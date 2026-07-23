@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
@@ -96,6 +96,23 @@ export const MappingReviewPage: React.FC = () => {
 
   const [project, setProject] = useState<Conversion | null>(null);
   const [loadingConversion, setLoadingConversion] = useState(false);
+  // AI verdicts shared across the table toolbar and the detail panel, keyed
+  // target_field_id -> source_column -> {verdict, reason}. The toolbar "Vet
+  // options with AI" fills it once; the detail panel reads it so a field the
+  // toolbar already vetted shows its AI reasons with no second click (and no
+  // second token spend). A field the toolbar skipped can still be vetted on its
+  // own from the panel, which writes back here.
+  const [aiVerdicts, setAiVerdicts] = useState<Record<string, Record<string, { verdict: string; reason: string }>>>({});
+  const mergeAiVerdicts = useCallback(
+    (incoming: Record<string, Record<string, { verdict: string; reason: string }>>) => {
+      setAiVerdicts((prev) => {
+        const next = { ...prev };
+        for (const [tfid, byCol] of Object.entries(incoming || {})) {
+          next[tfid] = { ...(next[tfid] || {}), ...byCol };
+        }
+        return next;
+      });
+    }, []);
   // Initial load of the conversion list + engagements (drives the landing view).
   const [loadingList, setLoadingList] = useState(true);
   // Surfaced when the conversion context fails to load (e.g. backend cold-start
@@ -1093,6 +1110,8 @@ export const MappingReviewPage: React.FC = () => {
             setSelectedMappingId={setSelectedMappingId}
             onOverride={(m, src) => override(m, src)}
             loading={running}
+            aiVerdicts={aiVerdicts}
+            onAiVerdicts={mergeAiVerdicts}
           />
         ) : (
         /* Mapping canvas */
@@ -1129,6 +1148,8 @@ export const MappingReviewPage: React.FC = () => {
             onAddCustomRule={(m) => { setRuleAuthorMapping(m); setRuleAuthorOpen(true); }}
             onResetDefault={(fn) => resetGoldDefaults([fn], false)}
             onSetFixedValue={(m, v) => setFixedValue(m, v)}
+            aiVerdicts={aiVerdicts}
+            onAiVerdicts={mergeAiVerdicts}
           />
         )}
 
@@ -1682,9 +1703,12 @@ const MappingTableView: React.FC<{
   setSelectedMappingId: (id: number | null) => void;
   onOverride: (m: MappingSuggestion, newSrc: string) => void;
   loading?: boolean;
+  aiVerdicts?: Record<string, Record<string, { verdict: string; reason: string }>>;
+  onAiVerdicts?: (m: Record<string, Record<string, { verdict: string; reason: string }>>) => void;
 }> = ({
   conversionId, sourceColumns, targetFields, mappings, visibleTargetIds,
   effectiveDefaults, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
+  aiVerdicts, onAiVerdicts,
 }) => {
   // Ranked alternatives for every target field (one round-trip), so each row can
   // show the runner-up source columns the matcher scored lower.
@@ -1728,8 +1752,11 @@ const MappingTableView: React.FC<{
         }
         return next;
       });
+      // publish to the shared cache so the detail panel shows these verdicts
+      // for any field the toolbar just covered — no second click, no second call.
+      onAiVerdicts?.(r.ai || {});
       if (r.vetted > 0) {
-        setVetMsg(`AI reviewed ${r.vetted} uncertain option(s) in view. Reasons added to the table and export.`);
+        setVetMsg(`AI reviewed ${r.vetted} uncertain option(s) in view. Reasons added to the table, panel and export.`);
       } else if ((r.eligible ?? 0) === 0) {
         setVetMsg("No uncertain options in view — the shown options are already clear from the deterministic reasons.");
       } else {
@@ -2834,12 +2861,30 @@ const AlternativeCandidatesPanel: React.FC<{
   targetFieldId: number | string;
   currentSource: string | null;
   onPick: (sourceColumn: string) => void;
-}> = ({ conversionId, targetFieldId, currentSource, onPick }) => {
+  /** Verdicts the toolbar "Vet options with AI" already produced for this field. */
+  cachedVerdicts?: Record<string, { verdict: string; reason: string }>;
+  onAiVerdicts?: (m: Record<string, Record<string, { verdict: string; reason: string }>>) => void;
+}> = ({ conversionId, targetFieldId, currentSource, onPick, cachedVerdicts, onAiVerdicts }) => {
   const [cands, setCands] = useState<MappingCandidate[] | null>(null);
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [vetting, setVetting] = useState(false);
   const [vetMsg, setVetMsg] = useState<string | null>(null);
+
+  // Fold cached AI verdicts (from the toolbar run) into the candidates and re-sort,
+  // so a field the toolbar already vetted shows its reasons immediately — no click.
+  const applyVerdicts = (
+    list: MappingCandidate[], verdicts?: Record<string, { verdict: string; reason: string }>,
+  ): MappingCandidate[] => {
+    if (!verdicts) return list;
+    const merged = list.map((c) => {
+      const v = verdicts[c.source_column];
+      return v ? { ...c, ai_verdict: v.verdict, ai_reason: v.reason } : c;
+    });
+    const rank = (c: MappingCandidate) =>
+      c.ai_verdict === "wrong" ? 2 : c.ai_verdict === "unlikely" ? 1 : (c.plausible === false ? 1 : 0);
+    return [...merged].sort((a, b) => rank(a) - rank(b) || (b.confidence || 0) - (a.confidence || 0));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -2849,12 +2894,18 @@ const AlternativeCandidatesPanel: React.FC<{
     MappingApi.candidates(conversionId, { targetFieldId: String(targetFieldId), topN: 6 })
       .then((groups) => {
         if (!alive) return;
-        setCands(groups[0]?.candidates ?? []);
+        const base = groups[0]?.candidates ?? [];
+        const withCached = applyVerdicts(base, cachedVerdicts);
+        setCands(withCached);
+        if (cachedVerdicts && Object.keys(cachedVerdicts).length) {
+          setVetMsg("AI reasons from the last review shown.");
+        }
       })
       .catch(() => { if (alive) setCands([]); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [conversionId, targetFieldId]);
+    // re-run if the toolbar vets this field while the panel is open
+  }, [conversionId, targetFieldId, cachedVerdicts]);
 
   // Vet just THIS field's candidates. only_uncertain=false so every option gets a
   // verdict (it is one field — cheap), then fold the verdicts back in and re-sort
@@ -2866,16 +2917,9 @@ const AlternativeCandidatesPanel: React.FC<{
         topN: 6, onlyUncertain: false, targetFieldIds: [String(targetFieldId)],
       });
       const verdicts = r.ai[String(targetFieldId)] || {};
-      setCands((prev) => {
-        const merged = (r.groups[0]?.candidates ?? prev ?? []).map((c) => {
-          const v = verdicts[c.source_column];
-          return v ? { ...c, ai_verdict: v.verdict, ai_reason: v.reason } : c;
-        });
-        // wrong/unlikely verdicts sink; plausible + higher confidence rise
-        const rank = (c: MappingCandidate) =>
-          c.ai_verdict === "wrong" ? 2 : c.ai_verdict === "unlikely" ? 1 : (c.plausible === false ? 1 : 0);
-        return [...merged].sort((a, b) => rank(a) - rank(b) || (b.confidence || 0) - (a.confidence || 0));
-      });
+      setCands((prev) => applyVerdicts(r.groups[0]?.candidates ?? prev ?? [], verdicts));
+      // save into the page cache so it survives closing/reopening this field
+      onAiVerdicts?.(r.ai || {});
       setVetMsg(r.vetted > 0 ? `AI reviewed ${r.vetted} option(s).` : "AI review unavailable — deterministic reasons shown.");
     } catch {
       setVetMsg("AI review unavailable — deterministic reasons shown.");
@@ -2994,7 +3038,9 @@ const MappingInspector: React.FC<{
   onResetDefault?: (fieldName: string) => void;
   onSetFixedValue?: (m: MappingSuggestion, value: string) => void;
   targetObject?: string | null;
-}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, onSetFixedValue, targetObject }) => {
+  aiVerdicts?: Record<string, Record<string, { verdict: string; reason: string }>>;
+  onAiVerdicts?: (m: Record<string, Record<string, { verdict: string; reason: string }>>) => void;
+}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, onSetFixedValue, targetObject, aiVerdicts, onAiVerdicts }) => {
   const [fixedVal, setFixedVal] = useState("");
   useEffect(() => { setFixedVal(mapping.source_column ? "" : (mapping.default_value ?? "")); }, [mapping.id]);
   const [editingOverride, setEditingOverride] = useState(false);
@@ -3201,6 +3247,8 @@ const MappingInspector: React.FC<{
           targetFieldId={mapping.target_field_id}
           currentSource={mapping.source_column}
           onPick={(src) => onOverride(mapping, src)}
+          cachedVerdicts={aiVerdicts?.[String(mapping.target_field_id)]}
+          onAiVerdicts={onAiVerdicts}
         />
 
         {/* Override editor */}
