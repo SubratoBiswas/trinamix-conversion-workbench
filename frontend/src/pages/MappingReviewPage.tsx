@@ -28,7 +28,7 @@ import type {
   MappingSuggestion,
 } from "@/types";
 
-type FilterMode = "all" | "required" | "review" | "approved" | "unmapped" | "kb";
+type FilterMode = "all" | "required" | "review" | "approved" | "unmapped" | "kb" | "mapped" | "learned";
 
 // Source-system display labels mirroring the server-driven enum, so the
 // KB badge can read "🧠 from NetSuite KB" instead of "🧠 from netsuite KB".
@@ -148,6 +148,7 @@ export const MappingReviewPage: React.FC = () => {
 
   const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
+  const [fillingPage, setFillingPage] = useState(false);
   // Canvas (drag-to-map graph) vs Table (row-per-field detail: required, how it
   // was mapped, transform, confidence, lower-probability alternatives, notes).
   const [viewMode, setViewMode] = useState<"canvas" | "table">("canvas");
@@ -209,6 +210,24 @@ export const MappingReviewPage: React.FC = () => {
   //   • EBS live mode → dataset_id null; columns stream from Oracle EBS
   // dataset_id presence (not source_type) decides the mode, mirroring the
   // Conversion Detail page's source card rule.
+  // Fill blanks with AI — available in BOTH canvas and table (lives in the shared
+  // header). Only touches unmapped fields; results land in Needs review.
+  const fillBlanksPage = async () => {
+    if (!pid) return;
+    if (!window.confirm("Ask AI to suggest a source for the unmapped fields? Results land in Needs-review for you to approve or reject — nothing is applied blindly.")) return;
+    setFillingPage(true);
+    try {
+      const requiredOnly = filter === "unmapped" || filter === "required";
+      const r = await MappingApi.aiFillBlanks(pid, { requiredOnly });
+      if (r.filled > 0) { await loadAll(); setFilter("review"); }
+      window.alert(r.filled > 0
+        ? `AI suggested a source for ${r.filled} of ${r.considered} unmapped field(s). Showing Needs review — approve or reject.`
+        : (r.note || "No unmapped fields to fill."));
+    } catch (e: any) {
+      window.alert(e?.response?.data?.detail || "AI fill is unavailable right now.");
+    } finally { setFillingPage(false); }
+  };
+
   const loadAll = async () => {
     if (!pid) return;
     setLoadingConversion(true);
@@ -417,6 +436,9 @@ export const MappingReviewPage: React.FC = () => {
         case "approved": return m.status === "approved";
         case "unmapped": return !m.source_column && m.target_required;
         case "kb":       return !!m.kb_source;
+        case "mapped":   return !!m.source_column;
+        case "learned":  return m.status === "approved" &&
+          (m.approved_by === "learning-engine" || (m.comment || "").includes("[learned]"));
         default: return true;
       }
     });
@@ -907,16 +929,27 @@ export const MappingReviewPage: React.FC = () => {
           </div>
         )}
 
-        {/* Stats + filters */}
+        {/* Stats + filters — each KPI filters the list (canvas + table) */}
         <div className="mt-3 flex items-center gap-3">
-          <Stat label="Target fields"  value={stats.total} />
-          <Stat label="Auto-mapped"    value={stats.mapped}    tone="info" />
-          <Stat label="Approved"       value={stats.approved}  tone="success" />
-          <Stat label="Required gaps"  value={stats.reqMissing} tone="danger" />
-          <Stat label="Learned"        value={stats.learned}   tone="brand" />
-          <Stat label="From KB"        value={stats.kb}        tone="brand" />
+          <Stat label="Target fields"  value={stats.total}                       onClick={() => setFilter("all")}      active={filter === "all"} />
+          <Stat label="Auto-mapped"    value={stats.mapped}    tone="info"       onClick={() => setFilter("mapped")}   active={filter === "mapped"} />
+          <Stat label="Approved"       value={stats.approved}  tone="success"    onClick={() => setFilter("approved")} active={filter === "approved"} />
+          <Stat label="Required gaps"  value={stats.reqMissing} tone="danger"    onClick={() => setFilter("unmapped")} active={filter === "unmapped"} />
+          <Stat label="Learned"        value={stats.learned}   tone="brand"      onClick={() => setFilter("learned")}  active={filter === "learned"} />
+          <Stat label="From KB"        value={stats.kb}        tone="brand"      onClick={() => setFilter("kb")}       active={filter === "kb"} />
 
           <div className="flex-1" />
+
+          {/* Available in BOTH canvas and table (the table also has its own copy) */}
+          <button
+            onClick={fillBlanksPage}
+            disabled={fillingPage}
+            title="Ask AI to suggest a source only for fields still unmapped. Lands in Needs review — nothing is applied blindly."
+            className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
+          >
+            {fillingPage ? <Spinner /> : <Sparkles className="h-3 w-3" />}
+            {fillingPage ? "Filling…" : (filter === "unmapped" || filter === "required") ? "Fill required blanks with AI" : "Fill blanks with AI"}
+          </button>
 
           {/* View toggle — canvas graph vs tabular field-mapping detail */}
           <div className="flex items-center rounded-md border border-line bg-white p-0.5">
@@ -1407,17 +1440,31 @@ const CompositeMappingModal: React.FC<{
 
 // ─────── Top KPI pill ───────
 
-const Stat: React.FC<{ label: string; value: number; tone?: "info" | "success" | "danger" | "brand" }> = ({ label, value, tone }) => {
+const Stat: React.FC<{
+  label: string; value: number; tone?: "info" | "success" | "danger" | "brand";
+  onClick?: () => void; active?: boolean;
+}> = ({ label, value, tone, onClick, active }) => {
   const text = tone === "info" ? "text-info" :
                tone === "success" ? "text-success" :
                tone === "danger" ? "text-danger" :
                tone === "brand" ? "text-brand-dark" :
                "text-ink";
-  return (
-    <div className="flex items-baseline gap-1.5">
+  const inner = (
+    <>
       <span className={cn("text-base font-semibold tabular-nums", text)}>{value}</span>
       <span className="text-[10.5px] uppercase tracking-wider text-ink-muted">{label}</span>
-    </div>
+    </>
+  );
+  if (!onClick) return <div className="flex items-baseline gap-1.5">{inner}</div>;
+  return (
+    <button
+      onClick={onClick}
+      title={`Filter to ${label}`}
+      className={cn("flex items-baseline gap-1.5 rounded-md px-1.5 py-0.5 transition hover:bg-canvas",
+        active && "bg-canvas ring-1 ring-brand/40")}
+    >
+      {inner}
+    </button>
   );
 };
 
@@ -2064,15 +2111,6 @@ const MappingTableView: React.FC<{
         >
           {vetting ? <Spinner /> : alreadyVetted ? <Check className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
           {vetting ? "Reviewing…" : alreadyVetted ? "AI review done" : "Vet options with AI"}
-        </button>
-        <button
-          onClick={fillBlanksWithAi}
-          disabled={filling || altLoading}
-          title="Ask AI to suggest a source only for fields that are still unmapped. Lands in Needs review — nothing is applied blindly."
-          className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
-        >
-          {filling ? <Spinner /> : <Sparkles className="h-3 w-3" />}
-          {filling ? "Filling…" : onlyRequired ? "Fill required blanks with AI" : "Fill blanks with AI"}
         </button>
         <button
           onClick={exportCsv}
