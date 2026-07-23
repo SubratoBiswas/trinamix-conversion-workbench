@@ -1711,7 +1711,12 @@ const MappingTableView: React.FC<{
     if (!conversionId) return;
     setVetting(true); setVetMsg(null);
     try {
-      const r = await MappingApi.vetCandidates(conversionId, { topN: 4, onlyUncertain: true });
+      // Scope the AI pass to the rows currently in view (bounded) so a wide
+      // template doesn't send hundreds of pairs and blow the gateway.
+      const ids = viewRows.map((r) => String(r.f.id)).slice(0, 120);
+      const r = await MappingApi.vetCandidates(conversionId, {
+        topN: 4, onlyUncertain: true, targetFieldIds: ids,
+      });
       setAltByTarget((prev) => {
         const next: Record<string, MappingCandidate[]> = { ...prev };
         for (const g of r.groups) {
@@ -1723,7 +1728,13 @@ const MappingTableView: React.FC<{
         }
         return next;
       });
-      setVetMsg(`AI reviewed ${r.vetted} of ${r.sent} uncertain option(s). Reasons added to the table and export.`);
+      if (r.vetted > 0) {
+        setVetMsg(`AI reviewed ${r.vetted} uncertain option(s) in view. Reasons added to the table and export.`);
+      } else if ((r.eligible ?? 0) === 0) {
+        setVetMsg("No uncertain options in view — the shown options are already clear from the deterministic reasons.");
+      } else {
+        setVetMsg("AI review returned nothing this time — the deterministic reasons are still shown. Try again, or narrow the rows with a filter.");
+      }
     } catch {
       setVetMsg("AI review is unavailable right now — the deterministic reasons are still shown.");
     } finally { setVetting(false); }

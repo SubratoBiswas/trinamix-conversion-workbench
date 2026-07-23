@@ -59,17 +59,23 @@ async def mapping_candidates_endpoint(
 @router.post("/conversions/{conversion_id}/vet-candidates")
 async def vet_candidates_endpoint(
     conversion_id: str,
+    payload: dict | None = None,
     top_n: int = 4,
     only_uncertain: bool = True,
     _: User = Depends(get_current_user),
 ):
     """Add an AI verdict + plain-English reason to each candidate — on demand, so
     an analyst can ask "why these options?" without paying the cost on every load.
-    Falls back to the deterministic guard's reasons when AI is unavailable."""
+
+    Body may carry {"target_field_ids": [...]} to vet only the rows on screen; this
+    is how a wide template (1000+ fields) stays inside the request budget. Falls
+    back to the deterministic guard's reasons when AI is unavailable."""
     from app.services.candidate_vetting_service import vet_conversion_candidates
     conv = await _require_conversion(conversion_id)
     top_n = max(1, min(top_n, 8))
-    return await vet_conversion_candidates(conv, top_n=top_n, only_uncertain=only_uncertain)
+    tfids = (payload or {}).get("target_field_ids") or None
+    return await vet_conversion_candidates(
+        conv, top_n=top_n, only_uncertain=only_uncertain, target_field_ids=tfids)
 
 
 @router.get("/conversions/{conversion_id}/mappings", response_model=list[MappingOut])

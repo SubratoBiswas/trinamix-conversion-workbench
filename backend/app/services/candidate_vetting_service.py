@@ -82,32 +82,57 @@ async def vet_with_ai(items: list[dict]) -> dict[int, dict]:
     return out
 
 
+# Hard ceiling on pairs sent to the model in one request. A wide template (the
+# Customer import is 1254 fields) has hundreds of low-confidence options; vetting
+# them all is dozens of sequential batches and blows the ~100s gateway, which is
+# exactly why the button failed. Cap to two batches' worth and PRIORITISE the pairs
+# worth a human's attention, so the call always returns well inside the budget.
+_MAX_AI_ITEMS = 60
+
+
 async def vet_conversion_candidates(conversion, *, top_n: int = 4,
-                                    only_uncertain: bool = True) -> dict:
+                                    only_uncertain: bool = True,
+                                    target_field_ids: list[str] | None = None,
+                                    max_items: int = _MAX_AI_ITEMS) -> dict:
     """Enrich a conversion's candidates with an AI verdict + reason.
 
-    only_uncertain (default) sends the model just the pairs worth a second opinion:
-    an implausible flag from the guard, or a chosen mapping with a close runner-up.
-    That keeps the call small and the token spend proportional to real doubt.
+    only_uncertain (default) keeps just the pairs worth a second opinion — an
+    implausible flag, or a low-confidence option. target_field_ids limits the pass
+    to specific fields (the rows the analyst is actually looking at), which is how
+    the UI keeps a wide template fast. Whatever remains is ranked so the most
+    doubtful pairs are vetted first, then capped at max_items.
     """
     from app.services.mapping_service import mapping_candidates
 
+    wanted = set(target_field_ids or [])
     groups = await mapping_candidates(conversion, top_n=top_n)
-    items: list[dict] = []
-    index: dict[int, tuple[str, str]] = {}   # id -> (target_field_id, source_column)
-    nid = 0
+    if wanted:
+        groups = [g for g in groups if g["target_field_id"] in wanted]
+
+    # collect candidate pairs with a priority: implausible (0) is most worth an
+    # explanation, then a close-but-uncertain option (1); ties by lower confidence.
+    pool: list[tuple[int, float, str, str, dict]] = []
     for g in groups:
         for c in g.get("candidates", []):
-            uncertain = (not c.get("plausible", True)) or (0 < c.get("confidence", 0) < 0.55)
+            implausible = not c.get("plausible", True)
+            conf = c.get("confidence", 0) or 0
+            uncertain = implausible or (0 < conf < 0.55)
             if only_uncertain and not uncertain:
                 continue
-            nid += 1
-            index[nid] = (g["target_field_id"], c["source_column"])
-            items.append({
-                "id": nid, "source_column": c["source_column"],
-                "sample_values": c.get("sample_values") or [],
-                "target_field": g["target_field_name"], "target_desc": "",
-            })
+            pri = 0 if implausible else 1
+            pool.append((pri, conf, g["target_field_id"], g["target_field_name"], c))
+    pool.sort(key=lambda t: (t[0], t[1]))          # implausible first, then lowest conf
+
+    items: list[dict] = []
+    index: dict[int, tuple[str, str]] = {}
+    for nid, (_, _, tfid, tname, c) in enumerate(pool[:max_items], start=1):
+        index[nid] = (tfid, c["source_column"])
+        items.append({
+            "id": nid, "source_column": c["source_column"],
+            "sample_values": c.get("sample_values") or [],
+            "target_field": tname, "target_desc": "",
+        })
+
     verdicts = await vet_with_ai(items)
     enriched: dict[str, dict] = {}
     for nid2, (tfid, src) in index.items():
@@ -115,4 +140,5 @@ async def vet_conversion_candidates(conversion, *, top_n: int = 4,
         if v:
             enriched.setdefault(tfid, {})[src] = v
     return {"groups": groups, "ai": enriched, "vetted": len(verdicts),
-            "sent": len(items)}
+            "sent": len(items), "eligible": len(pool),
+            "capped": len(pool) > max_items}

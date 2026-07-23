@@ -419,12 +419,34 @@ export const MappingApi = {
       params: { top_n: opts?.topN ?? 5, target_field_id: opts?.targetFieldId },
     }).then(r => r.data),
   /** On-demand AI verdict + reason for uncertain candidates. Returns groups plus
-   *  an ai map keyed target_field_id -> source_column -> {verdict, reason}. */
-  vetCandidates: (conversionId: string, opts?: { topN?: number; onlyUncertain?: boolean }) =>
-    api.post<{ groups: MappingCandidateGroup[]; ai: Record<string, Record<string, { verdict: string; reason: string }>>; vetted: number; sent: number }>(
-      `/conversions/${conversionId}/vet-candidates`, {},
-      { params: { top_n: opts?.topN ?? 4, only_uncertain: opts?.onlyUncertain ?? true }, timeout: 180_000 },
-    ).then(r => r.data),
+   *  an ai map keyed target_field_id -> source_column -> {verdict, reason}.
+   *  targetFieldIds scopes the pass to the rows on screen so a wide template stays
+   *  fast; a cold Render backend is retried once (POSTs are not auto-retried). */
+  vetCandidates: async (
+    conversionId: string,
+    opts?: { topN?: number; onlyUncertain?: boolean; targetFieldIds?: string[] },
+  ) => {
+    const call = () => api.post<{
+      groups: MappingCandidateGroup[];
+      ai: Record<string, Record<string, { verdict: string; reason: string }>>;
+      vetted: number; sent: number; eligible?: number; capped?: boolean;
+    }>(
+      `/conversions/${conversionId}/vet-candidates`,
+      { target_field_ids: opts?.targetFieldIds },
+      { params: { top_n: opts?.topN ?? 4, only_uncertain: opts?.onlyUncertain ?? true }, timeout: 120_000 },
+    ).then(r => r.data);
+    try {
+      return await call();
+    } catch (e: any) {
+      // wake a sleeping free-tier backend and try once more
+      const s = e?.response?.status;
+      if (!e?.response || s === 502 || s === 503 || s === 504) {
+        await new Promise((r) => setTimeout(r, 3500));
+        return await call();
+      }
+      throw e;
+    }
+  },
   list: (conversionId: string) =>
     api.get<MappingSuggestion[]>(`/conversions/${conversionId}/mappings`).then(r => r.data),
   update: (mappingId: string, body: Partial<MappingSuggestion>) =>
