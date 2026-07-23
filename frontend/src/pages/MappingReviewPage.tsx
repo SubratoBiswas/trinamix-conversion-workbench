@@ -2838,11 +2838,14 @@ const AlternativeCandidatesPanel: React.FC<{
   const [cands, setCands] = useState<MappingCandidate[] | null>(null);
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [vetting, setVetting] = useState(false);
+  const [vetMsg, setVetMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setCands(null);
+    setVetMsg(null);
     MappingApi.candidates(conversionId, { targetFieldId: String(targetFieldId), topN: 6 })
       .then((groups) => {
         if (!alive) return;
@@ -2852,6 +2855,32 @@ const AlternativeCandidatesPanel: React.FC<{
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [conversionId, targetFieldId]);
+
+  // Vet just THIS field's candidates. only_uncertain=false so every option gets a
+  // verdict (it is one field — cheap), then fold the verdicts back in and re-sort
+  // so the panel's recommendations reflect the AI review, not only the table.
+  const vetThisField = async () => {
+    setVetting(true); setVetMsg(null);
+    try {
+      const r = await MappingApi.vetCandidates(conversionId, {
+        topN: 6, onlyUncertain: false, targetFieldIds: [String(targetFieldId)],
+      });
+      const verdicts = r.ai[String(targetFieldId)] || {};
+      setCands((prev) => {
+        const merged = (r.groups[0]?.candidates ?? prev ?? []).map((c) => {
+          const v = verdicts[c.source_column];
+          return v ? { ...c, ai_verdict: v.verdict, ai_reason: v.reason } : c;
+        });
+        // wrong/unlikely verdicts sink; plausible + higher confidence rise
+        const rank = (c: MappingCandidate) =>
+          c.ai_verdict === "wrong" ? 2 : c.ai_verdict === "unlikely" ? 1 : (c.plausible === false ? 1 : 0);
+        return [...merged].sort((a, b) => rank(a) - rank(b) || (b.confidence || 0) - (a.confidence || 0));
+      });
+      setVetMsg(r.vetted > 0 ? `AI reviewed ${r.vetted} option(s).` : "AI review unavailable — deterministic reasons shown.");
+    } catch {
+      setVetMsg("AI review unavailable — deterministic reasons shown.");
+    } finally { setVetting(false); }
+  };
 
   return (
     <div className="mt-4 rounded-md border border-line bg-canvas/60">
@@ -2866,6 +2895,18 @@ const AlternativeCandidatesPanel: React.FC<{
       </button>
       {open && (
         <div className="px-3 pb-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <button
+              onClick={vetThisField}
+              disabled={vetting || loading}
+              title="Ask AI to judge these options and explain why each does or doesn't fit"
+              className="inline-flex items-center gap-1 rounded border border-brand/40 bg-brand-subtle px-2 py-0.5 text-[10px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
+            >
+              {vetting ? <Spinner /> : <Sparkles className="h-2.5 w-2.5" />}
+              {vetting ? "Reviewing…" : "Vet with AI"}
+            </button>
+            {vetMsg && <span className="text-[10px] text-ink-subtle">{vetMsg}</span>}
+          </div>
           {loading ? (
             <div className="flex items-center gap-2 py-2 text-[11px] text-ink-muted">
               <Spinner /> Ranking candidates…
@@ -2877,19 +2918,26 @@ const AlternativeCandidatesPanel: React.FC<{
               {(cands || []).map((c) => {
                 const isCurrent = currentSource && c.source_column === currentSource;
                 const pct = Math.round((c.confidence || 0) * 100);
+                const bad = c.plausible === false || c.ai_verdict === "wrong" || c.ai_verdict === "unlikely";
+                const aiLine = c.ai_reason
+                  ? `${c.ai_verdict ? c.ai_verdict.toUpperCase() + ": " : ""}${c.ai_reason}`
+                  : "";
                 return (
                   <div
                     key={c.source_column}
                     className={cn(
                       "rounded-md border px-2.5 py-1.5",
-                      isCurrent ? "border-brand/50 bg-brand-subtle/40" : "border-line bg-white",
+                      isCurrent ? "border-brand/50 bg-brand-subtle/40"
+                        : bad ? "border-danger/40 bg-danger-subtle/40" : "border-line bg-white",
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <code className="truncate rounded bg-canvas px-1.5 py-0.5 text-[11px] text-ink">{c.source_column}</code>
+                          {bad && <AlertTriangle className="h-3 w-3 shrink-0 text-danger" />}
+                          <code className={cn("truncate rounded bg-canvas px-1.5 py-0.5 text-[11px] text-ink", bad && "line-through decoration-danger/50")}>{c.source_column}</code>
                           {isCurrent && <Pill tone="brand">current</Pill>}
+                          {c.ai_reason && <Sparkles className="h-2.5 w-2.5 shrink-0 text-brand" />}
                         </div>
                         <div className="mt-0.5 flex items-center gap-2 text-[10px] text-ink-subtle">
                           <span className="font-mono tabular-nums">{pct}%</span>
@@ -2906,9 +2954,14 @@ const AlternativeCandidatesPanel: React.FC<{
                         </button>
                       )}
                     </div>
-                    {c.reasons?.length > 0 && (
+                    {/* AI verdict takes precedence; else the guard caution; else the deterministic reasons */}
+                    {aiLine ? (
+                      <div className={cn("mt-1 text-[10px] leading-snug", bad ? "text-danger" : "text-brand-dark")}>{aiLine}</div>
+                    ) : bad && c.caution ? (
+                      <div className="mt-1 text-[10px] leading-snug text-danger">implausible — {c.caution}</div>
+                    ) : c.reasons?.length > 0 ? (
                       <div className="mt-1 text-[10px] leading-snug text-ink-muted">{c.reasons.join(" · ")}</div>
-                    )}
+                    ) : null}
                     {c.sample_values?.length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {c.sample_values.slice(0, 3).map((v, i) => (
