@@ -438,6 +438,12 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
   const [proposalId, setProposalId] = useState("");
   const [joinSep, setJoinSep] = useState(" ");
   const [sourceList, setSourceList] = useState<string[]>([]);
+  // filterable pick-list modal (source columns / destination fields)
+  const [picker, setPicker] = useState<{ open: boolean; title: string; items: string[]; multi: boolean; sel: string[]; filter: string; resolve?: (v: string[] | null) => void }>(
+    { open: false, title: "", items: [], multi: false, sel: [], filter: "" });
+  const openPicker = (title: string, items: string[], multi: boolean, initial: string[] = []) =>
+    new Promise<string[] | null>((resolve) => setPicker({ open: true, title, items, multi, sel: initial, filter: "", resolve }));
+  const closePicker = (v: string[] | null) => { picker.resolve?.(v); setPicker((p) => ({ ...p, open: false, resolve: undefined })); };
 
   useEffect(() => { FbdiApi.list().then(setTemplates).catch(() => {}); }, []);
 
@@ -505,45 +511,46 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
     setEdits((p) => ({ ...p, [f.target_field]: { ...ed, reason: why.trim() } }));
   };
 
-  // Many sources → one field, launched from the toolbar: pick the destination first.
+  // Many sources → one field, launched from the toolbar: pick the destination field
+  // from the list first, then the source picker opens.
   const aiManyToOneToolbar = async () => {
-    const tf = window.prompt("Destination field to build from several sources:", "");
-    if (tf === null || !tf.trim()) return;
-    const f = fields.find((x) => x.target_field.toLowerCase() === tf.trim().toLowerCase());
-    if (!f) { setMsg(`No field named "${tf.trim()}" in this template.`); return; }
-    await aiManyToOne(f);
+    const pick = await openPicker("Pick the destination field to build from several sources", fields.map((f) => f.target_field), false);
+    if (!pick || !pick.length) return;
+    const f = fields.find((x) => x.target_field === pick[0]);
+    if (f) await aiManyToOne(f);
   };
 
   // AI: one source → many destination fields. Ask which target fields the source
   // fits, then fill those rows.
   const aiOneToMany = async () => {
-    const source = window.prompt("Source column to spread across fields (AI will pick which fields it fits):", "");
-    if (source === null || !source.trim()) return;
+    const pick = await openPicker("Pick a source column to spread across fields", sourceList, false);
+    if (!pick || !pick.length) return;
+    const source = pick[0];
     setBusy(true); setMsg(null);
     try {
-      const r = await LearningApi.manualSuggestOneToMany(source.trim(), fields.map((f) => f.target_field));
-      if (!r.matches.length) { setMsg(`AI found no fields that "${source.trim()}" fits.`); return; }
+      const r = await LearningApi.manualSuggestOneToMany(source, fields.map((f) => f.target_field));
+      if (!r.matches.length) { setMsg(`AI found no fields that "${source}" fits.`); return; }
       setEdits((p) => {
         const next = { ...p };
         for (const m of r.matches) {
           const ed = next[m.target_field] || { source: "", rule: "" };
-          next[m.target_field] = { ...ed, source: source.trim() };
+          next[m.target_field] = { ...ed, source };
         }
         return next;
       });
-      setMsg(`AI mapped "${source.trim()}" into ${r.matches.length} field(s): ${r.matches.map((m) => m.target_field).join(", ")}. Review and Save.`);
+      setMsg(`AI mapped "${source}" into ${r.matches.length} field(s): ${r.matches.map((m) => m.target_field).join(", ")}. Review and Save.`);
     } catch (e: any) {
       setMsg(e?.response?.data?.detail || "AI suggestion unavailable.");
     } finally { setBusy(false); }
   };
 
-  // AI: many source columns → one destination field. Ask which combine and how,
-  // then set that field's source (comma-separated) + rule.
+  // AI: many source columns → one destination field. Pick candidates from the list,
+  // then AI decides which combine and how; set that field's sources + rule.
   const aiManyToOne = async (f: any) => {
-    const raw = window.prompt(`Candidate source columns for "${f.target_field}" (comma-separated) — AI will pick which combine and how:`, edits[f.target_field]?.source || "");
-    if (raw === null || !raw.trim()) return;
-    const sources = raw.split(",").map((s) => s.trim()).filter(Boolean);
-    if (!sources.length) return;
+    const preset = (edits[f.target_field]?.source || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const pick = await openPicker(`Pick source columns that could fill "${f.target_field}"`, sourceList, true, preset);
+    if (!pick || !pick.length) return;
+    const sources = pick;
     setBusy(true); setMsg(null);
     try {
       const r = await LearningApi.manualSuggestManyToOne(f.target_field, sources);
@@ -740,6 +747,47 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
           </div>
         </>
       )}
+
+      {/* filterable pick-list modal */}
+      {picker.open && (() => {
+        const filtered = picker.items.filter((it) => !picker.filter || it.toLowerCase().includes(picker.filter.toLowerCase()));
+        const toggle = (it: string) => setPicker((p) => {
+          if (!p.multi) return { ...p, sel: [it] };
+          const has = p.sel.includes(it);
+          return { ...p, sel: has ? p.sel.filter((x) => x !== it) : [...p.sel, it] };
+        });
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => closePicker(null)}>
+            <div className="w-full max-w-md rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="border-b px-4 py-3 text-sm font-semibold">{picker.title}</div>
+              <div className="p-3">
+                <input autoFocus className="mb-2 w-full rounded-lg border px-3 py-2 text-sm" placeholder="Filter…"
+                       value={picker.filter} onChange={(e) => setPicker((p) => ({ ...p, filter: e.target.value }))} />
+                <div className="max-h-72 overflow-auto rounded-lg border">
+                  {filtered.length === 0 && <div className="px-3 py-6 text-center text-sm text-muted">No matches.</div>}
+                  {filtered.map((it) => {
+                    const on = picker.sel.includes(it);
+                    return (
+                      <button key={it} onClick={() => { toggle(it); if (!picker.multi) closePicker([it]); }}
+                              className={`flex w-full items-center gap-2 border-b px-3 py-1.5 text-left text-sm last:border-0 hover:bg-slate-50 ${on ? "bg-indigo-50" : ""}`}>
+                        {picker.multi && <input type="checkbox" readOnly checked={on} />}
+                        <span className="truncate">{it}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {picker.multi && (
+                  <div className="mt-1 text-[11px] text-muted">{picker.sel.length} selected</div>
+                )}
+              </div>
+              <div className="flex justify-end gap-2 border-t px-4 py-3">
+                <Button variant="secondary" onClick={() => closePicker(null)}>Cancel</Button>
+                {picker.multi && <Button disabled={!picker.sel.length} onClick={() => closePicker(picker.sel)}>Use {picker.sel.length || ""}</Button>}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
