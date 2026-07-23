@@ -231,3 +231,50 @@ Seeders run at startup and upsert-with-upgrade, and generation re-runs
 300-field heavy gate). Existing NextPower conversions therefore pick this up on the next
 **Regenerate** — no re-mapping, no re-upload. `overridden` / `rejected` choices are still
 respected.
+
+---
+
+## Mapping Documents review workflow (2026-07-23)
+
+New page **Mapping Documents** (AI Engine group). Upload an analyst mapping workbook →
+it is parsed per sheet and each row classified against the learning library as
+**new / unchanged / conflict** → the reviewer approves or rejects the contradictions →
+**Apply** writes the approved rows AND re-runs the learning pass over existing
+conversions for that client+object. Nothing is written on upload; apply is refused
+while any conflict is undecided. An approved conflict replaces the existing learning
+in place rather than adding a rival.
+
+Files: `backend/app/models/mapping_proposal.py`, `backend/app/services/mapping_ingest_service.py`,
+`backend/app/routers/mapping_proposals.py`, `frontend/src/pages/MappingDocumentsPage.tsx`.
+
+Layout detection is deterministic-first, AI fallback only for unrecognised sheets (the
+model identifies which column is which, never invents a mapping). Two bugs fixed during
+testing on the real docs: NaN cells counted as content and defeated header-row
+detection (str(nan) == "nan"); and mapping cells are prose ("Country / Country Code"),
+so they are reduced to the columns offered and matched on any alternative — this cut
+the Supplier v3 re-upload from 57 false conflicts to 8 genuine ones.
+
+## Intelligent recommendations + reasons in export (2026-07-23)
+
+`backend/app/ai/semantic_guard.py` classifies every column into a semantic category
+(identifier, phone, email, date, currency, money, name, code, country, tax id, boolean,
+url…) from name tokens + sample values, and rejects nonsensical pairs (employee_id →
+Phone, fax_num → Account Currency Code). Wired into `mapping_candidates`: over-fetch,
+demote/annotate implausible options, sort plausible-first. Each candidate now carries
+source_category, target_category, plausible, caution, reasons.
+
+`backend/app/services/candidate_vetting_service.py` + `POST /conversions/{id}/vet-candidates`:
+on-demand, per-sheet batched LLM verdict + reason for the UNCERTAIN options only,
+heavy-batched, deterministic guard as fallback. Surfaced via a "Vet options with AI"
+button on Mapping Review.
+
+CSV export gained **"Other options — reasons"** and **"Cautions (implausible options)"**;
+the alternatives UI strikes through and flags implausible options. Guard verified 20/20
+on realistic pairs through the real rank_candidates path.
+
+## launch_git.bat note
+
+Commit messages MUST be single-line. Windows batch reads a newline inside the quoted
+`-m` string as a new command and treats the `->` arrow as a redirect, which created the
+empty files `Payee` and `Corporation)'` and sprayed "not recognized" errors. Keep the
+message on one line and put detail here instead.
