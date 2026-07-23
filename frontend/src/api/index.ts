@@ -448,6 +448,13 @@ export const MappingApi = {
       throw e;
     }
   },
+  /** Opt-in AI fill for unmapped target fields (reviewable 'suggested' mappings). */
+  aiFillBlanks: (conversionId: string, opts?: { requiredOnly?: boolean; targetFieldIds?: string[] }) =>
+    api.post<{ filled: number; considered: number; note?: string }>(
+      `/conversions/${conversionId}/ai-fill-blanks`,
+      { target_field_ids: opts?.targetFieldIds },
+      { params: { required_only: opts?.requiredOnly ?? false }, timeout: 180_000 },
+    ).then(r => r.data),
   list: (conversionId: string) =>
     api.get<MappingSuggestion[]>(`/conversions/${conversionId}/mappings`).then(r => r.data),
   update: (mappingId: string, body: Partial<MappingSuggestion>) =>

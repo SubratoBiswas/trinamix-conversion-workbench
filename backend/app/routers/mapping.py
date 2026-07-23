@@ -56,6 +56,131 @@ async def mapping_candidates_endpoint(
     return await mapping_candidates(conv, top_n=top_n, target_field_id=target_field_id)
 
 
+@router.post("/conversions/{conversion_id}/ai-fill-blanks")
+async def ai_fill_blanks(
+    conversion_id: str,
+    payload: dict | None = None,
+    required_only: bool = False,
+    user: User = Depends(get_current_user),
+):
+    """Opt-in: suggest a source for target fields that are still UNMAPPED.
+
+    The mapper is deterministic-first and deliberately never over-maps on its own.
+    This runs the model ONLY when the analyst asks, and ONLY on fields that have no
+    source and no default. It ranks the real dataset columns for each blank field,
+    lets the model pick the best (or none), and writes the pick as a 'suggested'
+    mapping with an AI-fill reason — so it lands in Needs-review for the analyst to
+    approve or reject, never silently in the output."""
+    from app.ai.rule_based import rank_candidates
+    from app.models.mapping import MappingSuggestion
+    from app.services.candidate_vetting_service import vet_with_ai
+    from app.services.mapping_service import (_sources_for_conversion,
+                                              _target_fields_for)
+
+    conv = await _require_conversion(conversion_id)
+    template = await FBDITemplate.get(conv.template_id) if conv.template_id else None
+    if not template:
+        raise HTTPException(400, "This conversion has no template.")
+    sources = await _sources_for_conversion(conv)
+    targets = await _target_fields_for(template)
+    maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == conv.id).to_list()
+    by_tid = {str(m.target_field_id): m for m in maps}
+
+    tfids = set((payload or {}).get("target_field_ids") or [])
+    # blank = no source column and no default; skip anything a human already touched
+    blanks = []
+    for t in targets:
+        m = by_tid.get(str(t.id))
+        if m is None:
+            continue
+        if tfids and str(t.id) not in tfids:
+            continue
+        if required_only and not getattr(t, "required", False):
+            continue
+        if (m.source_column or "").strip() or (m.default_value or "").strip():
+            continue
+        if m.status in ("approved", "overridden", "rejected"):
+            continue
+        blanks.append((t, m))
+
+    if not blanks:
+        return {"filled": 0, "considered": 0, "note": "No unmapped fields to fill."}
+
+    # deterministic top candidates per blank field, then let AI pick the best/none
+    items, index = [], {}
+    nid = 0
+    MAX = 60
+    for t, _m in blanks[:MAX]:
+        ranked = rank_candidates(sources, t, top_n=4)
+        cand_names = [src.name for _s, src, _r in ranked if _s > 0][:4]
+        if not cand_names:
+            continue
+        nid += 1
+        index[nid] = (t, cand_names)
+        samples = []
+        for _s, src, _r in ranked[:1]:
+            samples = [str(v) for v in (src.sample_values or [])[:3]]
+        items.append({"id": nid, "source_column": " | ".join(cand_names),
+                      "sample_values": samples, "target_field": t.field_name,
+                      "target_desc": (t.description or "")})
+
+    # ask the model to confirm the single best candidate per field
+    from app.config import settings
+    import httpx as _httpx
+    import json as _json
+    import re as _re
+    verdicts: dict[int, str] = {}
+    key = (settings.ANTHROPIC_API_KEY or "").strip()
+    if key and items:
+        for i in range(0, len(items), 30):
+            chunk = items[i:i + 30]
+            lines = "\n".join(
+                f'{it["id"]}. Oracle field "{it["target_field"]}"'
+                + (f' ({it["target_desc"]})' if it["target_desc"] else "")
+                + f'. Candidate source columns: {it["source_column"]}.'
+                for it in chunk)
+            prompt = (
+                "Pick the SINGLE best source column for each Oracle field from its "
+                "candidate list, judged by meaning. Return null if none genuinely "
+                f"fits — do not force a match.\n\n{lines}\n\n"
+                'Reply ONLY with JSON: [{"id":n,"source":"col or null"}].')
+            try:
+                async with _httpx.AsyncClient(timeout=55.0) as cx:
+                    r = await cx.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                                 "content-type": "application/json"},
+                        json={"model": settings.ANTHROPIC_MODEL, "max_tokens": 1500,
+                              "messages": [{"role": "user", "content": prompt}]})
+                    r.raise_for_status()
+                    txt = "".join(b.get("text", "") for b in r.json().get("content", [])
+                                  if b.get("type") == "text")
+                mm = _re.search(r"\[.*\]", txt, _re.S)
+                for row in (_json.loads(mm.group(0)) if mm else []):
+                    if isinstance(row, dict) and row.get("id") and row.get("source"):
+                        verdicts[int(row["id"])] = str(row["source"])
+            except Exception:  # noqa: BLE001
+                continue
+
+    filled = 0
+    for nid2, (t, cand_names) in index.items():
+        # AI pick if present and it is one of the real candidates; else deterministic top
+        pick = verdicts.get(nid2)
+        if pick not in cand_names:
+            pick = cand_names[0] if not key else None   # with AI on, respect a 'none'
+        if not pick:
+            continue
+        m = by_tid.get(str(t.id))
+        if m is None:
+            continue
+        await m.set({"source_column": pick, "status": "suggested",
+                     "confidence": 0.5, "review_required": 1,
+                     "reason": "AI fill — review before use", "suggested_transformation": None})
+        filled += 1
+    return {"filled": filled, "considered": len(blanks)}
+
+
 @router.post("/conversions/{conversion_id}/vet-candidates")
 async def vet_candidates_endpoint(
     conversion_id: str,

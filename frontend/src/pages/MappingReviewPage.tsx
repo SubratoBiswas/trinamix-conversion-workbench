@@ -1112,6 +1112,7 @@ export const MappingReviewPage: React.FC = () => {
             loading={running}
             aiVerdicts={aiVerdicts}
             onAiVerdicts={mergeAiVerdicts}
+            onReload={loadAll}
           />
         ) : (
         /* Mapping canvas */
@@ -1705,10 +1706,11 @@ const MappingTableView: React.FC<{
   loading?: boolean;
   aiVerdicts?: Record<string, Record<string, { verdict: string; reason: string }>>;
   onAiVerdicts?: (m: Record<string, Record<string, { verdict: string; reason: string }>>) => void;
+  onReload?: () => void | Promise<void>;
 }> = ({
   conversionId, sourceColumns, targetFields, mappings, visibleTargetIds,
   effectiveDefaults, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
-  aiVerdicts, onAiVerdicts,
+  aiVerdicts, onAiVerdicts, onReload,
 }) => {
   // Ranked alternatives for every target field (one round-trip), so each row can
   // show the runner-up source columns the matcher scored lower.
@@ -1784,6 +1786,24 @@ const MappingTableView: React.FC<{
     } catch {
       setVetMsg("AI review is unavailable right now — the deterministic reasons are still shown.");
     } finally { setVetting(false); }
+  };
+
+  // Opt-in: AI suggests a source ONLY for fields that are still unmapped (no source,
+  // no default, not human-touched). Lands as reviewable 'suggested' mappings.
+  const [filling, setFilling] = useState(false);
+  const fillBlanksWithAi = async () => {
+    if (!conversionId) return;
+    if (!window.confirm("Ask AI to suggest a source for the unmapped fields? Results land in Needs-review for you to approve or reject — nothing is applied blindly.")) return;
+    setFilling(true); setVetMsg(null);
+    try {
+      const r = await MappingApi.aiFillBlanks(conversionId, { requiredOnly: onlyRequired });
+      setVetMsg(r.filled > 0
+        ? `AI suggested a source for ${r.filled} of ${r.considered} unmapped field(s). Review them under Needs review.`
+        : (r.note || "No unmapped fields to fill."));
+      if (r.filled > 0) await onReload?.();
+    } catch (e: any) {
+      setVetMsg(e?.response?.data?.detail || "AI fill is unavailable right now.");
+    } finally { setFilling(false); }
   };
 
   // Field names that occur on more than one interface sheet (e.g. "Item Number"
@@ -2044,6 +2064,15 @@ const MappingTableView: React.FC<{
         >
           {vetting ? <Spinner /> : alreadyVetted ? <Check className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
           {vetting ? "Reviewing…" : alreadyVetted ? "AI review done" : "Vet options with AI"}
+        </button>
+        <button
+          onClick={fillBlanksWithAi}
+          disabled={filling || altLoading}
+          title="Ask AI to suggest a source only for fields that are still unmapped. Lands in Needs review — nothing is applied blindly."
+          className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10 disabled:opacity-50"
+        >
+          {filling ? <Spinner /> : <Sparkles className="h-3 w-3" />}
+          {filling ? "Filling…" : onlyRequired ? "Fill required blanks with AI" : "Fill blanks with AI"}
         </button>
         <button
           onClick={exportCsv}
