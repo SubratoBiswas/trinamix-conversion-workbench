@@ -731,6 +731,14 @@ export const LearningApi = {
       reason: string; ai_verdict?: string; ai_reason?: string }> }>(
       "/manual-map/vet", { pairs, use_ai: useAi }, { timeout: useAi ? 120_000 : 30_000 },
     ).then(r => r.data),
+  manualSuggestOneToMany: (source: string, targetFields: string[]) =>
+    api.post<{ source: string; matches: Array<{ target_field: string; reason: string }> }>(
+      "/manual-map/suggest", { mode: "one_to_many", source, target_fields: targetFields },
+      { timeout: 120_000 }).then(r => r.data),
+  manualSuggestManyToOne: (targetField: string, sources: string[]) =>
+    api.post<{ target_field: string; use: string[]; rule_type?: string; separator?: string; reason?: string }>(
+      "/manual-map/suggest", { mode: "many_to_one", target_field: targetField, sources },
+      { timeout: 120_000 }).then(r => r.data),
   manualSave: (body: { client_id?: string; target_object: string; source_system?: string;
     rows: Array<{ target_field: string; source_field: string; rule_type?: string; separator?: string; reason?: string; clear?: boolean }> }) =>
     api.post<{ saved: number; updated: number; cleared: number; conversions_touched: number }>(

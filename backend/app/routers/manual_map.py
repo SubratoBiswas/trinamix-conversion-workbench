@@ -131,6 +131,79 @@ async def vet(payload: dict, _: User = Depends(get_current_user)):
     return {"results": out}
 
 
+@router.post("/suggest")
+async def suggest(payload: dict, _: User = Depends(get_current_user)):
+    """AI-assisted composition, both directions.
+
+    one_to_many: {mode, source, target_fields:[...]} -> which target fields that ONE
+      source column plausibly populates (a source often feeds several fields —
+      Location -> LocationCode + LocationName).
+    many_to_one: {mode, target_field, sources:[...]} -> which of several source
+      columns COMBINE to fill one field, and how (e.g. First+Last -> Name via CONCAT).
+    """
+    import json as _json
+    import re as _re
+
+    import httpx as _httpx
+
+    from app.config import settings as _settings
+
+    key = (_settings.ANTHROPIC_API_KEY or "").strip()
+    if not key:
+        raise HTTPException(503, "AI is not configured on this environment.")
+    mode = (payload or {}).get("mode")
+
+    async def _ask(prompt: str) -> str:
+        async with _httpx.AsyncClient(timeout=55.0) as cx:
+            r = await cx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": _settings.ANTHROPIC_MODEL, "max_tokens": 1200,
+                      "messages": [{"role": "user", "content": prompt}]})
+            r.raise_for_status()
+            return "".join(b.get("text", "") for b in r.json().get("content", [])
+                           if b.get("type") == "text")
+
+    if mode == "one_to_many":
+        source = (payload.get("source") or "").strip()
+        targets = [t for t in (payload.get("target_fields") or []) if t]
+        if not source or not targets:
+            raise HTTPException(400, "source and target_fields are required.")
+        prompt = (
+            f'A legacy source column is named "{source}". From the Oracle Fusion target '
+            f'fields below, which ones would this single column legitimately populate? '
+            f'A column can feed several related fields. Judge by meaning.\n\n'
+            f'Target fields: {_json.dumps(targets)}\n\n'
+            'Reply ONLY with a JSON array: [{"target_field":"...","fits":true,'
+            '"reason":"under 15 words"}]. Include only fields that fit.')
+        txt = await _ask(prompt)
+        m = _re.search(r"\[.*\]", txt, _re.S)
+        picks = [p for p in (_json.loads(m.group(0)) if m else []) if isinstance(p, dict) and p.get("fits")]
+        return {"mode": mode, "source": source, "matches": picks}
+
+    if mode == "many_to_one":
+        target = (payload.get("target_field") or "").strip()
+        sources = [s for s in (payload.get("sources") or []) if s]
+        if not target or not sources:
+            raise HTTPException(400, "target_field and sources are required.")
+        prompt = (
+            f'The Oracle Fusion field "{target}" may need to be built from more than one '
+            f'legacy source column. From the candidates below, which combine to fill it, '
+            f'and how?\n\nCandidate source columns: {_json.dumps(sources)}\n\n'
+            'Reply ONLY with JSON: {"use":["col",...],"rule_type":"CONCAT",'
+            '"separator":" ","reason":"under 18 words"}. If a single column suffices, '
+            'return that one column with rule_type "DIRECT".')
+        txt = await _ask(prompt)
+        m = _re.search(r"\{.*\}", txt, _re.S)
+        obj = _json.loads(m.group(0)) if m else {}
+        return {"mode": mode, "target_field": target,
+                "use": obj.get("use") or [], "rule_type": obj.get("rule_type"),
+                "separator": obj.get("separator", " "), "reason": obj.get("reason")}
+
+    raise HTTPException(400, "mode must be one_to_many or many_to_one.")
+
+
 @router.post("/save")
 async def save(payload: dict, user: User = Depends(get_current_user)):
     """Upsert manual mappings as client-scoped column_mapping learnings.

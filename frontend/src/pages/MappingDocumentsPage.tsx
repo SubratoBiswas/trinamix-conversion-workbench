@@ -427,7 +427,7 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
   const [clientId, setClientId] = useState("");
   const [sys, setSys] = useState("");
   const [fields, setFields] = useState<any[]>([]);
-  const [edits, setEdits] = useState<Record<string, { source: string; rule: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { source: string; rule: string; reason?: string }>>({});
   const [verdicts, setVerdicts] = useState<Record<string, { plausible: boolean; reason: string; ai_verdict?: string; ai_reason?: string }>>({});
   const [reason, setReason] = useState("");
   const [useAi, setUseAi] = useState(false);
@@ -458,7 +458,7 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
       const ctx = await LearningApi.manualContext(targetObject, templateId, clientId || undefined, proposalId || undefined);
       setFields(ctx.fields);
       // prefill: document's proposal wins (if chosen), else the learnt source
-      const e: Record<string, { source: string; rule: string }> = {};
+      const e: Record<string, { source: string; rule: string; reason?: string }> = {};
       for (const f of ctx.fields) {
         e[f.target_field] = { source: f.doc_source || f.learnt_source || "", rule: f.learnt_rule || "" };
       }
@@ -486,7 +486,73 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
     finally { setBusy(false); }
   };
 
+  // Overriding a field that is ALREADY LEARNT requires a reason. This flags such a
+  // change (learnt, and the source now differs from what was learnt).
+  const changedLearnt = (f: any) => {
+    const cur = (edits[f.target_field]?.source || "").trim();
+    return f.learnt_source && cur && cur.toLowerCase() !== String(f.learnt_source).toLowerCase();
+  };
+
+  const overrideField = (f: any) => {
+    const ed = edits[f.target_field] || { source: "", rule: "" };
+    const nextSource = window.prompt(`Override the source for "${f.target_field}":`, ed.source || f.learnt_source || "");
+    if (nextSource === null || !nextSource.trim()) return;
+    const why = window.prompt("Reason for the override (required):", ed.reason || "");
+    if (why === null || !why.trim()) { setMsg("Override cancelled — a reason is required."); return; }
+    setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: nextSource.trim(), reason: why.trim() } }));
+  };
+
+  // AI: one source → many destination fields. Ask which target fields the source
+  // fits, then fill those rows.
+  const aiOneToMany = async () => {
+    const source = window.prompt("Source column to spread across fields (AI will pick which fields it fits):", "");
+    if (source === null || !source.trim()) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await LearningApi.manualSuggestOneToMany(source.trim(), fields.map((f) => f.target_field));
+      if (!r.matches.length) { setMsg(`AI found no fields that "${source.trim()}" fits.`); return; }
+      setEdits((p) => {
+        const next = { ...p };
+        for (const m of r.matches) {
+          const ed = next[m.target_field] || { source: "", rule: "" };
+          next[m.target_field] = { ...ed, source: source.trim() };
+        }
+        return next;
+      });
+      setMsg(`AI mapped "${source.trim()}" into ${r.matches.length} field(s): ${r.matches.map((m) => m.target_field).join(", ")}. Review and Save.`);
+    } catch (e: any) {
+      setMsg(e?.response?.data?.detail || "AI suggestion unavailable.");
+    } finally { setBusy(false); }
+  };
+
+  // AI: many source columns → one destination field. Ask which combine and how,
+  // then set that field's source (comma-separated) + rule.
+  const aiManyToOne = async (f: any) => {
+    const raw = window.prompt(`Candidate source columns for "${f.target_field}" (comma-separated) — AI will pick which combine and how:`, edits[f.target_field]?.source || "");
+    if (raw === null || !raw.trim()) return;
+    const sources = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!sources.length) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await LearningApi.manualSuggestManyToOne(f.target_field, sources);
+      if (!r.use.length) { setMsg("AI did not find a combination for this field."); return; }
+      const ed = edits[f.target_field] || { source: "", rule: "" };
+      const rule = r.rule_type && r.rule_type !== "DIRECT" ? r.rule_type : "";
+      setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: r.use.join(", "), rule } }));
+      if (r.separator) setJoinSep(r.separator);
+      setMsg(`AI: ${f.target_field} ← ${r.use.join(" + ")}${rule ? ` [${rule}]` : ""}. ${r.reason || ""} Review and Save.`);
+    } catch (e: any) {
+      setMsg(e?.response?.data?.detail || "AI suggestion unavailable.");
+    } finally { setBusy(false); }
+  };
+
   const save = async () => {
+    // any learnt field whose source changed but has no reason blocks the save
+    const needReason = fields.filter((f) => changedLearnt(f) && !(edits[f.target_field]?.reason || reason).trim());
+    if (needReason.length) {
+      setMsg(`A reason is required to override ${needReason.length} already-learnt field(s): ${needReason.slice(0, 4).map((f) => f.target_field).join(", ")}${needReason.length > 4 ? "…" : ""}. Use Override… on the row, or fill the Reason box.`);
+      return;
+    }
     const rows = fields
       .map((f) => {
         const source = (edits[f.target_field]?.source || "").trim();
@@ -495,7 +561,8 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
           target_field: f.target_field, source_field: source,
           rule_type: (edits[f.target_field]?.rule || "").trim() || undefined,
           separator: multi ? joinSep : undefined,
-          reason: reason.trim() || undefined,
+          // per-row override reason wins, else the global reason box
+          reason: (edits[f.target_field]?.reason || reason).trim() || undefined,
         };
       })
       .filter((r) => r.source_field);
@@ -545,6 +612,9 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
               <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} /> include AI in check
             </label>
             <Button variant="secondary" disabled={busy} onClick={vet}><Sparkles size={14} /> Check mappings</Button>
+            <Button variant="secondary" disabled={busy} onClick={aiOneToMany} title="One source column → the fields it fits (AI)">
+              <Sparkles size={14} /> 1 source → many fields
+            </Button>
             <label className="flex items-center gap-1 text-xs text-muted">
               join with
               <input className="w-16 rounded border px-1.5 py-1 text-[11px]" value={joinSep} onChange={(e) => setJoinSep(e.target.value)} title="Separator used when a field has several source columns (CONCAT)" />
@@ -584,14 +654,32 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
                         {f.sheet_name && <div className="text-[10px] text-slate-400">{f.sheet_name}</div>}
                       </td>
                       <td className="px-3 py-1.5">
-                        <input
-                          className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : ""}`}
-                          value={ed.source}
-                          placeholder="legacy column (comma-separate for many)…"
-                          onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value } }))}
-                        />
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : changedLearnt(f) ? "border-violet-300 bg-violet-50" : ""}`}
+                            value={ed.source}
+                            placeholder="legacy column (comma-separate for many)…"
+                            onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value } }))}
+                          />
+                          <button onClick={() => aiManyToOne(f)}
+                                  title="Combine several source columns into this one field (AI)"
+                                  className="shrink-0 text-[10px] font-medium text-brand hover:underline">
+                            +AI
+                          </button>
+                          <button onClick={() => overrideField(f)}
+                                  title={f.learnt_source ? "Override this learnt mapping (reason required)" : "Set with a reason"}
+                                  className="shrink-0 text-[10px] font-medium text-violet-700 hover:underline">
+                            Override…
+                          </button>
+                        </div>
                         {ed.source.includes(",") && (
                           <div className="mt-0.5 text-[10px] text-violet-700">combines {ed.source.split(",").filter((s) => s.trim()).length} columns (CONCAT)</div>
+                        )}
+                        {ed.reason && (
+                          <div className="mt-0.5 text-[10px] text-violet-700">override — {ed.reason}</div>
+                        )}
+                        {changedLearnt(f) && !ed.reason && (
+                          <div className="mt-0.5 text-[10px] text-rose-600">changed from "{f.learnt_source}" — reason required</div>
                         )}
                       </td>
                       <td className="px-3 py-1.5">
