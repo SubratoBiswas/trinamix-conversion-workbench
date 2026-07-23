@@ -437,6 +437,7 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
   const [proposals, setProposals] = useState<any[]>([]);
   const [proposalId, setProposalId] = useState("");
   const [joinSep, setJoinSep] = useState(" ");
+  const [sourceList, setSourceList] = useState<string[]>([]);
 
   useEffect(() => { FbdiApi.list().then(setTemplates).catch(() => {}); }, []);
 
@@ -457,6 +458,8 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
     try {
       const ctx = await LearningApi.manualContext(targetObject, templateId, clientId || undefined, proposalId || undefined);
       setFields(ctx.fields);
+      // known source columns for this client → the filterable pick-list
+      LearningApi.manualSources(clientId || undefined, targetObject).then((s) => setSourceList(s.sources || [])).catch(() => {});
       // prefill: document's proposal wins (if chosen), else the learnt source
       const e: Record<string, { source: string; rule: string; reason?: string }> = {};
       for (const f of ctx.fields) {
@@ -493,13 +496,22 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
     return f.learnt_source && cur && cur.toLowerCase() !== String(f.learnt_source).toLowerCase();
   };
 
+  // The source is chosen from the filterable list in the row's input; Override only
+  // captures the mandatory reason for changing an already-learnt mapping.
   const overrideField = (f: any) => {
     const ed = edits[f.target_field] || { source: "", rule: "" };
-    const nextSource = window.prompt(`Override the source for "${f.target_field}":`, ed.source || f.learnt_source || "");
-    if (nextSource === null || !nextSource.trim()) return;
-    const why = window.prompt("Reason for the override (required):", ed.reason || "");
+    const why = window.prompt(`Reason for overriding "${f.target_field}" (required). Pick the source column from the list in the row first.`, ed.reason || "");
     if (why === null || !why.trim()) { setMsg("Override cancelled — a reason is required."); return; }
-    setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: nextSource.trim(), reason: why.trim() } }));
+    setEdits((p) => ({ ...p, [f.target_field]: { ...ed, reason: why.trim() } }));
+  };
+
+  // Many sources → one field, launched from the toolbar: pick the destination first.
+  const aiManyToOneToolbar = async () => {
+    const tf = window.prompt("Destination field to build from several sources:", "");
+    if (tf === null || !tf.trim()) return;
+    const f = fields.find((x) => x.target_field.toLowerCase() === tf.trim().toLowerCase());
+    if (!f) { setMsg(`No field named "${tf.trim()}" in this template.`); return; }
+    await aiManyToOne(f);
   };
 
   // AI: one source → many destination fields. Ask which target fields the source
@@ -615,6 +627,9 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
             <Button variant="secondary" disabled={busy} onClick={aiOneToMany} title="One source column → the fields it fits (AI)">
               <Sparkles size={14} /> 1 source → many fields
             </Button>
+            <Button variant="secondary" disabled={busy} onClick={aiManyToOneToolbar} title="Combine several source columns into one destination field (AI)">
+              <Sparkles size={14} /> many sources → 1 field
+            </Button>
             <label className="flex items-center gap-1 text-xs text-muted">
               join with
               <input className="w-16 rounded border px-1.5 py-1 text-[11px]" value={joinSep} onChange={(e) => setJoinSep(e.target.value)} title="Separator used when a field has several source columns (CONCAT)" />
@@ -628,6 +643,12 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
             combined value using the separator above.
           </p>
 
+          <datalist id="manual-source-columns">
+            {sourceList.map((s) => <option key={s} value={s} />)}
+          </datalist>
+          {sourceList.length > 0 && (
+            <p className="text-[11px] text-muted">{sourceList.length} known source column(s) — the source boxes filter as you type.</p>
+          )}
           <div className="max-h-[30rem] overflow-auto rounded-lg border">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-muted">
@@ -656,9 +677,10 @@ const ManualMapper: React.FC<{ clients: any[] }> = ({ clients }) => {
                       <td className="px-3 py-1.5">
                         <div className="flex items-center gap-1.5">
                           <input
+                            list="manual-source-columns"
                             className={`w-full rounded border px-2 py-1 text-[12px] ${bad ? "border-rose-300 bg-rose-50" : changedLearnt(f) ? "border-violet-300 bg-violet-50" : ""}`}
                             value={ed.source}
-                            placeholder="legacy column (comma-separate for many)…"
+                            placeholder="pick or type a source column…"
                             onChange={(e) => setEdits((p) => ({ ...p, [f.target_field]: { ...ed, source: e.target.value } }))}
                           />
                           <button onClick={() => aiManyToOne(f)}

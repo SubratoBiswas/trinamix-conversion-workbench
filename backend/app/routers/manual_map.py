@@ -100,6 +100,61 @@ async def context(
             "learnt_count": len(learnt), "gold_count": len(gold), "doc_count": len(doc)}
 
 
+@router.get("/sources")
+async def known_sources(
+    client_id: Optional[str] = None,
+    target_object: Optional[str] = None,
+    _: User = Depends(get_current_user),
+):
+    """The legacy source columns already seen for this client — from every dataset
+    the client's projects have uploaded, plus every source column any learning holds.
+    Powers a filterable pick-list so the analyst chooses a real column instead of
+    typing one from memory."""
+    from app.models.conversion import Conversion
+    from app.models.dataset import Dataset, DatasetColumnProfile
+    from app.models.project import Project
+    from app.services.client_service import scope_query
+
+    cid = PydanticObjectId(client_id) if client_id else None
+    names: set[str] = set()
+
+    # 1) real columns from the client's uploaded datasets
+    try:
+        proj_ids = [p.id for p in await Project.find(
+            *( [Project.client_id == cid] if cid is not None else [] )).to_list()]
+        convs = await Conversion.find_all().to_list()
+        ds_ids = set()
+        pid_set = set(proj_ids)
+        for c in convs:
+            if (cid is None or c.project_id in pid_set) and c.dataset_id:
+                ds_ids.add(c.dataset_id)
+        if ds_ids:
+            for prof in await DatasetColumnProfile.find(
+                    {"dataset_id": {"$in": list(ds_ids)}}).to_list():
+                if prof.column_name:
+                    names.add(prof.column_name.strip())
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2) every source column any learning already uses (scoped to the client)
+    try:
+        scope = await scope_query(cid)
+        q = {"kind": "column_mapping", **scope}
+        if target_object:
+            q["target_object"] = target_object
+        for lm in await LearnedMapping.find(q).to_list():
+            if lm.original_value:
+                names.add(lm.original_value.strip())
+            cols = (lm.rule_config or {}).get("columns") if isinstance(lm.rule_config, dict) else None
+            for c in (cols or []):
+                if c:
+                    names.add(str(c).strip())
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"sources": sorted(n for n in names if n)[:3000]}
+
+
 @router.post("/vet")
 async def vet(payload: dict, _: User = Depends(get_current_user)):
     """Judge typed (source -> target) pairs. Deterministic guard always; add AI when
