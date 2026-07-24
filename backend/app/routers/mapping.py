@@ -71,9 +71,9 @@ async def ai_fill_blanks(
     lets the model pick the best (or none), and writes the pick as a 'suggested'
     mapping with an AI-fill reason — so it lands in Needs-review for the analyst to
     approve or reject, never silently in the output."""
+    import asyncio
     from app.ai.rule_based import rank_candidates
     from app.models.mapping import MappingSuggestion
-    from app.services.candidate_vetting_service import vet_with_ai
     from app.services.mapping_service import (_sources_for_conversion,
                                               _target_fields_for)
 
@@ -107,23 +107,31 @@ async def ai_fill_blanks(
     if not blanks:
         return {"filled": 0, "considered": 0, "note": "No unmapped fields to fill."}
 
-    # deterministic top candidates per blank field, then let AI pick the best/none
-    items, index = [], {}
-    nid = 0
-    MAX = 60
-    for t, _m in blanks[:MAX]:
-        ranked = rank_candidates(sources, t, top_n=4)
-        cand_names = [src.name for _s, src, _r in ranked if _s > 0][:4]
-        if not cand_names:
-            continue
-        nid += 1
-        index[nid] = (t, cand_names)
-        samples = []
-        for _s, src, _r in ranked[:1]:
-            samples = [str(v) for v in (src.sample_values or [])[:3]]
-        items.append({"id": nid, "source_column": " | ".join(cand_names),
-                      "sample_values": samples, "target_field": t.field_name,
-                      "target_desc": (t.description or "")})
+    # deterministic top candidates per blank field, then let AI pick the best/none.
+    # The ranking loops every source column for every blank field — CPU-bound — so
+    # run it OFF the event loop (blocking it here was stalling/killing the worker on
+    # wide sources, surfacing as ERR_FAILED/CORS on the client).
+    MAX = 40
+
+    def _build_items(sources, blank_list):
+        items_l, index_l = [], {}
+        nid_l = 0
+        for t, _m in blank_list[:MAX]:
+            ranked = rank_candidates(sources, t, top_n=4)
+            cand_names = [src.name for _s, src, _r in ranked if _s > 0][:4]
+            if not cand_names:
+                continue
+            nid_l += 1
+            index_l[nid_l] = (t, cand_names)
+            samples = []
+            for _s, src, _r in ranked[:1]:
+                samples = [str(v) for v in (src.sample_values or [])[:3]]
+            items_l.append({"id": nid_l, "source_column": " | ".join(cand_names),
+                            "sample_values": samples, "target_field": t.field_name,
+                            "target_desc": (t.description or "")})
+        return items_l, index_l
+
+    items, index = await asyncio.to_thread(_build_items, sources, blanks)
 
     # ask the model to confirm the single best candidate per field
     from app.config import settings
