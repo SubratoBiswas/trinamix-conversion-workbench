@@ -48,11 +48,15 @@ def key_col_for(df0: pd.DataFrame, target_object: Optional[str], key_registry: d
     return None
 
 
-def merge_dedupe(frames: list, target_object: Optional[str], key_registry: dict) -> pd.DataFrame:
+def merge_dedupe(frames: list, target_object: Optional[str], key_registry: dict,
+                 survivorship: bool = True) -> pd.DataFrame:
     """Concatenate per-source frames in PRIORITY order, drop exact full-row
     duplicates (same record in >1 source), then — if a master business key is
-    present — keep the first (highest-priority source) row per key. Blank-key rows
-    are all kept. A single frame is returned unchanged (aside from index reset)."""
+    present — collapse to one row per key. With ``survivorship`` (default) the kept
+    row is a GOLDEN RECORD: each field takes the first NON-BLANK value across the
+    sources in priority order, so a blank in the top source is filled from a lower
+    one. Without survivorship it's plain keep-first. Blank-key rows are all kept.
+    A single frame is returned unchanged (aside from index reset)."""
     frames = [f for f in frames if f is not None]
     if not frames:
         return pd.DataFrame()
@@ -63,6 +67,28 @@ def merge_dedupe(frames: list, target_object: Optional[str], key_registry: dict)
     if key_col is not None and key_col in merged.columns:
         s = merged[key_col].astype(str).str.strip()
         blank = s == ""
-        keyed = merged[~blank].drop_duplicates(subset=[key_col], keep="first")
+        keyed = merged[~blank]
+        if survivorship:
+            keyed = _survive(keyed, key_col)
+        else:
+            keyed = keyed.drop_duplicates(subset=[key_col], keep="first")
         merged = pd.concat([keyed, merged[blank]]).sort_index()
     return merged.reset_index(drop=True)
+
+
+def _survive(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
+    """Golden-record survivorship: one row per key where each field is the first
+    NON-BLANK value in priority (row) order. Rows arrive already ordered by source
+    priority, so the top source wins per field but its blanks are back-filled from
+    lower-priority sources. Falls back to plain keep-first if a group has a single
+    row (the common case), so it's cheap."""
+    if df.empty:
+        return df
+    def _first_non_blank(col: pd.Series):
+        for v in col:
+            if v is not None and str(v).strip() != "":
+                return v
+        return col.iloc[0]
+    # Group preserving first-seen key order; aggregate each column by first-non-blank.
+    grouped = df.groupby(key_col, sort=False, as_index=False).agg(_first_non_blank)
+    return grouped

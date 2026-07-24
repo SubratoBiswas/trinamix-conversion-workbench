@@ -63,6 +63,24 @@ export const DataQualityRulesPage: React.FC = () => {
     } catch (e: any) { flash(e?.response?.data?.detail || "Extract failed"); }
   };
 
+  const [proposals, setProposals] = useState<Partial<DqRule>[]>([]);
+  const [proposing, setProposing] = useState(false);
+  const doAiPropose = async () => {
+    if (!objectType || !templateId) { flash("Pick an object and an FBDI template first."); return; }
+    setProposing(true);
+    try {
+      const r = await DqRulesApi.aiPropose({ target_object: objectType, template_id: templateId });
+      setProposals(r.proposals || []);
+      flash(`AI proposed ${r.proposal_count} rule(s)${r.ai_used ? "" : " (deterministic fallback)"}. Review and save.`);
+    } catch (e: any) { flash(e?.response?.data?.detail || "AI propose failed"); }
+    finally { setProposing(false); }
+  };
+  const saveProposals = async () => {
+    const withObj = proposals.map(p => ({ ...p, target_object: objectType }));
+    try { const r = await DqRulesApi.bulkCreateRules(withObj); flash(`Saved ${r.created} rule(s).`); setProposals([]); load(); }
+    catch (e: any) { flash(e?.response?.data?.detail || "Save failed"); }
+  };
+
   const doUpload = async (f: File) => {
     try {
       const r = await DqRulesApi.upload({ kind, target_object: objectType, file: f });
@@ -142,6 +160,7 @@ export const DataQualityRulesPage: React.FC = () => {
           )}
           {kind === "validation" &&
             <Button variant="secondary" className="!h-8" onClick={doExtract}>Extract rules</Button>}
+          <Button variant="secondary" className="!h-8" loading={proposing} onClick={doAiPropose}>AI suggest rules</Button>
           <Button variant="secondary" className="!h-8" onClick={() => fileRef.current?.click()}>Upload rules</Button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm,.json" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) doUpload(f); e.currentTarget.value = ""; }} />
@@ -179,6 +198,32 @@ export const DataQualityRulesPage: React.FC = () => {
       )}
 
       {msg && <div className="rounded-md border border-brand/40 bg-brand-subtle/40 px-3 py-2 text-xs text-brand-dark">{msg}</div>}
+
+      {proposals.length > 0 && (
+        <Card>
+          <CardHeader title={`AI proposed ${proposals.length} rule(s) — review & save`}
+            actions={<><Button className="!h-8" onClick={saveProposals}>Save all</Button>
+              <Button variant="ghost" className="!h-8" onClick={() => setProposals([])}>Discard</Button></>} />
+          <CardBody>
+            <table className="w-full text-xs">
+              <thead><tr className="border-b border-line text-left text-ink-subtle">
+                <th className="py-1 pr-3">Kind</th><th className="py-1 pr-3">Field</th>
+                <th className="py-1 pr-3">Rule</th><th className="py-1 pr-3">Params</th><th className="py-1 pr-3">Why</th></tr></thead>
+              <tbody>
+                {proposals.map((p, i) => (
+                  <tr key={i} className="border-b border-line/60">
+                    <td className="py-1 pr-3">{p.kind}</td>
+                    <td className="py-1 pr-3 font-medium">{p.field || "(object-wide)"}</td>
+                    <td className="py-1 pr-3 font-mono">{p.rule_type}</td>
+                    <td className="py-1 pr-3 font-mono text-[10px] text-ink-subtle">{JSON.stringify(p.params || {})}</td>
+                    <td className="py-1 pr-3 text-ink-subtle">{p.description}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardBody>
+        </Card>
+      )}
 
       <Card>
         <CardHeader title={`${rules.length} ${kind} rule(s) for ${objectType || "—"}`} />

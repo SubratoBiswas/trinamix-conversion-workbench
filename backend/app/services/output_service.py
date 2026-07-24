@@ -603,10 +603,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 "format_mask": f.format_mask} for f in fields]
         _dq_issues = await asyncio.to_thread(validate_frame, df, _tf, _val_rules, 2000)
         dq_report = build_report(_dq_issues, _dq_fixes)
-    except Exception:  # noqa: BLE001 — DQ is advisory; never block generation
+    except Exception as _dq_exc:  # noqa: BLE001 — DQ is advisory; never block generation
         import logging as _lg
         _lg.getLogger(__name__).exception("generate DQ step failed")
-        dq_report = None
+        # Surface the reason (diagnostic) instead of silently dropping the report.
+        dq_report = {"error_count": 0, "warning_count": 0, "hard_error_count": 0,
+                     "blocked": False, "cleansing_fix_count": 0, "cleansing_fixes": [],
+                     "top_issues": [], "dq_error": f"{type(_dq_exc).__name__}: {_dq_exc}"[:300]}
 
     # Group fields by their interface sheet (preserving field sequence).
     fields_by_sheet: dict[Any, list] = {}
@@ -922,6 +925,31 @@ async def get_output_preview(conversion: Conversion, limit: int = 50) -> dict[st
             total = int(ds.row_count)  # true dataset size, not the capped preview
     return {"columns": list(head.columns.astype(str)), "rows": head.fillna("").to_dict(orient="records"),
             "total_rows": total, "lineage": lineage}
+
+
+async def preload_report(conversion: Conversion, sample_rows: int = 3000) -> dict[str, Any]:
+    """Predictive pre-load check: build the merged converted frame and validate it
+    (built-in FBDI checks + custom rules) WITHOUT writing a file, returning a
+    plain-English 'what Oracle will reject and how to fix' report. Read-only."""
+    from app.services.generate_dq import apply_cleansing, validate_frame, build_report, explain_report
+    from app.services.dq_rule_service import load_rules
+    from app.services.client_service import client_id_for_conversion
+    df, _ = await build_converted_dataframe(conversion, max_rows=sample_rows)
+    template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+    fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
+    obj = (template.business_object if template else None) or (conversion.target_object or "")
+    cid = await client_id_for_conversion(conversion)
+    cleanse_rules = await load_rules(obj, cid, "cleansing")
+    val_rules = await load_rules(obj, cid, "validation")
+    df2, fixes = await asyncio.to_thread(apply_cleansing, df, cleanse_rules)
+    tf = [{"field_name": f.field_name, "required": bool(f.required), "data_type": f.data_type,
+           "max_length": f.max_length, "format_mask": f.format_mask} for f in fields]
+    issues = await asyncio.to_thread(validate_frame, df2, tf, val_rules, sample_rows)
+    report = build_report(issues, fixes)
+    report = explain_report(report)
+    report["sampled_rows"] = int(len(df2))
+    report["target_object"] = obj
+    return report
 
 
 async def get_output_preview_by_source(conversion: Conversion, limit: int = 50) -> dict[str, Any]:

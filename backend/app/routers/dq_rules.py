@@ -134,6 +134,51 @@ async def extract_rules(body: ExtractIn, user: User = Depends(get_current_user))
     return res
 
 
+class AiProposeIn(BaseModel):
+    target_object: str
+    template_id: str
+    sample_dataset_id: Optional[str] = None
+    client_id: Optional[str] = None
+
+
+@router.post("/ai-propose")
+async def ai_propose(body: AiProposeIn, _: User = Depends(get_current_user)):
+    """AI proposes validation + cleansing rules from the FBDI field metadata (and a
+    data sample if given). Returns proposals for REVIEW — nothing is saved. Falls
+    back to deterministic proposals when AI is unavailable."""
+    from app.services.dq_rule_service import ai_propose_rules
+    cid = await _resolve_client(body.client_id)
+    res = await ai_propose_rules(body.target_object, body.template_id, cid, body.sample_dataset_id)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+class BulkIn(BaseModel):
+    rules: list[dict]
+    is_global: bool = False
+    client_id: Optional[str] = None
+
+
+@router.post("/bulk")
+async def bulk_create(body: BulkIn, user: User = Depends(get_current_user)):
+    """Save a list of reviewed proposals as rules (source='manual')."""
+    cid = None if body.is_global else await _resolve_client(body.client_id)
+    created = 0
+    for r in body.rules:
+        rt = str(r.get("rule_type") or "").strip()
+        if not rt or not r.get("target_object"):
+            continue
+        await DataQualityRule(
+            kind=str(r.get("kind") or "validation"), target_object=str(r.get("target_object")),
+            field=(r.get("field") or None), rule_type=rt.upper(), params=r.get("params") or {},
+            severity=str(r.get("severity") or "error"), description=(r.get("description") or None),
+            source="manual", is_global=body.is_global, client_id=cid, created_by=user.email,
+        ).insert()
+        created += 1
+    return {"created": created}
+
+
 @router.post("/upload")
 async def upload_rules(
     kind: str = Query("validation"),

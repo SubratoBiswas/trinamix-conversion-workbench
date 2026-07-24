@@ -151,6 +151,60 @@ async def output_preview_by_source(
     return await get_output_preview_by_source(c, limit=limit)
 
 
+@output_router.get("/{conversion_id}/reconciliation")
+async def reconciliation(conversion_id: str, _: User = Depends(get_current_user)):
+    """Reconcile the conversion: source record counts (per source file), the merged
+    output record count, how many were merged/de-duplicated, and — if a load has
+    run — the loaded/passed/failed counts, with a short narrative."""
+    from app.models.dataset import Dataset
+    c = await _require_conversion(conversion_id)
+    sources = []
+    src_total = 0
+    for did in c.source_dataset_ids:
+        ds = await Dataset.get(did)
+        if ds:
+            rc = int(ds.row_count or 0)
+            src_total += rc
+            sources.append({"name": ds.name, "rows": rc})
+    latest_out = await ConvertedOutput.find(
+        ConvertedOutput.conversion_id == c.id).sort("-generated_at").first_or_none()
+    out_rows = int(latest_out.row_count) if latest_out else None
+    merged_removed = (src_total - out_rows) if (out_rows is not None and src_total) else None
+    run = await LoadRun.find(LoadRun.conversion_id == c.id).sort("-completed_at").first_or_none()
+    load = None
+    if run:
+        load = {"status": run.status, "total": run.total_records, "passed": run.passed_count,
+                "failed": run.failed_count, "warnings": run.warning_count}
+    parts = []
+    if sources:
+        parts.append(f"{len(sources)} source file(s) totalling {src_total} record(s)")
+    if out_rows is not None:
+        parts.append(f"merged output has {out_rows} record(s)")
+    if merged_removed and merged_removed > 0:
+        parts.append(f"{merged_removed} merged/de-duplicated away")
+    if load:
+        parts.append(f"last load: {load['passed']} passed / {load['failed']} failed of {load['total']}")
+    return {"sources": sources, "source_total": src_total, "output_rows": out_rows,
+            "merged_or_deduped": merged_removed, "load": load,
+            "narrative": "; ".join(parts) + "." if parts else "No source/output yet."}
+
+
+@output_router.get("/{conversion_id}/preload-report")
+async def preload_report_endpoint(
+    conversion_id: str,
+    sample_rows: int = 3000,
+    _: User = Depends(get_current_user),
+):
+    """Predictive pre-load DQ report: validate the merged converted frame and return
+    a plain-English 'what Oracle will reject and how to fix' summary (no file written)."""
+    c = await _require_conversion(conversion_id)
+    is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+    if not c.template_id or (not is_ebs and not c.dataset_id):
+        raise HTTPException(400, "Conversion is not fully bound")
+    from app.services.output_service import preload_report
+    return await preload_report(c, sample_rows=sample_rows)
+
+
 @output_router.get("/{conversion_id}/outputs", response_model=list[ConvertedOutputOut])
 async def list_outputs(
     conversion_id: str,
@@ -325,6 +379,46 @@ async def download_project_zip(
 
 # ----- LOAD -----
 load_router = APIRouter(prefix="/api", tags=["load"])
+
+
+_LOAD_ERROR_PATTERNS = [
+    ("value.*not.*(valid|found|lookup|value set)", "The value isn't in Oracle's lookup (LOV) for this field.",
+     "Add a value crosswalk to the accepted code, or correct the source value."),
+    ("mandatory|required|cannot be null|missing", "A required field was empty for this row.",
+     "Map a source column or set a default for the field before reloading."),
+    ("exceed|too long|maximum length|size", "A value is longer than the column allows.",
+     "Trim/abbreviate the value to the field's max length."),
+    ("duplicate|already exists|unique", "A duplicate key already exists in Oracle.",
+     "De-duplicate the source or switch Import Action to UPDATE."),
+    ("date|format", "A value isn't in the format Oracle expects.",
+     "Reformat the value (e.g. dates to YYYY/MM/DD) and reload."),
+    ("parent|reference|foreign|dependinquiry|not found", "A referenced parent record doesn't exist yet.",
+     "Load the parent object first (respect the load-order dependencies)."),
+]
+
+
+@load_router.post("/load-runs/{load_run_id}/explain-errors")
+async def explain_load_errors(load_run_id: str, _: User = Depends(get_current_user)):
+    """Fill plain-English root cause + suggested fix for a load run's errors that
+    don't have them yet (pattern-based; reliable). Returns the explained errors."""
+    import re as _re
+    errs = await LoadError.find(LoadError.load_run_id == PydanticObjectId(load_run_id)).to_list()
+    explained = 0
+    for e in errs:
+        if e.root_cause and e.suggested_fix:
+            continue
+        msg = (e.error_message or "").lower()
+        rc, fix = None, None
+        for pat, cause, suggestion in _LOAD_ERROR_PATTERNS:
+            if _re.search(pat, msg):
+                rc, fix = cause, suggestion
+                break
+        if not rc:
+            rc = "Oracle rejected this row during import."
+            fix = "Review the error message and the row's values against the field's requirements."
+        await e.set({"root_cause": e.root_cause or rc, "suggested_fix": e.suggested_fix or fix})
+        explained += 1
+    return {"load_run_id": load_run_id, "explained": explained, "total_errors": len(errs)}
 
 
 @load_router.post("/conversions/{conversion_id}/simulate-load", response_model=LoadRunOut)

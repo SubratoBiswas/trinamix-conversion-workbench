@@ -141,6 +141,52 @@ def validate_frame(df: pd.DataFrame, target_fields: list, custom_rules: Optional
     return issues
 
 
+# Plain-English guidance per issue type — what Oracle will do + how to fix it.
+_EXPLAIN: dict[str, dict] = {
+    "Missing Required Field": {
+        "meaning": "Oracle rejects a row when a required column is empty.",
+        "fix": "Map a source column to this field or set a default value before loading."},
+    "Value Not In Value Set": {
+        "meaning": "The value isn't a code in Oracle's lookup (LOV) for this field, so the row fails validation.",
+        "fix": "Add a value mapping / crosswalk to the accepted code, or correct the source value."},
+    "Exceeds Max Length": {
+        "meaning": "The value is longer than the column allows; Oracle truncates or rejects it.",
+        "fix": "Trim or abbreviate the value to the field's max length (add a cleansing rule)."},
+    "Invalid Number Format": {
+        "meaning": "A numeric column contains non-numeric text; the load will error.",
+        "fix": "Clean non-numeric characters or remap the source column."},
+    "Negative Value Not Allowed": {
+        "meaning": "A field that must be non-negative has negative values.",
+        "fix": "Correct the source or add a rule to reject/zero negatives."},
+    "Invalid Date Format": {
+        "meaning": "A date isn't in a form Oracle accepts (YYYY/MM/DD).",
+        "fix": "Reformat the date (a DATE_FORMAT transform) before loading."},
+    "Min Greater Than Max": {
+        "meaning": "A min/max pair is inverted (min > max), which Oracle rejects.",
+        "fix": "Swap or correct the two values at source."},
+    "Pattern Mismatch": {
+        "meaning": "The value doesn't match the expected format (e.g. email/phone).",
+        "fix": "Correct the format or relax the pattern rule."},
+}
+
+
+def explain_report(report: dict) -> dict:
+    """Attach plain-English 'what Oracle will reject and how to fix' guidance to the
+    report, grouped by issue type with impacted counts. Deterministic + reliable
+    (no external call); an AI layer can enrich this later."""
+    groups: dict[str, dict] = {}
+    for i in report.get("top_issues", []):
+        t = i.get("issue_type") or "Other"
+        g = groups.setdefault(t, {"issue_type": t, "count": 0, "example_field": i.get("field_name")})
+        g["count"] += int(i.get("impacted_count", 1) or 1)
+    explained = []
+    for t, g in groups.items():
+        info = _EXPLAIN.get(t, {"meaning": "Review this issue before loading.", "fix": "Inspect the flagged rows."})
+        explained.append({**g, "meaning": info["meaning"], "fix": info["fix"]})
+    explained.sort(key=lambda x: -x["count"])
+    return {**report, "explanations": explained}
+
+
 def build_report(issues: list, cleansing_fixes: list) -> dict:
     """Summarise into a DQ report: severity counts, hard-error count, advisory
     ``blocked`` flag, cleansing fixes applied, and the top issues."""

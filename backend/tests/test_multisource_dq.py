@@ -43,6 +43,20 @@ def test_child_interface_keeps_distinct_rows():
     assert key_col_for(pd.concat([c1]), "Supplier Site", KR) is None
 
 
+def test_survivorship_golden_record():
+    # Priority source has a blank field; lower source has it filled. The golden row
+    # keeps the priority source's populated fields but back-fills its blanks.
+    s1 = pd.DataFrame([{"Supplier Number": "S1", "Supplier Name": "Acme", "Phone": ""}])
+    s2 = pd.DataFrame([{"Supplier Number": "S1", "Supplier Name": "Acme Inc", "Phone": "111"}])
+    m = merge_dedupe([s1, s2], "Supplier Import", KR)
+    r = m[m["Supplier Number"] == "S1"].iloc[0]
+    assert r["Supplier Name"] == "Acme", "priority source's populated value must win"
+    assert r["Phone"] == "111", "priority source's blank must back-fill from lower source"
+    # survivorship=False keeps the priority row as-is (blank stays blank)
+    m2 = merge_dedupe([s1, s2], "Supplier Import", KR, survivorship=False)
+    assert m2[m2["Supplier Number"] == "S1"].iloc[0]["Phone"] == ""
+
+
 def test_single_frame_unchanged():
     s1 = pd.DataFrame([{"Item Number": "I1"}, {"Item Number": "I2"}])
     m = merge_dedupe([s1], "Item Import", KR)

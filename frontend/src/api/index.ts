@@ -588,6 +588,16 @@ export const OutputApi = {
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: string, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
+  /** Predictive pre-load DQ report (what Oracle will reject + how to fix). */
+  preloadReport: (conversionId: string, sampleRows = 3000) =>
+    api.get<DqReport & { explanations: { issue_type: string; count: number; meaning: string; fix: string }[];
+      sampled_rows: number; target_object: string }>(
+      `/conversions/${conversionId}/preload-report`, { params: { sample_rows: sampleRows } }).then(r => r.data),
+  /** Source vs merged-output vs load reconciliation. */
+  reconciliation: (conversionId: string) =>
+    api.get<{ sources: { name: string; rows: number }[]; source_total: number; output_rows: number | null;
+      merged_or_deduped: number | null; load: any; narrative: string }>(
+      `/conversions/${conversionId}/reconciliation`).then(r => r.data),
   /** Per-source converted preview (multi-source): one block per source file. */
   previewBySource: (conversionId: string, limit = 50) =>
     api.get<{ multi: boolean; sources: { source_id: string | null; source_name: string | null;
@@ -1134,6 +1144,11 @@ export const DqRulesApi = {
   extract: (body: { target_object: string; template_id: string; client_id?: string }) =>
     api.post<{ target_object: string; created: number; skipped: number }>(
       "/dq-rules/extract", body).then(r => r.data),
+  aiPropose: (body: { target_object: string; template_id: string; sample_dataset_id?: string; client_id?: string }) =>
+    api.post<{ target_object: string; ai_used: boolean; proposal_count: number; proposals: Partial<DqRule>[] }>(
+      "/dq-rules/ai-propose", body).then(r => r.data),
+  bulkCreateRules: (rules: Partial<DqRule>[], is_global = false) =>
+    api.post<{ created: number }>("/dq-rules/bulk", { rules, is_global }).then(r => r.data),
   upload: (opts: { kind: string; target_object: string; file: File; is_global?: boolean; client_id?: string }) => {
     const fd = new FormData();
     fd.append("file", opts.file);
