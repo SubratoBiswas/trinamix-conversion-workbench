@@ -53,6 +53,7 @@ async def init_db() -> None:
             FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
             GoldStandard,
             MappingSuggestion, LearnedMapping, MappingProposal, CandidateVerdict,
+            DataQualityRule,
             TransformationRule, Crosswalk,
             ConvertedOutput, Workflow,
             LoadRun, LoadError,
