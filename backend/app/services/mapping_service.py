@@ -314,7 +314,18 @@ async def _sources_for_conversion(conversion: Conversion) -> list[SourceColumn]:
     dataset = await Dataset.get(conversion.dataset_id)
     sources = await _source_columns_for(dataset)
     try:
-        df = parse_tabular(dataset.file_path, file_type=dataset.file_type)
+        # Enrich low-cardinality columns with their distinct values. Read via the
+        # durable store (the ephemeral file_path is wiped on redeploy) and CAP the
+        # rows + run off the event loop — parsing the full wide file inline here was
+        # OOM-killing the worker on small instances (surfaced as "AI fill
+        # unavailable" / Failed to fetch on the ai-fill-blanks + candidate paths).
+        import asyncio as _asyncio
+        from app.services.dataset_file_store import materialize_dataset_file
+        _path = await materialize_dataset_file(dataset)
+        if _path is None:
+            return sources
+        df = await _asyncio.to_thread(parse_tabular, str(_path),
+                                      file_type=dataset.file_type, nrows=5000)
         for sc in sources:
             if sc.name not in df.columns:
                 continue
