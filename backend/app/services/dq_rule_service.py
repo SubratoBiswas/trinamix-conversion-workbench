@@ -143,9 +143,9 @@ async def ai_propose_rules(target_object: str, template_id, client_id, sample_da
         except Exception:  # noqa: BLE001 — sampling is best-effort
             pass
 
-    # Compact field catalog (cap to bound tokens).
+    # Compact field catalog (cap to bound tokens — the response must fit max_tokens).
     cat = []
-    for f in fields[:120]:
+    for f in fields[:60]:
         cat.append({"field": f.field_name, "required": bool(f.required),
                     "type": f.data_type, "max_length": f.max_length,
                     "lov": len(f.allowed_values or []) or None,
@@ -180,7 +180,7 @@ async def ai_propose_rules(target_object: str, template_id, client_id, sample_da
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
                              "content-type": "application/json"},
-                    json={"model": model, "max_tokens": 4000,
+                    json={"model": model, "max_tokens": 8000,
                           "messages": [{"role": "user", "content": prompt}]},
                 )
                 dbg["http_status"] = r.status_code
@@ -190,9 +190,29 @@ async def ai_propose_rules(target_object: str, template_id, client_id, sample_da
                 text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
                 if not text:
                     dbg["no_text"] = str(data)[:300]
-                m = text[text.find("{"): text.rfind("}") + 1]
-                doc = _json.loads(m) if m else {"proposals": []}
-                _raw = doc.get("proposals", [])
+                # Parse the proposals array; tolerate a response truncated mid-array
+                # (max_tokens) by salvaging the complete objects decoded so far.
+                _raw = []
+                try:
+                    mm = text[text.find("{"): text.rfind("}") + 1]
+                    _raw = (_json.loads(mm).get("proposals", []) if mm else [])
+                except Exception:  # noqa: BLE001 — salvage complete objects
+                    dbg["salvaged"] = True
+                    start = text.find("[")
+                    if start >= 0:
+                        dec = _json.JSONDecoder()
+                        pos = start + 1
+                        while pos < len(text):
+                            while pos < len(text) and text[pos] in " \t\r\n,":
+                                pos += 1
+                            if pos >= len(text) or text[pos] == "]":
+                                break
+                            try:
+                                obj, end = dec.raw_decode(text, pos)
+                                _raw.append(obj)
+                                pos = end
+                            except Exception:  # noqa: BLE001 — truncated tail
+                                break
                 dbg["raw_proposals"] = len(_raw)
                 dbg["dropped_types"] = sorted({str(p.get("rule_type", "")).upper() for p in _raw
                                                if str(p.get("rule_type", "")).upper() not in (_VALID_TYPES | _CLEANSE_TYPES)})[:10]
