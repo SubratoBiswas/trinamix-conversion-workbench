@@ -1,0 +1,23 @@
+{
+ "_note": "Analyst (Tejaswi) Oracle FBDI file-name spec for supplier loads. Supplier CSVs are HEADERLESS (data rows only, each ending in END), packaged in a .zip named per zip_by_primary_sheet; each interface sheet CSV is named per csv_by_sheet. Keyed by normalized interface sheet table name.",
+ "zip_by_primary_sheet": {
+  "pozsuppliersint": "PozSuppliersInt",
+  "pozsupplieraddressesint": "PozSupplierAddressesInt",
+  "pozsuppliersitesint": "PozSupplierSitesInt",
+  "pozsiteassignmentsint": "PozSiteAssignmentsInt",
+  "ibytempextpayees": "ibysupplierbankaccimport",
+  "pozsupcontacts": "PozSupContactsInt"
+ },
+ "csv_by_sheet": {
+  "pozsuppliersint": "PozSuppliersInt",
+  "pozsupplieraddressesint": "PozSupplierAddressesInt",
+  "pozsuppliersitesint": "PozSupplierSitesInt",
+  "thirdpartypayrelationships": "PozSupThirdPartyInt",
+  "pozsiteassignmentsint": "PozSiteAssignmentsInt",
+  "pozsupcontacts": "PozSupContactsInt",
+  "pozsuppcontactaddressesint": "PozSupContactAddressesInt",
+  "ibytempextpayees": "IbyTempExtPayees",
+  "ibytempextbankaccts": "IbyTempExtBankAccts",
+  "ibytemppmtinstruses": "IbyTempPmtInstrUses"
+ }
+}

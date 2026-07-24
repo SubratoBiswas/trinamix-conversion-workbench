@@ -409,6 +409,12 @@ export const MappingReviewPage: React.FC = () => {
   // objects come back as a .zip (one CSV per interface sheet); the artifact's
   // real file_name carries the correct extension.
   const [generating, setGenerating] = useState(false);
+  // Header-row toggle for the generated file. Default is "auto": supplier FBDI
+  // loads are headerless (data only), every other object keeps its header row.
+  // The user can override per-download; null = follow the auto default.
+  const isSupplierObj = /supplier/i.test(project?.target_object || project?.name || "");
+  const [includeHeader, setIncludeHeader] = useState<boolean | null>(null);
+  const headerOn = includeHeader ?? !isSupplierObj;
   const generateAndDownload = async () => {
     if (!pid) return;
     setGenerating(true);
@@ -418,7 +424,7 @@ export const MappingReviewPage: React.FC = () => {
       // the background and can take a while — surface elapsed time so it's not silent.
       const out = await OutputApi.generateAndWait(pid, "csv", (sec) => {
         if (sec >= 3) setToast(`Generating FBDI output… ${sec}s`);
-      });
+      }, headerOn);
       const fallback = `${(project?.target_object || project?.name || "fbdi").replace(/[^\w.-]+/g, "_")}.csv`;
       await OutputApi.download(pid, out.file_name || fallback);
       flash("FBDI output generated and downloaded.");
@@ -913,6 +919,33 @@ export const MappingReviewPage: React.FC = () => {
             <Sparkles className="h-3.5 w-3.5" />
             {mappings.length ? "Re-run AI" : "Run AI Mapping"}
           </Button>
+
+          <button
+            type="button"
+            onClick={() => setIncludeHeader(!headerOn)}
+            role="switch"
+            aria-checked={headerOn}
+            title={headerOn
+              ? "Header row INCLUDED — the output's first row is the column names. Click to exclude (Oracle FBDI load format is headerless)."
+              : "Header row EXCLUDED — data rows only (Oracle FBDI load format). Click to include column names as the first row."}
+            className={cn(
+              "flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors",
+              headerOn
+                ? "border-brand/40 bg-brand-subtle/40 text-brand-dark"
+                : "border-line bg-canvas text-ink-subtle",
+            )}
+          >
+            <span className={cn(
+              "relative inline-flex h-4 w-7 items-center rounded-full transition-colors",
+              headerOn ? "bg-brand" : "bg-line",
+            )}>
+              <span className={cn(
+                "inline-block h-3 w-3 transform rounded-full bg-white transition-transform",
+                headerOn ? "translate-x-3.5" : "translate-x-0.5",
+              )} />
+            </span>
+            <span>Header {headerOn ? "on" : "off"}</span>
+          </button>
 
           <Button
             onClick={generateAndDownload}

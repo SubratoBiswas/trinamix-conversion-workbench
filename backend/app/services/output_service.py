@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
 import zipfile
 from pathlib import Path
@@ -345,6 +346,50 @@ def _safe_sheet_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "sheet"
 
 
+def _norm_hdr(s: Any) -> str:
+    """Normalise a column header for order-matching: alphanumerics only, lower.
+    Reconciles cosmetic differences ('Supplier Name*' vs 'Supplier Name *',
+    'Remittance E-mail' vs 'Remittance E-Mail')."""
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+
+# Analyst-authored supplier FBDI column SEQUENCE (ConvNXP_All.xlsm "Supplier
+# Import" tab). Each supplier primary interface sheet is reordered to this exact
+# extraction order, and every supplier CSV row gets a trailing "END"
+# record-terminator (Oracle's end-of-record marker). Loaded once, cached.
+_SUPPLIER_ORDER_FILE = Path(__file__).resolve().parent.parent / "data" / "supplier_fbdi_column_order.json"
+_SUPPLIER_COL_ORDER_CACHE: dict | None = None
+
+
+def _supplier_col_order() -> dict:
+    """{normalized interface sheet name -> ordered list of CSV headers}."""
+    global _SUPPLIER_COL_ORDER_CACHE
+    if _SUPPLIER_COL_ORDER_CACHE is None:
+        try:
+            doc = json.loads(_SUPPLIER_ORDER_FILE.read_text(encoding="utf-8"))
+            _SUPPLIER_COL_ORDER_CACHE = doc.get("order", doc) or {}
+        except Exception:  # noqa: BLE001 — missing/invalid file just disables reorder
+            _SUPPLIER_COL_ORDER_CACHE = {}
+    return _SUPPLIER_COL_ORDER_CACHE
+
+
+# Analyst (Tejaswi) Oracle FBDI file-naming spec for supplier loads: the zip name
+# per entity (keyed by the primary interface sheet) and each CSV's exact name
+# (keyed by interface sheet). Supplier CSVs are HEADERLESS (data only, END last).
+_SUPPLIER_NAMES_FILE = Path(__file__).resolve().parent.parent / "data" / "supplier_fbdi_file_names.json"
+_SUPPLIER_NAMES_CACHE: dict | None = None
+
+
+def _supplier_file_names() -> dict:
+    global _SUPPLIER_NAMES_CACHE
+    if _SUPPLIER_NAMES_CACHE is None:
+        try:
+            _SUPPLIER_NAMES_CACHE = json.loads(_SUPPLIER_NAMES_FILE.read_text(encoding="utf-8")) or {}
+        except Exception:  # noqa: BLE001
+            _SUPPLIER_NAMES_CACHE = {}
+    return _SUPPLIER_NAMES_CACHE
+
+
 # Control-field defaults + auto-numbered keys so generated files aren't blank in
 # the columns Fusion requires — mirrors how a consultant fills the template
 # (Import Action = CREATE, a batch id, a running supplier number, standard
@@ -481,7 +526,11 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
     return df
 
 
-async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> ConvertedOutput:
+async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
+                                   include_header: bool | None = None) -> ConvertedOutput:
+    """``include_header``: None = auto (supplier CSVs headerless per the Oracle load
+    format, every other object keeps its column-label row); True/False = the user's
+    explicit toggle, forcing headers on/off for every sheet of this output."""
     from app.models.fbdi import FBDISheet
 
     # HDL divert: HCM objects (Employee HDL) are not FBDI — they load as
@@ -701,6 +750,41 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         cols = _dedup([_header_label(f) for f in sfields])
         return pd.DataFrame(columns=cols)
 
+    def _apply_supplier_layout(sdf: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+        """Supplier-only, per the analyst ConvNXP_All.xlsm 'Supplier Import' tab:
+        (1) reorder a primary interface sheet's columns to the tab's exact
+            extraction sequence (columns are matched by normalized header; any
+            column the tab doesn't list is kept and appended after, so nothing is
+            dropped), and
+        (2) append an 'END' record-terminator column to EVERY supplier interface
+            CSV — the literal 'END' in the last field of the header and every data
+            row (Oracle's end-of-record marker).
+        No-op for non-supplier objects."""
+        if not _is_supplier:
+            return sdf
+        order = _supplier_col_order().get(_norm_hdr(_safe_sheet_name(sheet_name)))
+        if order:
+            by_norm: dict = {}
+            for c in sdf.columns:
+                by_norm.setdefault(_norm_hdr(c), c)
+            seen: set = set()
+            ordered: list = []
+            for h in order:
+                c = by_norm.get(_norm_hdr(h))
+                if c is not None and c not in seen:
+                    ordered.append(c)
+                    seen.add(c)
+            for c in sdf.columns:  # keep any template column the tab didn't list
+                if c not in seen:
+                    ordered.append(c)
+                    seen.add(c)
+            sdf = sdf[ordered]
+        else:
+            sdf = sdf.copy()
+        # END terminator — last column, literal 'END' on header + every data row.
+        sdf["END"] = "END"
+        return sdf
+
     def _write_all() -> tuple[str, str, int, int]:
         """Serialize to disk, STREAMING one interface sheet at a time so peak memory
         stays at ~one sheet — not all 19 at once, which OOM'd the worker on a large
@@ -713,6 +797,9 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
         total_cols = 0
         multi = bool(sheets_with_fields)
         _ref_cache = _cust_ref()
+        # Header row inclusion. User toggle wins; otherwise auto — supplier FBDI
+        # load files are headerless (data only), every other object keeps headers.
+        _hdr = include_header if include_header is not None else (not _is_supplier)
 
         if fmt == "xlsx":
             name = f"{obj_name}_{ts}.xlsx"
@@ -725,17 +812,48 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
                             _cust_apply(sdf)
                         else:
                             sdf = _headers_only(fields_by_sheet[s.id])
-                        sdf.to_excel(xw, index=False, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
+                        sdf = _apply_supplier_layout(sdf, s.sheet_name)
+                        sdf.to_excel(xw, index=False, header=_hdr, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                         total_rows = max(total_rows, len(sdf))
                         total_cols += len(sdf.columns)
                         del sdf
                 else:
                     fdf = _finalize(fields) if fields else _apply_control_defaults(df)
-                    fdf.to_excel(xw, index=False, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
+                    fdf.to_excel(xw, index=False, header=_hdr, sheet_name=(_safe_sheet_name(obj_name)[:31] or "Sheet1"))
                     total_rows, total_cols = len(fdf), len(fdf.columns)
             return name, str(path), total_rows, total_cols
 
         # CSV
+        # Supplier FBDI load package (analyst / Tejaswi spec): HEADERLESS CSVs
+        # (data rows only, each terminated with END), columns in the tab's
+        # extraction order, each file named for its interface and packaged in a
+        # zip named for the entity — even a single-sheet interface gets a zip.
+        _names = _supplier_file_names()
+        _zipmap = _names.get("zip_by_primary_sheet", {})
+        _csvmap = _names.get("csv_by_sheet", {})
+        _primary = sheets_with_fields[0] if sheets_with_fields else None
+        _zbase = _zipmap.get(_norm_hdr(_safe_sheet_name(_primary.sheet_name))) if _primary else None
+        if _is_supplier and _zbase:
+            import zipfile as _zip
+            name = f"{_zbase}.zip"
+            path = out_dir / name
+            with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
+                for s in sheets_with_fields:
+                    if _sheet_carries_data(s):
+                        sdf = _finalize(fields_by_sheet[s.id])
+                        _cust_apply(sdf)
+                    else:
+                        sdf = _headers_only(fields_by_sheet[s.id])
+                    sdf = _apply_supplier_layout(sdf, s.sheet_name)
+                    cbase = _csvmap.get(_norm_hdr(_safe_sheet_name(s.sheet_name))) or _safe_sheet_name(s.sheet_name)
+                    # Oracle FBDI CSVs are headerless by default (data only, END
+                    # last); the user's Include-header toggle can force headers on.
+                    zf.writestr(f"{cbase}.csv", sdf.to_csv(index=False, header=_hdr))
+                    total_rows = max(total_rows, len(sdf))
+                    total_cols += len(sdf.columns)
+                    del sdf
+            return name, str(path), total_rows, total_cols
+
         if multi and len(sheets_with_fields) > 1:
             import zipfile as _zip
             name = f"{obj_name}_{ts}.zip"
@@ -747,7 +865,8 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
                         _cust_apply(sdf)
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
-                    zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False))
+                    sdf = _apply_supplier_layout(sdf, s.sheet_name)
+                    zf.writestr(f"{i:02d}_{_safe_sheet_name(s.sheet_name)}.csv", sdf.to_csv(index=False, header=_hdr))
                     total_rows = max(total_rows, len(sdf))
                     total_cols += len(sdf.columns)
                     del sdf
@@ -755,9 +874,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv") -> 
 
         sfields = fields_by_sheet[sheets_with_fields[0].id] if multi else fields
         fdf = _finalize(sfields) if sfields else _apply_control_defaults(df)
+        _sname = (sheets_with_fields[0].sheet_name if multi else obj_name)
+        fdf = _apply_supplier_layout(fdf, _sname)
         name = f"{obj_name}_{ts}.csv"
         path = out_dir / name
-        fdf.to_csv(path, index=False)
+        fdf.to_csv(path, index=False, header=_hdr)
         return name, str(path), len(fdf), len(fdf.columns)
 
     out_name, out_path_str, total_rows, total_cols = await asyncio.to_thread(_write_all)

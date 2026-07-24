@@ -515,10 +515,13 @@ export const QualityApi = {
 };
 
 export const OutputApi = {
-  /** Kick off generation (async by default) — returns immediately with status. */
-  generate: (conversionId: string, fmt: "csv" | "xlsx" = "csv") =>
+  /** Kick off generation (async by default) — returns immediately with status.
+   *  includeHeader: undefined = auto (supplier headerless, others with header);
+   *  true/false forces the column-label row on/off. */
+  generate: (conversionId: string, fmt: "csv" | "xlsx" = "csv", includeHeader?: boolean) =>
     api.post<{ status: string; conversion_id: string }>(
-      `/conversions/${conversionId}/generate-output`, null, { params: { fmt } },
+      `/conversions/${conversionId}/generate-output`, null,
+      { params: { fmt, ...(includeHeader === undefined ? {} : { include_header: includeHeader }) } },
     ).then(r => r.data),
   generationStatus: (conversionId: string) =>
     api.get<{
@@ -534,8 +537,10 @@ export const OutputApi = {
     conversionId: string,
     fmt: "csv" | "xlsx" = "csv",
     onTick?: (elapsedSec: number) => void,
+    includeHeader?: boolean,
   ): Promise<{ id: string; file_name: string; row_count: number; column_count: number }> => {
-    await api.post(`/conversions/${conversionId}/generate-output`, null, { params: { fmt } });
+    await api.post(`/conversions/${conversionId}/generate-output`, null,
+      { params: { fmt, ...(includeHeader === undefined ? {} : { include_header: includeHeader }) } });
     const start = Date.now();
     // Poll up to ~8 minutes; generation of a 19-sheet object on a small instance
     // can take a while, but it's off the request thread so nothing times out.

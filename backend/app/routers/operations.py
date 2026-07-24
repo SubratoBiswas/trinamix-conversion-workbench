@@ -39,7 +39,8 @@ async def _require_conversion(conversion_id: str) -> Conversion:
 output_router = APIRouter(prefix="/api/conversions", tags=["output"])
 
 
-async def _run_generation(conversion_id: str, fmt: str) -> None:
+async def _run_generation(conversion_id: str, fmt: str,
+                          include_header: bool | None = None) -> None:
     """Background worker: build the FBDI artifact off the request thread and record
     the outcome on the conversion, so the UI can poll instead of holding a long HTTP
     request (which the free-tier gateway kills at ~100s → surfaces as a CORS error)."""
@@ -47,7 +48,7 @@ async def _run_generation(conversion_id: str, fmt: str) -> None:
         c = await Conversion.get(PydanticObjectId(conversion_id))
         if not c:
             return
-        await generate_output_artifact(c, fmt=fmt)
+        await generate_output_artifact(c, fmt=fmt, include_header=include_header)
         await c.set({"output_status": "ready", "output_error": None,
                      "updated_at": datetime.utcnow()})
     except Exception as exc:  # noqa: BLE001
@@ -64,6 +65,9 @@ async def generate_output(
     conversion_id: str,
     fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
     wait: bool = Query(False, description="Block until done (legacy). Default is async."),
+    include_header: bool | None = Query(
+        None, description="Include the column-label header row. None=auto "
+        "(supplier FBDI headerless, others with header); true/false forces it."),
     _: User = Depends(get_current_user),
 ):
     """Kick off FBDI generation. By default this returns immediately with
@@ -79,13 +83,13 @@ async def generate_output(
         raise HTTPException(400, "Conversion is not fully bound")
 
     if wait:
-        out = await generate_output_artifact(c, fmt=fmt)
+        out = await generate_output_artifact(c, fmt=fmt, include_header=include_header)
         return {**out.model_dump(), "id": str(out.id),
                 "conversion_id": str(out.conversion_id), "status": "ready"}
 
     await c.set({"output_status": "generating", "output_error": None,
                  "output_started_at": datetime.utcnow()})
-    asyncio.create_task(_run_generation(conversion_id, fmt))
+    asyncio.create_task(_run_generation(conversion_id, fmt, include_header))
     return {"status": "generating", "conversion_id": conversion_id}
 
 
