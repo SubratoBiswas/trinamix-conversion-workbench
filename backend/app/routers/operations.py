@@ -428,17 +428,28 @@ async def download_all_outputs(
         for i, obj in enumerate(objs, start=1):
             group = by_obj[obj]
             art = None
-            # REUSE the merged artifact already written under this object's carrier
-            # conversion (first by load order) — no rebuild on download.
-            carrier = sorted(group, key=lambda x: x.planned_load_order or 100)[0]
+            # REUSE the merged artifact already written for this object. The merged
+            # file is written under a carrier conversion, but which conversion is the
+            # carrier can differ by sort tie-breaks, so look across EVERY conversion
+            # in the group and take the newest artifact whose file is on disk. NOTE:
+            # a "csv" generation may be a .zip (Oracle FBDI bundle) or a .csv — both
+            # are the csv family; only reject a true format mismatch (xlsx vs csv).
             if not regenerate:
-                existing = await ConvertedOutput.find(
-                    ConvertedOutput.conversion_id == carrier.id
-                ).sort("-generated_at").first_or_none()
-                want_ext = "xlsx" if fmt == "xlsx" else "csv"
-                if (existing and Path(existing.output_file_path).exists()
-                        and Path(existing.output_file_name).suffix.lstrip(".") == want_ext):
-                    art = existing
+                cand = None
+                for cc in group:
+                    e = await ConvertedOutput.find(
+                        ConvertedOutput.conversion_id == cc.id
+                    ).sort("-generated_at").first_or_none()
+                    if not e or not Path(e.output_file_path).exists():
+                        continue
+                    ext_e = Path(e.output_file_name).suffix.lstrip(".").lower()
+                    is_xlsx = ext_e == "xlsx"
+                    if (fmt == "xlsx") != is_xlsx:
+                        continue  # wrong family (xlsx vs csv/zip)
+                    if cand is None or (e.generated_at and cand.generated_at
+                                        and e.generated_at > cand.generated_at):
+                        cand = e
+                art = cand
             if art is None:
                 if not regenerate:
                     # Nothing pre-generated for this object and we won't rebuild inline.
