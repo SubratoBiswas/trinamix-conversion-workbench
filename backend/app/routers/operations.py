@@ -292,6 +292,59 @@ async def generate_merged(
     return {"status": "generating", "conversion_id": str(carrier.id), "carrier_id": str(carrier.id)}
 
 
+async def _run_merged_all(project_id, fmt, include_header, jobs) -> None:
+    """Background: generate the merged file for every interface object, sequentially
+    (bounded memory), updating each carrier's status as it completes."""
+    from app.services.output_service import generate_merged_artifact
+    for obj, carrier_id in jobs:
+        try:
+            await generate_merged_artifact(project_id, obj, fmt=fmt, include_header=include_header)
+            c = await Conversion.get(carrier_id)
+            if c:
+                await c.set({"output_status": "ready", "output_error": None, "updated_at": datetime.utcnow()})
+        except Exception as exc:  # noqa: BLE001
+            try:
+                c = await Conversion.get(carrier_id)
+                if c:
+                    await c.set({"output_status": "failed", "output_error": str(exc)[:500]})
+            except Exception:
+                pass
+
+
+@output_router.post("/project/{project_id}/generate-merged-all")
+async def generate_merged_all(
+    project_id: str,
+    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    include_header: bool | None = Query(None),
+    _: User = Depends(get_current_user),
+):
+    """Kick off merged generation for EVERY interface object in the project, in the
+    background. Returns the carrier conversion per object to poll via
+    /generation-status; then GET /download-all zips the (already-generated) merged
+    files fast. This keeps wide multi-source projects off the gateway timeout."""
+    import asyncio
+    convs = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)).to_list()
+    by_obj: dict[str, list] = {}
+    for c in convs:
+        is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+        if not c.template_id or (not is_ebs and not c.dataset_id):
+            continue
+        by_obj.setdefault(c.target_object or c.name, []).append(c)
+    objs = sorted(by_obj, key=lambda o: min((cc.planned_load_order or 100) for cc in by_obj[o]))
+    jobs, carriers = [], []
+    for obj in objs:
+        carrier = sorted(by_obj[obj], key=lambda x: x.planned_load_order or 100)[0]
+        await carrier.set({"output_status": "generating", "output_error": None,
+                           "output_started_at": datetime.utcnow()})
+        jobs.append((obj, carrier.id))
+        carriers.append({"object": obj, "conversion_id": str(carrier.id)})
+    if not jobs:
+        raise HTTPException(400, "No bound conversions to generate")
+    asyncio.create_task(_run_merged_all(project_id, fmt, include_header, jobs))
+    return {"status": "generating", "objects": len(jobs), "carriers": carriers}
+
+
 @output_router.get("/{conversion_id}/outputs", response_model=list[ConvertedOutputOut])
 async def list_outputs(
     conversion_id: str,
@@ -328,11 +381,15 @@ def _safe_name(s: str) -> str:
 async def download_all_outputs(
     project_id: str,
     fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    regenerate: bool = Query(False),
     _: User = Depends(get_current_user),
 ):
-    """Generate the FBDI output for every bound conversion in a project and
-    return them together as a single zip, named/ordered by the supplier load
-    sequence so the user gets all the filled-in files in one download."""
+    """Zip the merged FBDI output for every interface object in a project — one
+    merged, de-duplicated, cleansed, validated file per interface (NOT one per
+    source). By default this REUSES the merged file already generated per interface
+    (a fast zip); regenerating wide multi-source objects here would blow the gateway
+    timeout, so the client should call POST /generate-merged-all first (background)
+    and poll, then download. Pass ?regenerate=true to force a rebuild inline."""
     from app.models.project import Project
 
     project = await Project.get(PydanticObjectId(project_id))
@@ -350,6 +407,7 @@ async def download_all_outputs(
     # validated file per interface — not one file per source. Order by the object's
     # load sequence.
     from app.services.output_service import generate_merged_artifact
+    skipped: list[str] = []
     by_obj: dict[str, list] = {}
     for c in conversions:
         is_ebs = getattr(c, "source_type", "dataset") == "ebs"
@@ -363,17 +421,34 @@ async def download_all_outputs(
     buf = io.BytesIO()
     used: dict[str, int] = {}
     added = 0
+    stale: list[str] = []
     ext = "xlsx" if fmt == "xlsx" else "csv"
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for i, obj in enumerate(objs, start=1):
             group = by_obj[obj]
-            try:
-                # Merge every source-conversion for this object into one file.
-                art = await generate_merged_artifact(project_id, obj, fmt=fmt)
-            except Exception:
-                skipped.append(obj)
-                continue
+            art = None
+            # REUSE the merged artifact already written under this object's carrier
+            # conversion (first by load order) — no rebuild on download.
+            carrier = sorted(group, key=lambda x: x.planned_load_order or 100)[0]
+            if not regenerate:
+                existing = await ConvertedOutput.find(
+                    ConvertedOutput.conversion_id == carrier.id
+                ).sort("-generated_at").first_or_none()
+                want_ext = "xlsx" if fmt == "xlsx" else "csv"
+                if (existing and Path(existing.output_file_path).exists()
+                        and Path(existing.output_file_name).suffix.lstrip(".") == want_ext):
+                    art = existing
+            if art is None:
+                if not regenerate:
+                    # Nothing pre-generated for this object and we won't rebuild inline.
+                    stale.append(obj)
+                    continue
+                try:
+                    art = await generate_merged_artifact(project_id, obj, fmt=fmt)
+                except Exception:
+                    skipped.append(obj)
+                    continue
             if not art or not Path(art.output_file_path).exists():
                 skipped.append(obj)
                 continue
@@ -391,6 +466,14 @@ async def download_all_outputs(
             added += 1
 
     if added == 0:
+        if stale:
+            # Files just aren't generated yet — tell the client to generate first.
+            raise HTTPException(
+                409,
+                "Merged files aren't generated yet. Generate the merged output for "
+                "each interface first (Download all triggers this automatically), "
+                "then download.",
+            )
         raise HTTPException(
             400,
             "No conversions in this engagement are ready to generate FBDI output "

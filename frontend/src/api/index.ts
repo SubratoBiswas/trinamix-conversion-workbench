@@ -612,6 +612,43 @@ export const OutputApi = {
     }
     throw new Error("Merged generation is taking unusually long — check back shortly.");
   },
+  /** Kick off merged generation for EVERY interface object in a project, in the
+   *  background. Returns one carrier conversion per object to poll. */
+  generateMergedAll: (projectId: string, fmt: "csv" | "xlsx" = "csv", includeHeader?: boolean) =>
+    api.post<{ status: string; objects: number;
+      carriers: { object: string; conversion_id: string }[] }>(
+      `/conversions/project/${projectId}/generate-merged-all`, null,
+      { params: { fmt, ...(includeHeader === undefined ? {} : { include_header: includeHeader }) } },
+    ).then(r => r.data),
+  /** Generate every interface's merged file in the background, poll all carriers
+   *  until each is ready/failed, then return per-object results. */
+  generateMergedAllAndWait: async (
+    projectId: string, fmt: "csv" | "xlsx" = "csv", includeHeader?: boolean,
+    onTick?: (sec: number, done: number, total: number) => void,
+  ): Promise<{ object: string; ready: boolean; error?: string }[]> => {
+    const start = await OutputApi.generateMergedAll(projectId, fmt, includeHeader);
+    const carriers = start.carriers || [];
+    const total = carriers.length;
+    const done: Record<string, { ready: boolean; error?: string }> = {};
+    const t0 = Date.now();
+    for (let i = 0; i < 240; i++) {
+      await new Promise(res => setTimeout(res, 3000));
+      for (const c of carriers) {
+        if (done[c.conversion_id]) continue;
+        const s = await OutputApi.generationStatus(c.conversion_id);
+        if (s.status === "ready") done[c.conversion_id] = { ready: true };
+        else if (s.status === "failed") done[c.conversion_id] = { ready: false, error: s.error || "failed" };
+      }
+      const nDone = Object.keys(done).length;
+      onTick?.(Math.round((Date.now() - t0) / 1000), nDone, total);
+      if (nDone >= total) break;
+    }
+    return carriers.map(c => ({
+      object: c.object,
+      ready: !!done[c.conversion_id]?.ready,
+      error: done[c.conversion_id]?.error,
+    }));
+  },
   /** Preview the MERGED output for this conversion's interface (all sources). */
   mergedPreview: (conversionId: string, limit = 50) =>
     api.get<{ columns: string[]; rows: Record<string, any>[]; total_rows: number;
@@ -646,13 +683,22 @@ export const OutputApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
-  /** Generate + download every bound conversion's FBDI output for a project as
-   * a single zip (files named/ordered by the supplier load sequence). */
-  downloadAll: async (projectId: string, filename = "FBDI.zip", fmt: "csv" | "xlsx" = "csv") => {
+  /** Download every interface's MERGED FBDI file as one zip — one merged,
+   *  de-duplicated, cleansed, validated file per interface (not one per source).
+   *  Generates all merged files in the BACKGROUND first (so wide multi-source
+   *  objects don't hit the gateway timeout), polls until ready, then the zip is a
+   *  fast reuse of the already-generated files. */
+  downloadAll: async (
+    projectId: string, filename = "FBDI.zip", fmt: "csv" | "xlsx" = "csv",
+    onTick?: (sec: number, done: number, total: number) => void,
+  ) => {
+    // 1) Build every merged interface file in the background, wait for all.
+    const results = await OutputApi.generateMergedAllAndWait(projectId, fmt, undefined, onTick);
+    // 2) Fast zip — reuses the files just generated (regenerate=false).
     const response = await api.get(`/conversions/project/${projectId}/download-all`, {
       responseType: "blob",
       params: { fmt },
-      timeout: 300000,
+      timeout: 120000,
     });
     const url = window.URL.createObjectURL(new Blob([response.data], { type: "application/zip" }));
     const a = document.createElement("a");
@@ -662,6 +708,7 @@ export const OutputApi = {
     a.click();
     a.remove();
     window.URL.revokeObjectURL(url);
+    return results;
   },
   /** Package the ALREADY-generated outputs for a project into one zip (no
    * re-generation). Use after generating each object client-side. */

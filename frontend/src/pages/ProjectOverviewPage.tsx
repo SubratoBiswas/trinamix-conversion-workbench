@@ -185,6 +185,9 @@ export const ProjectOverviewPage: React.FC = () => {
       // the 6-object supplier set runs in parallel instead of one-by-one. Each
       // worker maps (only if unmapped) then generates that object's FBDI output;
       // generate force-applies the stored gold standard so gold always wins.
+      // Phase 1: ensure every source conversion is mapped (each has its OWN
+      // mapping — heterogeneous sources map correctly). Generation is merged
+      // per-interface, so we only MAP here, then merge+generate per object.
       const runOne = async (c: Conversion) => {
         const key = String(c.id);
         try {
@@ -194,8 +197,6 @@ export const ProjectOverviewPage: React.FC = () => {
           if (!ms.some((m) => m.source_column)) {
             try { await MappingApi.suggest(key); } catch { /* keep going */ }
           }
-          setStage(key, "generating");
-          await OutputApi.generateAndWait(key, "csv");
           setStage(key, "done");
         } catch {
           setStage(key, "error");
@@ -211,13 +212,21 @@ export const ProjectOverviewPage: React.FC = () => {
       });
       await Promise.all(workers);
 
-      // Package everything into one load-ordered zip and download.
-      setDlStatus(`Packaging ${n} files into .zip…`);
-      await OutputApi.downloadZip(
+      // Phase 2: merge every interface's sources into ONE file (de-duplicated,
+      // cleansed, validated), generated in the background so wide multi-source
+      // objects can't hit the gateway timeout, then download the fast reuse-zip.
+      const nObjs = new Set(convs.map((c) => objName(c))).size;
+      setDlStatus(`Merging & generating ${nObjs} interface file${nObjs === 1 ? "" : "s"}…`);
+      const results = await OutputApi.downloadAll(
         pid,
         `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_FBDI.zip`,
+        "csv",
+        (sec, done, total) => setDlStatus(`Merging & generating interface files… ${done}/${total} (${sec}s)`),
       );
-      flash("FBDI bundle generated and downloaded.");
+      const failed = (results || []).filter((r) => !r.ready);
+      flash(failed.length
+        ? `FBDI bundle downloaded. ${failed.length} interface(s) had issues: ${failed.map((f) => f.object).join(", ")}.`
+        : `FBDI bundle generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
       refresh();
       loadRefStandards();
     } catch (e: any) {
