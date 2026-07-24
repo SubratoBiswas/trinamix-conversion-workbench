@@ -279,3 +279,88 @@ JWT (HS256) bearer; secrets server-side; graceful degradation (retry on cold sta
 actionable EBS/Fusion diagnostics); global activity indicator; load runs capture
 raw Oracle responses; audit events. Production hardening: restrict CORS, rotate
 seed admin, move long EBS/Fusion ops to background workers before scaling out.
+
+---
+
+## 9. Continuation session — 2026-07-24 (multi-source merge efficiency, single-file download fix, filled Oracle templates, docs & tests)
+
+### 9.1 Efficient merged "Download all" (multi-source → one file per interface)
+- **Problem:** with multiple sources per interface, download-all regenerated every
+  merged object synchronously and timed out; a later deploy still showed the old
+  per-source files (stale download).
+- **Backend (`routers/operations.py`):** new `POST /conversions/project/{id}/generate-merged-all`
+  builds every interface's merged file in the BACKGROUND (grouped by `target_object`,
+  carrier = lowest load-order conversion; `output_status` polled via `/generation-status`).
+  `GET /download-all` now **reuses** the merged artifact already written for each
+  interface (scans every conversion in the group, newest artifact whose file exists,
+  format-family matched) and just fast-zips them; `?regenerate=true` forces inline.
+  Returns 409 if nothing generated yet.
+- **Frontend (`api/index.ts`, `ProjectOverviewPage.tsx`):** `OutputApi.downloadAll`
+  orchestrates `generateMergedAllAndWait` (background generate + poll all carriers)
+  then the fast reuse-zip, with progress. Download-all maps each source (own mapping)
+  then merges+generates one file per interface.
+
+### 9.2 Single-file FBDI download opened as "corrupt" in Excel — fixed
+- **Root cause:** a supplier/multi-sheet output is a **.zip** (Oracle FBDI bundle,
+  e.g. `PozSuppliersInt.zip`) but the client force-saved it as `Supplier Import.csv`,
+  so Excel saw ZIP bytes behind a `.csv` name and threw the recover-content dialog.
+- **Fix:** CORS now exposes `Content-Disposition` (prod is cross-origin, so the
+  browser was hiding the real filename from JS — `main.py`), and `OutputApi.download`
+  saves under the server's real filename/extension (`.zip`), passed name is fallback.
+- Same `.zip`-vs-`.csv` family mismatch had caused the download-all **409** — reuse
+  lookup now accepts the whole csv family (`csv`/`zip`), not an exact `.csv` match.
+
+### 9.3 Filled-in Oracle FBDI Excel templates (NEW output format, alongside CSV)
+- **What:** in addition to the headerless CSV bundle, the tool can now emit the
+  **real Oracle FBDI workbook filled in** (macros/instructions preserved) for
+  Supplier, BOM, Customer and Item. (Employee stays HDL `.dat` — no Excel FBDI
+  template exists for it.)
+- **`services/template_fill_service.py` (new):** opens the bundled workbook
+  (`keep_vba`), detects each sheet's header + first data row with the SAME logic as
+  `parsers/fbdi_parser.py` — **tabular** (Supplier/BOM/Customer: title/`* Required`/
+  header row 4/data row 5, cols from A) and **Oracle-transposed** (Item: col-A label
+  column Name/Description/Data Type/Technical Name, headers on the Name row from col
+  B, data below the metadata block, e.g. row 9), wipes the shipped sample rows, and
+  writes finalized per-sheet frames into the matching columns by normalised header.
+- **`services/output_service.py`:** `fmt="template"` materializes the source file
+  (`materialize_template_file` — disk or rehydrated from Mongo `FBDITemplateFile`),
+  builds finalized frames (no supplier reorder/END — the template owns column order),
+  fills, saves `<OracleName>.xlsm`; degrades to a fresh xlsx if no source file.
+- **Flows through** generate-output, generate-merged, generate-merged-all and
+  download-all (reuse family `template → {xlsm,xlsx}`); fmt query patterns widened to
+  `csv|xlsx|template`.
+- **Frontend:** per-conversion **Excel** button + **"Download all (Excel templates)"**
+  / "Filled Excel templates (.zip)"; `OutputApi` fmt widened to include `template`.
+- Minor: openpyxl drops one decorative WMF image on save (macros/data intact).
+
+### 9.4 Tests & documentation (deliverables)
+- **`backend/tests/test_conversion_workbench.py` (new):** one consolidated,
+  dependency-light pytest suite (no DB/network) — template fill (both layouts),
+  supplier FBDI layout/END/naming, merge/dedup + survivorship, DQ cleanse/validate.
+  Runs via pytest or `python3 …`. 11/11 pass. (Plus `tests/test_template_fill.py`.)
+- **`docs/Conversion_Workbench_User_Guide.docx`** — end-to-end user guide.
+- **`docs/Conversion_Workbench_Feature_List.docx`** — feature catalogue with a
+  separate **Part 2 — AI-powered features** table (feature / what the AI does /
+  deterministic fallback) covering: AI Auto-Map, candidate vetting, value crosswalks,
+  control-default inference, plain-English steering, NL rule authoring, fill-blanks,
+  AI-drafted DQ rules, AI DQ review, load-error remediation, reconciliation narrative,
+  Copilot. `.gitignore` excludes the doc-gen scratch (`docs/node_modules`,
+  `docs/_gen_docs.js`, `docs/_preview`, generated PDFs).
+
+### 9.5 Key files touched this session
+- Backend: `routers/operations.py`, `services/output_service.py`,
+  `services/template_fill_service.py` (new), `main.py` (CORS expose header),
+  `tests/test_conversion_workbench.py` (new), `tests/test_template_fill.py` (new).
+- Frontend: `api/index.ts`, `pages/ProjectOverviewPage.tsx`.
+- Docs: two `.docx` deliverables + this handoff; `.gitignore`.
+
+### 9.6 Continue-here checklist
+1. **Deploy:** run `launch_git.bat` (message already set for the filled-template
+   feature). Backend + frontend redeploy on push.
+2. **Verify live** on a multi-source project: Download-all returns one merged file
+   per interface (fast, background-generated); a single FBDI download opens cleanly
+   as `.zip`; "Download all (Excel templates)" and the per-row Excel button produce
+   populated Oracle workbooks (Supplier `POZ_SUPPLIERS_INT` merged eBOS+NetSuite,
+   BOM, Customer, Item) with data in the right sheet/rows and samples removed.
+3. **Watch memory** on very wide filled templates (Customer 19 sheets / Item 18) —
+   fill runs in the background; if a small instance OOMs, cap rows or stream.
