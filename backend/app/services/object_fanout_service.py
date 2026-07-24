@@ -143,17 +143,26 @@ def _find_template_for_step(step: dict, templates: list[FBDITemplate],
 
 
 async def generate_object_template_set(
-    project_id: str, dataset_id: str, object_type: str,
+    project_id: str, dataset_id, object_type: str,
 ) -> dict:
-    """Fan a single dataset out to every FBDI template its object type needs."""
+    """Fan source file(s) out to every FBDI template its object type needs.
+
+    ``dataset_id`` may be a single id (back-compat) or a list of ids in PRIORITY
+    order. Every created conversion is bound to ALL of them (``dataset_ids``) so
+    Generate merges + de-duplicates the sources into one output; the first is the
+    primary used for naming/idempotency."""
     key = resolve_object_key(object_type)
     if not key:
         return {"error": f"Unknown conversion object type: {object_type!r}",
                 "created": [], "missing": [], "existing": []}
 
-    dataset = await Dataset.get(PydanticObjectId(dataset_id))
-    if not dataset:
+    raw_ids = dataset_id if isinstance(dataset_id, (list, tuple)) else [dataset_id]
+    ds_oids = [PydanticObjectId(str(x)) for x in raw_ids if x]
+    datasets = [d for d in [await Dataset.get(x) for x in ds_oids] if d]
+    if not datasets:
         return {"error": "Dataset not found", "created": [], "missing": [], "existing": []}
+    dataset = datasets[0]                       # primary (naming + idempotency)
+    all_ds_ids = [d.id for d in datasets]
 
     templates = await FBDITemplate.find_all().to_list()
     steps = OBJECT_TEMPLATE_CATALOG[key]
@@ -193,6 +202,7 @@ async def generate_object_template_set(
             project_id=PydanticObjectId(project_id),
             name=f"{dataset.name} → {step['label']}",
             dataset_id=dataset.id,
+            dataset_ids=all_ds_ids,
             template_id=tpl.id,
             target_object=step["object"],
             planned_load_order=i,

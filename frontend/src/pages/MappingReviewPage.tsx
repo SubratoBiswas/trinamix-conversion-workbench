@@ -427,7 +427,14 @@ export const MappingReviewPage: React.FC = () => {
       }, headerOn);
       const fallback = `${(project?.target_object || project?.name || "fbdi").replace(/[^\w.-]+/g, "_")}.csv`;
       await OutputApi.download(pid, out.file_name || fallback);
-      flash("FBDI output generated and downloaded.");
+      const dq = out.dq_report;
+      if (dq && (dq.error_count || dq.warning_count || dq.cleansing_fix_count)) {
+        flash(`Downloaded. Data quality: ${dq.cleansing_fix_count} cleansing fix(es), ` +
+          `${dq.error_count} error(s)` + (dq.hard_error_count ? ` (${dq.hard_error_count} hard)` : "") +
+          `, ${dq.warning_count} warning(s).`);
+      } else {
+        flash("FBDI output generated and downloaded.");
+      }
     } catch (e: any) {
       flash(e?.message || e?.response?.data?.detail || "Failed to generate output");
     } finally { setGenerating(false); }

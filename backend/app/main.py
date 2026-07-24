@@ -37,6 +37,7 @@ from app.routers import copilot as copilot_router
 from app.routers import fusion as fusion_router
 from app.routers import settings as settings_router
 from app.routers import clients as clients_router
+from app.routers import dq_rules as dq_rules_router
 
 
 async def _run_seeds_background() -> None:
@@ -259,5 +260,6 @@ app.include_router(cutover_slice6_router.router)
 app.include_router(copilot_router.router)
 app.include_router(settings_router.router)
 app.include_router(clients_router.router)
+app.include_router(dq_rules_router.router)
 app.include_router(fusion_router.router)
 app.include_router(fusion_router.conv_router)

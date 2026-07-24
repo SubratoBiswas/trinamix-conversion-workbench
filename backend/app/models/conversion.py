@@ -1,6 +1,6 @@
 """Conversion model."""
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from beanie import Document, PydanticObjectId
 from pydantic import Field
 
@@ -13,7 +13,15 @@ class Conversion(Document):
     project_id: PydanticObjectId
     name: str
     description: Optional[str] = None
+    # Primary source (compatibility): the first/only source file. Kept so all the
+    # existing single-source code keeps working unchanged.
     dataset_id: Optional[PydanticObjectId] = None
+    # Multi-source: a module/target object can be fed by SEVERAL source files
+    # (NetSuite, EBS, …). Each is converted individually (per-source preview); at
+    # Generate the converted frames are merged + de-duplicated into one output.
+    # Ordered by SOURCE PRIORITY — earlier entries win on a natural-key clash.
+    # dataset_id always mirrors dataset_ids[0] so legacy reads stay correct.
+    dataset_ids: List[PydanticObjectId] = Field(default_factory=list)
     template_id: Optional[PydanticObjectId] = None
     target_object: Optional[str] = None
     planned_load_order: int = 100
@@ -34,6 +42,14 @@ class Conversion(Document):
     created_by: str = "admin"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def source_dataset_ids(self) -> List[PydanticObjectId]:
+        """Effective ordered source datasets (priority order). Prefers the
+        multi-source list; falls back to the single dataset_id for legacy rows."""
+        if self.dataset_ids:
+            return list(self.dataset_ids)
+        return [self.dataset_id] if self.dataset_id else []
 
     class Settings:
         name = "conversions"

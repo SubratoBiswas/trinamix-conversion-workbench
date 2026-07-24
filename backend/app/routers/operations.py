@@ -116,7 +116,8 @@ async def generation_status(conversion_id: str, _: User = Depends(get_current_us
         ).sort("-generated_at").first_or_none()
         if latest:
             out = {"id": str(latest.id), "file_name": latest.output_file_name,
-                   "row_count": latest.row_count, "column_count": latest.column_count}
+                   "row_count": latest.row_count, "column_count": latest.column_count,
+                   "dq_report": getattr(latest, "dq_report", None)}
     return {"status": status, "error": c.output_error, "output": out}
 
 
@@ -131,6 +132,23 @@ async def output_preview(
     if not c.template_id or (not is_ebs and not c.dataset_id):
         raise HTTPException(400, "Conversion is not fully bound")
     return await get_output_preview(c, limit=limit)
+
+
+@output_router.get("/{conversion_id}/output-preview-by-source")
+async def output_preview_by_source(
+    conversion_id: str,
+    limit: int = 50,
+    _: User = Depends(get_current_user),
+):
+    """Per-source converted preview (multi-source): one block per source file,
+    each converted individually. The merged, de-duplicated output is produced at
+    Generate. Single-source/EBS conversions return one block."""
+    c = await _require_conversion(conversion_id)
+    is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+    if not c.template_id or (not is_ebs and not c.dataset_id):
+        raise HTTPException(400, "Conversion is not fully bound")
+    from app.services.output_service import get_output_preview_by_source
+    return await get_output_preview_by_source(c, limit=limit)
 
 
 @output_router.get("/{conversion_id}/outputs", response_model=list[ConvertedOutputOut])

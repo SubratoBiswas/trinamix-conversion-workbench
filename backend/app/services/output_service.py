@@ -140,27 +140,24 @@ def _transform_frame(
     return pd.DataFrame(out_cols), lineage
 
 
+from app.services.merge_dedupe import merge_dedupe as _merge_dedupe  # noqa: E402
+
+
+def _merge_dedupe_frames(frames: list[pd.DataFrame], target_object: str | None) -> pd.DataFrame:
+    """Converge per-source converted frames into one, de-duplicated by the object's
+    natural business key with source priority. Delegates to the unit-tested
+    merge_dedupe module, passing the natural-key registry."""
+    return _merge_dedupe(frames, target_object, REFERENCE_KEY_FIELDS)
+
+
 async def build_converted_dataframe(
     conversion: Conversion, max_rows: int | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
-    # Source rows come from the uploaded file (dataset mode) or are streamed
-    # live from Oracle EBS (EBS mode — dataset_id is null). The column names in
-    # either DataFrame match the mappings' source_column values. ``max_rows`` caps
-    # the work for previews (only the shown rows are generated).
-    if conversion.dataset_id:
-        dataset = await Dataset.get(conversion.dataset_id)
-        from app.services.dataset_file_store import materialize_dataset_file
-        src_path = await materialize_dataset_file(dataset) if dataset else None
-        if src_path is None:
-            raise ValueError("Dataset source file not found; please re-upload the dataset")
-        src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
-    else:
-        from app.services.mapping_service import ebs_fetch_rows
-        table = getattr(conversion, "ebs_table_hint", "") or ""
-        rows = await ebs_fetch_rows(table) if table else []
-        src = pd.DataFrame(rows)
-        if max_rows:
-            src = src.head(max_rows)
+    # Source rows come from the uploaded file(s) (dataset mode) or are streamed
+    # live from Oracle EBS (EBS mode — no dataset). A module/target object can now
+    # be fed by SEVERAL source files (priority order): each is converted with the
+    # same mappings, then the converted frames are merged + de-duplicated into one.
+    # ``max_rows`` caps the work for previews (only the shown rows are generated).
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     mappings = await MappingSuggestion.find(MappingSuggestion.conversion_id == conversion.id).to_list()
@@ -193,14 +190,7 @@ async def build_converted_dataframe(
             _ref_from_sugg |= _rule_referenced_columns(
                 [{"rule_type": _st.get("rule_type"), "config": _st.get("config", {})}]
             )
-    try:
-        needed_src = {m.source_column for m in mappings if m.source_column} | _ref_from_sugg
-        if needed_src and len(src.columns) > len(needed_src) + 4:
-            keep = [c for c in src.columns if c in needed_src]
-            if keep:
-                src = src[keep].copy()
-    except Exception:  # noqa: BLE001 — pruning is an optimization, never fatal
-        pass
+    needed_src = {m.source_column for m in mappings if m.source_column} | _ref_from_sugg
 
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
     fields_by_id = {f.id: f for f in fields}
@@ -217,41 +207,85 @@ async def build_converted_dataframe(
             )
 
     # Extra per-row context columns for rule evaluation: suggested-transform refs
-    # (kept above) plus any referenced by explicit transformation-rule pipelines.
+    # plus any referenced by explicit transformation-rule pipelines.
     _ctx_cols: set[str] = set(_ref_from_sugg)
     for _rules in pipelines.values():
         _ctx_cols |= _rule_referenced_columns(_rules)
 
     # Order mappings by target field sequence once (metadata — cheap, row-count
     # independent). The heavy per-column transform runs on row CHUNKS in a worker
-    # thread (asyncio.to_thread) so it (a) never blocks the event loop / other
-    # requests and (b) keeps peak memory bounded to one chunk's worth of the
-    # per-row context + column caches on wide/tall extracts. The transform is
-    # row-local, so chunk-then-concat is byte-identical to a single pass.
+    # thread (asyncio.to_thread) so it never blocks the event loop and peak memory
+    # stays bounded to one chunk. The transform is row-local, so chunk-then-concat
+    # is byte-identical to a single pass.
     sorted_mappings = sorted(
         mappings,
         key=lambda m: (fields_by_id.get(m.target_field_id).sequence if fields_by_id.get(m.target_field_id) else 0),
     )
-    n_total = len(src)
-    if n_total <= _TRANSFORM_CHUNK_ROWS:
-        out_df, lineage = await asyncio.to_thread(
-            _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols
-        )
-    else:
+
+    async def _convert_source(src: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+        """Prune to the mapped/referenced columns, then chunk-transform ONE source
+        frame into the target field-keyed output frame."""
+        try:
+            if needed_src and len(src.columns) > len(needed_src) + 4:
+                keep = [c for c in src.columns if c in needed_src]
+                if keep:
+                    src = src[keep].copy()
+        except Exception:  # noqa: BLE001 — pruning is an optimization, never fatal
+            pass
+        n_total = len(src)
+        if n_total <= _TRANSFORM_CHUNK_ROWS:
+            return await asyncio.to_thread(
+                _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols)
         parts: list[pd.DataFrame] = []
-        lineage = {}
+        lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
-            odf, lin = await asyncio.to_thread(_transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols)
+            odf, lin = await asyncio.to_thread(
+                _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols)
             parts.append(odf)
+            if not lin0:
+                lin0 = lin
+        return (pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]), lin0
+
+    lineage: dict = {}
+    source_ids = conversion.source_dataset_ids
+    if source_ids:
+        from app.services.dataset_file_store import materialize_dataset_file
+        frames: list[pd.DataFrame] = []
+        for did in source_ids:
+            dataset = await Dataset.get(did)
+            src_path = await materialize_dataset_file(dataset) if dataset else None
+            if src_path is None:
+                if len(source_ids) == 1:
+                    raise ValueError("Dataset source file not found; please re-upload the dataset")
+                continue  # skip an unreadable secondary source rather than fail the merge
+            src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
+            odf, lin = await _convert_source(src)
+            frames.append(odf)
             if not lineage:
                 lineage = lin
-        out_df = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
+        if not frames:
+            raise ValueError("No readable source files for this conversion")
+        if len(frames) == 1:
+            out_df = frames[0]
+        else:
+            # Multi-source: converge the per-source outputs, then de-duplicate by
+            # the object's natural business key with SOURCE PRIORITY (earlier source
+            # wins). Master objects (unique key per source) dedupe on the key; child
+            # interfaces (many rows per entity) fall back to exact-row de-dup only.
+            obj = (template.business_object if template else None) or conversion.target_object
+            out_df = _merge_dedupe_frames(frames, obj)
+    else:
+        from app.services.mapping_service import ebs_fetch_rows
+        table = getattr(conversion, "ebs_table_hint", "") or ""
+        rows = await ebs_fetch_rows(table) if table else []
+        src = pd.DataFrame(rows)
+        if max_rows:
+            src = src.head(max_rows)
+        out_df, lineage = await _convert_source(src)
 
-    # Coded (LOV) columns last, on the assembled frame: rewrite every value Oracle
-    # would reject into the code it actually accepts. Run here rather than per
-    # chunk so the audit counts distinct values across the whole file. Still
-    # row-local, so it stays chunk-safe and byte-identical.
+    # Coded (LOV) columns last, on the assembled (merged) frame so the audit counts
+    # distinct values across the whole file. Row-local, so it stays chunk-safe.
     if fields:
         lov_report = await asyncio.to_thread(enforce_coded_values, out_df, fields)
         for fname, rep in lov_report.items():
@@ -549,6 +583,31 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         FBDISheet.template_id == template.id
     ).sort(+FBDISheet.sequence).to_list() if template else []
 
+    # --- Generate-time data quality on the MERGED frame: cleanse + validate ---
+    # Cleansing (universal trim + custom cleansing rules) is applied to df so the
+    # written file carries the cleaned values; validation (built-in FBDI checks +
+    # custom validation rules) produces an advisory issues report attached to the
+    # artifact. Runs off the event loop; never blocks file generation.
+    dq_report = None
+    try:
+        from app.services.generate_dq import apply_cleansing, validate_frame, build_report
+        from app.services.dq_rule_service import load_rules
+        from app.services.client_service import client_id_for_conversion
+        _dq_obj = (template.business_object if template else None) or (conversion.target_object or "")
+        _cid = await client_id_for_conversion(conversion)
+        _cleanse_rules = await load_rules(_dq_obj, _cid, "cleansing")
+        _val_rules = await load_rules(_dq_obj, _cid, "validation")
+        df, _dq_fixes = await asyncio.to_thread(apply_cleansing, df, _cleanse_rules)
+        _tf = [{"field_name": f.field_name, "required": bool(f.required),
+                "data_type": f.data_type, "max_length": f.max_length,
+                "format_mask": f.format_mask} for f in fields]
+        _dq_issues = await asyncio.to_thread(validate_frame, df, _tf, _val_rules, 2000)
+        dq_report = build_report(_dq_issues, _dq_fixes)
+    except Exception:  # noqa: BLE001 — DQ is advisory; never block generation
+        import logging as _lg
+        _lg.getLogger(__name__).exception("generate DQ step failed")
+        dq_report = None
+
     # Group fields by their interface sheet (preserving field sequence).
     fields_by_sheet: dict[Any, list] = {}
     for f in fields:
@@ -820,7 +879,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     artefact = ConvertedOutput(
         conversion_id=conversion.id, output_file_path=str(out_path),
         output_file_name=out_name, row_count=total_rows, column_count=total_cols,
-        status="generated",
+        status="generated", dq_report=dq_report,
     )
     await artefact.insert()
     await conversion.set({"status": "output_generated", "updated_at": datetime.utcnow()})
@@ -863,3 +922,53 @@ async def get_output_preview(conversion: Conversion, limit: int = 50) -> dict[st
             total = int(ds.row_count)  # true dataset size, not the capped preview
     return {"columns": list(head.columns.astype(str)), "rows": head.fillna("").to_dict(orient="records"),
             "total_rows": total, "lineage": lineage}
+
+
+async def get_output_preview_by_source(conversion: Conversion, limit: int = 50) -> dict[str, Any]:
+    """Per-source converted preview: convert EACH source file individually (the same
+    way it will be converted before the merge) and return one preview block per
+    source. The single merged/de-duplicated output is only produced at Generate; this
+    lets the analyst see what each source contributes. Falls back to one block for a
+    single-source or EBS conversion."""
+    ids = conversion.source_dataset_ids
+    _tpl = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+    _obj = ((_tpl.business_object if _tpl else None) or getattr(conversion, "target_object", "") or "")
+    is_supplier = "supplier" in _obj.lower()
+
+    if len(ids) <= 1:
+        p = await get_output_preview(conversion, limit=limit)
+        nm = None
+        if ids:
+            ds = await Dataset.get(ids[0])
+            nm = ds.name if ds else None
+        return {"multi": False, "sources": [{"source_id": (str(ids[0]) if ids else None),
+                                             "source_name": nm, **p}]}
+
+    # Convert each source in isolation by temporarily pointing the (in-memory only)
+    # conversion at one dataset at a time. Never persisted; restored in finally.
+    orig_ids = list(conversion.dataset_ids)
+    orig_single = conversion.dataset_id
+    sources: list[dict] = []
+    try:
+        for did in ids:
+            conversion.dataset_ids = [did]
+            conversion.dataset_id = did
+            df, lineage = await build_converted_dataframe(conversion, max_rows=limit)
+            head = df.head(limit)
+            if is_supplier:
+                try:
+                    head = _mask_supplier_emails(head.copy())
+                except Exception:  # noqa: BLE001
+                    pass
+            ds = await Dataset.get(did)
+            total = int(ds.row_count) if (ds and ds.row_count) else int(len(df))
+            sources.append({
+                "source_id": str(did), "source_name": ds.name if ds else None,
+                "columns": list(head.columns.astype(str)),
+                "rows": head.fillna("").to_dict(orient="records"),
+                "total_rows": total, "lineage": lineage,
+            })
+    finally:
+        conversion.dataset_ids = orig_ids
+        conversion.dataset_id = orig_single
+    return {"multi": True, "sources": sources}

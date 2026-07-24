@@ -28,6 +28,7 @@ async def init_db() -> None:
     from app.models.learned import LearnedMapping
     from app.models.mapping_proposal import MappingProposal
     from app.models.candidate_verdict import CandidateVerdict
+    from app.models.dq_rule import DataQualityRule
     from app.models.transformation import TransformationRule, Crosswalk
     from app.models.output import ConvertedOutput
     from app.models.workflow import Workflow

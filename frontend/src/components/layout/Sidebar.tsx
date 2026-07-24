@@ -60,6 +60,7 @@ const GROUPS: NavGroup[] = [
       { to: "/learning", label: "Learning Center", icon: BookOpen },
       { to: "/mapping-documents", label: "Mapping Documents", icon: FileSpreadsheet },
       { to: "/rules", label: "Rule Library", icon: Library },
+      { to: "/dq-rules", label: "Validation & Cleansing", icon: ShieldCheck },
       { to: "/crosswalks", label: "Crosswalk Library", icon: ArrowLeftRight },
     ],
   },

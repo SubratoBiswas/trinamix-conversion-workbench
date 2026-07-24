@@ -287,8 +287,9 @@ export const ConversionsApi = {
     api.get<{ object_types: { key: string; label: string; step_count: number; steps: { label: string; load_order: number }[] }[] }>(
       "/conversions/object-types"
     ).then(r => r.data.object_types),
-  /** One dataset -> all FBDI templates for the object type (Req 1). */
-  generateSet: (body: { project_id: string; dataset_id: string; object_type: string }) =>
+  /** Source file(s) -> all FBDI templates for the object type. Accepts a single
+   *  dataset_id or multiple dataset_ids (priority order) for a merged output. */
+  generateSet: (body: { project_id: string; dataset_id?: string; dataset_ids?: string[]; object_type: string }) =>
     api.post<{
       object_type: string;
       created: { label: string; template: string; conversion_id?: string; load_order: number }[];
@@ -297,6 +298,10 @@ export const ConversionsApi = {
       resolved_count: number;
       total_steps: number;
     }>("/conversions/generate-set", body).then(r => r.data),
+  /** Manage a conversion's multi-source list (priority order). mode: append | replace. */
+  setSources: (conversionId: string, datasetIds: string[], mode: "append" | "replace" = "append") =>
+    api.put<Conversion>(`/conversions/${conversionId}/sources`,
+      { dataset_ids: datasetIds, mode }).then(r => r.data),
   /** Phase 2 learning: derive source->target mappings + constant defaults from a
    *  populated example output, and/or apply a plain-text steering prompt. */
   learnFromExample: (conversionId: string, opts: { file?: File; prompt?: string }) => {
@@ -514,6 +519,31 @@ export const QualityApi = {
     api.get<ValidationIssue[]>(`/conversions/${conversionId}/validation-issues`).then(r => r.data),
 };
 
+export interface DqReport {
+  error_count: number;
+  warning_count: number;
+  hard_error_count: number;
+  blocked: boolean;
+  cleansing_fix_count: number;
+  cleansing_fixes: { field: string; rule: string; count: number }[];
+  top_issues: { field_name?: string; issue_type?: string; severity?: string; message?: string }[];
+}
+
+export interface DqRule {
+  id: string;
+  kind: "validation" | "cleansing";
+  target_object: string;
+  field?: string | null;
+  rule_type: string;
+  params: Record<string, any>;
+  severity: string;
+  description?: string | null;
+  source: string;
+  active: boolean;
+  is_global: boolean;
+  client_id?: string | null;
+}
+
 export const OutputApi = {
   /** Kick off generation (async by default) — returns immediately with status.
    *  includeHeader: undefined = auto (supplier headerless, others with header);
@@ -527,7 +557,8 @@ export const OutputApi = {
     api.get<{
       status: "idle" | "generating" | "ready" | "failed";
       error?: string | null;
-      output?: { id: string; file_name: string; row_count: number; column_count: number } | null;
+      output?: { id: string; file_name: string; row_count: number; column_count: number;
+                 dq_report?: DqReport | null } | null;
     }>(`/conversions/${conversionId}/generation-status`).then(r => r.data),
   /** Start generation, then poll until it's ready or fails. Returns the artifact
    *  info on success; throws with the backend error message on failure. Heavy
@@ -538,7 +569,7 @@ export const OutputApi = {
     fmt: "csv" | "xlsx" = "csv",
     onTick?: (elapsedSec: number) => void,
     includeHeader?: boolean,
-  ): Promise<{ id: string; file_name: string; row_count: number; column_count: number }> => {
+  ): Promise<{ id: string; file_name: string; row_count: number; column_count: number; dq_report?: DqReport | null }> => {
     await api.post(`/conversions/${conversionId}/generate-output`, null,
       { params: { fmt, ...(includeHeader === undefined ? {} : { include_header: includeHeader }) } });
     const start = Date.now();
@@ -557,6 +588,11 @@ export const OutputApi = {
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: string, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
+  /** Per-source converted preview (multi-source): one block per source file. */
+  previewBySource: (conversionId: string, limit = 50) =>
+    api.get<{ multi: boolean; sources: { source_id: string | null; source_name: string | null;
+      columns: string[]; rows: Record<string, any>[]; total_rows: number }[] }>(
+      `/conversions/${conversionId}/output-preview-by-source`, { params: { limit } }).then(r => r.data),
   downloadUrl: (conversionId: string) => `/api/conversions/${conversionId}/download-output`,
   download: async (conversionId: string, filename = "output.csv") => {
     const response = await api.get(`/conversions/${conversionId}/download-output`, {
@@ -1085,3 +1121,29 @@ export const Slice6Api = {
 
 // === COAApi alias (some pages import COAApi, others import CoaApi) =============
 export { CoaApi as COAApi };
+
+// === Validation & Cleansing rules (scoped by FBDI object + client) ============
+export const DqRulesApi = {
+  list: (params?: { target_object?: string; kind?: string; client_id?: string }) =>
+    api.get<{ rules: DqRule[]; count: number }>("/dq-rules", { params }).then(r => r.data),
+  create: (body: Partial<DqRule> & { kind: string; target_object: string; rule_type: string }) =>
+    api.post<DqRule>("/dq-rules", body).then(r => r.data),
+  update: (id: string, body: Partial<DqRule>) =>
+    api.patch<DqRule>(`/dq-rules/${id}`, body).then(r => r.data),
+  remove: (id: string) => api.delete(`/dq-rules/${id}`).then(r => r.data),
+  extract: (body: { target_object: string; template_id: string; client_id?: string }) =>
+    api.post<{ target_object: string; created: number; skipped: number }>(
+      "/dq-rules/extract", body).then(r => r.data),
+  upload: (opts: { kind: string; target_object: string; file: File; is_global?: boolean; client_id?: string }) => {
+    const fd = new FormData();
+    fd.append("file", opts.file);
+    return api.post<{ created: number; kind: string; target_object: string }>(
+      "/dq-rules/upload", fd,
+      { params: { kind: opts.kind, target_object: opts.target_object, is_global: !!opts.is_global,
+                  ...(opts.client_id ? { client_id: opts.client_id } : {}) } }).then(r => r.data);
+  },
+  exportUrl: (params?: { target_object?: string; kind?: string }) => {
+    const q = new URLSearchParams(params as any).toString();
+    return `/api/dq-rules/export${q ? "?" + q : ""}`;
+  },
+};

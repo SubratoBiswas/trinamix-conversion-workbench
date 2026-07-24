@@ -36,6 +36,7 @@ import { AuditPage } from "@/pages/AuditPage";
 import { LearningCenterPage } from "@/pages/LearningCenterPage";
 import { RuleLibraryPage } from "@/pages/RuleLibraryPage";
 import { MappingDocumentsPage } from "@/pages/MappingDocumentsPage";
+import { DataQualityRulesPage } from "@/pages/DataQualityRulesPage";
 import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
@@ -97,6 +98,7 @@ const App: React.FC = () => {
         {/* Quality */}
         <Route path="cleansing"              element={<CleansingPage />} />
         <Route path="validation"             element={<ValidationPage />} />
+        <Route path="dq-rules"               element={<DataQualityRulesPage />} />
 
         {/* Load Management */}
         <Route path="load"                   element={<LoadDashboardPage />} />

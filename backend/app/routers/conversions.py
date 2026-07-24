@@ -62,13 +62,35 @@ async def _auto_map(conversion_id) -> None:
 router = APIRouter(prefix="/api/conversions", tags=["conversions"])
 
 
+def _coerce_sources(data: dict) -> None:
+    """Normalise source binding in-place for create/update. Accepts either a
+    single ``dataset_id`` or a ``dataset_ids`` list (priority order) and keeps them
+    consistent: ``dataset_ids`` is the canonical multi-source list and
+    ``dataset_id`` always mirrors its first entry so single-source code still works."""
+    if data.get("dataset_ids") is not None:
+        ids = [PydanticObjectId(x) for x in (data.get("dataset_ids") or []) if x]
+        data["dataset_ids"] = ids
+        data["dataset_id"] = ids[0] if ids else None
+    elif data.get("dataset_id"):
+        did = PydanticObjectId(data["dataset_id"])
+        data["dataset_id"] = did
+        data["dataset_ids"] = [did]
+
+
 async def _hydrate(c: Conversion) -> ConversionOut:
     """Hydrate a single conversion (used for create/update responses)."""
     data = {**c.model_dump(), "id": str(c.id), "project_id": str(c.project_id)}
-    if c.dataset_id:
-        data["dataset_id"] = str(c.dataset_id)
-        ds = await Dataset.get(c.dataset_id)
-        data["dataset_name"] = ds.name if ds else None
+    ids = c.source_dataset_ids
+    data["dataset_ids"] = [str(x) for x in ids]
+    names: list[str] = []
+    if ids:
+        data["dataset_id"] = str(ids[0])
+        for did in ids:
+            ds = await Dataset.get(did)
+            if ds:
+                names.append(ds.name)
+        data["dataset_name"] = names[0] if names else None
+    data["dataset_names"] = names
     if c.template_id:
         data["template_id"] = str(c.template_id)
         tmpl = await FBDITemplate.get(c.template_id)
@@ -83,9 +105,9 @@ async def _hydrate_bulk(convs: list[Conversion]) -> list[ConversionOut]:
     if not convs:
         return []
 
-    # Collect unique IDs
+    # Collect unique IDs (include every source in a multi-source conversion)
     project_ids = list({c.project_id for c in convs})
-    dataset_ids = list({c.dataset_id for c in convs if c.dataset_id})
+    dataset_ids = list({d for c in convs for d in c.source_dataset_ids})
     template_ids = list({c.template_id for c in convs if c.template_id})
 
     # Bulk fetch in 3 queries instead of 3*N
@@ -100,10 +122,13 @@ async def _hydrate_bulk(convs: list[Conversion]) -> list[ConversionOut]:
     results = []
     for c in convs:
         data = {**c.model_dump(), "id": str(c.id), "project_id": str(c.project_id)}
-        if c.dataset_id:
-            data["dataset_id"] = str(c.dataset_id)
-            ds = ds_map.get(c.dataset_id)
-            data["dataset_name"] = ds.name if ds else None
+        ids = c.source_dataset_ids
+        data["dataset_ids"] = [str(x) for x in ids]
+        names = [ds_map[d].name for d in ids if d in ds_map]
+        if ids:
+            data["dataset_id"] = str(ids[0])
+            data["dataset_name"] = names[0] if names else None
+        data["dataset_names"] = names
         if c.template_id:
             data["template_id"] = str(c.template_id)
             tmpl = tpl_map.get(c.template_id)
@@ -123,7 +148,8 @@ async def list_object_types(_: User = Depends(get_current_user)):
 
 class GenerateSetRequest(BaseModel):
     project_id: str
-    dataset_id: str
+    dataset_id: Optional[str] = None            # single-source (back-compat)
+    dataset_ids: Optional[list[str]] = None     # multi-source (priority order)
     object_type: str
 
 
@@ -133,18 +159,23 @@ async def generate_object_set(
     background_tasks: BackgroundTasks,
     _: User = Depends(get_current_user),
 ):
-    """One dataset -> all FBDI templates for the object type (Req 1).
+    """Source file(s) -> all FBDI templates for the object type (Req 1).
 
-    Creates one auto-mapped conversion per resolved template, sets the load
-    order, chains the load-sequence dependencies, and reports any template the
-    object needs that isn't seeded yet.
+    Creates one auto-mapped conversion per resolved template, each bound to ALL
+    the given source files (priority order) so Generate merges them into one
+    output. Sets the load order, chains load-sequence dependencies, and reports any
+    template the object needs that isn't seeded yet.
     """
     from app.services.object_fanout_service import generate_object_template_set
     proj = await Project.get(PydanticObjectId(payload.project_id))
     if not proj:
         raise HTTPException(400, f"Project {payload.project_id} does not exist")
+    ds_ids = payload.dataset_ids or ([payload.dataset_id] if payload.dataset_id else [])
+    ds_ids = [d for d in ds_ids if d]
+    if not ds_ids:
+        raise HTTPException(400, "Provide dataset_id or dataset_ids")
     result = await generate_object_template_set(
-        payload.project_id, payload.dataset_id, payload.object_type
+        payload.project_id, ds_ids, payload.object_type
     )
     if result.get("error"):
         raise HTTPException(400, result["error"])
@@ -241,8 +272,7 @@ async def create_conversion(
         raise HTTPException(400, f"Project {payload.project_id} does not exist")
     data = payload.model_dump(exclude_unset=True)
     data["project_id"] = PydanticObjectId(payload.project_id)
-    if data.get("dataset_id"):
-        data["dataset_id"] = PydanticObjectId(data["dataset_id"])
+    _coerce_sources(data)  # dataset_ids <-> dataset_id (priority order)
     if data.get("template_id"):
         data["template_id"] = PydanticObjectId(data["template_id"])
     data["created_by"] = user.email
@@ -268,14 +298,48 @@ async def update_conversion(
     if not c:
         raise HTTPException(404, "Conversion not found")
     update_data = payload.model_dump(exclude_unset=True)
-    if "dataset_id" in update_data and update_data["dataset_id"]:
-        update_data["dataset_id"] = PydanticObjectId(update_data["dataset_id"])
+    _coerce_sources(update_data)  # dataset_ids <-> dataset_id (priority order)
     if "template_id" in update_data and update_data["template_id"]:
         update_data["template_id"] = PydanticObjectId(update_data["template_id"])
     update_data["updated_at"] = datetime.utcnow()
     await c.set(update_data)
     await c.sync()
     if c.dataset_id and c.template_id:
+        background_tasks.add_task(_auto_map, c.id)
+    return await _hydrate(c)
+
+
+class SourcesIn(BaseModel):
+    dataset_ids: list[str]
+    mode: str = "append"   # "append" adds to the priority list; "replace" sets it
+
+
+@router.put("/{conversion_id}/sources", response_model=ConversionOut)
+async def set_conversion_sources(
+    conversion_id: str,
+    body: SourcesIn,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(get_current_user),
+):
+    """Manage the multi-source list for a conversion (priority order). ``append``
+    adds datasets (de-duplicated, order preserved); ``replace`` sets the whole list.
+    dataset_id stays mirrored to the first entry. Re-triggers auto-map."""
+    c = await Conversion.get(PydanticObjectId(conversion_id))
+    if not c:
+        raise HTTPException(404, "Conversion not found")
+    incoming = [PydanticObjectId(x) for x in body.dataset_ids if x]
+    if body.mode == "replace":
+        ids = incoming
+    else:
+        ids = list(c.source_dataset_ids)
+        for d in incoming:
+            if d not in ids:
+                ids.append(d)
+    await c.set({"dataset_ids": ids, "dataset_id": (ids[0] if ids else None),
+                 "source_type": "dataset" if ids else c.source_type,
+                 "updated_at": datetime.utcnow()})
+    await c.sync()
+    if c.template_id and ids:
         background_tasks.add_task(_auto_map, c.id)
     return await _hydrate(c)
 

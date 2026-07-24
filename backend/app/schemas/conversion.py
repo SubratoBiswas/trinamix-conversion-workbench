@@ -1,6 +1,6 @@
 """Conversion schemas."""
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -10,6 +10,7 @@ class ConversionCreate(BaseModel):
     description: Optional[str] = None
     target_object: Optional[str] = None
     dataset_id: Optional[str] = None
+    dataset_ids: Optional[List[str]] = None  # multi-source (priority order)
     template_id: Optional[str] = None
     planned_load_order: Optional[int] = 100
     status: Optional[str] = None
@@ -23,6 +24,7 @@ class ConversionUpdate(BaseModel):
     description: Optional[str] = None
     target_object: Optional[str] = None
     dataset_id: Optional[str] = None
+    dataset_ids: Optional[List[str]] = None  # multi-source (priority order)
     template_id: Optional[str] = None
     planned_load_order: Optional[int] = None
     status: Optional[str] = None
@@ -40,6 +42,7 @@ class ConversionOut(BaseModel):
     description: Optional[str] = None
     target_object: Optional[str] = None
     dataset_id: Optional[str] = None
+    dataset_ids: List[str] = []
     template_id: Optional[str] = None
     planned_load_order: int
     status: str
@@ -50,5 +53,6 @@ class ConversionOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     dataset_name: Optional[str] = None
+    dataset_names: List[str] = []          # names of all sources (priority order)
     template_name: Optional[str] = None
     project_name: Optional[str] = None
