@@ -926,25 +926,12 @@ export const MappingReviewPage: React.FC = () => {
             role="switch"
             aria-checked={headerOn}
             title={headerOn
-              ? "Header row INCLUDED — the output's first row is the column names. Click to exclude (Oracle FBDI load format is headerless)."
+              ? "Header row INCLUDED — the output's first row is the column names. Click to exclude (Oracle FBDI load files are headerless)."
               : "Header row EXCLUDED — data rows only (Oracle FBDI load format). Click to include column names as the first row."}
-            className={cn(
-              "flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors",
-              headerOn
-                ? "border-brand/40 bg-brand-subtle/40 text-brand-dark"
-                : "border-line bg-canvas text-ink-subtle",
-            )}
+            className={cn("btn-ghost !h-8", headerOn && "bg-brand-subtle text-brand-dark")}
           >
-            <span className={cn(
-              "relative inline-flex h-4 w-7 items-center rounded-full transition-colors",
-              headerOn ? "bg-brand" : "bg-line",
-            )}>
-              <span className={cn(
-                "inline-block h-3 w-3 transform rounded-full bg-white transition-transform",
-                headerOn ? "translate-x-3.5" : "translate-x-0.5",
-              )} />
-            </span>
-            <span>Header {headerOn ? "on" : "off"}</span>
+            <Table2 className="h-3.5 w-3.5" />
+            <span className="ml-1 text-xs">Header: {headerOn ? "on" : "off"}</span>
           </button>
 
           <Button
