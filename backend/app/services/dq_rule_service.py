@@ -154,8 +154,10 @@ async def ai_propose_rules(target_object: str, template_id, client_id, sample_da
     from app.config import settings
     from app.services.ai_settings import get_active_model
     api_key = getattr(settings, "ANTHROPIC_API_KEY", None)
+    model = get_active_model()
     proposals: list[dict] = []
     ai_used = False
+    dbg: dict = {"has_key": bool(api_key), "model": model}
     if api_key:
         try:
             import json as _json
@@ -178,14 +180,23 @@ async def ai_propose_rules(target_object: str, template_id, client_id, sample_da
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
                              "content-type": "application/json"},
-                    json={"model": get_active_model(), "max_tokens": 4000,
+                    json={"model": model, "max_tokens": 4000,
                           "messages": [{"role": "user", "content": prompt}]},
                 )
+                dbg["http_status"] = r.status_code
                 data = r.json()
+                if isinstance(data, dict) and data.get("type") == "error":
+                    dbg["api_error"] = str(data.get("error"))[:300]
                 text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                if not text:
+                    dbg["no_text"] = str(data)[:300]
                 m = text[text.find("{"): text.rfind("}") + 1]
-                doc = _json.loads(m)
-                for p in doc.get("proposals", []):
+                doc = _json.loads(m) if m else {"proposals": []}
+                _raw = doc.get("proposals", [])
+                dbg["raw_proposals"] = len(_raw)
+                dbg["dropped_types"] = sorted({str(p.get("rule_type", "")).upper() for p in _raw
+                                               if str(p.get("rule_type", "")).upper() not in (_VALID_TYPES | _CLEANSE_TYPES)})[:10]
+                for p in _raw:
                     rt = str(p.get("rule_type", "")).upper()
                     kind = str(p.get("kind", "validation")).lower()
                     if rt in (_VALID_TYPES | _CLEANSE_TYPES) and p.get("field"):
@@ -197,8 +208,9 @@ async def ai_propose_rules(target_object: str, template_id, client_id, sample_da
                 ai_used = bool(proposals)
         except Exception as exc:  # noqa: BLE001
             logger.warning("ai_propose_rules AI call failed: %s", exc)
+            dbg["exception"] = f"{type(exc).__name__}: {exc}"[:300]
 
     if not proposals:
         proposals = _deterministic_proposals(fields)
     return {"target_object": target_object, "ai_used": ai_used,
-            "proposal_count": len(proposals), "proposals": proposals}
+            "proposal_count": len(proposals), "proposals": proposals, "_debug": dbg}
