@@ -346,48 +346,15 @@ def _safe_sheet_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "sheet"
 
 
-def _norm_hdr(s: Any) -> str:
-    """Normalise a column header for order-matching: alphanumerics only, lower.
-    Reconciles cosmetic differences ('Supplier Name*' vs 'Supplier Name *',
-    'Remittance E-mail' vs 'Remittance E-Mail')."""
-    return re.sub(r"[^a-z0-9]", "", str(s).lower())
-
-
-# Analyst-authored supplier FBDI column SEQUENCE (ConvNXP_All.xlsm "Supplier
-# Import" tab). Each supplier primary interface sheet is reordered to this exact
-# extraction order, and every supplier CSV row gets a trailing "END"
-# record-terminator (Oracle's end-of-record marker). Loaded once, cached.
-_SUPPLIER_ORDER_FILE = Path(__file__).resolve().parent.parent / "data" / "supplier_fbdi_column_order.json"
-_SUPPLIER_COL_ORDER_CACHE: dict | None = None
-
-
-def _supplier_col_order() -> dict:
-    """{normalized interface sheet name -> ordered list of CSV headers}."""
-    global _SUPPLIER_COL_ORDER_CACHE
-    if _SUPPLIER_COL_ORDER_CACHE is None:
-        try:
-            doc = json.loads(_SUPPLIER_ORDER_FILE.read_text(encoding="utf-8"))
-            _SUPPLIER_COL_ORDER_CACHE = doc.get("order", doc) or {}
-        except Exception:  # noqa: BLE001 — missing/invalid file just disables reorder
-            _SUPPLIER_COL_ORDER_CACHE = {}
-    return _SUPPLIER_COL_ORDER_CACHE
-
-
-# Analyst (Tejaswi) Oracle FBDI file-naming spec for supplier loads: the zip name
-# per entity (keyed by the primary interface sheet) and each CSV's exact name
-# (keyed by interface sheet). Supplier CSVs are HEADERLESS (data only, END last).
-_SUPPLIER_NAMES_FILE = Path(__file__).resolve().parent.parent / "data" / "supplier_fbdi_file_names.json"
-_SUPPLIER_NAMES_CACHE: dict | None = None
-
-
-def _supplier_file_names() -> dict:
-    global _SUPPLIER_NAMES_CACHE
-    if _SUPPLIER_NAMES_CACHE is None:
-        try:
-            _SUPPLIER_NAMES_CACHE = json.loads(_SUPPLIER_NAMES_FILE.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
-            _SUPPLIER_NAMES_CACHE = {}
-    return _SUPPLIER_NAMES_CACHE
+# Supplier FBDI layout + Oracle file naming live in a pure, dependency-light
+# module so they can be unit tested without the Beanie/Mongo stack. The generator
+# just delegates to them (reorder to the analyst tab sequence + END terminator;
+# zip/CSV names per the Tejaswi spec).
+from app.services.supplier_fbdi_layout import (  # noqa: E402
+    apply_supplier_layout as _supplier_layout,
+    csv_name_for as _csv_name_for,
+    zip_name_for as _zip_name_for,
+)
 
 
 # Control-field defaults + auto-numbered keys so generated files aren't blank in
@@ -751,39 +718,9 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         return pd.DataFrame(columns=cols)
 
     def _apply_supplier_layout(sdf: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
-        """Supplier-only, per the analyst ConvNXP_All.xlsm 'Supplier Import' tab:
-        (1) reorder a primary interface sheet's columns to the tab's exact
-            extraction sequence (columns are matched by normalized header; any
-            column the tab doesn't list is kept and appended after, so nothing is
-            dropped), and
-        (2) append an 'END' record-terminator column to EVERY supplier interface
-            CSV — the literal 'END' in the last field of the header and every data
-            row (Oracle's end-of-record marker).
-        No-op for non-supplier objects."""
-        if not _is_supplier:
-            return sdf
-        order = _supplier_col_order().get(_norm_hdr(_safe_sheet_name(sheet_name)))
-        if order:
-            by_norm: dict = {}
-            for c in sdf.columns:
-                by_norm.setdefault(_norm_hdr(c), c)
-            seen: set = set()
-            ordered: list = []
-            for h in order:
-                c = by_norm.get(_norm_hdr(h))
-                if c is not None and c not in seen:
-                    ordered.append(c)
-                    seen.add(c)
-            for c in sdf.columns:  # keep any template column the tab didn't list
-                if c not in seen:
-                    ordered.append(c)
-                    seen.add(c)
-            sdf = sdf[ordered]
-        else:
-            sdf = sdf.copy()
-        # END terminator — last column, literal 'END' on header + every data row.
-        sdf["END"] = "END"
-        return sdf
+        # Delegate to the pure, unit-tested module (reorder to the analyst tab
+        # sequence + END terminator); no-op for non-supplier objects.
+        return _supplier_layout(sdf, sheet_name, _is_supplier)
 
     def _write_all() -> tuple[str, str, int, int]:
         """Serialize to disk, STREAMING one interface sheet at a time so peak memory
@@ -828,11 +765,8 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # (data rows only, each terminated with END), columns in the tab's
         # extraction order, each file named for its interface and packaged in a
         # zip named for the entity — even a single-sheet interface gets a zip.
-        _names = _supplier_file_names()
-        _zipmap = _names.get("zip_by_primary_sheet", {})
-        _csvmap = _names.get("csv_by_sheet", {})
         _primary = sheets_with_fields[0] if sheets_with_fields else None
-        _zbase = _zipmap.get(_norm_hdr(_safe_sheet_name(_primary.sheet_name))) if _primary else None
+        _zbase = _zip_name_for(_primary.sheet_name) if _primary else None
         if _is_supplier and _zbase:
             import zipfile as _zip
             name = f"{_zbase}.zip"
@@ -845,7 +779,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
                     sdf = _apply_supplier_layout(sdf, s.sheet_name)
-                    cbase = _csvmap.get(_norm_hdr(_safe_sheet_name(s.sheet_name))) or _safe_sheet_name(s.sheet_name)
+                    cbase = _csv_name_for(s.sheet_name)
                     # Oracle FBDI CSVs are headerless by default (data only, END
                     # last); the user's Include-header toggle can force headers on.
                     zf.writestr(f"{cbase}.csv", sdf.to_csv(index=False, header=_hdr))
