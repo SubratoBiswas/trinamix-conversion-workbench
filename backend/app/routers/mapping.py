@@ -73,6 +73,7 @@ async def ai_fill_blanks(
     approve or reject, never silently in the output."""
     import asyncio
     from app.ai.rule_based import rank_candidates
+    from app.models.fbdi import FBDITemplate
     from app.models.mapping import MappingSuggestion
     from app.services.mapping_service import (_sources_for_conversion,
                                               _target_fields_for)

@@ -217,6 +217,23 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request, exc):
+    """Return unhandled server errors as a clean 500 WITH CORS headers. Starlette's
+    default 500 is generated above the CORS middleware, so it carries no
+    Access-Control-Allow-Origin header and the browser reports it as an opaque CORS
+    / ERR_FAILED error — which hid a simple bug as a 'CORS' problem. This makes every
+    server error a diagnosable JSON response the frontend can display."""
+    import logging as _lg
+    from fastapi.responses import JSONResponse
+    _lg.getLogger(__name__).exception("unhandled error on %s", getattr(request, "url", "?"))
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Server error: {type(exc).__name__}: {str(exc)[:200]}"},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
