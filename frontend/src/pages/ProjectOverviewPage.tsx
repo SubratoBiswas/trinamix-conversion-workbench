@@ -144,10 +144,24 @@ export const ProjectOverviewPage: React.FC = () => {
     setDl(String(c.id));
     try {
       await OutputApi.generateAndWait(String(c.id), "csv");
+      // download() now honours the server's real filename/extension (supplier is a
+      // .zip, not .csv) — the passed name is only a fallback.
       await OutputApi.download(String(c.id), `${(c as any).template_name || c.name}.csv`);
     } catch (e: any) {
       flash(e?.message || "Approve this conversion's mapping first, then download the FBDI file.");
     } finally { setDl(null); }
+  };
+  // Filled-in Oracle FBDI Excel template (data written into the real template, e.g.
+  // the POZ_SUPPLIERS_INT sheet) — generated in the background then downloaded.
+  const [dlT, setDlT] = useState<string | null>(null);
+  const downloadTemplate = async (c: Conversion) => {
+    setDlT(String(c.id));
+    try {
+      await OutputApi.generateAndWait(String(c.id), "template");
+      await OutputApi.download(String(c.id), `${(c as any).template_name || c.name}.xlsm`);
+    } catch (e: any) {
+      flash(e?.message || "Approve this conversion's mapping first, then download the filled template.");
+    } finally { setDlT(null); }
   };
   // Generate + download every bound conversion's FBDI file for this engagement
   // as one zip (named/ordered by the supplier load sequence).
@@ -165,7 +179,7 @@ export const ProjectOverviewPage: React.FC = () => {
   // isn't mapped yet → generate each object's FBDI output → package all into one
   // zip (load-ordered) and download. The client drives each step so it can show
   // exactly what's happening instead of a bare spinner.
-  const downloadAllFbdi = async () => {
+  const downloadAllFbdi = async (fmt: "csv" | "template" = "csv") => {
     setDlAll(true);
     const objName = (c: Conversion) =>
       (c as any).target_object || (c as any).template_name || c.name;
@@ -216,17 +230,19 @@ export const ProjectOverviewPage: React.FC = () => {
       // cleansed, validated), generated in the background so wide multi-source
       // objects can't hit the gateway timeout, then download the fast reuse-zip.
       const nObjs = new Set(convs.map((c) => objName(c))).size;
-      setDlStatus(`Merging & generating ${nObjs} interface file${nObjs === 1 ? "" : "s"}…`);
+      const _kind = fmt === "template" ? "filled Excel template" : "FBDI";
+      const _suffix = fmt === "template" ? "FBDI_templates" : "FBDI";
+      setDlStatus(`Merging & generating ${nObjs} ${_kind} file${nObjs === 1 ? "" : "s"}…`);
       const results = await OutputApi.downloadAll(
         pid,
-        `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_FBDI.zip`,
-        "csv",
-        (sec, done, total) => setDlStatus(`Merging & generating interface files… ${done}/${total} (${sec}s)`),
+        `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_${_suffix}.zip`,
+        fmt,
+        (sec, done, total) => setDlStatus(`Merging & generating ${_kind} files… ${done}/${total} (${sec}s)`),
       );
       const failed = (results || []).filter((r) => !r.ready);
       flash(failed.length
-        ? `FBDI bundle downloaded. ${failed.length} interface(s) had issues: ${failed.map((f) => f.object).join(", ")}.`
-        : `FBDI bundle generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
+        ? `Bundle downloaded. ${failed.length} interface(s) had issues: ${failed.map((f) => f.object).join(", ")}.`
+        : `${fmt === "template" ? "Filled Excel templates" : "FBDI bundle"} generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
       refresh();
       loadRefStandards();
     } catch (e: any) {
@@ -414,9 +430,14 @@ export const ProjectOverviewPage: React.FC = () => {
             >
               <Wand2 className="h-4 w-4" /> Auto-populate
             </Button>
-            <Button variant="secondary" disabled={dlAll} onClick={downloadAllFbdi}>
+            <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("csv")}>
               <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
               {dlAll ? (dlStatus ?? "Working…") : "Download all FBDI"}
+            </Button>
+            <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("template")}
+              title="Merge each interface's sources and download the filled-in Oracle FBDI Excel templates">
+              <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
+              {dlAll ? (dlStatus ?? "Working…") : "Download all (Excel templates)"}
             </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
@@ -486,13 +507,22 @@ export const ProjectOverviewPage: React.FC = () => {
                 {/* Generate every object's FBDI output and download them together
                     as one zip (ordered by the supplier load sequence). */}
                 <button
-                  onClick={downloadAllFbdi}
+                  onClick={() => downloadAllFbdi("csv")}
                   disabled={dlAll}
                   className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand-subtle px-2.5 py-1 text-[11px] font-semibold text-brand-dark hover:bg-brand-subtle/70 disabled:opacity-50"
                   title="For every object: apply your gold reference standard (if on file) + learnings + uploaded templates + deterministic Python (country/currency/UOM/flags) + rule-based matching, using AI only for the residual — then generate each FBDI output and download all as one .zip ordered by load sequence."
                 >
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
                   {dlAll ? (dlStatus ?? "Working…") : "Generate all & download (.zip)"}
+                </button>
+                <button
+                  onClick={() => downloadAllFbdi("template")}
+                  disabled={dlAll}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-brand/40 bg-white px-2.5 py-1 text-[11px] font-semibold text-brand-dark hover:bg-brand-subtle/40 disabled:opacity-50"
+                  title="Same pipeline, but write each interface's merged data INTO the real Oracle FBDI Excel template (POZ_SUPPLIERS_INT, EGP_STRUCTURES_INTERFACE, …) and download the filled templates as one .zip."
+                >
+                  <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
+                  {dlAll ? (dlStatus ?? "Working…") : "Filled Excel templates (.zip)"}
                 </button>
                 {!fileBased && (
                   <button
@@ -666,14 +696,24 @@ export const ProjectOverviewPage: React.FC = () => {
                     <td className="text-right">
                       <div className="inline-flex items-center gap-1">
                         {((c as any).output_mode === "fbdi_download") && (
-                          <button
-                            onClick={() => downloadFbdi(c)}
-                            disabled={dl === String(c.id)}
-                            title="Generate & download the FBDI file"
-                            className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
-                          >
-                            <Download className="h-3 w-3" /> FBDI
-                          </button>
+                          <>
+                            <button
+                              onClick={() => downloadFbdi(c)}
+                              disabled={dl === String(c.id)}
+                              title="Generate & download the FBDI CSV bundle"
+                              className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
+                            >
+                              <Download className="h-3 w-3" /> FBDI
+                            </button>
+                            <button
+                              onClick={() => downloadTemplate(c)}
+                              disabled={dlT === String(c.id)}
+                              title="Generate & download the filled-in Oracle FBDI Excel template"
+                              className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
+                            >
+                              <Download className="h-3 w-3" /> {dlT === String(c.id) ? "…" : "Excel"}
+                            </button>
+                          </>
                         )}
                         <Link to={`/conversions/${c.id}`} className="btn-ghost h-7 px-2 text-xs">
                           Open <ArrowRight className="h-3 w-3" />

@@ -63,7 +63,7 @@ async def _run_generation(conversion_id: str, fmt: str,
 @output_router.post("/{conversion_id}/generate-output")
 async def generate_output(
     conversion_id: str,
-    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    fmt: str = Query("csv", pattern="^(csv|xlsx|template)$"),
     wait: bool = Query(False, description="Block until done (legacy). Default is async."),
     include_header: bool | None = Query(
         None, description="Include the column-label header row. None=auto "
@@ -266,7 +266,7 @@ async def _run_merged_generation(project_id, target_object, fmt, include_header,
 @output_router.post("/{conversion_id}/generate-merged")
 async def generate_merged(
     conversion_id: str,
-    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    fmt: str = Query("csv", pattern="^(csv|xlsx|template)$"),
     include_header: bool | None = Query(None),
     wait: bool = Query(False),
     _: User = Depends(get_current_user),
@@ -314,7 +314,7 @@ async def _run_merged_all(project_id, fmt, include_header, jobs) -> None:
 @output_router.post("/project/{project_id}/generate-merged-all")
 async def generate_merged_all(
     project_id: str,
-    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    fmt: str = Query("csv", pattern="^(csv|xlsx|template)$"),
     include_header: bool | None = Query(None),
     _: User = Depends(get_current_user),
 ):
@@ -380,7 +380,7 @@ def _safe_name(s: str) -> str:
 @output_router.get("/project/{project_id}/download-all")
 async def download_all_outputs(
     project_id: str,
-    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    fmt: str = Query("csv", pattern="^(csv|xlsx|template)$"),
     regenerate: bool = Query(False),
     _: User = Depends(get_current_user),
 ):
@@ -433,7 +433,11 @@ async def download_all_outputs(
             # carrier can differ by sort tie-breaks, so look across EVERY conversion
             # in the group and take the newest artifact whose file is on disk. NOTE:
             # a "csv" generation may be a .zip (Oracle FBDI bundle) or a .csv — both
-            # are the csv family; only reject a true format mismatch (xlsx vs csv).
+            # are the csv family; a filled "template" is a .xlsm. Only reuse an
+            # artifact whose extension belongs to the requested format's family.
+            _FAMILY = {"csv": {"csv", "zip"}, "xlsx": {"xlsx"},
+                       "template": {"xlsm", "xlsx"}}
+            _want_ext = _FAMILY.get(fmt, {"csv", "zip"})
             if not regenerate:
                 cand = None
                 for cc in group:
@@ -443,9 +447,8 @@ async def download_all_outputs(
                     if not e or not Path(e.output_file_path).exists():
                         continue
                     ext_e = Path(e.output_file_name).suffix.lstrip(".").lower()
-                    is_xlsx = ext_e == "xlsx"
-                    if (fmt == "xlsx") != is_xlsx:
-                        continue  # wrong family (xlsx vs csv/zip)
+                    if ext_e not in _want_ext:
+                        continue  # wrong format family
                     if cand is None or (e.generated_at and cand.generated_at
                                         and e.generated_at > cand.generated_at):
                         cand = e

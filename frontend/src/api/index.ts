@@ -548,7 +548,7 @@ export const OutputApi = {
   /** Kick off generation (async by default) — returns immediately with status.
    *  includeHeader: undefined = auto (supplier headerless, others with header);
    *  true/false forces the column-label row on/off. */
-  generate: (conversionId: string, fmt: "csv" | "xlsx" = "csv", includeHeader?: boolean) =>
+  generate: (conversionId: string, fmt: "csv" | "xlsx" | "template" = "csv", includeHeader?: boolean) =>
     api.post<{ status: string; conversion_id: string }>(
       `/conversions/${conversionId}/generate-output`, null,
       { params: { fmt, ...(includeHeader === undefined ? {} : { include_header: includeHeader }) } },
@@ -566,7 +566,7 @@ export const OutputApi = {
    *  request can't hit the gateway timeout. */
   generateAndWait: async (
     conversionId: string,
-    fmt: "csv" | "xlsx" = "csv",
+    fmt: "csv" | "xlsx" | "template" = "csv",
     onTick?: (elapsedSec: number) => void,
     includeHeader?: boolean,
   ): Promise<{ id: string; file_name: string; row_count: number; column_count: number; dq_report?: DqReport | null }> => {
@@ -614,7 +614,7 @@ export const OutputApi = {
   },
   /** Kick off merged generation for EVERY interface object in a project, in the
    *  background. Returns one carrier conversion per object to poll. */
-  generateMergedAll: (projectId: string, fmt: "csv" | "xlsx" = "csv", includeHeader?: boolean) =>
+  generateMergedAll: (projectId: string, fmt: "csv" | "xlsx" | "template" = "csv", includeHeader?: boolean) =>
     api.post<{ status: string; objects: number;
       carriers: { object: string; conversion_id: string }[] }>(
       `/conversions/project/${projectId}/generate-merged-all`, null,
@@ -623,7 +623,7 @@ export const OutputApi = {
   /** Generate every interface's merged file in the background, poll all carriers
    *  until each is ready/failed, then return per-object results. */
   generateMergedAllAndWait: async (
-    projectId: string, fmt: "csv" | "xlsx" = "csv", includeHeader?: boolean,
+    projectId: string, fmt: "csv" | "xlsx" | "template" = "csv", includeHeader?: boolean,
     onTick?: (sec: number, done: number, total: number) => void,
   ): Promise<{ object: string; ready: boolean; error?: string }[]> => {
     const start = await OutputApi.generateMergedAll(projectId, fmt, includeHeader);
@@ -674,10 +674,18 @@ export const OutputApi = {
     const response = await api.get(`/conversions/${conversionId}/download-output`, {
       responseType: "blob",
     });
-    const url = window.URL.createObjectURL(new Blob([response.data]));
+    // ALWAYS honour the server's real filename/extension — a supplier FBDI output
+    // is a .zip (Oracle bundle), not .csv. Saving zip bytes under a forced .csv
+    // name makes Excel try to "recover" a corrupt workbook. The passed name is a
+    // fallback only; the Content-Disposition filename wins when present.
+    const cd = (response.headers?.["content-disposition"] as string) || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const serverName = m ? decodeURIComponent(m[1].replace(/"/g, "").trim()) : "";
+    const type = (response.headers?.["content-type"] as string) || "";
+    const url = window.URL.createObjectURL(new Blob([response.data], type ? { type } : undefined));
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename;
+    a.download = serverName || filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -689,7 +697,7 @@ export const OutputApi = {
    *  objects don't hit the gateway timeout), polls until ready, then the zip is a
    *  fast reuse of the already-generated files. */
   downloadAll: async (
-    projectId: string, filename = "FBDI.zip", fmt: "csv" | "xlsx" = "csv",
+    projectId: string, filename = "FBDI.zip", fmt: "csv" | "xlsx" | "template" = "csv",
     onTick?: (sec: number, done: number, total: number) => void,
   ) => {
     // 1) Build every merged interface file in the background, wait for all.

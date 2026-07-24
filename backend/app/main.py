@@ -214,6 +214,11 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Frontend runs cross-origin (separate backend host), so the browser hides
+    # response headers from JS unless they're explicitly exposed. Downloads need
+    # Content-Disposition so the client saves the file under its REAL name/extension
+    # (a supplier FBDI output is a .zip, not .csv) instead of a forced .csv.
+    expose_headers=["Content-Disposition"],
 )
 
 

@@ -660,6 +660,22 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         or "fbdi"
     )
 
+    # "template" output = the REAL Oracle FBDI workbook, filled in. Materialize the
+    # bundled source file (disk, or rehydrated from Mongo after a redeploy). If the
+    # template has no stored file we can't fill it, so degrade gracefully to a fresh
+    # xlsx workbook rather than failing the whole generation.
+    _template_src_path: str | None = None
+    if fmt == "template":
+        if template:
+            try:
+                from app.services.fbdi_service import materialize_template_file
+                _p = await materialize_template_file(template)
+                _template_src_path = str(_p) if _p else None
+            except Exception:  # noqa: BLE001
+                _template_src_path = None
+        if not _template_src_path:
+            fmt = "xlsx"  # no source workbook to populate — fall back
+
     def _finalize(sfields: list) -> pd.DataFrame:
         # Req 8 — exactly this sheet's interface columns, in sequence, blanks
         # where unmapped, no instruction rows. Data ops (date reformat, control
@@ -805,6 +821,37 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # Header row inclusion. User toggle wins; otherwise auto — supplier FBDI
         # load files are headerless (data only), every other object keeps headers.
         _hdr = include_header if include_header is not None else (not _is_supplier)
+
+        # Filled Oracle template: write each sheet's finalized frame INTO the real
+        # bundled workbook (macros/instructions/formatting preserved), clearing the
+        # shipped sample rows. No supplier reorder/END here — the Oracle template
+        # already defines the column order and has no END terminator row; the
+        # analyst runs the template's own CSV-generation macro for the load files.
+        if fmt == "template" and _template_src_path:
+            from app.services.template_fill_service import fill_template
+            frames: dict[str, pd.DataFrame] = {}
+            if multi:
+                for s in sheets_with_fields:
+                    if _sheet_carries_data(s):
+                        sdf = _finalize(fields_by_sheet[s.id])
+                        _cust_apply(sdf)
+                    else:
+                        sdf = _headers_only(fields_by_sheet[s.id])
+                    frames[s.sheet_name] = sdf
+                    total_rows = max(total_rows, len(sdf))
+                    total_cols += len(sdf.columns)
+            else:
+                fdf = _finalize(fields) if fields else _apply_control_defaults(df)
+                # single-sheet: key by the only data sheet's name if known
+                _only = sheets_with_fields[0].sheet_name if sheets_with_fields else obj_name
+                frames[_only] = fdf
+                total_rows, total_cols = len(fdf), len(fdf.columns)
+            _data = fill_template(_template_src_path, frames)
+            _stem = Path(_template_src_path).stem
+            name = f"{_stem}.xlsm" if _template_src_path.lower().endswith(".xlsm") else f"{_stem}.xlsx"
+            path = out_dir / name
+            path.write_bytes(_data)
+            return name, str(path), total_rows, total_cols
 
         if fmt == "xlsx":
             name = f"{obj_name}_{ts}.xlsx"
