@@ -205,6 +205,55 @@ async def preload_report_endpoint(
     return await preload_report(c, sample_rows=sample_rows)
 
 
+@output_router.get("/{conversion_id}/merged-preview")
+async def merged_preview(conversion_id: str, limit: int = 50, _: User = Depends(get_current_user)):
+    """Preview the MERGED output for this conversion's interface — every source
+    conversion for the same target object in the project, converted with its own
+    mapping and merged/de-duplicated into one result (what the merged file will
+    contain). If there's only one source, it's just that conversion's preview."""
+    c = await _require_conversion(conversion_id)
+    from app.services.output_service import (build_merged_frame_for_object,
+                                             _mask_supplier_emails)
+    merged, carrier, names = await build_merged_frame_for_object(
+        c.project_id, c.target_object or "", max_rows=max(limit * 4, 200))
+    if merged is None:
+        from app.services.output_service import get_output_preview
+        p = await get_output_preview(c, limit=limit)
+        p["sources"] = names
+        return p
+    head = merged.head(limit)
+    if "supplier" in (c.target_object or "").lower():
+        try:
+            head = _mask_supplier_emails(head.copy())
+        except Exception:  # noqa: BLE001
+            pass
+    return {"columns": list(head.columns.astype(str)),
+            "rows": head.fillna("").to_dict(orient="records"),
+            "total_rows": int(len(merged)), "sources": names,
+            "target_object": c.target_object}
+
+
+@output_router.post("/{conversion_id}/generate-merged")
+async def generate_merged(
+    conversion_id: str,
+    fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
+    include_header: bool | None = Query(None),
+    _: User = Depends(get_current_user),
+):
+    """Generate ONE merged file for this conversion's interface object — merging all
+    per-source conversions in the project (merged + de-duplicated + cleansed +
+    validated). The artifact is stored under the carrier conversion; the response
+    carries its id + file name + dq_report."""
+    c = await _require_conversion(conversion_id)
+    from app.services.output_service import generate_merged_artifact
+    art = await generate_merged_artifact(c.project_id, c.target_object or "",
+                                         fmt=fmt, include_header=include_header)
+    return {"status": "ready", "id": str(art.id),
+            "conversion_id": str(art.conversion_id),
+            "file_name": art.output_file_name, "row_count": art.row_count,
+            "column_count": art.column_count, "dq_report": getattr(art, "dq_report", None)}
+
+
 @output_router.get("/{conversion_id}/outputs", response_model=list[ConvertedOutputOut])
 async def list_outputs(
     conversion_id: str,
@@ -258,44 +307,46 @@ async def download_all_outputs(
     if not conversions:
         raise HTTPException(404, "This engagement has no conversions yet")
 
+    # Group by target interface object so MULTIPLE source files for the same object
+    # (e.g. eBOS + NetSuite supplier) become ONE merged, de-duplicated, cleansed,
+    # validated file per interface — not one file per source. Order by the object's
+    # load sequence.
+    from app.services.output_service import generate_merged_artifact
+    by_obj: dict[str, list] = {}
+    for c in conversions:
+        is_ebs = getattr(c, "source_type", "dataset") == "ebs"
+        if not c.template_id or (not is_ebs and not c.dataset_id):
+            skipped.append(c.name)
+            continue
+        obj = c.target_object or c.name
+        by_obj.setdefault(obj, []).append(c)
+    objs = sorted(by_obj, key=lambda o: min((cc.planned_load_order or 100) for cc in by_obj[o]))
+
     buf = io.BytesIO()
     used: dict[str, int] = {}
     added = 0
-    skipped: list[str] = []
     ext = "xlsx" if fmt == "xlsx" else "csv"
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for c in conversions:
-            is_ebs = getattr(c, "source_type", "dataset") == "ebs"
-            if not c.template_id or (not is_ebs and not c.dataset_id):
-                skipped.append(c.name)
-                continue
-            # NOTE: we deliberately do NOT run full AI mapping here. Doing it inline
-            # for every unmapped conversion is what made this bundle time out on a
-            # big engagement (one 60s request running AI + generating 19-sheet xlsx
-            # files). generate_output_artifact already force-applies the learned
-            # standards, and CSV output is written per-sheet in a worker thread, so
-            # the bundle stays fast. A brand-new conversion with no mappings simply
-            # exports its structure + defaults; the user re-runs AI on it when ready.
+        for i, obj in enumerate(objs, start=1):
+            group = by_obj[obj]
             try:
-                art = await generate_output_artifact(c, fmt=fmt)
+                # Merge every source-conversion for this object into one file.
+                art = await generate_merged_artifact(project_id, obj, fmt=fmt)
             except Exception:
-                skipped.append(c.name)
+                skipped.append(obj)
                 continue
             if not art or not Path(art.output_file_path).exists():
-                skipped.append(c.name)
+                skipped.append(obj)
                 continue
-            # Prefix with the load-order number so files sort in the sequence
-            # the supplier load must run in (1 Import, 2 Address, …). Use the
-            # artifact's REAL extension — multi-sheet objects (Customer/Item)
-            # produce a per-sheet .zip, single objects a .csv/.xlsx.
             real_ext = (Path(art.output_file_name).suffix.lstrip(".") or ext)
-            order = c.planned_load_order if c.planned_load_order and c.planned_load_order < 100 else None
+            order = min((cc.planned_load_order for cc in group
+                         if cc.planned_load_order and cc.planned_load_order < 100), default=None)
             prefix = f"{order:02d}_" if order is not None else ""
-            arcname = f"{prefix}{_safe_name(c.name)}.{real_ext}"
+            arcname = f"{prefix}{_safe_name(obj)}.{real_ext}"
             if arcname in used:
                 used[arcname] += 1
-                arcname = f"{prefix}{_safe_name(c.name)}_{used[arcname]}.{real_ext}"
+                arcname = f"{prefix}{_safe_name(obj)}_{used[arcname]}.{real_ext}"
             else:
                 used[arcname] = 0
             zf.write(art.output_file_path, arcname=arcname)

@@ -588,6 +588,20 @@ export const OutputApi = {
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: string, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
+  /** Generate ONE merged file for this conversion's interface — all per-source
+   *  conversions in the project merged + de-duplicated + cleansed + validated.
+   *  Returns the carrier artifact (conversion_id may differ from the input). */
+  generateMerged: (conversionId: string, includeHeader?: boolean) =>
+    api.post<{ status: string; id: string; conversion_id: string; file_name: string;
+      row_count: number; column_count: number; dq_report?: DqReport | null }>(
+      `/conversions/${conversionId}/generate-merged`, null,
+      { params: { ...(includeHeader === undefined ? {} : { include_header: includeHeader }) },
+        timeout: 300000 }).then(r => r.data),
+  /** Preview the MERGED output for this conversion's interface (all sources). */
+  mergedPreview: (conversionId: string, limit = 50) =>
+    api.get<{ columns: string[]; rows: Record<string, any>[]; total_rows: number;
+      sources: string[]; target_object?: string }>(
+      `/conversions/${conversionId}/merged-preview`, { params: { limit } }).then(r => r.data),
   /** Predictive pre-load DQ report (what Oracle will reject + how to fix). */
   preloadReport: (conversionId: string, sampleRows = 3000) =>
     api.get<DqReport & { explanations: { issue_type: string; count: number; meaning: string; fix: string }[];

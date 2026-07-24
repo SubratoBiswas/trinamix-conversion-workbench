@@ -422,11 +422,20 @@ export const MappingReviewPage: React.FC = () => {
       // Async generation: kick it off, poll until ready (nothing hits the gateway
       // timeout), then download. Heavy objects like the 19-sheet Customer build in
       // the background and can take a while — surface elapsed time so it's not silent.
-      const out = await OutputApi.generateAndWait(pid, "csv", (sec) => {
-        if (sec >= 3) setToast(`Generating FBDI output… ${sec}s`);
-      }, headerOn);
       const fallback = `${(project?.target_object || project?.name || "fbdi").replace(/[^\w.-]+/g, "_")}.csv`;
-      await OutputApi.download(pid, out.file_name || fallback);
+      // Merge-by-interface: produce ONE merged file for this interface (all source
+      // conversions in the project merged + de-duplicated). Works for a single
+      // source too. Fall back to the plain (async) generate on any error.
+      let out: any = null;
+      try {
+        out = await OutputApi.generateMerged(pid, headerOn);
+        await OutputApi.download(out.conversion_id || pid, out.file_name || fallback);
+      } catch {
+        out = await OutputApi.generateAndWait(pid, "csv", (sec) => {
+          if (sec >= 3) setToast(`Generating FBDI output… ${sec}s`);
+        }, headerOn);
+        await OutputApi.download(pid, out.file_name || fallback);
+      }
       const dq = out.dq_report;
       if (dq && (dq.error_count || dq.warning_count || dq.cleansing_fix_count)) {
         flash(`Downloaded. Data quality: ${dq.cleansing_fix_count} cleansing fix(es), ` +

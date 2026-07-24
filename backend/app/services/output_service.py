@@ -528,10 +528,16 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
 
 
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
-                                   include_header: bool | None = None) -> ConvertedOutput:
+                                   include_header: bool | None = None,
+                                   merged_df: "pd.DataFrame | None" = None) -> ConvertedOutput:
     """``include_header``: None = auto (supplier CSVs headerless per the Oracle load
     format, every other object keeps its column-label row); True/False = the user's
-    explicit toggle, forcing headers on/off for every sheet of this output."""
+    explicit toggle, forcing headers on/off for every sheet of this output.
+
+    ``merged_df``: when provided, this ALREADY-BUILT frame is written instead of
+    converting ``conversion``'s own source — used by the merge-by-interface path,
+    where several per-source conversions are each converted and then merged into one
+    frame that is finalized/written once (one file per interface)."""
     from app.models.fbdi import FBDISheet
 
     # HDL divert: HCM objects (Employee HDL) are not FBDI — they load as
@@ -571,7 +577,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             await apply_learned_to_conversion(conversion, _pre_maps, force=True)
         except Exception:
             pass  # best-effort — never block output generation on the learning pass
-    df, _ = await build_converted_dataframe(conversion)
+    df = merged_df if merged_df is not None else (await build_converted_dataframe(conversion))[0]
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     # Fetch fields (interface sequence) + sheets so we can emit exactly the
@@ -898,6 +904,54 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         except Exception:
             pass
     return artefact
+
+
+async def build_merged_frame_for_object(project_id, target_object: str, max_rows: int | None = None):
+    """Convert EVERY bound conversion in the project that targets ``target_object``
+    (each with its OWN mapping — so heterogeneous sources like eBOS + NetSuite map
+    correctly), then converge them into one frame via survivorship de-dup. Returns
+    (merged_df, carrier_conversion, source_names). carrier is used only for the
+    shared template/sheets/naming (all conversions of one object share a template)."""
+    from beanie import PydanticObjectId as _OID
+    from app.models.conversion import Conversion as _Conv
+    from app.models.dataset import Dataset as _DS
+    convs = await _Conv.find(
+        _Conv.project_id == _OID(str(project_id)),
+        _Conv.target_object == target_object,
+    ).sort(+_Conv.planned_load_order).to_list()
+    convs = [c for c in convs if c.template_id and (c.source_dataset_ids or
+             getattr(c, "source_type", "") == "ebs")]
+    if not convs:
+        return None, None, []
+    frames, names = [], []
+    for c in convs:
+        try:
+            f, _ = await build_converted_dataframe(c, max_rows=max_rows)
+        except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
+            continue
+        if f is not None and len(f.columns):
+            frames.append(f)
+            for did in c.source_dataset_ids:
+                ds = await _DS.get(did)
+                if ds:
+                    names.append(ds.name)
+    if not frames:
+        return None, convs[0], names
+    merged = _merge_dedupe(frames, target_object, REFERENCE_KEY_FIELDS) if len(frames) > 1 else frames[0]
+    return merged, convs[0], names
+
+
+async def generate_merged_artifact(project_id, target_object: str, fmt: str = "csv",
+                                   include_header: bool | None = None) -> ConvertedOutput:
+    """Merge all per-source conversions for one interface object into ONE output
+    file (merged + de-duplicated + cleansed + validated), written under the carrier
+    conversion's artifact."""
+    merged, carrier, _names = await build_merged_frame_for_object(project_id, target_object)
+    if carrier is None:
+        raise ValueError(f"No bound conversions for {target_object!r} in this project")
+    if merged is None:
+        merged = (await build_converted_dataframe(carrier))[0]
+    return await generate_output_artifact(carrier, fmt=fmt, include_header=include_header, merged_df=merged)
 
 
 async def get_output_preview(conversion: Conversion, limit: int = 50) -> dict[str, Any]:
