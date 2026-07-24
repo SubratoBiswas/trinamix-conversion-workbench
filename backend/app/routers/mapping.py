@@ -215,7 +215,27 @@ async def list_mappings(conversion_id: str, _: User = Depends(get_current_user))
     ).to_list()
     if not items:
         return []
+    # Collapse any duplicate rows a prior re-run race may have left (same target
+    # field appearing 2+ times), keeping the strongest human decision per field.
+    # Non-destructive: fixes the canvas/table AND the CSV export (both read this)
+    # so a rejected field never shows a stale "suggested" twin. Physical cleanup
+    # happens at map time (run_mapping_suggestions) and via /dedupe-mappings.
+    from app.services.mapping_service import collapse_mapping_dupes
+    items = collapse_mapping_dupes(items)
     return await enrich_mapping_with_samples(conv, items)
+
+
+@router.post("/conversions/{conversion_id}/dedupe-mappings")
+async def dedupe_mappings(conversion_id: str, _: User = Depends(get_current_user)):
+    """Physically remove duplicate mapping rows for this conversion (heals a
+    conversion whose rows were doubled by an earlier re-run race). Keeps the
+    strongest human decision per target field. Returns how many were removed."""
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    from app.services.mapping_service import dedupe_conversion_mappings
+    removed = await dedupe_conversion_mappings(conv.id)
+    return {"conversion_id": conversion_id, "removed": removed}
 
 
 @router.get("/conversions/{conversion_id}/source-columns")

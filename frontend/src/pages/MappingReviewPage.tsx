@@ -1941,14 +1941,20 @@ const MappingTableView: React.FC<{
         const alts = (altByTarget[String(f.id)] || [])
           .filter((c) => c.source_column !== m?.source_column)
           .slice(0, 3);
-        const isGap = !!f.required && !m?.source_column && !dv && m?.status !== "not_applicable";
+        // "Required" must read the SAME signal everywhere (sort, count, filter,
+        // gap). Some templates (e.g. HDL) don't carry the flag on the template
+        // field, but the mapping row does (target_required) — so OR them. Without
+        // this the table sorted/counted on f.required alone, which was falsy for
+        // every HDL row, so "sort by Required" reordered nothing.
+        const req = !!(f.required || m?.target_required);
+        const isGap = req && !m?.source_column && !dv && m?.status !== "not_applicable";
         const confirm = needsConfirmation(m, f, alts, dv);
-        return { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm };
+        return { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm, req };
       });
   }, [targetFields, visibleTargetIds, mapByTarget, ruleTargetIds, effectiveDefaults, srcProfile, altByTarget]);
 
   const confirmCount = viewRows.filter((r) => r.confirm).length;
-  const requiredCount = viewRows.filter((r) => r.f.required).length;
+  const requiredCount = viewRows.filter((r) => r.req).length;
   // The distinct "how it's mapped" methods actually present, for the dropdown.
   const methods = useMemo(
     () => Array.from(new Set(viewRows.map((r) => r.method.label))).sort(),
@@ -1959,7 +1965,7 @@ const MappingTableView: React.FC<{
     const q = tableSearch.trim().toLowerCase();
     let out = viewRows.filter((r) => {
       if (onlyConfirm && !r.confirm) return false;
-      if (onlyRequired && !r.f.required) return false;
+      if (onlyRequired && !r.req) return false;
       if (methodFilter !== "all" && r.method.label !== methodFilter) return false;
       if (q) {
         const hay = `${r.f.field_name} ${r.m?.source_column ?? ""} ${r.dv ?? ""}`.toLowerCase();
@@ -1971,8 +1977,8 @@ const MappingTableView: React.FC<{
       // Default order: MANDATORY fields first (they're what blocks a load),
       // then the template's own column sequence.
       out = [...out].sort((a, b) => {
-        const ra = a.f.required ? 0 : 1;
-        const rb = b.f.required ? 0 : 1;
+        const ra = a.req ? 0 : 1;
+        const rb = b.req ? 0 : 1;
         if (ra !== rb) return ra - rb;
         return (a.f.sequence ?? 0) - (b.f.sequence ?? 0);
       });
@@ -1985,7 +1991,7 @@ const MappingTableView: React.FC<{
           case "method":   return r.method.label.toLowerCase();
           case "conf":     return r.m?.source_column ? (r.m.confidence ?? 0) : -1;
           // Ascending = mandatory first (that's what people mean by "sort by required").
-          case "required": return r.f.required ? 0 : 1;
+          case "required": return r.req ? 0 : 1;
           default:         return 0;
         }
       };
@@ -1994,8 +2000,8 @@ const MappingTableView: React.FC<{
         if (va < vb) return -1 * dir;
         if (va > vb) return 1 * dir;
         // Stable tiebreak: still keep required above optional, then sequence.
-        const ra = a.f.required ? 0 : 1;
-        const rb = b.f.required ? 0 : 1;
+        const ra = a.req ? 0 : 1;
+        const rb = b.req ? 0 : 1;
         if (ra !== rb) return ra - rb;
         return (a.f.sequence ?? 0) - (b.f.sequence ?? 0);
       });
@@ -2020,7 +2026,7 @@ const MappingTableView: React.FC<{
     const lines = rows.map((r) => [
       r.m?.source_column || (r.dv ? "(constant)" : ""),
       r.f.field_name,
-      r.f.required ? "YES" : "",
+      r.req ? "YES" : "",
       r.method.label + (r.dv && !r.m?.source_column ? ` → ${r.dv}` : ""),
       r.transform || (r.hasRule ? "custom rule" : ""),
       r.m?.source_column ? Math.round((r.m.confidence ?? 0) * 100) : "",
@@ -2166,7 +2172,7 @@ const MappingTableView: React.FC<{
         </thead>
         <tbody>
           {rows.map((r) => {
-            const { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm } = r;
+            const { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm, req } = r;
             const selected = m && selectedMappingId === m.id;
             return (
               <tr
@@ -2211,7 +2217,7 @@ const MappingTableView: React.FC<{
                 </td>
                 {/* Required */}
                 <td className="px-3 py-2">
-                  {f.required ? (
+                  {req ? (
                     <span className="rounded bg-danger-subtle px-1.5 py-0.5 text-[9px] font-bold uppercase text-danger">
                       required
                     </span>

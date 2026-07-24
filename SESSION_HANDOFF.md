@@ -278,3 +278,100 @@ Commit messages MUST be single-line. Windows batch reads a newline inside the qu
 `-m` string as a new command and treats the `->` arrow as a redirect, which created the
 empty files `Payee` and `Corporation)'` and sprayed "not recognized" errors. Keep the
 message on one line and put detail here instead.
+
+---
+
+## Mapping-tools wave — review, manual mapper, AI helpers (2026-07-23, later)
+
+A large run of features on the mapping surfaces. All statically verified (backend
+parses, frontend `tsc` clean on the new identifiers); most still need a live
+click-through because the Chrome path / login blocks automated UI testing.
+
+### Rejected-mapping output leak (earlier, already deployed)
+`output_service._transform_frame`: a `rejected` status must never read
+`source_column` (has_src requires `not _discarded`); a discarded row applies only
+if it carries an explicit default_value (emitted as CONSTANT). Fixes "UI says
+rejected, FBDI still carried the column."
+
+### Mapping Documents — proper review surface
+`MappingDocumentsPage.tsx` + `mapping_ingest_service.py` + `mapping_proposals.py`
++ model `mapping_proposal.py`.
+- Row now shows **Source → Destination** (object + FBDI sheet), a **Learning**
+  column ("already learnt" + captured_from), a **Previous gold** column
+  (cross-references what the last gold output used, via gold-derived learnings),
+  an **AI review** column (verdict + which of document/library it recommends).
+- **Vet with AI** (`POST /mapping-proposals/{id}/vet`) — one batched pass over
+  conflict/new rows; verdict stored on the proposal so a return visit is free.
+- **Override** (`POST /mapping-proposals/{id}/override`) — mandatory reason;
+  400s without one; `apply_proposal` writes the overridden source with
+  `manual override: <reason>` in captured_from.
+- **CSV export** of every column.
+- classify() adds `is_learnt`/`learnt_from` and the gold cross-reference.
+
+### Manual template mapper (new "Map manually" tab)
+`manual_map.py` router: `context`, `sources`, `vet`, `suggest`, `suggest-fill`,
+`save`. Pick client + FBDI template → every target field loads pre-filled with its
+learnt source and previous-gold source. Also **Prefill from an uploaded document**
+(context takes `proposal_id`, fills `doc_source`).
+- **Filterable source pick-list**: `/manual-map/sources` returns the client's known
+  columns (its datasets' profiles + every source any learning holds); source cells
+  use a datalist, and the AI source/field selections use a proper **filter-on-top
+  modal** (single/multi select).
+- **Many sources → one field**: comma-separated sources save as a CONCAT learning
+  (columns + join separator; `original_value` = first column so the output
+  source-exists gate passes). Verified through the real engine
+  (`First Name`+`Last Name` → `Ada Lovelace`). **One source → many fields**: type
+  the same source into several rows, or use the AI helper.
+- **AI helpers** (opt-in): `1 source → many fields`, `many sources → 1 field`
+  (`/manual-map/suggest`), and **Fill blanks with AI** (`/manual-map/suggest-fill`)
+  which fills ONLY unmapped fields, never overwrites, marks each with an amber `AI`
+  tag. Save upserts client-scoped `column_mapping` learnings (optional reason) and
+  force-reapplies onto the client's existing conversions.
+- **Override** per row requires a mandatory reason for changing a learnt field.
+
+### Main Mapping Review — AI verdict persistence + opt-in fill + clickable stats
+`MappingReviewPage.tsx`, `mapping_service.mapping_candidates`,
+`candidate_vetting_service.py`, model `candidate_verdict.py`, `mapping.py` router.
+- Semantic guard (`app/ai/semantic_guard.py`) classifies each column and demotes
+  implausible candidates (employee_id → Phone, fax_num → Account Currency Code);
+  20/20 on the test pairs. Wired into `mapping_candidates` (over-fetch, demote,
+  sort plausible-first).
+- **Vet options with AI** persists verdicts in `CandidateVerdict` per (conversion,
+  target field, source column); `mapping_candidates` re-attaches them on every load
+  and the endpoint skips already-vetted pairs (`force` to redo), so a return visit
+  shows reasons with **no new tokens**. UI shows "AI review done" and per-field
+  short-circuits.
+- **Fill blanks with AI** (`POST /conversions/{id}/ai-fill-blanks`) — opt-in, runs
+  ONLY on unmapped/non-human-touched fields (optionally required-only), ranks the
+  real dataset columns then AI picks the best or null; writes 'suggested' with
+  reason "AI fill — review before use" → lands in Needs review. Button lives in the
+  **shared header** (works in Canvas and Table).
+- **Clickable KPIs**: Target fields / Auto-mapped / Approved / Required gaps /
+  Learned / From KB filter the list (added `mapped` + `learned` FilterModes).
+- **Clickable precedence chips** ("How each field is decided"): each layer chip
+  filters to fields decided by that layer, via `classifyLayer`, driving both canvas
+  and table (`layerFilter` state folded into `visibleMappings`). KPI and layer
+  filters reset each other so they never intersect to empty.
+
+### Known behaviour / caveats
+- The vet-fail on wide templates was a gateway timeout (Customer 1254 fields):
+  fixed by capping AI to 60 prioritised pairs, scoping to visible rows, retry on
+  cold-start.
+- `render.yaml` names services `trinamix-backend`/`trinamix-frontend` but the live
+  ones are `trinamix-conversion-backend`/`trinamix-conversion-frontend` — reconcile.
+- `frontend/src/pages/MappingReviewPage.tsx` tsc reports pre-existing `pid`
+  (ObjectId vs string) errors at ~272/591/1216 etc. — NOT from this work; the Vite
+  build (esbuild, no tsc) is unaffected.
+- Still open: destination-side alternatives (rank target fields for a clicked
+  source); purge of auto-captured stale bank learnings (Branch Name ← Bank ID,
+  IBAN ← WIRE ID) needs a cleanup path; Supplier Type outputs "Supplier" vs gold
+  "Standard"; Address Name uses supplier name vs gold city.
+
+### New endpoints (this wave)
+- `POST /api/mapping-proposals/{id}/vet` · `/override`
+- `GET  /api/manual-map/context` · `/sources`  ·  `POST /api/manual-map/vet` ·
+  `/suggest` · `/suggest-fill` · `/save`
+- `POST /api/conversions/{id}/vet-candidates` · `/ai-fill-blanks`
+
+### New models / collections
+`mapping_proposals`, `candidate_verdicts` (both registered in `database.py`).
