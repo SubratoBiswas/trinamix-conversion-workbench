@@ -233,25 +233,63 @@ async def merged_preview(conversion_id: str, limit: int = 50, _: User = Depends(
             "target_object": c.target_object}
 
 
+async def _carrier_for_object(project_id, target_object: str):
+    """The carrier conversion (first bound, by load order) for a project+interface —
+    the merged artifact is stored under it and its status is polled."""
+    convs = await Conversion.find(
+        Conversion.project_id == project_id,
+        Conversion.target_object == target_object,
+    ).sort(+Conversion.planned_load_order).to_list()
+    convs = [x for x in convs if x.template_id and
+             (x.source_dataset_ids or getattr(x, "source_type", "") == "ebs")]
+    return convs[0] if convs else None
+
+
+async def _run_merged_generation(project_id, target_object, fmt, include_header, carrier_id) -> None:
+    """Background worker: build + merge + write the one-file-per-interface output off
+    the request thread (wide multi-source objects would otherwise blow the gateway)."""
+    from app.services.output_service import generate_merged_artifact
+    try:
+        await generate_merged_artifact(project_id, target_object, fmt=fmt, include_header=include_header)
+        c = await Conversion.get(carrier_id)
+        if c:
+            await c.set({"output_status": "ready", "output_error": None, "updated_at": datetime.utcnow()})
+    except Exception as exc:  # noqa: BLE001
+        try:
+            c = await Conversion.get(carrier_id)
+            if c:
+                await c.set({"output_status": "failed", "output_error": str(exc)[:500]})
+        except Exception:
+            pass
+
+
 @output_router.post("/{conversion_id}/generate-merged")
 async def generate_merged(
     conversion_id: str,
     fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
     include_header: bool | None = Query(None),
+    wait: bool = Query(False),
     _: User = Depends(get_current_user),
 ):
     """Generate ONE merged file for this conversion's interface object — merging all
-    per-source conversions in the project (merged + de-duplicated + cleansed +
-    validated). The artifact is stored under the carrier conversion; the response
-    carries its id + file name + dq_report."""
+    per-source conversions (merged + de-duplicated + cleansed + validated). Async by
+    default: returns immediately with the CARRIER conversion id to poll via
+    /generation-status; the artifact is stored under the carrier. Pass wait=true to
+    block (used internally)."""
+    import asyncio
     c = await _require_conversion(conversion_id)
-    from app.services.output_service import generate_merged_artifact
-    art = await generate_merged_artifact(c.project_id, c.target_object or "",
-                                         fmt=fmt, include_header=include_header)
-    return {"status": "ready", "id": str(art.id),
-            "conversion_id": str(art.conversion_id),
-            "file_name": art.output_file_name, "row_count": art.row_count,
-            "column_count": art.column_count, "dq_report": getattr(art, "dq_report", None)}
+    obj = c.target_object or ""
+    carrier = await _carrier_for_object(c.project_id, obj) or c
+    if wait:
+        from app.services.output_service import generate_merged_artifact
+        art = await generate_merged_artifact(c.project_id, obj, fmt=fmt, include_header=include_header)
+        return {"status": "ready", "id": str(art.id), "conversion_id": str(art.conversion_id),
+                "file_name": art.output_file_name, "row_count": art.row_count,
+                "column_count": art.column_count, "dq_report": getattr(art, "dq_report", None)}
+    await carrier.set({"output_status": "generating", "output_error": None,
+                       "output_started_at": datetime.utcnow()})
+    asyncio.create_task(_run_merged_generation(c.project_id, obj, fmt, include_header, carrier.id))
+    return {"status": "generating", "conversion_id": str(carrier.id), "carrier_id": str(carrier.id)}
 
 
 @output_router.get("/{conversion_id}/outputs", response_model=list[ConvertedOutputOut])

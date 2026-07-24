@@ -428,7 +428,9 @@ export const MappingReviewPage: React.FC = () => {
       // source too. Fall back to the plain (async) generate on any error.
       let out: any = null;
       try {
-        out = await OutputApi.generateMerged(pid, headerOn);
+        out = await OutputApi.generateMergedAndWait(pid, headerOn, (sec) => {
+          if (sec >= 3) setToast(`Merging + generating FBDI output… ${sec}s`);
+        });
         await OutputApi.download(out.conversion_id || pid, out.file_name || fallback);
       } catch {
         out = await OutputApi.generateAndWait(pid, "csv", (sec) => {

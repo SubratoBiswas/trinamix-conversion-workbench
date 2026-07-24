@@ -588,15 +588,30 @@ export const OutputApi = {
     api.get<ConvertedOutput[]>(`/conversions/${conversionId}/outputs`).then(r => r.data),
   preview: (conversionId: string, limit = 50) =>
     api.get<OutputPreview>(`/conversions/${conversionId}/output-preview`, { params: { limit } }).then(r => r.data),
-  /** Generate ONE merged file for this conversion's interface — all per-source
-   *  conversions in the project merged + de-duplicated + cleansed + validated.
-   *  Returns the carrier artifact (conversion_id may differ from the input). */
+  /** Kick off merged generation (async) — returns the CARRIER conversion id to poll. */
   generateMerged: (conversionId: string, includeHeader?: boolean) =>
-    api.post<{ status: string; id: string; conversion_id: string; file_name: string;
-      row_count: number; column_count: number; dq_report?: DqReport | null }>(
+    api.post<{ status: string; conversion_id: string; carrier_id?: string }>(
       `/conversions/${conversionId}/generate-merged`, null,
-      { params: { ...(includeHeader === undefined ? {} : { include_header: includeHeader }) },
-        timeout: 300000 }).then(r => r.data),
+      { params: { ...(includeHeader === undefined ? {} : { include_header: includeHeader }) } },
+    ).then(r => r.data),
+  /** Merged generate, then poll the carrier conversion until ready. Returns the
+   *  carrier's artifact info (file_name lives under conversion_id = carrier). */
+  generateMergedAndWait: async (
+    conversionId: string, includeHeader?: boolean, onTick?: (sec: number) => void,
+  ): Promise<{ conversion_id: string; file_name: string; row_count: number;
+    column_count: number; dq_report?: DqReport | null }> => {
+    const start = await OutputApi.generateMerged(conversionId, includeHeader);
+    const carrier = start.conversion_id;
+    const t0 = Date.now();
+    for (let i = 0; i < 160; i++) {
+      await new Promise(res => setTimeout(res, 3000));
+      const s = await OutputApi.generationStatus(carrier);
+      onTick?.(Math.round((Date.now() - t0) / 1000));
+      if (s.status === "ready" && s.output) return { conversion_id: carrier, ...s.output };
+      if (s.status === "failed") throw new Error(s.error || "Merged generation failed");
+    }
+    throw new Error("Merged generation is taking unusually long — check back shortly.");
+  },
   /** Preview the MERGED output for this conversion's interface (all sources). */
   mergedPreview: (conversionId: string, limit = 50) =>
     api.get<{ columns: string[]; rows: Record<string, any>[]; total_rows: number;

@@ -79,16 +79,16 @@ def merge_dedupe(frames: list, target_object: Optional[str], key_registry: dict,
 def _survive(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
     """Golden-record survivorship: one row per key where each field is the first
     NON-BLANK value in priority (row) order. Rows arrive already ordered by source
-    priority, so the top source wins per field but its blanks are back-filled from
-    lower-priority sources. Falls back to plain keep-first if a group has a single
-    row (the common case), so it's cheap."""
+    priority, so the top source wins per field, back-filled from lower sources.
+
+    VECTORISED: blank/whitespace cells -> NaN, then groupby.first() (which skips
+    NaN) gives the first non-blank per column per key in one pass. This is O(1) pandas
+    ops instead of a Python callable per column per group — critical for wide objects
+    (Item 1,365 cols / Customer 1,254 cols) where the naive agg was the bottleneck."""
     if df.empty:
         return df
-    def _first_non_blank(col: pd.Series):
-        for v in col:
-            if v is not None and str(v).strip() != "":
-                return v
-        return col.iloc[0]
-    # Group preserving first-seen key order; aggregate each column by first-non-blank.
-    grouped = df.groupby(key_col, sort=False, as_index=False).agg(_first_non_blank)
-    return grouped
+    import numpy as np
+    # Only string blanks need masking; regex replace is a no-op on numeric columns.
+    work = df.replace(r"^\s*$", np.nan, regex=True)
+    grouped = work.groupby(key_col, sort=False, as_index=False).first()
+    return grouped.fillna("")
