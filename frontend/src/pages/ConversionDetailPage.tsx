@@ -85,6 +85,16 @@ export const ConversionDetailPage: React.FC = () => {
     catch { setCrossSug({ suggestions: [], clients_seen: 0 }); }
     finally { setCrossLoading(false); }
   };
+  // Cutover readiness (auto-loaded).
+  const [readiness, setReadiness] = useState<any>(null);
+  useEffect(() => {
+    if (!id) return;
+    OutputApi.readiness(id).then(setReadiness).catch(() => setReadiness(null));
+  }, [id]);
+  const BAND_TONE: Record<string, any> = {
+    "Ready": "success", "Needs minor work": "warning", "In progress": "warning",
+    "Blocked": "danger", "Not started": "neutral",
+  };
   // Gold reference standards on file (per object), loaded from the DB. Lets this
   // page show whether a standard already exists for this conversion's object
   // (uploaded here or on the project screen) — it's auto-applied at generate.
@@ -685,6 +695,39 @@ export const ConversionDetailPage: React.FC = () => {
             )}
           </CardBody>
         </Card>
+
+        {/* Cutover readiness */}
+        {readiness && (
+          <Card>
+            <CardHeader
+              title={<><CheckCircle2 className="mr-2 inline h-4 w-4 text-brand" />Cutover readiness</>}
+              subtitle={`Load-readiness for this interface object`}
+              actions={
+                <div className="flex items-center gap-2">
+                  <Pill tone={BAND_TONE[readiness.band] || "neutral"}>{readiness.band}</Pill>
+                  <span className="text-lg font-bold text-ink">{readiness.score}<span className="text-xs text-ink-muted">/100</span></span>
+                </div>
+              }
+            />
+            <CardBody>
+              <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
+                <Pill tone="neutral">Coverage {readiness.coverage_pct}%</Pill>
+                <Pill tone="neutral">Effort: {readiness.effort}</Pill>
+                <Pill tone="neutral">~{readiness.est_hours}h</Pill>
+                <Pill tone="neutral">{readiness.open_items} open item(s)</Pill>
+              </div>
+              <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                {readiness.factors.map((f: any) => (
+                  <div key={f.label} className="flex items-center gap-2 rounded-md border border-line bg-white px-2 py-1.5 text-xs">
+                    {f.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-success" /> : <Clock className="h-3.5 w-3.5 text-ink-muted" />}
+                    <span className="font-medium text-ink">{f.label}</span>
+                    <span className="ml-auto text-[11px] text-ink-muted">{f.detail}</span>
+                  </div>
+                ))}
+              </div>
+            </CardBody>
+          </Card>
+        )}
 
         {/* Cross-client suggestions — decisions other clients approved for this object */}
         <Card>

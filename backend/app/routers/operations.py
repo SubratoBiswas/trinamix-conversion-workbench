@@ -291,6 +291,23 @@ async def cross_client_suggestions(
     return res
 
 
+@output_router.get("/{conversion_id}/readiness")
+async def conversion_readiness(conversion_id: str, _: User = Depends(get_current_user)):
+    """Cutover-readiness score (0-100) + band + effort estimate for one conversion,
+    rolled up from required-field coverage, DQ status, gold, output and load history."""
+    c = await _require_conversion(conversion_id)
+    from app.services.readiness_service import assess_conversion
+    return await assess_conversion(c)
+
+
+@output_router.get("/project/{project_id}/readiness")
+async def project_readiness(project_id: str, _: User = Depends(get_current_user)):
+    """Cutover-readiness across every interface object in a project + a rollup
+    (avg score, ready/blocked counts, total estimated effort)."""
+    from app.services.readiness_service import assess_project
+    return await assess_project(project_id)
+
+
 async def _carrier_for_object(project_id, target_object: str):
     """The carrier conversion (first bound, by load order) for a project+interface —
     the merged artifact is stored under it and its status is polled."""

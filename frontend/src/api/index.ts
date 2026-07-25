@@ -538,6 +538,19 @@ export interface DqReport {
   top_issues: { field_name?: string; issue_type?: string; severity?: string; message?: string }[];
 }
 
+export interface ReadinessObject {
+  conversion_id?: string;
+  name?: string;
+  target_object?: string;
+  score: number;
+  band: "Not started" | "In progress" | "Needs minor work" | "Ready" | "Blocked";
+  effort: "None" | "Low" | "Medium" | "High";
+  est_hours: number;
+  open_items: number;
+  coverage_pct: number;
+  factors: { label: string; ok: boolean; detail: string }[];
+}
+
 export interface DqRule {
   id: string;
   kind: "validation" | "cleansing";
@@ -687,6 +700,14 @@ export const OutputApi = {
       params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
       timeout: 120000,
     }).then(r => r.data),
+  /** Cutover-readiness score for one conversion. */
+  readiness: (conversionId: string) =>
+    api.get<ReadinessObject>(`/conversions/${conversionId}/readiness`, { timeout: 60000 }).then(r => r.data),
+  /** Cutover-readiness across every interface object in a project + rollup. */
+  projectReadiness: (projectId: string) =>
+    api.get<{ project_id: string; object_count: number; avg_score: number; ready: number;
+      blocked: number; bands: Record<string, number>; total_est_hours: number;
+      objects: ReadinessObject[] }>(`/conversions/project/${projectId}/readiness`, { timeout: 90000 }).then(r => r.data),
   /** Cross-client mapping/crosswalk suggestions — decisions other clients approved
    *  for the same Fusion object, ranked by supporting-client count. */
   crossClientSuggestions: (conversionId: string, limit = 200) =>
