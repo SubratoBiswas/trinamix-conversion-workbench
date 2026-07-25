@@ -154,6 +154,15 @@ export const ProjectOverviewPage: React.FC = () => {
   // Filled-in Oracle FBDI Excel template (data written into the real template, e.g.
   // the POZ_SUPPLIERS_INT sheet) — generated in the background then downloaded.
   const [dlT, setDlT] = useState<string | null>(null);
+  // Agentic plan (checkpoint preview) — read-only draft, nothing runs.
+  const [plan, setPlan] = useState<any>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const loadPlan = async () => {
+    setPlanLoading(true);
+    try { setPlan(await OutputApi.agenticPlan(pid)); }
+    catch { setPlan({ objects: [], note: "Couldn't draft a plan right now." }); }
+    finally { setPlanLoading(false); }
+  };
   const downloadTemplate = async (c: Conversion) => {
     setDlT(String(c.id));
     try {
@@ -476,6 +485,64 @@ export const ProjectOverviewPage: React.FC = () => {
 
       {/* Cutover Orchestration */}
       <CutoverPanel projectId={pid} />
+
+      {/* Agentic plan (checkpoint preview) */}
+      <Card className="mt-4">
+        <CardHeader
+          title={<><Wand2 className="mr-2 inline h-4 w-4 text-brand" />Agentic conversion plan (preview)</>}
+          subtitle="Draft the map → generate → validate plan for every interface — review before anything runs"
+          actions={
+            <Button variant="secondary" disabled={planLoading} onClick={loadPlan}>
+              <Wand2 className={cn("h-4 w-4", planLoading && "animate-pulse")} />
+              {planLoading ? "Drafting…" : plan ? "Re-draft plan" : "Draft plan"}
+            </Button>
+          }
+        />
+        {plan && (
+          <CardBody>
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
+              <Pill tone="neutral">{plan.object_count} objects</Pill>
+              <Pill tone="neutral">{plan.total_steps} planned steps</Pill>
+              <Pill tone="success">{plan.ready_count} ready</Pill>
+              {plan.blocked_objects?.length > 0 && <Pill tone="danger">{plan.blocked_objects.length} blocked</Pill>}
+              <span className="text-ink-muted">{plan.note}</span>
+            </div>
+            <div className="space-y-3">
+              {(plan.objects || []).map((o: any) => (
+                <div key={o.conversion_id} className="rounded-lg border border-line bg-white">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-ink">{o.target_object || o.name}</span>
+                      <Pill tone={o.status === "Ready" ? "success" : o.status.startsWith("Blocked") ? "danger" : "warning"}>{o.status}</Pill>
+                      {o.readiness && <span className="text-[11px] text-ink-muted">{o.readiness.score}/100</span>}
+                    </div>
+                    <span className="text-[11px] text-ink-subtle">{o.required_covered}/{o.required_total} required · {o.steps.length} step(s)</span>
+                  </div>
+                  <ol className="space-y-1 px-3 py-2">
+                    {o.steps.map((s: any, i: number) => (
+                      <li key={i} className="flex items-start gap-2 text-xs">
+                        <span className={cn("mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
+                          s.blocker ? "bg-danger-subtle text-danger" : "bg-brand-subtle text-brand-dark")}>{s.blocker ? "!" : i + 1}</span>
+                        <span>
+                          <span className="font-medium text-ink">{s.action}</span>
+                          <span className="text-ink-muted"> — {s.detail}</span>
+                          <span className="ml-1 rounded bg-canvas px-1 py-0.5 text-[10px] text-ink-subtle">{s.layer}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <Button variant="primary" disabled title="Plan execution with per-object approval is the next slice">
+                Approve &amp; run (coming soon)
+              </Button>
+              <span className="text-[11px] text-ink-muted">This is a checkpoint — nothing is mapped, generated or loaded until you approve.</span>
+            </div>
+          </CardBody>
+        )}
+      </Card>
 
       {/* Conversion Objects + Source Connection + Load Order */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">

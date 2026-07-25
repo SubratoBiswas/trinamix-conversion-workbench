@@ -308,6 +308,15 @@ async def project_readiness(project_id: str, _: User = Depends(get_current_user)
     return await assess_project(project_id)
 
 
+@output_router.get("/project/{project_id}/agentic-plan")
+async def agentic_plan(project_id: str, _: User = Depends(get_current_user)):
+    """Agentic PLAN step (checkpoint): draft — but do NOT run — the per-interface
+    conversion plan (map → generate → validate, with provenance and blockers) for
+    every object in the project, for human review/approval. Read-only."""
+    from app.services.agentic_planner import build_project_plan
+    return await build_project_plan(project_id)
+
+
 @output_router.post("/{conversion_id}/copilot")
 async def conversion_copilot(
     conversion_id: str,

@@ -407,8 +407,19 @@ Building the AI-differentiator list the user prioritised, highest-impact first.
   mutates). `POST conversions/{id}/copilot`. UI: Conversion detail → "Ask the copilot"
   card. Tests: `tests/test_copilot_grounding.py` (8). NEXT for #7: confirmable ACTION
   tools (regenerate, toggle header, apply a rule) behind explicit confirmation.
-- **Still to build:** #7 action tools (above), and #8 agentic end-to-end conversion.
+- **#8 Agentic end-to-end conversion — SLICE 1 DONE (plan step + checkpoint).**
+  `services/agentic_planner.py`: pure `plan_steps_for` (per-object ordered steps:
+  bind source [blocker] → auto-map N required (gold→learnings→workbook→deterministic→AI)
+  → generate merged → pre-load validate → resolve DQ hard errors [blocker], each
+  naming its precedence LAYER), + `build_object_plan`/`build_project_plan` from real
+  state. Read-only, no execution. `GET conversions/project/{id}/agentic-plan`. UI:
+  ProjectOverview → "Agentic conversion plan (preview)" card with a disabled
+  "Approve & run (coming soon)" checkpoint. Tests: `tests/test_agentic_planner.py` (6).
+  NEXT for #8: execute-with-approval (per-object, at plan/dry-run/pre-load gates,
+  reusing the map/generate/validate endpoints; approvals become learnings; never auto-load).
+- **Still to build:** #7 copilot ACTION tools, #8 plan EXECUTION with approval gates.
   (Roadmap in `docs/AI_Differentiators_Roadmap.md`.)
 - New AI-intelligence unit suites (all pure, no DB/network): `test_entity_resolution.py`
   (7), `test_anomaly_service.py` (10), `test_cross_client.py` (5), `test_readiness.py`
-  (8), `test_synthetic_data.py` (8), `test_copilot_grounding.py` (8) — 46 total.
+  (8), `test_synthetic_data.py` (8), `test_copilot_grounding.py` (8),
+  `test_agentic_planner.py` (6) — 52 total.

@@ -719,6 +719,16 @@ export const OutputApi = {
   /** Cutover-readiness score for one conversion. */
   readiness: (conversionId: string) =>
     api.get<ReadinessObject>(`/conversions/${conversionId}/readiness`, { timeout: 60000 }).then(r => r.data),
+  /** Agentic PLAN step (checkpoint): draft per-interface plan for a project (read-only). */
+  agenticPlan: (projectId: string) =>
+    api.get<{
+      project_id: string; object_count: number; total_steps: number; ready_count: number;
+      blocked_objects: string[]; requires_review: boolean; note: string;
+      objects: { conversion_id: string; name: string; target_object?: string; status: string;
+        readiness?: { score: number; band: string } | null; required_total?: number;
+        required_covered?: number; unmapped_required: string[]; has_blocker: boolean;
+        steps: { action: string; detail: string; layer: string; blocker: boolean }[] }[];
+    }>(`/conversions/project/${projectId}/agentic-plan`, { timeout: 120000 }).then(r => r.data),
   /** Cutover-readiness across every interface object in a project + rollup. */
   projectReadiness: (projectId: string) =>
     api.get<{ project_id: string; object_count: number; avg_score: number; ready: number;
