@@ -712,6 +712,10 @@ export const OutputApi = {
       params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
       timeout: 120000,
     }).then(r => r.data),
+  /** Grounded, read-only copilot Q&A for one conversion (mappings/DQ/readiness). */
+  copilot: (conversionId: string, question: string) =>
+    api.post<{ answer: string; citations: string[]; intent: string; ai_used: boolean;
+      facts_summary?: any }>(`/conversions/${conversionId}/copilot`, { question }, { timeout: 60000 }).then(r => r.data),
   /** Cutover-readiness score for one conversion. */
   readiness: (conversionId: string) =>
     api.get<ReadinessObject>(`/conversions/${conversionId}/readiness`, { timeout: 60000 }).then(r => r.data),

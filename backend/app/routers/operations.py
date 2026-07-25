@@ -308,6 +308,23 @@ async def project_readiness(project_id: str, _: User = Depends(get_current_user)
     return await assess_project(project_id)
 
 
+@output_router.post("/{conversion_id}/copilot")
+async def conversion_copilot(
+    conversion_id: str,
+    body: dict,
+    _: User = Depends(get_current_user),
+):
+    """Grounded, read-only copilot for ONE conversion. Answers a question strictly
+    from this conversion's own mappings (with provenance), DQ report and readiness —
+    deterministic, with an LLM layer when configured. Never mutates state."""
+    c = await _require_conversion(conversion_id)
+    question = str((body or {}).get("question") or "").strip()
+    if not question:
+        raise HTTPException(400, "Provide a 'question'.")
+    from app.services.copilot_grounding import answer_grounded
+    return await answer_grounded(c, question)
+
+
 async def _carrier_for_object(project_id, target_object: str):
     """The carrier conversion (first bound, by load order) for a project+interface —
     the merged artifact is stored under it and its status is polled."""

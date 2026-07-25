@@ -399,9 +399,16 @@ Building the AI-differentiator list the user prioritised, highest-impact first.
   required/type/max-length/LOV/date-mask/name heuristics + unique keys, seeded.
   `GET fbdi/templates/{id}/synthetic-data?rows&fmt` (CSV / .zip multi-sheet / xlsx).
   UI: FBDI Templates page "Sample data" (flask) button. Tests: `tests/test_synthetic_data.py` (8).
-- **Still to build (list order):** the two epics — #7 conversational copilot that
-  operates the tool, #8 agentic end-to-end conversion. (Roadmap in
-  `docs/AI_Differentiators_Roadmap.md`.)
+- **#7 Conversational copilot — SLICE 1 DONE (read-only grounded Q&A).**
+  `services/copilot_grounding.py`: `build_conversion_facts` (mappings w/ provenance +
+  DQ + readiness), pure `answer_from_facts` (intents: field provenance / unmapped /
+  DQ-reject / readiness / summary, with citations — works with no model),
+  `answer_grounded` (LLM layer over the same facts, deterministic fallback; never
+  mutates). `POST conversions/{id}/copilot`. UI: Conversion detail → "Ask the copilot"
+  card. Tests: `tests/test_copilot_grounding.py` (8). NEXT for #7: confirmable ACTION
+  tools (regenerate, toggle header, apply a rule) behind explicit confirmation.
+- **Still to build:** #7 action tools (above), and #8 agentic end-to-end conversion.
+  (Roadmap in `docs/AI_Differentiators_Roadmap.md`.)
 - New AI-intelligence unit suites (all pure, no DB/network): `test_entity_resolution.py`
   (7), `test_anomaly_service.py` (10), `test_cross_client.py` (5), `test_readiness.py`
-  (8), `test_synthetic_data.py` (8) — 38 total.
+  (8), `test_synthetic_data.py` (8), `test_copilot_grounding.py` (8) — 46 total.

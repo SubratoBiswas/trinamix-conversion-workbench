@@ -95,6 +95,23 @@ export const ConversionDetailPage: React.FC = () => {
     "Ready": "success", "Needs minor work": "warning", "In progress": "warning",
     "Blocked": "danger", "Not started": "neutral",
   };
+  // Grounded copilot Q&A (read-only).
+  const [cpQ, setCpQ] = useState("");
+  const [cpAns, setCpAns] = useState<any>(null);
+  const [cpLoading, setCpLoading] = useState(false);
+  const askCopilot = async (q?: string) => {
+    const question = (q ?? cpQ).trim();
+    if (!question || !id) return;
+    setCpQ(question); setCpLoading(true);
+    try { setCpAns(await OutputApi.copilot(id, question)); }
+    catch { setCpAns({ answer: "Couldn't answer right now. Try again.", citations: [] }); }
+    finally { setCpLoading(false); }
+  };
+  const CP_SUGGESTIONS = [
+    "Which required fields are still unmapped?",
+    "What will Oracle reject?",
+    "How ready is this for cutover?",
+  ];
   // Gold reference standards on file (per object), loaded from the DB. Lets this
   // page show whether a standard already exists for this conversion's object
   // (uploaded here or on the project screen) — it's auto-applied at generate.
@@ -691,6 +708,49 @@ export const ConversionDetailPage: React.FC = () => {
                     <span className="text-danger">{r.failed_count} ✕</span>
                   </div>
                 ))}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        {/* Grounded copilot */}
+        <Card>
+          <CardHeader
+            title={<><Sparkles className="mr-2 inline h-4 w-4 text-brand" />Ask the copilot</>}
+            subtitle="Read-only Q&A grounded in this conversion's mappings, data quality & readiness"
+          />
+          <CardBody>
+            <div className="flex gap-2">
+              <input
+                value={cpQ}
+                onChange={(e) => setCpQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") askCopilot(); }}
+                placeholder="e.g. why is Invoice Match Option blank?"
+                className="input flex-1 !h-9 text-sm"
+              />
+              <Button variant="primary" onClick={() => askCopilot()} loading={cpLoading} className="h-9">
+                Ask
+              </Button>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {CP_SUGGESTIONS.map((s) => (
+                <button key={s} onClick={() => askCopilot(s)}
+                  className="rounded-full border border-line bg-white px-2.5 py-1 text-[11px] text-ink-muted hover:border-brand hover:text-brand-dark">
+                  {s}
+                </button>
+              ))}
+            </div>
+            {cpAns && (
+              <div className="mt-3 rounded-lg border border-line bg-canvas px-3 py-2.5">
+                <div className="text-sm text-ink whitespace-pre-wrap">{cpAns.answer}</div>
+                {(cpAns.citations?.length || cpAns.ai_used) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {(cpAns.citations || []).map((c: string, i: number) => (
+                      <span key={i} className="rounded bg-white px-1.5 py-0.5 text-[10.5px] text-ink-muted border border-line">{c}</span>
+                    ))}
+                    <Pill tone={cpAns.ai_used ? "brand" : "neutral"}>{cpAns.ai_used ? "AI + grounded" : "grounded"}</Pill>
+                  </div>
+                )}
               </div>
             )}
           </CardBody>
