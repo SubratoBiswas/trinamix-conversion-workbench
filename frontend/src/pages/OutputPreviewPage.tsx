@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Download, FileOutput, FolderDown } from "lucide-react";
+import { ArrowLeft, Download, FileOutput, FolderDown, Sparkles, Copy } from "lucide-react";
 import { ConversionsApi, OutputApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Tabs,
@@ -20,6 +20,19 @@ export const OutputPreviewPage: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
+  // Fuzzy duplicate / entity resolution (loaded on demand when the tab opens).
+  const [dupes, setDupes] = useState<any>(null);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [dupAi, setDupAi] = useState(false);
+
+  const loadDupes = async (useAi = false) => {
+    setDupLoading(true);
+    try {
+      setDupes(await OutputApi.duplicateCandidates(pid!, { useAi }));
+    } catch {
+      setDupes({ clusters: [], note: "Couldn't analyze duplicates — generate/preview the output first." });
+    } finally { setDupLoading(false); }
+  };
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -102,13 +115,79 @@ export const OutputPreviewPage: React.FC = () => {
       <Card>
         <Tabs
           value={tab}
-          onChange={setTab}
+          onChange={(v) => { setTab(v); if (v === "dupes" && dupes === null) loadDupes(false); }}
           items={[
             { value: "data", label: "Converted Data", count: data?.total_rows },
             { value: "lineage", label: "Lineage", count: data ? Object.keys(data.lineage).length : 0 },
+            { value: "dupes", label: "Duplicate suspects", count: dupes?.cluster_count },
           ]}
         />
-        {data === null ? <PageLoader /> :
+        {tab === "dupes" ? (
+          <CardBody>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-xs text-ink-muted">
+                Records likely to be the <span className="font-medium">same entity</span> despite different keys/names —
+                what the exact-key de-duplication can't catch.
+                {dupes?.anchor && <> Matched on <code className="rounded bg-canvas px-1 py-0.5">{dupes.anchor}</code> + identity fields.</>}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={() => loadDupes(false)} loading={dupLoading}>
+                  <Copy className="h-4 w-4" /> Re-scan
+                </Button>
+                <Button variant="secondary" onClick={() => { setDupAi(true); loadDupes(true); }} loading={dupLoading && dupAi}>
+                  <Sparkles className="h-4 w-4" /> Adjudicate with AI
+                </Button>
+              </div>
+            </div>
+            {dupLoading ? <PageLoader /> : !dupes || !(dupes.clusters?.length) ? (
+              <EmptyState
+                title="No likely duplicates found"
+                description={dupes?.note || `Scanned ${dupes?.rows_scanned ?? 0} records — no near-duplicate entities above the match threshold.`}
+              />
+            ) : (
+              <>
+                <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
+                  <Pill tone="warning">{dupes.cluster_count} suspected group{dupes.cluster_count === 1 ? "" : "s"}</Pill>
+                  <Pill tone="neutral">{dupes.duplicate_rows} records</Pill>
+                  <Pill tone="neutral">{dupes.rows_scanned} scanned</Pill>
+                  {dupes.ai_used && <Pill tone="brand">AI-adjudicated</Pill>}
+                </div>
+                <div className="space-y-3">
+                  {dupes.clusters.map((cl: any, i: number) => (
+                    <div key={i} className="rounded-lg border border-line bg-white">
+                      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <Pill tone={cl.confidence >= 0.92 ? "danger" : cl.confidence >= 0.8 ? "warning" : "neutral"}>
+                            {Math.round(cl.confidence * 100)}% match
+                          </Pill>
+                          <span className="text-xs text-ink-muted">{cl.size} records</span>
+                          {cl.verdict && <Pill tone={cl.verdict === "same" ? "danger" : cl.verdict === "different" ? "success" : "neutral"}>AI: {cl.verdict}</Pill>}
+                        </div>
+                        <span className="text-[11px] text-ink-subtle">on {cl.fields.join(", ")}</span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="table-shell">
+                          <thead><tr><th>Row</th>{(dupes.identity_fields || []).map((f: string) => <th key={f} className="whitespace-nowrap">{f}</th>)}</tr></thead>
+                          <tbody>
+                            {cl.members.map((m: any) => (
+                              <tr key={m.row}>
+                                <td className="text-ink-muted">{m.row + 1}</td>
+                                {(dupes.identity_fields || []).map((f: string) => (
+                                  <td key={f} className="whitespace-nowrap">{String(m.values[f] ?? "")}</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {cl.ai_reason && <div className="border-t border-line px-3 py-1.5 text-[11px] text-ink-muted"><Sparkles className="mr-1 inline h-3 w-3" />{cl.ai_reason}</div>}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </CardBody>
+        ) : data === null ? <PageLoader /> :
           tab === "data" ? (
             data.columns.length === 0 ? (
               <CardBody><EmptyState

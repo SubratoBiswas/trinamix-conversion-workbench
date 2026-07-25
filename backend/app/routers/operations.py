@@ -233,6 +233,37 @@ async def merged_preview(conversion_id: str, limit: int = 50, _: User = Depends(
             "target_object": c.target_object}
 
 
+@output_router.get("/{conversion_id}/duplicate-candidates")
+async def duplicate_candidates(
+    conversion_id: str,
+    threshold: float = Query(0.86, ge=0.5, le=1.0),
+    use_ai: bool = Query(False),
+    max_rows: int = Query(8000, ge=100, le=50000),
+    _: User = Depends(get_current_user),
+):
+    """Fuzzy duplicate / entity resolution over this interface's MERGED data —
+    surface records that are likely the SAME entity despite non-identical keys or
+    names (what the exact-key de-dup can't catch). Deterministic clustering; set
+    ``use_ai=true`` to have the model adjudicate borderline clusters."""
+    c = await _require_conversion(conversion_id)
+    from app.services.output_service import (build_merged_frame_for_object,
+                                             build_converted_dataframe)
+    from app.services.entity_resolution import (find_duplicate_clusters,
+                                                 ai_adjudicate_clusters)
+    merged, carrier, names = await build_merged_frame_for_object(
+        c.project_id, c.target_object or "", max_rows=max_rows)
+    if merged is None:
+        merged = (await build_converted_dataframe(c))[0]
+    import asyncio as _aio
+    result = await _aio.to_thread(
+        find_duplicate_clusters, merged, c.target_object or "", threshold=threshold,
+        max_rows=max_rows)
+    result["sources"] = names
+    if use_ai:
+        result = await ai_adjudicate_clusters(result)
+    return result
+
+
 async def _carrier_for_object(project_id, target_object: str):
     """The carrier conversion (first bound, by load order) for a project+interface —
     the merged artifact is stored under it and its status is polled."""

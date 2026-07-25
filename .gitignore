@@ -11,4 +11,5 @@ docs/_gen_docs.js
 docs/_preview/
 docs/Conversion_Workbench_User_Guide.pdf
 docs/Conversion_Workbench_Feature_List.pdf
+docs/Conversion_Workbench_Unit_Tests.pdf
 node_modules/

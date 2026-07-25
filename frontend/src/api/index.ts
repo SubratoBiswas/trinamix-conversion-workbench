@@ -73,6 +73,15 @@ export const DatasetsApi = {
     api.get<DatasetPreview>(`/datasets/${id}/preview`, { params: { limit } }).then(r => r.data),
   suggestTemplate: (id: string) =>
     api.get<{ dataset_id: string; suggestions: TemplateSuggestion[] }>(`/datasets/${id}/suggest-template`).then(r => r.data),
+  /** Source-data anomaly / outlier detection (pre-mapping). */
+  anomalies: (id: string, opts?: { useAi?: boolean }) =>
+    api.get<{
+      dataset_id: string; dataset_name?: string; rows: number; columns_scanned: number;
+      duplicate_rows: number; ai_used?: boolean;
+      summary: { error: number; warning: number; info: number; columns_flagged: number };
+      findings: { column: string; issue_type: string; severity: "error" | "warning" | "info";
+        count: number; pct: number; examples: string[]; detail: string; ai_risk?: string }[];
+    }>(`/datasets/${id}/anomalies`, { params: { use_ai: opts?.useAi ?? false }, timeout: 90000 }).then(r => r.data),
   classify: (id: string) =>
     api.get<{
       dataset_id: string; signature: string; learned: boolean;
@@ -664,6 +673,20 @@ export const OutputApi = {
     api.get<{ sources: { name: string; rows: number }[]; source_total: number; output_rows: number | null;
       merged_or_deduped: number | null; load: any; narrative: string }>(
       `/conversions/${conversionId}/reconciliation`).then(r => r.data),
+  /** Fuzzy duplicate / entity resolution over the merged interface data — clusters
+   *  of records likely to be the same entity despite non-identical keys/names. */
+  duplicateCandidates: (conversionId: string, opts?: { threshold?: number; useAi?: boolean }) =>
+    api.get<{
+      object?: string; rows_scanned: number; identity_fields: string[]; anchor?: string;
+      cluster_count?: number; duplicate_rows?: number; truncated?: boolean; note?: string;
+      ai_used?: boolean; sources?: string[];
+      clusters: { confidence: number; size: number; fields: string[];
+        verdict?: string; ai_reason?: string;
+        members: { row: number; values: Record<string, any> }[] }[];
+    }>(`/conversions/${conversionId}/duplicate-candidates`, {
+      params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
+      timeout: 120000,
+    }).then(r => r.data),
   /** Per-source converted preview (multi-source): one block per source file. */
   previewBySource: (conversionId: string, limit = 50) =>
     api.get<{ multi: boolean; sources: { source_id: string | null; source_name: string | null;

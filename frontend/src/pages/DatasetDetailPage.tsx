@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Hash, Calendar, Type, ToggleLeft, AlignLeft, Lock, ShieldOff } from "lucide-react";
+import { ArrowLeft, Hash, Calendar, Type, ToggleLeft, AlignLeft, Lock, ShieldOff, AlertTriangle, Sparkles, RefreshCw } from "lucide-react";
 import { DatasetsApi } from "@/api";
-import { Card, CardHeader, PageLoader, PageTitle, Pill, Tabs } from "@/components/ui/Primitives";
+import { Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Tabs } from "@/components/ui/Primitives";
 import type { DatasetDetail, DatasetPreview } from "@/types";
 
 const PII_CATEGORIES: { value: string; label: string }[] = [
@@ -22,6 +22,17 @@ export const DatasetDetailPage: React.FC = () => {
   const [data, setData] = useState<DatasetDetail | null>(null);
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
   const [tab, setTab] = useState("profile");
+  const [anom, setAnom] = useState<any>(null);
+  const [anomLoading, setAnomLoading] = useState(false);
+  const [anomAi, setAnomAi] = useState(false);
+  const loadAnom = async (useAi = false) => {
+    if (!id) return;
+    setAnomLoading(true);
+    try { setAnom(await DatasetsApi.anomalies(id, { useAi })); }
+    catch { setAnom({ findings: [], summary: {} }); }
+    finally { setAnomLoading(false); }
+  };
+  const SEV_TONE: Record<string, any> = { error: "danger", warning: "warning", info: "neutral" };
 
   useEffect(() => {
     if (!id) return;
@@ -45,10 +56,11 @@ export const DatasetDetailPage: React.FC = () => {
       <Card>
         <Tabs
           value={tab}
-          onChange={setTab}
+          onChange={(v) => { setTab(v); if (v === "anomalies" && anom === null) loadAnom(false); }}
           items={[
             { value: "profile", label: "Column Profile", count: data.columns.length },
             { value: "preview", label: "Data Preview", count: preview?.total_rows },
+            { value: "anomalies", label: "Anomalies", count: anom?.findings?.length },
           ]}
         />
         {tab === "profile" && (
@@ -161,6 +173,55 @@ export const DatasetDetailPage: React.FC = () => {
               </tbody>
             </table>
           </div>
+        )}
+        {tab === "anomalies" && (
+          <CardBody>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-xs text-ink-muted">
+                Data problems in this source file that commonly fail an FBDI load — checked <span className="font-medium">before mapping</span>.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={() => loadAnom(false)} loading={anomLoading && !anomAi}>
+                  <RefreshCw className="h-4 w-4" /> Re-scan
+                </Button>
+                <Button variant="secondary" onClick={() => { setAnomAi(true); loadAnom(true); }} loading={anomLoading && anomAi}>
+                  <Sparkles className="h-4 w-4" /> Explain risks with AI
+                </Button>
+              </div>
+            </div>
+            {anomLoading ? <PageLoader /> : !anom || !(anom.findings?.length) ? (
+              <EmptyState icon={<AlertTriangle className="h-5 w-5" />} title="No anomalies detected"
+                description={`Scanned ${anom?.rows ?? 0} rows × ${anom?.columns_scanned ?? 0} columns — nothing flagged.`} />
+            ) : (
+              <>
+                <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
+                  <Pill tone="danger">{anom.summary.error} error</Pill>
+                  <Pill tone="warning">{anom.summary.warning} warning</Pill>
+                  <Pill tone="neutral">{anom.summary.info} info</Pill>
+                  <Pill tone="neutral">{anom.summary.columns_flagged} columns flagged</Pill>
+                  {anom.ai_used && <Pill tone="brand">AI risk notes</Pill>}
+                </div>
+                <table className="table-shell">
+                  <thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th className="text-right">Rows</th><th>Examples</th></tr></thead>
+                  <tbody>
+                    {anom.findings.map((f: any, i: number) => (
+                      <tr key={i}>
+                        <td><Pill tone={SEV_TONE[f.severity] || "neutral"}>{f.severity}</Pill></td>
+                        <td className="font-medium whitespace-nowrap">{f.column}</td>
+                        <td>
+                          <div className="text-ink">{f.issue_type}</div>
+                          <div className="text-[11px] text-ink-muted">{f.detail}</div>
+                          {f.ai_risk && <div className="mt-0.5 text-[11px] text-brand-dark"><Sparkles className="mr-1 inline h-3 w-3" />{f.ai_risk}</div>}
+                        </td>
+                        <td className="text-right tabular-nums">{f.count}<span className="text-ink-subtle"> ({Math.round(f.pct * 100)}%)</span></td>
+                        <td className="text-[11px] text-ink-muted">{(f.examples || []).slice(0, 3).map((e: string) => <code key={e} className="mr-1 rounded bg-canvas px-1 py-0.5">{e}</code>)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </CardBody>
         )}
       </Card>
     </>

@@ -122,6 +122,38 @@ async def get_profile(dataset_id: str, _: User = Depends(get_current_user)):
     return _ds_out(ds, columns)
 
 
+@router.get("/{dataset_id}/anomalies")
+async def dataset_anomalies(
+    dataset_id: str,
+    use_ai: bool = False,
+    max_rows: int = 5000,
+    _: User = Depends(get_current_user),
+):
+    """Source-data anomaly / outlier detection — profile the raw extract BEFORE
+    mapping and flag the data problems (nulls, mixed types, outliers, embedded
+    units, casing/whitespace variants, non-printables, duplicate rows) that later
+    fail the FBDI load. Deterministic; ``use_ai=true`` adds a risk note per finding."""
+    import asyncio as _aio
+    from app.parsers import parse_tabular
+    from app.services.dataset_file_store import materialize_dataset_file
+    from app.services.anomaly_service import detect_anomalies, ai_review_anomalies
+
+    ds = await Dataset.get(PydanticObjectId(dataset_id))
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    path = await materialize_dataset_file(ds)
+    if not path:
+        raise HTTPException(404, "Source file not available for this dataset")
+    ext = (ds.file_type or "csv").lstrip(".")
+    df = await _aio.to_thread(parse_tabular, str(path), ext, max(200, max_rows))
+    result = await _aio.to_thread(detect_anomalies, df)
+    result["dataset_id"] = dataset_id
+    result["dataset_name"] = ds.file_name
+    if use_ai:
+        result = await ai_review_anomalies(result, getattr(ds, "detected_object_type", None))
+    return result
+
+
 @router.get("/{dataset_id}/suggest-template")
 async def suggest_template_for_dataset(dataset_id: str, _: User = Depends(get_current_user)):
     ds = await Dataset.get(PydanticObjectId(dataset_id))

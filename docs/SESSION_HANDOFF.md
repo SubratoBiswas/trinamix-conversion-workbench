@@ -364,3 +364,26 @@ seed admin, move long EBS/Fusion ops to background workers before scaling out.
    BOM, Customer, Item) with data in the right sheet/rows and samples removed.
 3. **Watch memory** on very wide filled templates (Customer 19 sheets / Item 18) —
    fill runs in the background; if a small instance OOMs, cap rows or stream.
+
+### 9.7 AI data-intelligence features (roadmap build, in list order)
+Building the AI-differentiator list the user prioritised, highest-impact first.
+- **#1 Fuzzy duplicate / entity resolution — DONE.** `services/entity_resolution.py`
+  (pure, unit-tested): identity-field detection per object, blocking + token/difflib
+  similarity + union-find clustering with confidence + field evidence; optional AI
+  adjudication of borderline clusters (fallback deterministic). `GET conversions/{id}/
+  duplicate-candidates` (over the merged frame). UI: Output Preview → "Duplicate
+  suspects" tab (+ "Adjudicate with AI"). Tests: `tests/test_entity_resolution.py` (7).
+- **#2 Source-data anomaly / outlier detection — DONE.** `services/anomaly_service.py`
+  (pure, unit-tested): high-null, leading/trailing spaces, mixed types, numeric
+  outliers (IQR), embedded units, casing/whitespace variants, non-printables,
+  duplicate rows — severity/count/examples; optional AI risk notes. `GET datasets/
+  {id}/anomalies`. UI: Dataset detail → "Anomalies" tab (+ "Explain risks with AI").
+  Tests: `tests/test_anomaly_service.py` (10).
+- **#4 Source-profiling → target-module recommendation — ALREADY EXISTS.** `datasets`
+  router `/classify` + `/suggest-template` (detect_dataset_type / detect_source_system /
+  column_signature) recommend the source system + target Fusion object and learn from
+  confirmations. No rebuild; could add an AI adjudication layer if wanted.
+- **Still to build (list order):** #3 cross-client mapping/crosswalk auto-suggestion,
+  #5 object-readiness/effort scoring, #6 synthetic test-data generation, then the two
+  epics — #7 conversational copilot that operates the tool, #8 agentic end-to-end
+  conversion. (Roadmap in `docs/AI_Differentiators_Roadmap.md`.)
