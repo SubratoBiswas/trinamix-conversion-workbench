@@ -115,6 +115,18 @@ export const FbdiApi = {
     return api.post<FBDITemplateDetail>("/fbdi/upload", fd, { timeout: 300_000 }).then(r => r.data);
   },
   delete: (id: string) => api.delete(`/fbdi/templates/${id}`),
+  /** Generate + download synthetic test data for a template (load rehearsal / demo). */
+  syntheticData: async (id: string, rows = 25, fmt: "csv" | "xlsx" = "csv") => {
+    const res = await api.get(`/fbdi/templates/${id}/synthetic-data`, {
+      responseType: "blob", params: { rows, fmt }, timeout: 90000,
+    });
+    const cd = (res.headers?.["content-disposition"] as string) || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const name = m ? decodeURIComponent(m[1].replace(/"/g, "").trim()) : `synthetic.${fmt}`;
+    const url = window.URL.createObjectURL(new Blob([res.data]));
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+  },
   reparse: (id: string) => api.post<FBDITemplateDetail>(`/fbdi/templates/${id}/reparse`).then(r => r.data),
   reparseAll: () => api.post<{ reparsed: number; results: Array<{ id: string; name: string; status: string; fields: number }> }>("/fbdi/reparse-all").then(r => r.data),
   seedStandardFields: (id: string) =>

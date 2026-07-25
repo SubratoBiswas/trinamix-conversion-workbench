@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search, Trash2, RefreshCw,
+  Upload, FileSpreadsheet, ArrowLeft, Edit2, Save, X, Search, Trash2, RefreshCw, FlaskConical,
 } from "lucide-react";
 import { FbdiApi } from "@/api";
 import {
@@ -39,6 +39,7 @@ export const FbdiTemplatesPage: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reparsingId, setReparsingId] = useState<string | null>(null);
+  const [sampleId, setSampleId] = useState<string | null>(null);
   const [reparsingAll, setReparsingAll] = useState(false);
   const [reparseResult, setReparseResult] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -242,6 +243,20 @@ export const FbdiTemplatesPage: React.FC = () => {
                     <td className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/fbdi/${t.id}`} className="btn-ghost h-7 px-2 text-xs">Open</Link>
+                        <button
+                          onClick={async () => {
+                            const tid = String(t.id);
+                            setSampleId(tid);
+                            try { await FbdiApi.syntheticData(tid, 25, "csv"); }
+                            catch { /* ignore */ }
+                            finally { setSampleId(null); }
+                          }}
+                          disabled={sampleId === String(t.id)}
+                          className="btn-ghost h-7 px-2 text-xs text-ink-muted hover:bg-canvas disabled:opacity-50"
+                          title="Download 25 rows of synthetic, type-valid sample data (load rehearsal / demo)"
+                        >
+                          <FlaskConical className={cn("h-3.5 w-3.5", sampleId === String(t.id) && "animate-pulse")} />
+                        </button>
                         <button
                           onClick={() => handleReparse(t.id)}
                           disabled={reparsingId === t.id}

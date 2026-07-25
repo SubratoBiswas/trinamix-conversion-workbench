@@ -132,6 +132,80 @@ async def list_template_fields(template_id: str, _: User = Depends(get_current_u
     return out
 
 
+@router.get("/templates/{template_id}/synthetic-data")
+async def synthetic_data(
+    template_id: str,
+    rows: int = 25,
+    fmt: str = "csv",
+    _: User = Depends(get_current_user),
+):
+    """Generate synthetic, type-valid sample data for this interface (for a load
+    rehearsal or demo, without real client data). Honours required flags, data
+    types, max length and published lists-of-values. Returns a CSV (single sheet),
+    a .zip of CSVs (multi-sheet), or an .xlsx workbook (fmt=xlsx)."""
+    import io
+    import re as _re
+    import zipfile
+    from fastapi.responses import StreamingResponse
+    import pandas as pd
+    from app.services.synthetic_data_service import synthetic_frame
+
+    rows = max(1, min(1000, rows))
+    fmt = (fmt or "csv").lower()
+    tid = PydanticObjectId(template_id)
+    tpl = await FBDITemplate.get(tid)
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    sheets = await FBDISheet.find(FBDISheet.template_id == tid).sort("sequence").to_list()
+    fields = await FBDIField.find(FBDIField.template_id == tid).sort("sequence").to_list()
+    if not fields:
+        raise HTTPException(400, "Template has no parsed fields to generate from")
+    by_sheet: dict = {}
+    for f in fields:
+        by_sheet.setdefault(f.sheet_id, []).append(f)
+
+    def _fd(f):
+        return {"field_name": f.field_name, "display_name": f.display_name,
+                "required": f.required, "data_type": f.data_type,
+                "max_length": f.max_length, "allowed_values": f.allowed_values,
+                "format_mask": f.format_mask}
+
+    def _safe(s):
+        return _re.sub(r"[^A-Za-z0-9._-]+", "_", str(s or "sheet")).strip("_") or "sheet"
+
+    ordered = [s for s in sheets if s.id in by_sheet] or [None]
+    obj = _safe(tpl.business_object or tpl.name or "fbdi")
+
+    if fmt == "xlsx":
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            for s in ordered:
+                sid = s.id if s else next(iter(by_sheet))
+                df = synthetic_frame([_fd(f) for f in by_sheet[sid]], rows)
+                nm = _safe(s.sheet_name if s else obj)[:31] or "Sheet1"
+                df.to_excel(xw, index=False, sheet_name=nm)
+        buf.seek(0)
+        return StreamingResponse(iter([buf.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{obj}_synthetic.xlsx"'})
+
+    if len(ordered) == 1:
+        sid = ordered[0].id if ordered[0] else next(iter(by_sheet))
+        df = synthetic_frame([_fd(f) for f in by_sheet[sid]], rows)
+        data = df.to_csv(index=False)
+        return StreamingResponse(iter([data]), media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{obj}_synthetic.csv"'})
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, s in enumerate(ordered, 1):
+            df = synthetic_frame([_fd(f) for f in by_sheet[s.id]], rows)
+            zf.writestr(f"{i:02d}_{_safe(s.sheet_name)}.csv", df.to_csv(index=False))
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{obj}_synthetic.zip"'})
+
+
 @router.delete("/templates/{template_id}", status_code=204)
 async def delete_template(template_id: str, _: User = Depends(get_current_user)):
     tpl = await FBDITemplate.get(PydanticObjectId(template_id))

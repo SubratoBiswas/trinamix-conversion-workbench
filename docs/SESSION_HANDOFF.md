@@ -394,9 +394,14 @@ Building the AI-differentiator list the user prioritised, highest-impact first.
   coverage + DQ + gold + output + last-load into a 0-100 score, band and effort
   estimate. `GET conversions/{id}/readiness` and `conversions/project/{id}/readiness`.
   UI: Conversion detail → "Cutover readiness" card. Tests: `tests/test_readiness.py` (8).
-- **Still to build (list order):** #6 synthetic test-data generation, then the two
-  epics — #7 conversational copilot that operates the tool, #8 agentic end-to-end
-  conversion. (Roadmap in `docs/AI_Differentiators_Roadmap.md`.)
+- **#6 Synthetic test-data generation — DONE.** `services/synthetic_data_service.py`
+  (pure `synthetic_frame`): type-valid sample rows per FBDI interface honouring
+  required/type/max-length/LOV/date-mask/name heuristics + unique keys, seeded.
+  `GET fbdi/templates/{id}/synthetic-data?rows&fmt` (CSV / .zip multi-sheet / xlsx).
+  UI: FBDI Templates page "Sample data" (flask) button. Tests: `tests/test_synthetic_data.py` (8).
+- **Still to build (list order):** the two epics — #7 conversational copilot that
+  operates the tool, #8 agentic end-to-end conversion. (Roadmap in
+  `docs/AI_Differentiators_Roadmap.md`.)
 - New AI-intelligence unit suites (all pure, no DB/network): `test_entity_resolution.py`
   (7), `test_anomaly_service.py` (10), `test_cross_client.py` (5), `test_readiness.py`
-  (8) — 30 total.
+  (8), `test_synthetic_data.py` (8) — 38 total.
