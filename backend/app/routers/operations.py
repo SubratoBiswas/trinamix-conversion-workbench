@@ -264,6 +264,33 @@ async def duplicate_candidates(
     return result
 
 
+@output_router.get("/{conversion_id}/cross-client-suggestions")
+async def cross_client_suggestions(
+    conversion_id: str,
+    limit: int = Query(200, ge=1, le=500),
+    _: User = Depends(get_current_user),
+):
+    """Cross-client mapping/crosswalk suggestions for this conversion's interface —
+    decisions OTHER clients have approved for the SAME Fusion object, ranked by how
+    many clients support each (advisory; the current client's own rows are excluded
+    and nothing is auto-applied)."""
+    c = await _require_conversion(conversion_id)
+    from app.services.cross_client_service import suggest_for_object
+    try:
+        from app.services.client_service import client_id_for_conversion
+        cid = await client_id_for_conversion(c)
+    except Exception:  # noqa: BLE001
+        cid = None
+    target = c.target_object or ""
+    if not target and c.template_id:
+        from app.models.fbdi import FBDITemplate
+        tpl = await FBDITemplate.get(c.template_id)
+        target = (tpl.business_object if tpl else "") or ""
+    res = await suggest_for_object(target, cid, limit=limit)
+    res["client_id"] = str(cid) if cid else None
+    return res
+
+
 async def _carrier_for_object(project_id, target_object: str):
     """The carrier conversion (first bound, by load order) for a project+interface —
     the merged artifact is stored under it and its status is polled."""

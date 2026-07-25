@@ -4,7 +4,7 @@ import {
   ArrowLeft, Database, FileSpreadsheet, Sparkles, ShieldCheck,
   ListChecks, Play, Download, FileOutput, ArrowRight, Workflow as WfIcon,
   Eye, Cloud, GitBranch, CheckCircle2, Clock, XCircle, Loader2, Zap, Table2,
-  Upload, Wand2,
+  Upload, Wand2, Users,
 } from "lucide-react";
 import {
   ConversionsApi, CutoverApi, DatasetsApi, FbdiApi, LearningApi, LoadApi, MappingApi,
@@ -75,6 +75,16 @@ export const ConversionDetailPage: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
+  // Cross-client suggestions (loaded on demand).
+  const [crossSug, setCrossSug] = useState<any>(null);
+  const [crossLoading, setCrossLoading] = useState(false);
+  const loadCross = async () => {
+    if (!id) return;
+    setCrossLoading(true);
+    try { setCrossSug(await OutputApi.crossClientSuggestions(id)); }
+    catch { setCrossSug({ suggestions: [], clients_seen: 0 }); }
+    finally { setCrossLoading(false); }
+  };
   // Gold reference standards on file (per object), loaded from the DB. Lets this
   // page show whether a standard already exists for this conversion's object
   // (uploaded here or on the project screen) — it's auto-applied at generate.
@@ -672,6 +682,52 @@ export const ConversionDetailPage: React.FC = () => {
                   </div>
                 ))}
               </div>
+            )}
+          </CardBody>
+        </Card>
+
+        {/* Cross-client suggestions — decisions other clients approved for this object */}
+        <Card>
+          <CardHeader
+            title={<><Users className="mr-2 inline h-4 w-4 text-brand" />Proven by other clients</>}
+            subtitle="Mappings & crosswalks other clients approved for this Fusion object"
+            actions={
+              <Button variant="secondary" onClick={loadCross} loading={crossLoading} className="h-7 px-2 text-xs">
+                {crossSug ? "Refresh" : "Show suggestions"}
+              </Button>
+            }
+          />
+          <CardBody>
+            {crossSug === null ? (
+              <div className="text-xs text-ink-muted">See how other clients mapped this object — advisory only, nothing is auto-applied.</div>
+            ) : !(crossSug.suggestions?.length) ? (
+              <EmptyState icon={<Users className="h-5 w-5" />} title="No cross-client suggestions"
+                description={`No other client has approved learnings for this object yet (${crossSug.clients_seen ?? 0} other clients scanned).`} />
+            ) : (
+              <>
+                <div className="mb-2 text-[11px] text-ink-muted">From {crossSug.clients_seen} other client(s):</div>
+                <table className="table-shell">
+                  <thead><tr><th>Target field</th><th>Kind</th><th>Suggestion</th><th className="text-right">Clients</th><th className="text-right">Confidence</th></tr></thead>
+                  <tbody>
+                    {crossSug.suggestions.slice(0, 25).map((s: any, i: number) => (
+                      <tr key={i}>
+                        <td className="font-medium whitespace-nowrap">{s.target_field || "—"}</td>
+                        <td><Pill tone="neutral">{s.kind || "mapping"}</Pill></td>
+                        <td className="text-xs">
+                          {s.original_value ? <code className="rounded bg-canvas px-1 py-0.5">{s.original_value}</code> : "—"}
+                          {s.resolved_value ? <> → <code className="rounded bg-canvas px-1 py-0.5">{s.resolved_value}</code></> : null}
+                          {s.rule_type ? <Pill tone="brand">{s.rule_type}</Pill> : null}
+                          {s.already_used_here && <span className="ml-1 text-[10px] text-success">(already used here)</span>}
+                        </td>
+                        <td className="text-right tabular-nums">{s.support_clients}</td>
+                        <td className="text-right tabular-nums">
+                          <span className={s.confidence >= 0.85 ? "text-success" : s.confidence >= 0.7 ? "text-warning" : "text-ink-muted"}>{Math.round(s.confidence * 100)}%</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </CardBody>
         </Card>

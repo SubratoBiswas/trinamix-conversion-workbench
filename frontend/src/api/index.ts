@@ -687,6 +687,15 @@ export const OutputApi = {
       params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
       timeout: 120000,
     }).then(r => r.data),
+  /** Cross-client mapping/crosswalk suggestions — decisions other clients approved
+   *  for the same Fusion object, ranked by supporting-client count. */
+  crossClientSuggestions: (conversionId: string, limit = 200) =>
+    api.get<{
+      target_object: string; client_id: string | null; clients_seen: number; learnings_scanned: number;
+      suggestions: { target_field?: string; kind?: string; rule_type?: string | null;
+        original_value?: string; resolved_value?: string; support_clients: number; uses: number;
+        already_used_here: boolean; confidence: number }[];
+    }>(`/conversions/${conversionId}/cross-client-suggestions`, { params: { limit }, timeout: 60000 }).then(r => r.data),
   /** Per-source converted preview (multi-source): one block per source file. */
   previewBySource: (conversionId: string, limit = 50) =>
     api.get<{ multi: boolean; sources: { source_id: string | null; source_name: string | null;

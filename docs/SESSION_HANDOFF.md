@@ -379,11 +379,18 @@ Building the AI-differentiator list the user prioritised, highest-impact first.
   duplicate rows — severity/count/examples; optional AI risk notes. `GET datasets/
   {id}/anomalies`. UI: Dataset detail → "Anomalies" tab (+ "Explain risks with AI").
   Tests: `tests/test_anomaly_service.py` (10).
+- **#3 Cross-client mapping/crosswalk auto-suggestion — DONE.** `services/
+  cross_client_service.py` (pure `aggregate_cross_client` + Beanie `suggest_for_object`):
+  aggregates client-scoped LearnedMappings across ALL tenants for the same object,
+  ranked by supporting-client count + reuse, excluding the current client (advisory,
+  tenant-isolated). `GET conversions/{id}/cross-client-suggestions`. UI: Conversion
+  detail → "Proven by other clients" card. Tests: `tests/test_cross_client.py` (5).
 - **#4 Source-profiling → target-module recommendation — ALREADY EXISTS.** `datasets`
   router `/classify` + `/suggest-template` (detect_dataset_type / detect_source_system /
   column_signature) recommend the source system + target Fusion object and learn from
   confirmations. No rebuild; could add an AI adjudication layer if wanted.
-- **Still to build (list order):** #3 cross-client mapping/crosswalk auto-suggestion,
-  #5 object-readiness/effort scoring, #6 synthetic test-data generation, then the two
-  epics — #7 conversational copilot that operates the tool, #8 agentic end-to-end
-  conversion. (Roadmap in `docs/AI_Differentiators_Roadmap.md`.)
+- **Still to build (list order):** #5 object-readiness/effort scoring, #6 synthetic
+  test-data generation, then the two epics — #7 conversational copilot that operates
+  the tool, #8 agentic end-to-end conversion. (Roadmap in `docs/AI_Differentiators_Roadmap.md`.)
+- New AI-intelligence unit suites: `test_entity_resolution.py` (7),
+  `test_anomaly_service.py` (10), `test_cross_client.py` (5) — all pure, no DB/network.
