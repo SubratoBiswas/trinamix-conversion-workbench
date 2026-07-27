@@ -335,7 +335,13 @@ async def update_mapping(
         data["approved_at"] = datetime.utcnow()
     await m.set(data)
     conv = await Conversion.get(m.conversion_id)
-    if m.status in ("approved", "overridden") and m.source_column:
+    # Learn on save when the analyst has made a decision: a source column OR an
+    # explicit default. The default-only case used to be dropped here, so
+    # "Default values" stayed empty in the Learning Centre until a Generate ran
+    # (QA issue #7).
+    if m.status in ("approved", "overridden") and (
+        m.source_column or (m.default_value and str(m.default_value).strip())
+    ):
         await record_learning_from_mapping(m, conv, captured_by=user.email)
     return (await enrich_mapping_with_samples(conv, [m]))[0]
 
@@ -401,8 +407,9 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
         raise HTTPException(404, "Mapping not found")
     await m.set({"status": "approved", "approved_by": user.email, "approved_at": datetime.utcnow()})
     conv = await Conversion.get(m.conversion_id)
-    if m.source_column:
+    if m.source_column or (m.default_value and str(m.default_value).strip()):
         await record_learning_from_mapping(m, conv, captured_by=user.email)
+    if m.source_column:
         from app.services.learning_service import propagate_rules_to_downstream
         await propagate_rules_to_downstream(conv, m)
     return (await enrich_mapping_with_samples(conv, [m]))[0]
@@ -566,6 +573,51 @@ async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
         TransformationRule.conversion_id == PydanticObjectId(conversion_id)
     ).sort("sequence").to_list()
     return [{"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id", "conversion_id")}} for r in rules]
+
+
+@router.put("/rules/{rule_id}", response_model=TransformationRuleOut)
+async def update_rule(
+    rule_id: str, payload: TransformationRuleCreate, user: User = Depends(get_current_user)
+):
+    """Edit a saved rule in place.
+
+    Without this, re-opening "Add custom transformation rule" for a field the
+    analyst already configured and pressing Save inserted a SECOND rule for the
+    same target field — the two then stacked at generate time. The authoring
+    modal now loads the existing rule and PUTs back to this endpoint.
+    """
+    r = await TransformationRule.get(PydanticObjectId(rule_id))
+    if not r:
+        raise HTTPException(404, "Rule not found")
+    conv = await Conversion.get(r.conversion_id)
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("target_field_id"):
+        try:
+            data["target_field_id"] = PydanticObjectId(str(data["target_field_id"]))
+        except Exception:
+            data["target_field_id"] = None
+    for k, v in data.items():
+        setattr(r, k, v)
+    await r.save()
+    # Re-learn so the edited definition (not the superseded one) is what future
+    # conversions inherit. Best-effort, exactly as in add_rule.
+    try:
+        await record_learning_from_rule(r, conv, captured_by=user.email)
+    except Exception as exc:
+        log.warning(f"update_rule: learning capture failed for rule {r.id}: {exc}")
+    return {
+        "id": str(r.id),
+        "conversion_id": str(r.conversion_id),
+        "target_field_id": str(r.target_field_id) if r.target_field_id else None,
+        "source_column": r.source_column,
+        "rule_type": r.rule_type,
+        "rule_config": r.rule_config or {},
+        "description": r.description,
+        "sequence": r.sequence,
+        "created_at": r.created_at,
+    }
 
 
 @router.delete("/rules/{rule_id}")

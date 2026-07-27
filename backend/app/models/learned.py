@@ -30,6 +30,40 @@ class LearnedMapping(Document):
     times_reused: int = 0
     originated_in_project_id: Optional[PydanticObjectId] = None
     source_erp: Optional[str] = None
+    # Tombstone (QA issue #5). Deleting a learning used to hard-delete the row,
+    # but three paths recreate it — startup seeds (find-or-insert), auto-capture
+    # after Generate Output, and approve/override in Mapping Review — so deleted
+    # items reappeared. A delete now marks the row retired instead: it stops
+    # applying and stops being listed, and `_upsert`/the seeders refuse to
+    # resurrect it unless the user explicitly restores it.
+    is_deleted: bool = False
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
 
     class Settings:
         name = "learned_mappings"
+
+    # ── Tombstone-aware queries ──────────────────────────────────────────
+    # Retired learnings must disappear from EVERY read path — the Learning
+    # Center lists, the apply/steering passes, defaults, mapping candidates.
+    # There are ~40 query sites across 18 modules, so filtering here (rather
+    # than at each call site) is what makes the guarantee hold, including for
+    # code added later. Pass ``include_deleted=True`` to see retired rows
+    # (used by the delete/restore endpoints).
+    @classmethod
+    def find(cls, *args, include_deleted: bool = False, **kwargs):
+        if not include_deleted:
+            args = (*args, {"is_deleted": {"$ne": True}})
+        return super().find(*args, **kwargs)
+
+    @classmethod
+    def find_one(cls, *args, include_deleted: bool = False, **kwargs):
+        if not include_deleted:
+            args = (*args, {"is_deleted": {"$ne": True}})
+        return super().find_one(*args, **kwargs)
+
+    @classmethod
+    def find_all(cls, *args, include_deleted: bool = False, **kwargs):
+        if include_deleted:
+            return super().find_all(*args, **kwargs)
+        return super().find({"is_deleted": {"$ne": True}}, *args, **kwargs)

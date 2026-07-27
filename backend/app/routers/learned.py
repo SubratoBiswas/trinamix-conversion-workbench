@@ -1,5 +1,6 @@
 """Learning library endpoints - registry of human-approved mappings/rules."""
 from collections import Counter
+from datetime import datetime
 from typing import Optional
 
 from beanie import PydanticObjectId
@@ -500,10 +501,51 @@ async def update_learned(
 @router.delete("/{learned_id}")
 async def delete_learned(
     learned_id: str,
-    _: User = Depends(get_current_user),
+    purge: bool = False,
+    user: User = Depends(get_current_user),
 ):
+    """Retire a learning (QA issue #5).
+
+    A hard delete did not stick: the startup seeds, the auto-capture that runs
+    after every Generate Output, and approve/override in Mapping Review all
+    re-created the row, so deleted items reappeared. We now tombstone instead —
+    the row stops applying and stops being listed, and nothing automatic can
+    resurrect it. ``?purge=true`` still removes the document outright.
+    """
     item = await LearnedMapping.get(PydanticObjectId(learned_id))
     if not item:
         raise HTTPException(404, "Not found")
-    await item.delete()
-    return {"deleted": learned_id}
+    if purge:
+        await item.delete()
+        return {"deleted": learned_id, "purged": True}
+    await item.set({
+        "is_deleted": True,
+        "deleted_at": datetime.utcnow(),
+        "deleted_by": user.email,
+    })
+    return {"deleted": learned_id, "purged": False}
+
+
+@router.post("/{learned_id}/restore")
+async def restore_learned(
+    learned_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Bring a retired learning back (undo of the delete above)."""
+    item = await LearnedMapping.find_one(
+        {"_id": PydanticObjectId(learned_id)}, include_deleted=True
+    )
+    if not item:
+        raise HTTPException(404, "Not found")
+    await item.set({"is_deleted": False, "deleted_at": None, "deleted_by": None})
+    return _serialize(item)
+
+
+@router.get("/retired/list")
+async def list_retired(_: User = Depends(get_current_user)):
+    """Learnings the user has retired — so a deletion is reviewable, not a
+    black hole. Restore via POST /{id}/restore."""
+    items = await LearnedMapping.find(
+        {"is_deleted": True}, include_deleted=True
+    ).sort("-deleted_at").limit(500).to_list()
+    return [_serialize(i) for i in items]

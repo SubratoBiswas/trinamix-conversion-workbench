@@ -503,6 +503,13 @@ export const MappingApi = {
     rule_config: any; description?: string;
   }) =>
     api.post<TransformationRule>(`/conversions/${conversionId}/rules`, body).then(r => r.data),
+  /** Edit a saved rule in place (so re-saving from the author modal does not
+   *  stack a duplicate rule on the same target field). */
+  updateRule: (ruleId: string, body: {
+    target_field_id?: string; source_column?: string; rule_type: string;
+    rule_config: any; description?: string;
+  }) =>
+    api.put<TransformationRule>(`/rules/${ruleId}`, body).then(r => r.data),
   deleteRule: (ruleId: string) => api.delete(`/rules/${ruleId}`).then(r => r.data),
   previewRules: (
     conversionId: string,
@@ -999,7 +1006,16 @@ export const LearningApi = {
     api.post<LearnedMapping>("/learned-mappings", body).then(r => r.data),
   update: (id: string, body: Partial<LearnedMapping>) =>
     api.patch<LearnedMapping>(`/learned-mappings/${id}`, body).then(r => r.data),
-  delete: (id: string) => api.delete(`/learned-mappings/${id}`).then(r => r.data),
+  /** Retire a learning. Tombstoned by default so seeds / auto-capture cannot
+   *  resurrect it; pass purge to remove the document outright. */
+  delete: (id: string, purge = false) =>
+    api.delete(`/learned-mappings/${id}`, { params: purge ? { purge: true } : {} })
+      .then(r => r.data),
+  /** Learnings the user retired — reviewable, and restorable. */
+  listRetired: () =>
+    api.get<LearnedMapping[]>("/learned-mappings/retired/list").then(r => r.data),
+  restore: (id: string) =>
+    api.post<LearnedMapping>(`/learned-mappings/${id}/restore`).then(r => r.data),
   backfillProjects: () =>
     api.post("/learned-mappings/backfill-projects").then(r => r.data),
   /** Per-object gold reference standards stored in the DB (auto-applied to

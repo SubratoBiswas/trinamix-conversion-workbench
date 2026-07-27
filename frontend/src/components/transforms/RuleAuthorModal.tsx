@@ -6,7 +6,7 @@ import {
 import { MappingApi } from "@/api";
 import { Button, Modal, Pill } from "@/components/ui/Primitives";
 import { cn } from "@/lib/utils";
-import type { DatasetDetail, FBDIField } from "@/types";
+import type { DatasetDetail, FBDIField, TransformationRule } from "@/types";
 
 /**
  * Universal rule authoring modal — one place to add any of the engine's
@@ -1004,7 +1004,8 @@ const RULE_GROUPS: { label: string; types: string[] }[] = [
 interface RuleAuthorModalProps {
   open: boolean;
   onClose: () => void;
-  conversionId: number;
+  // Conversion ids are ObjectId hex strings; number is tolerated for older callers.
+  conversionId: string | number;
   fields: FBDIField[];
   sourceColumns: DatasetDetail["columns"];
   defaultTargetFieldId?: number | null;
@@ -1058,7 +1059,36 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   const [nlError, setNlError] = useState<string | null>(null);
   const [nlSource, setNlSource] = useState<"local" | "ai" | null>(null);
 
-  // Reset on open
+  // Existing saved rules for this conversion/target field. A rule the analyst
+  // already saved must come BACK into this form when they reopen it — otherwise
+  // the modal looks empty even though the rule is live in the output, and
+  // pressing Save silently stacks a duplicate.
+  const [existingRules, setExistingRules] = useState<TransformationRule[]>([]);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [loadingExisting, setLoadingExisting] = useState(false);
+
+  const applyRuleToForm = (r: TransformationRule) => {
+    const cfg = r.rule_config || {};
+    setEditingRuleId(String(r.id));
+    setType(r.rule_type);
+    setConfig(cfg);
+    setAdvancedRaw(JSON.stringify(cfg, null, 2));
+    setSourceColumn(r.source_column || "");
+    setDescription(r.description || "");
+    if (r.target_field_id != null) setTargetFieldId(String(r.target_field_id));
+  };
+
+  const startNewRule = () => {
+    setEditingRuleId(null);
+    setType("VALUE_MAP");
+    const cfg = RULE_SPECS.VALUE_MAP.defaultConfig();
+    setConfig(cfg);
+    setAdvancedRaw(JSON.stringify(cfg, null, 2));
+    setSourceColumn(defaultSourceColumn ?? "");
+    setDescription("");
+  };
+
+  // Reset on open, then load any rule already saved for this target field.
   useEffect(() => {
     if (!open) return;
     setType("VALUE_MAP");
@@ -1077,16 +1107,52 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     setNlAmbiguities([]);
     setNlError(null);
     setNlSource(null);
-  }, [open]);
+    setEditingRuleId(null);
+    setExistingRules([]);
+
+    let cancelled = false;
+    (async () => {
+      setLoadingExisting(true);
+      try {
+        const all = await MappingApi.rules(String(conversionId));
+        if (cancelled) return;
+        setExistingRules(all);
+        // Pre-load the rule saved for THIS field (latest by sequence wins).
+        if (defaultTargetFieldId != null) {
+          const mine = all
+            .filter((r) => String(r.target_field_id ?? "") === String(defaultTargetFieldId))
+            .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+          const last = mine[mine.length - 1];
+          if (last) applyRuleToForm(last);
+        }
+      } catch {
+        /* listing is best-effort — authoring a new rule still works */
+      } finally {
+        if (!cancelled) setLoadingExisting(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, conversionId, defaultTargetFieldId]);
+
+  // Rules already saved against the currently-selected target field.
+  const rulesForField = useMemo(
+    () =>
+      targetFieldId == null
+        ? []
+        : existingRules
+            .filter((r) => String(r.target_field_id ?? "") === String(targetFieldId))
+            .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)),
+    [existingRules, targetFieldId],
+  );
 
   const translateNL = async () => {
     if (!nlDescription.trim()) return;
     setNlBusy(true);
     setNlError(null);
     try {
-      const res = await MappingApi.translateRule(conversionId, {
+      const res = await MappingApi.translateRule(String(conversionId), {
         description: nlDescription,
-        target_field_id: targetFieldId ?? undefined,
+        target_field_id: targetFieldId != null ? String(targetFieldId) : undefined,
         source_column: sourceColumn || undefined,
         sample_size: 5,
       });
@@ -1136,7 +1202,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
             return;
           }
         }
-        const res = await MappingApi.previewRules(conversionId, {
+        const res = await MappingApi.previewRules(String(conversionId), {
           source_column: sourceColumn || undefined,
           rules: [{ rule_type: type, config: activeCfg }],
           sample_size: 5,
@@ -1178,13 +1244,18 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     }
     setSaving(true);
     try {
-      await MappingApi.addRule(conversionId, {
+      const body = {
         target_field_id: targetFieldId != null ? String(targetFieldId) : undefined,
         source_column: sourceColumn || undefined,
         rule_type: type,
         rule_config: activeCfg,
         description: description || undefined,
-      });
+      };
+      // Editing a rule that already exists updates it in place; only a genuinely
+      // new rule is inserted. Previously every save inserted, so reopening and
+      // saving stacked duplicate rules on the same field.
+      if (editingRuleId) await MappingApi.updateRule(editingRuleId, body);
+      else await MappingApi.addRule(String(conversionId), body);
       onSaved();
     } catch (e: any) {
       setSaveError(e?.response?.data?.detail || "Failed to save rule");
@@ -1193,11 +1264,21 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     }
   };
 
+  const removeRule = async (id: string) => {
+    try {
+      await MappingApi.deleteRule(id);
+      setExistingRules((rs) => rs.filter((r) => String(r.id) !== id));
+      if (editingRuleId === id) startNewRule();
+    } catch (e: any) {
+      setSaveError(e?.response?.data?.detail || "Failed to delete rule");
+    }
+  };
+
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="Add transformation rule"
+      title={editingRuleId ? "Edit transformation rule" : "Add transformation rule"}
       size="xl"
       footer={
         <div className="flex w-full items-center justify-between">
@@ -1216,7 +1297,8 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
               Cancel
             </Button>
             <Button onClick={save} loading={saving}>
-              <Check className="h-3.5 w-3.5" /> Save & learn
+              <Check className="h-3.5 w-3.5" />
+              {editingRuleId ? "Update & learn" : "Save & learn"}
             </Button>
           </div>
         </div>
@@ -1320,6 +1402,70 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
               )}
             </div>
           )}
+
+          {/* Rules already saved for this field — loaded back so the analyst sees
+              what is live, can edit it, or add another on top. */}
+          {loadingExisting ? (
+            <div className="rounded-md border border-line bg-canvas px-3 py-2 text-[11px] text-ink-muted">
+              Checking for rules already saved on this field…
+            </div>
+          ) : rulesForField.length > 0 ? (
+            <div className="rounded-md border border-success/40 bg-success-subtle/40">
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-success">
+                  <Check className="h-3.5 w-3.5" />
+                  {rulesForField.length} rule{rulesForField.length !== 1 ? "s" : ""} already saved
+                  on this field
+                </span>
+                {editingRuleId && (
+                  <button
+                    onClick={startNewRule}
+                    className="text-[11px] font-medium text-brand-dark hover:underline"
+                  >
+                    + Add another instead
+                  </button>
+                )}
+              </div>
+              <div className="border-t border-success/30 px-3 py-2 space-y-1">
+                {rulesForField.map((r) => {
+                  const active = editingRuleId === String(r.id);
+                  return (
+                    <div
+                      key={String(r.id)}
+                      className={cn(
+                        "flex items-center justify-between gap-2 rounded px-2 py-1",
+                        active ? "bg-white ring-1 ring-success/50" : "hover:bg-white/60",
+                      )}
+                    >
+                      <button
+                        onClick={() => applyRuleToForm(r)}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      >
+                        <span className="rounded bg-brand-subtle px-1.5 py-0.5 font-mono text-[10px] text-brand-dark">
+                          {RULE_SPECS[r.rule_type]?.label ?? r.rule_type}
+                        </span>
+                        <span className="truncate font-mono text-[10.5px] text-ink-muted">
+                          {r.source_column || "(row-aware)"}
+                        </span>
+                        {active && (
+                          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-success">
+                            editing
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => removeRule(String(r.id))}
+                        title="Delete this saved rule"
+                        className="shrink-0 rounded p-1 text-ink-subtle hover:bg-white hover:text-danger"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Rule type">

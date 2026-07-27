@@ -492,12 +492,21 @@ _AUTHORITATIVE: set[str] = {
 
 def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
                             suppressed: set | None = None,
-                            effective: dict | None = None) -> pd.DataFrame:
+                            effective: dict | None = None,
+                            explicitly_mapped: set | None = None) -> pd.DataFrame:
+    """``explicitly_mapped``: normalized field names the analyst deliberately bound
+    to a real source column (curated seed, approved or overridden mapping). Those
+    are never overwritten by an authoritative constant — QA issue #8, where the
+    seeded eBOS ``Address Name <- city`` mapping was shown correctly in the UI but
+    the generated file contained the forced constant ``PRIMARY``. Mirrors
+    ``defaults_service._effective`` which already skips fields with a source column.
+    """
     n = len(df)
     if n == 0:
         return df
     suppressed = suppressed or set()
     effective = effective or {}
+    explicitly_mapped = explicitly_mapped or set()
     for col in df.columns:
         key = str(col).strip().lower().rstrip("*").strip()
         # The user's gold example / prompt marked this field as intentionally
@@ -519,9 +528,16 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
                 # Running key column — authoritative: Fusion needs a clean
                 # sequential id, not whatever source column auto-map guessed.
                 df[col] = [str(seq_start + i) for i in range(n)]
-        elif key in _AUTHORITATIVE:
-            # Gold-constant control field — always write the standard value,
-            # overriding any wrong auto-mapped source guess.
+        elif key in _AUTHORITATIVE and key not in explicitly_mapped:
+            # Gold-constant control field — write the standard value, overriding a
+            # wrong AUTO-MAPPED source guess. Skipped when the analyst explicitly
+            # bound this field to a source column (issue #8): a deliberate mapping
+            # outranks the constant, and silently discarding it made the UI and the
+            # generated file disagree.
+            df[col] = _CONTROL_DEFAULTS[key]
+        elif key in _AUTHORITATIVE and bool((df[col].astype(str).str.strip() == "").all()):
+            # Explicitly mapped but the source produced nothing at all — fall back
+            # to the standard constant rather than shipping an empty control column.
             df[col] = _CONTROL_DEFAULTS[key]
         elif key in _CONTROL_DEFAULTS and bool((df[col].astype(str).str.strip() == "").all()):
             # Other defaults only fill columns the source left entirely blank.
@@ -654,6 +670,19 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # even though the mapping is not_applicable (no source column).
         and not (getattr(_m, "default_value", None) and str(_m.default_value).strip())
     }
+    # Fields the analyst deliberately bound to a source column. An authoritative
+    # control constant must NOT overwrite these (issue #8: eBOS Address Name was
+    # mapped to `city` in the UI but the file shipped the forced "PRIMARY").
+    # "suggested" is excluded on purpose — that is auto-map guessing, which is
+    # exactly what the authoritative constants exist to correct.
+    _MAPPED_OK = {"approved", "overridden"}
+    explicitly_mapped_keys = {
+        _fbyid[tid].field_name.strip().lower().rstrip("*").strip()
+        for tid, _m in _best_m.items()
+        if tid in _fbyid and _fbyid[tid].field_name
+        and (_m.source_column or "").strip()
+        and (_m.status or "") in _MAPPED_OK
+    }
 
     # Effective defaults (curated control + learned example defaults) — the SAME
     # layer the Mapping Review UI and the mapping export display. Applied to blank,
@@ -710,7 +739,8 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # standard default, not the literal text.
         sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
-        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys, effective=_eff_defaults)
+        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys, effective=_eff_defaults,
+                                      explicitly_mapped=explicitly_mapped_keys)
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
         # field_name (before the header rename below).

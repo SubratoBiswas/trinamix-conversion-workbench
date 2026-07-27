@@ -541,15 +541,21 @@ Analyst note (CW_Issues, Item): "confidence scores average below 50 … most onl
 compatibility and keyword." Three-part fix — deterministic scorer, AI residual, export.
 
 **(A) Deterministic scorer — `app/ai/rule_based.py`.**
-- Added fuzzy token matching `_tok_sim` (exact / prefix ≥3 / **suffix ≥4 / embedded ≥5** /
-  edit-ratio ≥0.86) and `_soft_coverage` (fraction of TARGET tokens covered by best fuzzy
-  source token). Column-name score is now `0.35*Jaccard + 0.65*soft_coverage`, so a short/
+- All fuzzy logic uses the Python **stdlib `difflib`** (no external deps), applied fully
+  BEFORE any AI call:
+  - `_tok_sim(a,b)`: exact / prefix ≥3 / suffix ≥4 / embedded ≥5 / `SequenceMatcher.ratio()`
+    (≥0.86 full, 0.75–0.86 graded partial ×0.7 — catches typos `adress`→`address`,
+    `custmer`→`customer`).
+  - `_soft_coverage`: fraction of TARGET tokens covered by their best fuzzy source token.
+  - `_whole_ratio`: whole-name `SequenceMatcher` ratio (overall closeness / word-order safety net).
+  Column-name score = `0.30*Jaccard + 0.55*soft_coverage + 0.15*whole_ratio`, so a short/
   cryptic source contained in a longer target name (`descr`→`description`, `rev`→`revision`)
   is rewarded instead of punished by Jaccard. The suffix/embedded rule handles **glued
   compound columns in every module** — `hiredate`(hire+date), `remitemail`(remit+email),
-  `billtocity`(bill+to+city), `componentitem`(component+item), `effstartdate`. Edge tradeoff:
-  a literal suffix like `city`⊂`capacity` can give a rare review-band false hit — contained by
-  best-per-field selection + value/LOV penalties.
+  `billtocity`(bill+to+city), `componentitem`(component+item), `effstartdate`. Measured typo/
+  fuzzy lift: `adress`→Address 79%, `custmer_name`→Customer Name 84%, `descriptn`→Description
+  78%. Edge tradeoff: a literal suffix like `city`⊂`capacity` can give a rare review-band false
+  hit — contained by best-per-field selection + value/LOV penalties. Unrelated controls ~22%.
 - `_semantic_score` is fuzzy-aware (alias hit by exact membership OR prefix/fuzzy).
 - Semantic now also runs against the target DESCRIPTION tokens.
 - **Root fix for the < 50% average:** the composite is now NORMALISED by the weight of the
@@ -595,3 +601,189 @@ compatibility and keyword." Three-part fix — deterministic scorer, AI residual
 - Files touched this wave: `app/ai/rule_based.py`, `app/services/mapping_service.py`,
   `app/services/mapping_export_service.py`, `frontend/src/pages/MappingReviewPage.tsx`,
   `tests/test_scorer_tokenization.py`, `tests/test_mapping_export.py`.
+
+### 9.13 Flat "All Fields" export sheet + glued-token precision fix (2026-07-27)
+
+**(A) Export is now "Both" — flat sheet AND confidence bands —
+`app/services/mapping_export_service.py` + `frontend/.../MappingReviewPage.tsx`.**
+- Analyst context: the downloaded `field_mapping.csv` was the OLD flat CSV (11 columns,
+  "Other options" showing bare probabilities like `custentity_flex_cust_id (33%)`). The
+  reasons/AI-vetting work from 9.12 only existed on the banded .xlsx, so the familiar
+  single-table view had lost the per-option reasons.
+- Fix: `build_workbook` now writes a flat **"All Fields"** sheet (immediately after Summary,
+  one row per field, original order) alongside the existing per-band sheets. Columns mirror the
+  old CSV plus the new evidence: Source Field / Target FBDI Field / Required / How it's mapped /
+  Transform / Confidence % / Status / Needs confirmation / Why / **Other options (AI-vetted,
+  with reasons)** / **Value Crosswalks (legacy → Oracle)** / Excluded / Notes.
+- Reuses `_fmt_alternatives` / `_fmt_crosswalks`, so an option now reads
+  `custentity_flex_cust_id (33%) — unlikely: a Salesforce id, not the account source ref`
+  instead of just `(33%)`.
+- `exportMapping` enriches each record with `required`, `how_mapped`, `transform`, `status`,
+  `needs_confirmation`, `notes` so the flat sheet matches the on-screen table exactly.
+- All extra record keys are OPTIONAL — `build_workbook` degrades gracefully if absent.
+- Verified: workbook builds with sheets `[Summary, All Fields, 100pct_-_Exact_Match, 50-75pct,
+  0pct_-_No_Match_Found]`; per-option reasons and `USA → US (vetted)` crosswalks render.
+  `tests/test_mapping_export.py` 7/7 pass.
+
+**(B) Precision fix in the glued-token matcher — `app/ai/rule_based.py`.**
+- Bug introduced by 9.12's suffix/interior rule: credit was given for ANY substring, so
+  `capacity` scored **57%** against `City` ("city" is literally the tail of "capacity").
+  Same class of error: `surname`→Name, `paid`→Employee Id, `velocity`→City.
+- Fix: a glue match now requires BOTH halves to be meaningful — the matched part must be in the
+  new curated `_WORD_PARTS` vocabulary AND the residue must decompose into known parts via
+  `_is_wordy()` (depth-bounded, allows `billto` = bill+to, `effstart` = eff+start).
+  `capacity` − `city` leaves `capa`, not a word → no credit.
+- Measured: noise collapsed (capacity→City 57%→**10%**, velocity→City 10%, surname→Name 11%,
+  paid→Employee Id 6%) with **zero loss** on genuine matches — hiredate→Hire Date 62%,
+  componentitem→Component Item 63%, effstartdate→Eff Start Date 61%, invoicenumber 63%,
+  billtocity 46%, shiptocountry 46%, and typo cases custmer_name 78% / adress 65% all held.
+- Note: figures above are the deterministic NAME component only (`0.30·jaccard +
+  0.55·soft_coverage + 0.15·whole_ratio`), not final `score_pair` confidence, which adds
+  semantic/type/value-affinity — e.g. vendor_name→Supplier Name is 46% on name alone because
+  vendor/supplier is a SYNONYM hit, scored by `_semantic_score`.
+
+**Caveats / still open**
+- Sandbox cannot run the full pytest suite (`test_app.py`, `test_ebs_output.py` fail to collect
+  on a pyOpenSSL/cryptography clash in pymongo; others hang on DB). Only environmental.
+- `tsc` still reports the pre-existing `pid` ObjectId-vs-string errors and a `COAEngine.tsx`
+  `crosswalks` error — both unrelated to this wave; Vite/esbuild build is unaffected.
+- **Live-verify after deploy:** Export mapping (Excel) on a Customer conversion → confirm the
+  "All Fields" sheet appears and its "Other options" column carries reasons, not bare percentages.
+
+### 9.14 QA issue list of 27/07/2026 — audit + issue 6 fix
+
+Audit of the 8-row QA sheet (Tejaswini / Aryan / debayon). Verdict per row, then the fix made.
+
+| # | Module | Issue | Verdict |
+|---|--------|-------|---------|
+| 1 | Customer | Two-sheet workbook → only first sheet's columns; two conversions | PARTIAL |
+| 2 | Customer | Approved defaults not in FBDI output | FIXED (verify live) |
+| 3 | Item | AI mapping file grouped into confidence bands | FIXED |
+| 4 | Item | Confidence scores average below 50 | IMPROVED |
+| 5 | Supplier | Deleted Learning Center items reappear | **NOT FIXED** |
+| 6 | Supplier-NetSuite | Saved custom transformation rule not shown on reopen | **FIXED (this wave)** |
+| 7 | EBOS Supplier | Default values not populated in Learning Centre | **NOT FIXED** |
+| 8 | EBOS Supplier | Address Name mapped to city in UI, static PRIMARY in file | **NOT FIXED** |
+
+**(A) Issue 6 — FIXED.** Root cause was purely frontend: `RuleAuthorModal`'s open-effect
+unconditionally reset the form (`setType("VALUE_MAP")`, `setConfig(VALUE_MAP.defaultConfig())`)
+and never fetched existing rules — so a saved rule was invisible even though the backend had
+stored it AND learned it (`routers/mapping.py:434 record_learning_from_rule`), which is why the
+output was correct. Second, latent defect: `save()` always POSTed, so re-saving stacked a
+DUPLICATE rule on the same target field.
+- `backend/app/routers/mapping.py` — new `PUT /rules/{rule_id}` (`update_rule`) that edits in
+  place and re-runs `record_learning_from_rule` so the EDITED definition is what future
+  conversions inherit.
+- `frontend/src/api/index.ts` — `MappingApi.updateRule`.
+- `frontend/src/components/transforms/RuleAuthorModal.tsx` — on open, `MappingApi.rules()` loads
+  the conversion's rules; any rule on the current target field is pre-loaded into the form
+  (type, config, source column, description; latest by `sequence` wins). New green banner lists
+  every saved rule for the field — click to load, trash to delete, "+ Add another instead" to
+  author a second. Title and button switch to "Edit…" / "Update & learn" when editing.
+  `save()` PUTs when `editingRuleId` is set, POSTs only for genuinely new rules.
+- Also cleaned the pre-existing `conversionId: number` vs ObjectId-string mismatch in this file
+  (prop widened to `string | number`, call sites `String()`-wrapped) — `tsc` clean for this file.
+
+**(B) Issues still open — root causes located, NOT yet fixed (need a decision).**
+- **#8 Address Name → PRIMARY.** `output_service.py:419` `_CONTROL_DEFAULTS["address name"]="PRIMARY"`,
+  and `"address name"` is in `_AUTHORITATIVE` (`:480`), whose branch at `:522-525` does
+  `df[col] = _CONTROL_DEFAULTS[key]` with **no check for an explicit mapping**. The only escape
+  is `suppressed_keys`, built at `:648-656` solely from `status == "not_applicable"`. So the
+  seeded eBOS mapping (`data/supplier_field_mappings.json`, Address Name * ← city) is written
+  then overwritten. UI/preview disagree because `get_output_preview` (`:1025-1028`) never calls
+  `_apply_control_defaults`. Same defect class: `supplier site`, `pay`, `ordering`, `rfq or bidding`.
+  *Fix shape:* pass the set of target fields having an explicit non-suppressed `source_column`
+  into `_apply_control_defaults` and skip the `_AUTHORITATIVE` branch for them (mirrors
+  `defaults_service.py:163`).
+- **#5 Deleted learnings reappear.** No tombstone exists anywhere (`grep tombstone|is_deleted`
+  → nothing). `routers/learned.py:500-509` hard-deletes. Three paths recreate it: startup seeds
+  (`main.py:103-121`, find-or-insert), auto-capture on every Generate
+  (`output_service.py:968-973` → `learning_service.py:111-135`; supplier is never `_heavy`, so
+  this always runs), and approve/override (`routers/mapping.py:338`). *Fix shape:* a
+  `deleted`/tombstone flag on `LearnedMapping` respected by `_upsert` and the seeders.
+- **#7 Defaults absent from Learning Centre.** UI and API are correct; the rows are never
+  written. `MappingReviewPage.tsx:551-562 setFixedValue()` sends `source_column: null`, and
+  `routers/mapping.py:336-339` only learns `if ... and m.source_column`, with
+  `learning_service.py:192-193` bailing on no source column — so a default-only mapping is
+  learned only after a Generate. Also `learning_service.py:119-134` puts `not_applicable` +
+  default under `suppress_field` instead of `example_default`, and the whole `_CONTROL_DEFAULTS`
+  set is never persisted as learnings.
+- **#1 Multi-sheet.** Sheet picking exists (`tabular_parser.py:117 list_excel_sheets`,
+  `POST /datasets/peek-sheets`) but is wired ONLY into `CreateDatasetModal.tsx:62`; the
+  Convert-a-file and Setup-wizard paths upload with no `sheet`, and
+  `tabular_parser.py:163-166` then picks the **largest** sheet. No column union anywhere
+  (`mapping.py:297-299` reads one `dataset_id`); `PUT /conversions/{id}/sources` has no UI caller.
+  So "one conversion spanning both sheets" is not currently reachable.
+
+**Live-verify after deploy (issue 6):** open a Supplier-NetSuite conversion → a field with a
+saved rule → "Add custom transformation rule" → the saved rule loads, banner shows it, Save
+updates rather than duplicating.
+
+### 9.15 QA issues #1, #5, #7, #8 — the four that were still open
+
+**(A) #8 Address Name shipped "PRIMARY" over an explicit mapping — FIXED.**
+`output_service._apply_control_defaults` gains an `explicitly_mapped` parameter.
+The `_AUTHORITATIVE` branch (`df[col] = _CONTROL_DEFAULTS[key]`) now skips fields the
+analyst deliberately bound to a source column; a new fallback branch still writes the
+constant when the mapped source produced nothing, so no control column ships empty.
+`explicitly_mapped_keys` is built next to `suppressed_keys` in `generate_output_artifact`
+from `_best_m`, restricted to `status in {approved, overridden}` with a non-blank
+`source_column` — "suggested" is deliberately excluded, since auto-map guessing is exactly
+what the authoritative constants exist to correct. Applied learnings get `status="approved"`
+(`learning_service.py:390`), so the seeded eBOS `Address Name <- city` row qualifies.
+Verified by replay: no explicit map -> `PRIMARY` (unchanged); explicitly mapped -> `Austin/
+Dallas`; mapped-but-blank -> `PRIMARY`; `suppressed` still wins; `Pay` unaffected.
+Same fix covers Supplier Site, Pay, Ordering, RFQ or Bidding.
+
+**(B) #5 Deleted learnings reappeared — FIXED with a tombstone.**
+`LearnedMapping` gains `is_deleted` / `deleted_at` / `deleted_by`. Rather than patching ~40
+query sites across 18 modules (one miss = the bug survives), `find` / `find_one` / `find_all`
+are overridden ON THE MODEL to inject `{"is_deleted": {"$ne": True}}`, with an
+`include_deleted=True` escape hatch. `$ne: True` also matches documents that predate the
+field, so existing rows stay visible — no migration needed. Query-shape behaviour verified
+against Beanie 2.1 (plain dicts, multi-arg `$and`, `$in`, sort/limit chains, kwargs).
+`DELETE /learned-mappings/{id}` now tombstones (`?purge=true` still hard-deletes), plus
+`POST /{id}/restore` and `GET /retired/list` so a deletion is reviewable, not a black hole.
+All seven resurrection paths were closed — `_upsert` (auto-capture / approve / override, via
+a new `revive` flag), the four `catalog_seed_service` seeders, `defaults_service`'s AI-default
+cache, and `example_learning_service` (re-uploading the same gold file would otherwise have
+silently undone every deletion).
+
+**(C) #7 Defaults missing from the Learning Centre — FIXED.**
+Two independent causes. (1) `record_learning_from_mapping` returned early on
+`not mapping.source_column`, and both call sites in `routers/mapping.py` gated on
+`m.source_column` — so a default-only decision was learned ONLY after a Generate Output.
+Both gates now also accept a non-blank `default_value`, and the service records an
+`example_default` for the default-only case. (2) In `capture_learnings_from_conversion` the
+`not_applicable` branch ran first, filing `not_applicable + default` under "left blank on
+purpose" — contradicting `output_service` and `learning_service`, which both treat that shape
+as *populate*. It now requires a blank default, and the `example_default` branch accepts
+`not_applicable`. Verified by decision table: analyst default / Set-fixed-value / NA+default
+all now capture as `example_default`; genuine blanks still `suppress_field`.
+
+**(D) #1 Two-sheet workbook only imported one sheet — FIXED on the Convert-a-file path.**
+`ConvertFilePage.analyzeAll` now peeks sheets before upload and expands a multi-sheet
+workbook into one row per data sheet (rows > 1), uploading each with its `sheet` argument so
+BOTH sheets' columns become available; the row shows a sheet chip. Previously these paths
+uploaded with no `sheet` and `tabular_parser.py:163-166` silently kept only the LARGEST
+sheet. Non-xlsx and single-sheet files are untouched, and the peek is best-effort.
+
+**Deliberately NOT done — needs a product decision.**
+The QA note also says "generates two conversions when two sheets are uploaded". That remains
+true and is arguably correct (Oracle Customer Import genuinely separates account from
+address). Making ONE conversion span both sheets would need a column-wise join on a shared
+key; `PUT /conversions/{id}/sources` exists for multi-source binding but has no UI caller and
+`output_service` currently row-concats rather than joins. Guessing a join key would silently
+corrupt data, so I left it. `SetupWizard` and `ConversionDetailPage` still upload without a
+sheet argument — same one-line change if you want it there too.
+
+**Verification:** backend `ast.parse` clean on 8 edited modules; `tests/test_mapping_export.py`
++ `test_scorer_tokenization.py` 16/16 pass; `tsc` shows no new errors in edited files (the
+`ConvertFilePage` / `TransformationStudioPage` id-type errors are pre-existing). Full pytest
+still can't run in the sandbox (pyOpenSSL/cryptography clash in pymongo).
+
+**Live-verify after deploy:** (#8) generate an eBOS Supplier Address and confirm Address Name
+holds city, not PRIMARY. (#5) delete a supplier learning, restart the backend, confirm it
+stays gone and appears under retired. (#7) set a fixed value in Mapping Review and check the
+Learning Centre "Default values" tab BEFORE generating. (#1) upload a two-sheet workbook on
+Convert a file and confirm two rows appear with sheet chips.

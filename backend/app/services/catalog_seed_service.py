@@ -74,7 +74,7 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
         logger.warning("catalog seed: could not read %s: %s", path.name, exc)
         return {"seeded": 0, "skipped": 0, "error": str(exc)}
 
-    seeded = updated = deduped = skipped = 0
+    seeded = updated = deduped = skipped = retired = 0
     for r in rows:
         tgt_obj = (r.get("target_object") or "").strip()
         tgt_field = (r.get("target_field") or "").strip()
@@ -97,7 +97,15 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
             LearnedMapping.target_object == tgt_obj,
             LearnedMapping.target_field == tgt_field,
             LearnedMapping.original_value == src_field,
+            include_deleted=True,
         ).to_list()
+        # The user retired this learning — a reseed on the next restart must not
+        # bring it back (QA issue #5). include_deleted above is what lets us SEE
+        # the tombstone; without it the find returns nothing and we'd re-insert.
+        if matches and all(getattr(m, "is_deleted", False) for m in matches):
+            retired += 1
+            continue
+        matches = [m for m in matches if not getattr(m, "is_deleted", False)]
         if matches:
             keep = matches[0]
             upd: dict = {}
@@ -128,11 +136,12 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
         ).insert()
         seeded += 1
 
-    if seeded or updated or deduped or skipped:
-        logger.info("%s: seeded %d, upgraded %d, de-duped %d, skipped %d (of %d rows)",
-                    path.name, seeded, updated, deduped, skipped, len(rows))
+    if seeded or updated or deduped or skipped or retired:
+        logger.info("%s: seeded %d, upgraded %d, de-duped %d, skipped %d, "
+                    "retired-respected %d (of %d rows)",
+                    path.name, seeded, updated, deduped, skipped, retired, len(rows))
     return {"seeded": seeded, "updated": updated, "deduped": deduped,
-            "skipped": skipped, "total": len(rows)}
+            "skipped": skipped, "retired": retired, "total": len(rows)}
 
 
 async def _nextpower_client_id():
@@ -210,7 +219,11 @@ async def seed_item_donotmap_columns() -> dict:
             LearnedMapping.kind == "ignore_source",
             LearnedMapping.target_object == obj,
             LearnedMapping.original_value == col,
+            include_deleted=True,
         ).first_or_none()
+        if existing and getattr(existing, "is_deleted", False):
+            kept += 1          # retired by the user — do not resurrect (issue #5)
+            continue
         if existing:
             if existing.client_id != nid and not existing.is_global:
                 await existing.set({"client_id": nid})
@@ -256,7 +269,11 @@ async def seed_supplier_default_values() -> dict:
             LearnedMapping.kind == "example_default",
             LearnedMapping.target_object == tgt_obj,
             LearnedMapping.target_field == tgt_field,
+            include_deleted=True,
         ).first_or_none()
+        if existing and getattr(existing, "is_deleted", False):
+            kept += 1          # retired by the user — do not resurrect (issue #5)
+            continue
         if existing:
             if existing.resolved_value != str(const) or (existing.client_id != nid and not existing.is_global):
                 await existing.set({"resolved_value": str(const), "client_id": nid})
@@ -307,7 +324,11 @@ async def seed_bom_field_mappings() -> dict:
             LearnedMapping.kind == "example_default",
             LearnedMapping.target_object == tgt_obj,
             LearnedMapping.target_field == tgt_field,
+            include_deleted=True,
         ).first_or_none()
+        if existing and getattr(existing, "is_deleted", False):
+            const_kept += 1    # retired by the user — do not resurrect (issue #5)
+            continue
         if existing:
             upd = {}
             if existing.resolved_value != str(const):

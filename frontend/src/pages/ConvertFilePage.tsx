@@ -24,6 +24,11 @@ type Item = {
   error?: string;
   dirty?: boolean;   // user changed source/target since last learn
   saving?: boolean;  // learn request in flight
+  // Which worksheet of a multi-sheet workbook this row imports. Undefined for
+  // single-sheet files. A two-sheet book (e.g. Customer + Address) expands into
+  // one row per sheet at analyze time so BOTH sheets' columns become available —
+  // previously the parser silently kept only the largest sheet (QA issue #1).
+  sheet?: string;
 };
 
 // One conversion object type and its ordered FBDI steps (supplier → 6 files).
@@ -151,11 +156,37 @@ export const ConvertFilePage: React.FC = () => {
 
   const analyzeAll = async () => {
     setAnalyzing(true); setError(null);
+    // Expand multi-sheet workbooks FIRST: one row per data sheet, so a
+    // Customer + Address book imports both instead of silently keeping only the
+    // largest sheet (QA issue #1). Only rows not already tied to a sheet and not
+    // yet uploaded are considered.
+    let work = items;
+    const expanded: Item[] = [];
     for (const it of items) {
+      if (it.status === "ready" || it.sheet) { expanded.push(it); continue; }
+      if (!/\.(xlsx|xlsm|xls)$/i.test(it.file.name)) { expanded.push(it); continue; }
+      try {
+        const peek = await DatasetsApi.peekSheets(it.file);
+        const real = (peek?.sheets || []).filter((s) => (s.rows || 0) > 1);
+        if (real.length > 1) {
+          real.forEach((s: any, i: number) =>
+            expanded.push({ ...it, key: `${it.key}::${s.name}`, sheet: s.name,
+                            status: i === 0 ? it.status : "pending" }));
+          continue;
+        }
+      } catch { /* peek is best-effort — fall through to a normal single upload */ }
+      expanded.push(it);
+    }
+    if (expanded.length !== items.length) { work = expanded; setItems(expanded); }
+
+    for (const it of work) {
       if (it.status === "ready") continue;
       patch(it.key, { status: "analyzing", error: undefined });
       try {
-        const ds: any = await DatasetsApi.upload(it.file, it.file.name.replace(/\.[^.]+$/, ""));
+        const baseName = it.file.name.replace(/\.[^.]+$/, "");
+        const ds: any = await DatasetsApi.upload(
+          it.file, it.sheet ? `${baseName} — ${it.sheet}` : baseName,
+          undefined, it.sheet);
         const cls = await DatasetsApi.classify(ds.id);
         patch(it.key, {
           status: "ready", datasetId: ds.id, learned: cls.learned,
@@ -371,7 +402,15 @@ export const ConvertFilePage: React.FC = () => {
               <tbody>
                 {items.map((it) => (
                   <tr key={it.key}>
-                    <td className="max-w-[220px] truncate font-medium text-ink" title={it.file.name}>{it.file.name}</td>
+                    <td className="max-w-[220px] truncate font-medium text-ink"
+                        title={it.sheet ? `${it.file.name} — sheet "${it.sheet}"` : it.file.name}>
+                      {it.file.name}
+                      {it.sheet && (
+                        <span className="ml-1.5 rounded bg-canvas px-1 py-0.5 font-mono text-[9px] font-normal text-ink-subtle">
+                          {it.sheet}
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <div className="flex items-center gap-1.5">
                         <select className="input !h-8 !w-auto !text-xs" disabled={it.status !== "ready"}

@@ -101,6 +101,56 @@ _ID_STEMS = {"item", "entity", "vendor", "supplier", "customer", "party", "accou
              "product", "org", "organization", "location", "uom", "subsidiary",
              "employee", "invoice", "order", "transaction"}
 
+# Vocabulary of parts that genuinely appear glued together in ERP column names
+# ("hiredate", "billtocity", "remitemail"). Used ONLY to validate that a glued
+# token really decomposes into meaningful words before we award suffix/interior
+# credit in ``_tok_sim`` — without it, accidental substrings score as matches
+# ("city" is literally the tail of "capacity", "id" of "paid", "name" of "surname").
+_WORD_PARTS = {
+    # entities / heads
+    "item", "entity", "vendor", "supplier", "customer", "party", "account", "acct",
+    "product", "org", "organization", "location", "loc", "subsidiary", "employee",
+    "emp", "invoice", "order", "transaction", "txn", "component", "assembly", "bom",
+    "person", "contact", "site", "bank", "branch", "company", "business", "user",
+    # qualifiers / prepositions
+    "bill", "ship", "sold", "remit", "pay", "paid", "buy", "sell", "to", "from",
+    "by", "of", "for", "main", "primary", "default", "alt", "alternate", "home",
+    "work", "office", "legal", "trade", "base", "std", "standard", "eff", "cur",
+    "current", "prev", "previous", "new", "old", "first", "last", "mid", "full",
+    "short", "long", "min", "max", "net", "gross", "total", "sub", "parent", "child",
+    # attribute tails
+    "name", "code", "number", "num", "no", "id", "key", "ref", "reference", "desc",
+    "description", "type", "class", "category", "group", "status", "flag", "date",
+    "time", "stamp", "email", "mail", "phone", "fax", "mobile", "tel", "address",
+    "addr", "city", "state", "province", "country", "zip", "postal", "region",
+    "amount", "amt", "qty", "quantity", "price", "cost", "rate", "value", "val",
+    "currency", "curr", "tax", "vat", "gst", "terms", "term", "limit", "credit",
+    "debit", "balance", "line", "level", "seq", "sequence", "uom", "unit", "measure",
+    "method", "reason", "source", "target", "start", "end", "begin", "expiry",
+    "expire", "hire", "term", "title", "note", "notes", "comment", "text", "url",
+    "web", "site", "lot", "serial", "revision", "rev", "version", "phase",
+    "lifecycle", "make", "model", "size", "weight", "volume", "color", "colour",
+}
+
+
+def _is_wordy(s: str, depth: int = 0) -> bool:
+    """True if ``s`` is a known name-part, or splits cleanly into two of them.
+
+    Lets "billto" (bill+to) and "effstart" (eff+start) count as meaningful glue
+    while "capa" (the residue of capacity−city) does not. Depth-bounded so the
+    recursion stays cheap on long tokens.
+    """
+    if not s:
+        return False
+    if s in _WORD_PARTS:
+        return True
+    if depth >= 2 or len(s) < 4:
+        return False
+    for i in range(2, len(s) - 1):
+        if s[:i] in _WORD_PARTS and _is_wordy(s[i:], depth + 1):
+            return True
+    return False
+
 
 def _tokenize(text: str) -> list[str]:
     if not text:
@@ -161,17 +211,36 @@ def _tok_sim(a: str, b: str) -> float:
     # (eff+start+date). Credit a whole word embedded at the END of, or inside, a
     # longer glued token (the START case is already covered by the prefix branch).
     # Length-gated to stay precise: suffix needs len>=4, interior needs len>=5.
+    # Only credit the glue when BOTH halves are meaningful: the matched word must
+    # be a known name-part AND the residue must decompose into known parts too.
+    # That keeps "hiredate"/"billtocity"/"remitemail" while rejecting accidental
+    # substrings like "city" inside "capacity" (residue "capa" is not a word).
     short, long = (a, b) if la <= lb else (b, a)
-    if len(short) >= 4 and short != long:
-        if long.endswith(short):
+    if len(short) >= 4 and short != long and short in _WORD_PARTS:
+        if long.endswith(short) and _is_wordy(long[: -len(short)]):
             return 0.85
-        if len(short) >= 5 and short in long:
-            return 0.8
+        if len(short) >= 5:
+            i = long.find(short)
+            if i > 0 and _is_wordy(long[:i]) and _is_wordy(long[i + len(short):]):
+                return 0.8
     if la >= 4 and lb >= 4:
+        # Python stdlib fuzzy ratio (Ratcliff/Obershelp) — catches typos and
+        # near-miss spellings (``adress``/``address``, ``custmer``/``customer``).
         r = difflib.SequenceMatcher(None, a, b).ratio()
         if r >= 0.86:
             return r
+        if r >= 0.75:
+            return r * 0.7          # graded partial credit for near-miss tokens
     return 0.0
+
+
+def _whole_ratio(source_tokens: list[str], target_tokens: list[str]) -> float:
+    """Whole-name fuzzy similarity using Python's stdlib ``difflib`` — a safety net
+    that catches overall string closeness token-level checks miss (word order,
+    small typos across the whole name). Bounded 0..1."""
+    if not source_tokens or not target_tokens:
+        return 0.0
+    return difflib.SequenceMatcher(None, " ".join(source_tokens), " ".join(target_tokens)).ratio()
 
 
 def _soft_coverage(source_tokens: list[str], target_tokens: list[str]) -> float:
@@ -408,10 +477,13 @@ def score_pair(
     if tgt_desc_tokens is None:
         tgt_desc_tokens = _tokenize(tgt.description or "")
     src_tokens = _tokenize(src.name)
-    # 1. column-name similarity — blend Jaccard (punishes noise tokens) with soft
-    #    coverage (rewards a short source name contained in a longer target name,
-    #    plus fuzzy/abbreviation hits). This is the main lever for cryptic names.
-    name_score = 0.35 * _jaccard(src_tokens, tgt_tokens) + 0.65 * _soft_coverage(src_tokens, tgt_tokens)
+    # 1. column-name similarity — blend three deterministic signals: Jaccard
+    #    (punishes noise tokens), soft coverage (rewards containment + fuzzy/abbrev
+    #    hits), and a whole-name difflib ratio (overall string closeness). All three
+    #    are Python-stdlib fuzzy logic, applied BEFORE any AI call.
+    name_score = (0.30 * _jaccard(src_tokens, tgt_tokens)
+                  + 0.55 * _soft_coverage(src_tokens, tgt_tokens)
+                  + 0.15 * _whole_ratio(src_tokens, tgt_tokens))
     # 2. semantic synonym hits (fuzzy-aware)
     sem_score = _semantic_score(src_tokens, tgt_tokens)
     # 3. description signal — the human meaning of a field often lives in its

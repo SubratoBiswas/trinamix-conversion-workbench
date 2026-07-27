@@ -30,6 +30,14 @@ _HEADERS = ["Target FBDI Field", "Suggested Source Field", "Confidence %", "Reas
             "Excluded (Do-Not-Map Rule)", "Vetted Alternatives (AI-checked)",
             "Value Crosswalks (legacy → Oracle)"]
 
+# Flat "All Fields" sheet — one row per field, original order, mirroring the columns
+# analysts were used to in the old CSV export PLUS the AI-vetted reason columns.
+_FLAT_HEADERS = ["Source Field", "Target FBDI Field", "Required", "How it's mapped",
+                 "Transform", "Confidence %", "Status", "Needs confirmation", "Why",
+                 "Other options (AI-vetted, with reasons)",
+                 "Value Crosswalks (legacy → Oracle)", "Excluded (Do-Not-Map Rule)",
+                 "Notes"]
+
 
 def _fmt_alternatives(alts) -> str:
     """One line per ranked source candidate: ``source (72%) — accept: reason``.
@@ -115,7 +123,9 @@ def _style():
 
 def build_workbook(title: str, records: list[dict]) -> bytes:
     """``records``: [{target_field, suggested_source, confidence(0-100|None),
-    reason, excluded(bool)}]. Returns the .xlsx bytes."""
+    reason, excluded(bool), alternatives, crosswalks, required, how_mapped,
+    transform, status, needs_confirmation, notes}]. The extra fields feed the flat
+    "All Fields" sheet and are all optional. Returns the .xlsx bytes."""
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill
     st = _style()
@@ -152,6 +162,45 @@ def build_workbook(title: str, records: list[dict]) -> bytes:
     s.column_dimensions["A"].width = 24
     s.column_dimensions["B"].width = 14
     s.column_dimensions["C"].width = 52
+
+    # ---- All Fields (flat) — the familiar single-table view, one row per field ----
+    fs = wb.create_sheet(title="All Fields")
+    fs.sheet_view.showGridLines = False
+    fs["A1"] = f"{title}  —  all {len(records)} field{'s' if len(records) != 1 else ''}"
+    fs["A1"].font = st["title"]
+    fs.merge_cells("A1:M1")
+    for i, h in enumerate(_FLAT_HEADERS):
+        c = fs.cell(row=2, column=1 + i, value=h)
+        c.font = st["hdr"]; c.fill = st["hdr_fill"]; c.border = st["border"]
+        c.alignment = st["wrap"]
+    fr = 3
+    for rec in records:
+        conf = rec.get("confidence")
+        vals = [
+            rec.get("suggested_source") or "",
+            rec.get("target_field") or "",
+            "Yes" if rec.get("required") else "",
+            rec.get("how_mapped") or "",
+            rec.get("transform") or "",
+            ("" if conf is None else int(round(float(conf)))),
+            rec.get("status") or "",
+            rec.get("needs_confirmation") or "",
+            rec.get("reason") or "",
+            _fmt_alternatives(rec.get("alternatives")),
+            _fmt_crosswalks(rec.get("crosswalks")),
+            "Yes" if rec.get("excluded") else "",
+            rec.get("notes") or "",
+        ]
+        for i, v in enumerate(vals):
+            cell = fs.cell(row=fr, column=1 + i, value=v)
+            cell.border = st["border"]; cell.alignment = st["wrap"]; cell.font = st["cell"]
+        if rec.get("excluded"):
+            fs.cell(row=fr, column=12).font = st["excl"]
+        fr += 1
+    for col, w in zip("ABCDEFGHIJKLM",
+                      (26, 30, 10, 20, 16, 11, 14, 18, 42, 50, 40, 12, 40)):
+        fs.column_dimensions[col].width = w
+    fs.freeze_panes = "A3"
 
     # ---- One sheet per non-empty band ----
     for key, label, _lo, _hi, sheet_name, _desc in BANDS:

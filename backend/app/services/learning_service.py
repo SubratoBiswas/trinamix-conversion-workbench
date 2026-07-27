@@ -65,7 +65,13 @@ async def _upsert_learned(kind, business_object, field_name, *, original, resolv
         LearnedMapping.target_object == business_object,
         LearnedMapping.target_field == field_name,
         LearnedMapping.client_id == client_id,
+        include_deleted=True,
     )
+    # Retired by the user — auto-capture after Generate Output must not bring it
+    # back (QA issue #5). include_deleted above is what makes the tombstone
+    # visible here; without it we would insert a fresh duplicate.
+    if existing and getattr(existing, "is_deleted", False):
+        return False
     if existing and existing.captured_from in ("gold example", "prompt", "value-map-accept") \
             and captured_from == "auto-capture":
         return False
@@ -116,7 +122,13 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
         # (rule-based confident matches sit ~0.6+). Gold/prompt rules are never
         # downgraded by _upsert_learned, so this only ADDS coverage over time.
         trustworthy = (m.status in ("approved", "overridden")) or ((m.confidence or 0) >= 0.60)
-        if m.status == "not_applicable":
+        _dv = (str(m.default_value).strip() if m.default_value is not None else "")
+        if m.status == "not_applicable" and not _dv:
+            # Genuinely "leave blank". A not_applicable mapping that ALSO carries an
+            # explicit default is intent to POPULATE (the output writer already
+            # treats it that way), so it must be learned as a default rather than
+            # filed under "left blank on purpose" — QA issue #7, where analyst
+            # defaults never appeared in the Learning Centre.
             if await _upsert_learned("suppress_field", business_object, fname,
                                      original="(blank)", resolved="", rule_type="suppress",
                                      client_id=_cid):
@@ -128,9 +140,11 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
                                      rule_type=st.get("rule_type"), rule_config=st.get("config"),
                                      client_id=_cid):
                 n += 1
-        elif m.default_value and trustworthy:
+        elif _dv and (trustworthy or m.status == "not_applicable"):
+            # An explicit default the analyst typed is a decision regardless of the
+            # mapping's confidence — capture it (issue #7).
             if await _upsert_learned("example_default", business_object, fname,
-                                     original="(default)", resolved=m.default_value,
+                                     original="(default)", resolved=_dv,
                                      rule_type="default", client_id=_cid):
                 n += 1
     return {"captured": n, "object": business_object}
@@ -154,7 +168,15 @@ def _category_for(rule_type: str | None) -> str:
 async def _upsert(*, kind, category, original_value, resolved_value,
                   target_object=None, target_field=None, rule_type=None,
                   rule_config=None, project_id=None, captured_from, captured_by,
-                  client_id=None) -> LearnedMapping:
+                  client_id=None, revive: bool = False) -> LearnedMapping | None:
+    """Insert or update a learning.
+
+    ``revive=False`` (the default) honours the tombstone from QA issue #5: if the
+    user deleted this learning, an automatic path — auto-capture after Generate,
+    a startup seed, an approve/override — must NOT bring it back. Only an explicit
+    user action passes ``revive=True``. Returns ``None`` when a tombstoned row was
+    left untouched.
+    """
     # Client-scoped (is_global=False): an interactively captured rule encodes one
     # client's source data. Dedup is keyed by client too, so clients stay separate.
     query = {
@@ -168,12 +190,18 @@ async def _upsert(*, kind, category, original_value, resolved_value,
     existing = await LearnedMapping.find(query).to_list()
     for lm in existing:
         if _normalize(lm.original_value) == norm_orig:
-            await lm.set({
+            if getattr(lm, "is_deleted", False) and not revive:
+                # User retired this learning — respect that and do not resurrect.
+                return None
+            patch = {
                 "resolved_value": resolved_value, "rule_config": rule_config or {},
                 "captured_from": captured_from, "captured_by": captured_by,
                 "captured_at": datetime.utcnow(),
                 "project_id": project_id, "client_id": client_id, "is_global": False,
-            })
+            }
+            if revive and getattr(lm, "is_deleted", False):
+                patch.update({"is_deleted": False, "deleted_at": None, "deleted_by": None})
+            await lm.set(patch)
             return lm
     lm = LearnedMapping(
         kind=kind, category=category, original_value=original_value,
@@ -189,7 +217,14 @@ async def _upsert(*, kind, category, original_value, resolved_value,
 async def record_learning_from_mapping(
     mapping: MappingSuggestion, conversion: Conversion, captured_by: str | None
 ) -> LearnedMapping | None:
-    if not mapping.source_column:
+    # A mapping with no source column but an explicit default IS a decision worth
+    # learning — "Include in Credit Check = Y" is exactly the kind of standard the
+    # library exists to hold. Previously this returned early, so defaults set in
+    # Mapping Review only reached the Learning Centre after a Generate Output ran
+    # (QA issue #7: "Default values in the learning centre is not getting populated").
+    _default = (str(mapping.default_value).strip()
+                if getattr(mapping, "default_value", None) is not None else "")
+    if not mapping.source_column and not _default:
         return None
     business_object = await _business_object_for(conversion)
     if not business_object:
@@ -212,6 +247,17 @@ async def record_learning_from_mapping(
     captured_from = f"{conversion.name} -- {target_field}"
     from app.services.client_service import client_id_for_conversion
     _cid = await client_id_for_conversion(conversion)
+    if not mapping.source_column:
+        # Default-only decision → an example_default learning, so it shows up in
+        # the Learning Centre's "Default values" tab immediately on save.
+        return await _upsert(
+            kind="example_default", category="Default Value",
+            original_value="(default)", resolved_value=_default,
+            target_object=business_object, target_field=target_field,
+            rule_type="default", rule_config={"default_value": _default},
+            project_id=conversion.project_id, client_id=_cid,
+            captured_from=captured_from, captured_by=captured_by,
+        )
     lm = await _upsert(
         kind="column_mapping", category="Column Mapping Alias",
         original_value=mapping.source_column, resolved_value=target_field,

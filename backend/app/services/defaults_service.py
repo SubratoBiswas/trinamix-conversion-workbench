@@ -199,7 +199,10 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
                 LearnedMapping.kind == "example_default",
                 LearnedMapping.target_object == target_object,
                 LearnedMapping.target_field == c["label"],
+                include_deleted=True,
             )
+            # A retired default must stay retired — don't let the AI cache
+            # re-create it on the next run (QA issue #5).
             if not exists:
                 await LearnedMapping(
                     kind="example_default",

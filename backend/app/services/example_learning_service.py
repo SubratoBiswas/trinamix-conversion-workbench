@@ -152,7 +152,13 @@ async def _save_reference_standard(target_object, field, *, source_column, defau
         LearnedMapping.target_object == target_object,
         LearnedMapping.target_field == field.field_name,
         LearnedMapping.client_id == client_id,
+        include_deleted=True,
     )
+    # Learning from a gold example must not resurrect a learning the user
+    # retired (QA issue #5) — re-uploading the same gold file would otherwise
+    # silently undo every deletion.
+    if existing and getattr(existing, "is_deleted", False):
+        return
     doc = {
         "kind": kind,
         "category": category,

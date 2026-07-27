@@ -1839,6 +1839,24 @@ const MappingTableView: React.FC<{
   const [vetting, setVetting] = useState(false);
   const [vetMsg, setVetMsg] = useState<string | null>(null);
   const [alreadyVetted, setAlreadyVetted] = useState(false);
+  // AI-vetted value crosswalks (legacy → Oracle code) per target field — shown in
+  // the vet panel AND carried into the Excel export. Fetched once per conversion.
+  const [cwByField, setCwByField] = useState<Record<string, { legacy: string; oracle: string; status: string }[]>>({});
+  useEffect(() => {
+    if (!conversionId) return;
+    MappingApi.codedValues(conversionId)
+      .then((coded) => {
+        const map: Record<string, { legacy: string; oracle: string; status: string }[]> = {};
+        (coded?.columns || []).forEach((c) => {
+          const pairs = (c.resolved || [])
+            .filter((rv) => String(rv.from) !== String(rv.to))
+            .map((rv) => ({ legacy: String(rv.from), oracle: String(rv.to), status: rv.how || "" }));
+          if (pairs.length) map[(c.target_field || "").toLowerCase()] = pairs;
+        });
+        setCwByField(map);
+      })
+      .catch(() => setCwByField({}));
+  }, [conversionId]);
   useEffect(() => {
     if (!conversionId) return;
     setAltLoading(true);
@@ -1867,42 +1885,57 @@ const MappingTableView: React.FC<{
       .finally(() => setAltLoading(false));
   }, [conversionId]);
 
-  // On demand: ask the model to judge the uncertain options and fold its verdict +
-  // reason back into the candidates, so the table and the CSV both carry them.
+  // Batched AI vetting shared by the toolbar button AND the export. Covers ALL the
+  // given target-field ids (chunked so a wide template — Item/Customer, 1000+
+  // fields — can't overrun the gateway), folds each verdict + reason back into the
+  // on-screen candidates, and RETURNS the merged verdict map so a caller (export)
+  // can annotate immediately without waiting on React state. Already-vetted fields
+  // reuse stored verdicts server-side (no repeat token cost).
+  const runVet = async (
+    ids: string[],
+    onlyUncertain: boolean,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<Record<string, Record<string, { verdict: string; reason: string }>>> => {
+    const merged: Record<string, Record<string, { verdict: string; reason: string }>> = {};
+    const CHUNK = 90;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK);
+      try {
+        const r = await MappingApi.vetCandidates(conversionId, {
+          topN: 4, onlyUncertain, targetFieldIds: slice,
+        });
+        for (const [tid, v] of Object.entries(r.ai || {})) merged[tid] = { ...(merged[tid] || {}), ...v };
+        setAltByTarget((prev) => {
+          const next: Record<string, MappingCandidate[]> = { ...prev };
+          for (const g of r.groups) {
+            const verdicts = r.ai[String(g.target_field_id)] || {};
+            next[String(g.target_field_id)] = (g.candidates || []).map((c) => {
+              const v = verdicts[c.source_column];
+              return v ? { ...c, ai_verdict: v.verdict, ai_reason: v.reason } : c;
+            });
+          }
+          return next;
+        });
+      } catch { /* keep going — a failed chunk just keeps its deterministic reasons */ }
+      onProgress?.(Math.min(i + CHUNK, ids.length), ids.length);
+    }
+    if (Object.keys(merged).length) { onAiVerdicts?.(merged); setAlreadyVetted(true); }
+    return merged;
+  };
+
+  // Toolbar button: vet EVERY field in view (all modules, not just the first 120,
+  // and not only the uncertain ones), with progress.
   const vetWithAi = async () => {
     if (!conversionId) return;
     setVetting(true); setVetMsg(null);
     try {
-      // Scope the AI pass to the rows currently in view (bounded) so a wide
-      // template doesn't send hundreds of pairs and blow the gateway.
-      const ids = viewRows.map((r) => String(r.f.id)).slice(0, 120);
-      const r = await MappingApi.vetCandidates(conversionId, {
-        topN: 4, onlyUncertain: true, targetFieldIds: ids,
-      });
-      setAltByTarget((prev) => {
-        const next: Record<string, MappingCandidate[]> = { ...prev };
-        for (const g of r.groups) {
-          const verdicts = r.ai[String(g.target_field_id)] || {};
-          next[String(g.target_field_id)] = (g.candidates || []).map((c) => {
-            const v = verdicts[c.source_column];
-            return v ? { ...c, ai_verdict: v.verdict, ai_reason: v.reason } : c;
-          });
-        }
-        return next;
-      });
-      // publish to the shared cache so the detail panel shows these verdicts
-      // for any field the toolbar just covered — no second click, no second call.
-      onAiVerdicts?.(r.ai || {});
-      if (Object.keys(r.ai || {}).length) setAlreadyVetted(true);
-      if (r.already_done) {
-        setVetMsg(`Already reviewed by AI — reasons shown for ${r.reused ?? 0} option(s). No tokens used.`);
-      } else if (r.vetted > 0) {
-        setVetMsg(`AI reviewed ${r.vetted} new option(s)${r.reused ? `, reused ${r.reused} already done` : ""}. Reasons added to the table, panel and export.`);
-      } else if ((r.eligible ?? 0) === 0) {
-        setVetMsg("No uncertain options in view — the shown options are already clear from the deterministic reasons.");
-      } else {
-        setVetMsg("AI review returned nothing this time — the deterministic reasons are still shown. Try again, or narrow the rows with a filter.");
-      }
+      const ids = viewRows.map((r) => String(r.f.id));
+      const merged = await runVet(ids, false, (done, total) =>
+        setVetMsg(`AI reviewing options… ${done}/${total} fields`));
+      const n = Object.values(merged).reduce((s, v) => s + Object.keys(v).length, 0);
+      setVetMsg(n > 0
+        ? `AI reviewed ${n} option(s) across ${Object.keys(merged).length} field(s). Reasons added to the table, panel and export.`
+        : "AI review returned nothing this time — the deterministic reasons are still shown.");
     } catch {
       setVetMsg("AI review is unavailable right now — the deterministic reasons are still shown.");
     } finally { setVetting(false); }
@@ -2062,18 +2095,15 @@ const MappingTableView: React.FC<{
     };
     const isExcluded = (r: any) =>
       /do-?not-?map|do not map|analyst rule/i.test(String(r.m?.reason || ""));
-    // Value crosswalks (AI-vetted legacy → Oracle codes) — fetch the coded-value
-    // audit once and index by target field so each row can carry its pairs.
-    const cwByField: Record<string, { legacy: string; oracle: string; status: string }[]> = {};
+    // Auto-vet with AI first so the "Vetted Alternatives (AI-checked)" column is
+    // genuinely AI-checked, not a deterministic fallback (reuses stored verdicts,
+    // so a re-export is cheap). Uncertain-only — confident top picks need no AI.
+    let verdicts: Record<string, Record<string, { verdict: string; reason: string }>> = {};
     try {
-      const coded = await MappingApi.codedValues(conversionId);
-      (coded?.columns || []).forEach((c) => {
-        const pairs = (c.resolved || [])
-          .filter((rv) => String(rv.from) !== String(rv.to))   // identity pass-through isn't a crosswalk
-          .map((rv) => ({ legacy: String(rv.from), oracle: String(rv.to), status: rv.how || "" }));
-        if (pairs.length) cwByField[(c.target_field || "").toLowerCase()] = pairs;
-      });
-    } catch { /* coded-values optional — export still works without crosswalks */ }
+      setVetMsg("AI-checking options for the export…");
+      verdicts = await runVet(rows.map((r) => String(r.f.id)), true);
+    } catch { /* export still works with deterministic reasons */ }
+    finally { setVetMsg(null); }
     const records = rows.map((r) => {
       const top = r.alts && r.alts.length ? r.alts[0] : null;
       const mappedSrc = r.m?.source_column;
@@ -2098,17 +2128,31 @@ const MappingTableView: React.FC<{
       } else {
         reason = r.m?.reason || (r.isGap ? "Required field with no source and no default." : "No confident match found");
       }
-      // Ranked, AI-checked source alternatives (top few) so the analyst sees the
-      // options that were considered, each with the AI verdict/reason when vetted.
-      const alternatives = (r.alts || []).slice(0, 4).map((c: MappingCandidate) => ({
-        source: c.source_column,
-        confidence: c.confidence,
-        verdict: c.ai_verdict || "",
-        reason: c.ai_reason || optReason(c),
-      }));
+      // Ranked, AI-checked source alternatives (top few), annotated with the AI
+      // verdict/reason from the auto-vet just run (falls back to any stored verdict,
+      // then the deterministic reason).
+      const fieldVerdicts = verdicts[String(r.f.id)] || {};
+      const alternatives = (r.alts || []).slice(0, 4).map((c: MappingCandidate) => {
+        const v = fieldVerdicts[c.source_column];
+        return {
+          source: c.source_column,
+          confidence: c.confidence,
+          verdict: v?.verdict || c.ai_verdict || "",
+          reason: v?.reason || c.ai_reason || optReason(c),
+        };
+      });
       const crosswalks = cwByField[String(r.f.field_name || "").toLowerCase()] || [];
+      // Extra columns for the flat "All Fields" sheet (mirror the on-screen table).
+      const how_mapped = [r.method?.label, r.hasRule && !r.transform ? "custom rule" : ""]
+        .filter(Boolean).join(" · ");
+      const notes = r.isGap
+        ? "Required field with no source and no default."
+        : (r.confirm || r.m?.reason || r.method?.detail || "");
       return { target_field: r.f.field_name, suggested_source: suggested,
-               confidence, reason, excluded: isExcluded(r), alternatives, crosswalks };
+               confidence, reason, excluded: isExcluded(r), alternatives, crosswalks,
+               required: !!r.req, how_mapped, transform: r.transform || "",
+               status: r.m?.status ? String(r.m.status).replace(/_/g, " ") : "",
+               needs_confirmation: r.confirm || "", notes };
     });
     const obj = (objectName || "FBDI").trim();
     const src = (sourceName || "Source").trim();
@@ -2343,15 +2387,18 @@ const MappingTableView: React.FC<{
                     <span className="text-[11px] text-ink-subtle">—</span>
                   )}
                 </td>
-                {/* Alternatives */}
+                {/* Alternatives + AI-vetted value crosswalks */}
                 <td className="px-3 py-2">
-                  {altLoading ? (
-                    <span className="text-[10px] text-ink-subtle">ranking…</span>
-                  ) : alts.length === 0 ? (
-                    <span className="text-[10px] text-ink-subtle">—</span>
-                  ) : (
-                    <div className="flex flex-wrap gap-1">
-                      {alts.map((c) => {
+                  {(() => {
+                  const cws = cwByField[(f.field_name || "").toLowerCase()] || [];
+                  return (
+                    <div className="flex flex-wrap items-center gap-1">
+                    {altLoading ? (
+                      <span className="text-[10px] text-ink-subtle">ranking…</span>
+                    ) : alts.length === 0 && !cws.length ? (
+                      <span className="text-[10px] text-ink-subtle">—</span>
+                    ) : (
+                      alts.map((c) => {
                         const bad = c.plausible === false;
                         const why = c.ai_reason
                           ? `${c.ai_verdict ? c.ai_verdict + ": " : ""}${c.ai_reason}`
@@ -2380,9 +2427,20 @@ const MappingTableView: React.FC<{
                             {c.ai_reason && <Sparkles className="h-2.5 w-2.5 text-brand" />}
                           </button>
                         );
-                      })}
+                      })
+                    )}
+                    {cws.length > 0 && (
+                      <span
+                        title={`AI-vetted value crosswalks:\n${cws.slice(0, 15).map((p) => `${p.legacy} → ${p.oracle}${p.status ? ` (${p.status})` : ""}`).join("\n")}`}
+                        className="inline-flex items-center gap-1 rounded border border-brand/30 bg-brand-subtle px-1.5 py-0.5 text-[10px] text-brand-dark"
+                      >
+                        <ArrowLeftRight className="h-2.5 w-2.5" />
+                        {cws.length} value{cws.length !== 1 ? "s" : ""} vetted
+                      </span>
+                    )}
                     </div>
-                  )}
+                  );
+                  })()}
                 </td>
                 {/* Notes */}
                 <td className="px-3 py-2 text-[11px] leading-snug text-ink-muted">
