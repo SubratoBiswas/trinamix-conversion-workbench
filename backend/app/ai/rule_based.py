@@ -155,6 +155,18 @@ def _tok_sim(a: str, b: str) -> float:
     # enough to catch them, long enough to avoid noise from 1-2 char stubs.
     if la >= 3 and lb >= 3 and (a.startswith(b) or b.startswith(a)):
         return 0.9
+    # Glued compound columns are common in EVERY module, not just Item:
+    # ``hiredate`` (hire+date), ``remitemail`` (remit+email), ``billtocity``
+    # (bill+to+city), ``componentitem`` (component+item), ``effstartdate``
+    # (eff+start+date). Credit a whole word embedded at the END of, or inside, a
+    # longer glued token (the START case is already covered by the prefix branch).
+    # Length-gated to stay precise: suffix needs len>=4, interior needs len>=5.
+    short, long = (a, b) if la <= lb else (b, a)
+    if len(short) >= 4 and short != long:
+        if long.endswith(short):
+            return 0.85
+        if len(short) >= 5 and short in long:
+            return 0.8
     if la >= 4 and lb >= 4:
         r = difflib.SequenceMatcher(None, a, b).ratio()
         if r >= 0.86:

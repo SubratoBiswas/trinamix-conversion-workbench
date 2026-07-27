@@ -541,11 +541,15 @@ Analyst note (CW_Issues, Item): "confidence scores average below 50 … most onl
 compatibility and keyword." Three-part fix — deterministic scorer, AI residual, export.
 
 **(A) Deterministic scorer — `app/ai/rule_based.py`.**
-- Added fuzzy token matching `_tok_sim` (exact / prefix ≥3 chars / edit-ratio ≥0.86) and
-  `_soft_coverage` (fraction of TARGET tokens covered by best fuzzy source token). Column-name
-  score is now `0.35*Jaccard + 0.65*soft_coverage`, so a short/cryptic source contained in a
-  longer target name (or an abbreviation like `descr`→`description`, `rev`→`revision`) is
-  rewarded instead of punished by Jaccard.
+- Added fuzzy token matching `_tok_sim` (exact / prefix ≥3 / **suffix ≥4 / embedded ≥5** /
+  edit-ratio ≥0.86) and `_soft_coverage` (fraction of TARGET tokens covered by best fuzzy
+  source token). Column-name score is now `0.35*Jaccard + 0.65*soft_coverage`, so a short/
+  cryptic source contained in a longer target name (`descr`→`description`, `rev`→`revision`)
+  is rewarded instead of punished by Jaccard. The suffix/embedded rule handles **glued
+  compound columns in every module** — `hiredate`(hire+date), `remitemail`(remit+email),
+  `billtocity`(bill+to+city), `componentitem`(component+item), `effstartdate`. Edge tradeoff:
+  a literal suffix like `city`⊂`capacity` can give a rare review-band false hit — contained by
+  best-per-field selection + value/LOV penalties.
 - `_semantic_score` is fuzzy-aware (alias hit by exact membership OR prefix/fuzzy).
 - Semantic now also runs against the target DESCRIPTION tokens.
 - **Root fix for the < 50% average:** the composite is now NORMALISED by the weight of the
@@ -560,6 +564,12 @@ compatibility and keyword." Three-part fix — deterministic scorer, AI residual
   planner, buyer, lead, template, primary, serial, lot, manufacturer, unit, measure).
 - Tests: `tests/test_scorer_tokenization.py` extended to 9 (fuzzy abbrev, partial coverage,
   missing-LOV-no-dilution, higher genuine floor, unrelated stays low). All pass.
+- **Module-wide (not Item-only):** `score_pair` is the shared scorer for every conversion, so
+  the lift applies across modules. Measured (name+type only, no samples/LOV — AI residual lifts
+  the rest): Supplier vendor_name→Supplier Name 71%, remitemail→Remittance Email 48%; Customer
+  creditlimit→Credit Limit 76%, companyname→Party Name 65%, billtocity→City 41%; BOM
+  qtyper→Quantity 54%, effstartdate→Start Date 33%; Employee workemail→Work Email 42%,
+  hiredate→Hire Date 34%. Unrelated controls stay 20%.
 
 **(B) AI residual now runs on WIDE templates — `app/services/mapping_service.py`.**
 - Root cause found: `_heavy = len(targets) > 300` **fully disabled the LLM residual**, so Item
