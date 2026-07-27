@@ -1,0 +1,78 @@
+"""Unit tests for the banded field-mapping export (Issue #3)."""
+import io
+import os
+import sys
+
+import openpyxl
+
+_BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND not in sys.path:
+    sys.path.insert(0, _BACKEND)
+
+from app.services.mapping_export_service import band_for, build_workbook  # noqa: E402
+
+RECS = [
+    {"target_field": "Item Number", "suggested_source": "itemid", "confidence": 100,
+     "reason": "Auto-applied from learning library", "excluded": False},
+    {"target_field": "Formatted Description", "suggested_source": "description", "confidence": 54,
+     "reason": "column name overlap (50%)", "excluded": False},
+    {"target_field": "Transaction Type", "suggested_source": "custitem_product_type", "confidence": 30,
+     "reason": "semantic keyword match", "excluded": False},
+    {"target_field": "Item Class Name", "suggested_source": "class", "confidence": 24,
+     "reason": "Analyst rule: do-not-map list", "excluded": True},
+    {"target_field": "Asset Tracked", "suggested_source": "createddate", "confidence": 0,
+     "reason": "implausible", "excluded": False},
+]
+
+
+def test_band_for_boundaries():
+    assert band_for(100) == "exact"
+    assert band_for(96) == "b95" and band_for(92) == "b90" and band_for(87) == "b85"
+    assert band_for(80) == "b75" and band_for(60) == "b50" and band_for(30) == "b0"
+    assert band_for(0) == "none" and band_for(None) == "none"
+
+
+def _open():
+    return openpyxl.load_workbook(io.BytesIO(build_workbook("Item to NetSuite Field Mapping", RECS)))
+
+
+def test_summary_counts_and_total():
+    wb = _open()
+    s = wb["Summary"]
+    counts = {r[0]: r[1] for r in s.iter_rows(min_row=4, max_row=12, values_only=True) if r[0]}
+    assert counts["100% - Exact Match"] == 1
+    assert counts["0-50%"] == 2
+    assert counts["0% - No Match Found"] == 1
+    assert counts["Total"] == 5
+
+
+def test_only_nonempty_bands_get_sheets():
+    wb = _open()
+    assert "100pct_-_Exact_Match" in wb.sheetnames
+    assert "0-50pct" in wb.sheetnames
+    assert "95-100pct" not in wb.sheetnames  # empty band → no sheet
+
+
+def test_band_sheet_headers_and_rows():
+    wb = _open()
+    ws = wb["0-50pct"]
+    assert [ws.cell(row=2, column=c).value for c in range(1, 6)] == [
+        "Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason", "Excluded (Do-Not-Map Rule)"]
+    # excluded row renders "Yes"
+    vals = [[ws.cell(row=r, column=c).value for c in range(1, 6)] for r in range(3, 5)]
+    excl = {tuple(v[:2]): v[4] for v in vals}
+    assert excl[("Item Class Name", "class")] == "Yes"
+    assert excl[("Transaction Type", "custitem_product_type")] in (None, "")
+
+
+def test_title_on_summary():
+    wb = _open()
+    assert wb["Summary"]["A1"].value == "Item to NetSuite Field Mapping"
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    p = 0
+    for t in tests:
+        t(); print("PASS ", t.__name__); p += 1
+    print(f"\n{p}/{len(tests)} passed")

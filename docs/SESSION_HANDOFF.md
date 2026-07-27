@@ -282,7 +282,12 @@ seed admin, move long EBS/Fusion ops to background workers before scaling out.
 
 ---
 
-## 9. Continuation session — 2026-07-24 (multi-source merge efficiency, single-file download fix, filled Oracle templates, docs & tests)
+## 9. Continuation session — 2026-07-24
+
+Scope of this session: multi-source merged Download-all efficiency (9.1) + single-file
+download corruption fix (9.2) + filled-in Oracle FBDI Excel templates (9.3) + docs &
+tests incl. an Excel test report (9.4) + the full AI-differentiator build #1–#8 (9.7).
+Consolidated new-endpoint and files-touched references are in 9.8–9.9.
 
 ### 9.1 Efficient merged "Download all" (multi-source → one file per interface)
 - **Problem:** with multiple sources per interface, download-all regenerated every
@@ -346,24 +351,28 @@ seed admin, move long EBS/Fusion ops to background workers before scaling out.
   AI-drafted DQ rules, AI DQ review, load-error remediation, reconciliation narrative,
   Copilot. `.gitignore` excludes the doc-gen scratch (`docs/node_modules`,
   `docs/_gen_docs.js`, `docs/_preview`, generated PDFs).
-
-### 9.5 Key files touched this session
-- Backend: `routers/operations.py`, `services/output_service.py`,
-  `services/template_fill_service.py` (new), `main.py` (CORS expose header),
-  `tests/test_conversion_workbench.py` (new), `tests/test_template_fill.py` (new).
-- Frontend: `api/index.ts`, `pages/ProjectOverviewPage.tsx`.
-- Docs: two `.docx` deliverables + this handoff; `.gitignore`.
+- **`docs/Conversion_Workbench_Unit_Tests.xlsx`** — Excel test report: Summary sheet
+  (live COUNTIF pass/fail + coverage-by-area) + Test Cases matrix (11 cases: id, area,
+  module under test, what it verifies, setup, expected, result, type). Built with
+  openpyxl + recalc'd (0 formula errors).
 
 ### 9.6 Continue-here checklist
-1. **Deploy:** run `launch_git.bat` (message already set for the filled-template
-   feature). Backend + frontend redeploy on push.
-2. **Verify live** on a multi-source project: Download-all returns one merged file
-   per interface (fast, background-generated); a single FBDI download opens cleanly
-   as `.zip`; "Download all (Excel templates)" and the per-row Excel button produce
-   populated Oracle workbooks (Supplier `POZ_SUPPLIERS_INT` merged eBOS+NetSuite,
-   BOM, Customer, Item) with data in the right sheet/rows and samples removed.
-3. **Watch memory** on very wide filled templates (Customer 19 sheets / Item 18) —
+1. **Deploy:** run `launch_git.bat`. Backend + frontend redeploy on push. (User has
+   been deploying after each feature; #1–#8 slice-1 are all deployed as of end of session.)
+2. **Verify live** (multi-source project): Download-all returns one merged file per
+   interface (fast, background); single FBDI download opens cleanly as `.zip`; filled
+   Excel templates populate the right sheet/rows; the AI tabs/cards render (Duplicate
+   suspects, Anomalies, Proven by other clients, Cutover readiness, Ask the copilot,
+   Agentic plan preview).
+3. **Run all new tests:** `python3 -m pytest backend/tests/test_conversion_workbench.py
+   backend/tests/test_entity_resolution.py backend/tests/test_anomaly_service.py
+   backend/tests/test_cross_client.py backend/tests/test_readiness.py
+   backend/tests/test_synthetic_data.py backend/tests/test_copilot_grounding.py
+   backend/tests/test_agentic_planner.py -q` (all pure, no DB/network).
+4. **Watch memory** on very wide filled templates (Customer 19 sheets / Item 18) —
    fill runs in the background; if a small instance OOMs, cap rows or stream.
+5. **AI is optional everywhere:** every new AI feature falls back to deterministic
+   logic when `AI_PROVIDER`/`ANTHROPIC_API_KEY` is unset — none of them can break the flow.
 
 ### 9.7 AI data-intelligence features (roadmap build, in list order)
 Building the AI-differentiator list the user prioritised, highest-impact first.
@@ -423,3 +432,84 @@ Building the AI-differentiator list the user prioritised, highest-impact first.
   (7), `test_anomaly_service.py` (10), `test_cross_client.py` (5), `test_readiness.py`
   (8), `test_synthetic_data.py` (8), `test_copilot_grounding.py` (8),
   `test_agentic_planner.py` (6) — 52 total.
+
+### 9.8 New API endpoints (this session)
+Conversions/output router (`routers/operations.py`, mounted under `/api/conversions`):
+- `POST /project/{id}/generate-merged-all` — background-generate every interface's merged file.
+- `GET  /project/{id}/download-all?fmt=csv|xlsx|template&regenerate=` — fast reuse-zip of merged files.
+- `POST /{id}/generate-merged`, `GET /{id}/merged-preview` — merged generate + preview (per interface).
+- `GET  /{id}/duplicate-candidates?threshold&use_ai` — #1 fuzzy entity resolution.
+- `GET  /{id}/cross-client-suggestions?limit` — #3 cross-client suggestions.
+- `GET  /{id}/readiness`, `GET /project/{id}/readiness` — #5 cutover-readiness (object + project rollup).
+- `POST /{id}/copilot` `{question}` — #7 grounded copilot Q&A.
+- `GET  /project/{id}/agentic-plan` — #8 agentic plan step (checkpoint, read-only).
+- Also present from earlier: `GET /{id}/preload-report`, `GET /{id}/reconciliation`,
+  `POST /load-runs/{id}/explain-errors`.
+Datasets router (`routers/datasets.py`, `/api/datasets`): `GET /{id}/anomalies?use_ai&max_rows` — #2.
+FBDI router (`routers/fbdi.py`, `/api/fbdi`): `GET /templates/{id}/synthetic-data?rows&fmt` — #6.
+Output generation (`services/output_service.py`): new `fmt="template"` across generate-output,
+generate-merged(-all) and download-all (#9.3).
+
+### 9.9 All files touched this session (complete)
+**Backend — new services:** `template_fill_service.py` (9.3), `entity_resolution.py` (#1),
+`anomaly_service.py` (#2), `cross_client_service.py` (#3), `readiness_service.py` (#5),
+`synthetic_data_service.py` (#6), `copilot_grounding.py` (#7), `agentic_planner.py` (#8).
+**Backend — edited:** `routers/operations.py` (merged download-all + all #1/#3/#5/#7/#8 endpoints),
+`routers/datasets.py` (#2 endpoint), `routers/fbdi.py` (#6 endpoint),
+`services/output_service.py` (`fmt="template"` + materialize), `main.py` (CORS expose
+`Content-Disposition`).
+**Backend — new tests:** `test_conversion_workbench.py`, `test_template_fill.py`,
+`test_entity_resolution.py`, `test_anomaly_service.py`, `test_cross_client.py`,
+`test_readiness.py`, `test_synthetic_data.py`, `test_copilot_grounding.py`,
+`test_agentic_planner.py`.
+**Frontend — edited:** `api/index.ts` (all new API methods + `ReadinessObject` type +
+`download` uses server filename), `pages/ProjectOverviewPage.tsx` (merged download-all +
+Excel-template buttons + Agentic plan card), `pages/OutputPreviewPage.tsx` (Duplicate
+suspects tab), `pages/DatasetDetailPage.tsx` (Anomalies tab), `pages/ConversionDetailPage.tsx`
+(Proven-by-other-clients + Cutover-readiness + Ask-the-copilot cards),
+`pages/FbdiTemplatesPage.tsx` (Sample-data button).
+**Docs / config:** `docs/Conversion_Workbench_User_Guide.docx`,
+`docs/Conversion_Workbench_Feature_List.docx`, `docs/Conversion_Workbench_Unit_Tests.xlsx`,
+`docs/AI_Differentiators_Roadmap.md` (referenced), this handoff, `.gitignore`
+(doc-gen scratch + render byproducts), `launch_git.bat` (commit messages per deploy).
+Note: a stray `docs/node_modules` + `docs/_gen_docs.js` from the docx build remain on
+disk (folder deletes are permission-gated; user declined) but are git-ignored.
+
+### 9.10 CW_Issues.xlsx (analyst-reported) — status
+- **Issue #3 — banded mapping export — DONE.** `services/mapping_export_service.py`
+  (pure `build_workbook` + `band_for`, 5 tests) + `POST conversions/{id}/mapping-export`
+  + Mapping Review "Export mapping (Excel)" button. Replaces the flat
+  `field_mapping.csv` with Summary + per-confidence-band sheets (matches
+  `Item_NetSuite_Field_Mapping_Clean.xlsx`).
+- **Issue #1 — Customer multi-sheet upload — DONE (prompt at upload).**
+  Root cause: `_read_excel_robust` read only the LARGEST sheet. Fix: `tabular_parser`
+  gains `list_excel_sheets` + a `sheet=` param on `parse_tabular`; `POST datasets/
+  peek-sheets` lists a workbook's sheets; `POST datasets/upload` accepts a `sheet`
+  form field; `create_dataset_from_upload(sheet=...)` extracts that sheet into its
+  OWN single-sheet CSV (so every downstream read is correct with no sheet tracking).
+  UI: `CreateDatasetModal` peeks on file-pick and, for a multi-sheet workbook, shows
+  a checkbox picker — each selected sheet is imported as its own source dataset
+  (Customer + Address → two datasets, each bound to its own interface). Tests:
+  `tests/test_multisheet_parser.py` (3).
+- **Issue #4 — low suggestion confidence — DONE (better tokenization).**
+  Genuine matches scored low because cryptic NetSuite names didn't tokenize.
+  `app/ai/rule_based.py::_tokenize` now strips custom-field noise prefixes
+  (`custitem_`/`custentity_`/…) and splits glued id-suffixes on curated domain stems
+  (`itemid`→`item id`) with no false splits (`valid`/`void` unaffected). Result:
+  `custitem_lifecycle_phase`→`Lifecycle Phase` 41%→80%, `itemid`→`Item Number`
+  surfaces ~51%, unrelated `createddate` stays 14% (no inflation). Tests:
+  `tests/test_scorer_tokenization.py` (6). Further gains (LOV/synonym weighting)
+  possible; verify against analyst-expected mappings before pushing weights higher.
+- **Issue #2 — approved defaults missing in FBDI output — FIXED (verify live).**
+  Root cause: the UI + mapping export show default = `mapping.default_value` OR
+  `controlDefaultFor` OR `effectiveDefaults` (from `defaults_service.
+  compute_effective_defaults`), but GENERATION only applied `output_service`'s own
+  static `_CONTROL_DEFAULTS`. A default living only in the effective-defaults layer
+  (e.g. the 4 Customer profile booleans) therefore showed in the UI/export but was
+  blank in the file. Fix: `generate_output_artifact` computes
+  `compute_effective_defaults(conversion, use_ai=False)` and `_apply_control_defaults`
+  now fills any BLANK, non-suppressed column from that dict (same key normalization),
+  so output matches the UI. Logic unit-verified; **live-verify after deploy**:
+  regenerate the Customer output and confirm the 4 fields are populated. (Sandbox
+  can't import beanie modules due to an OpenSSL/pymongo mismatch — env issue, not code.)
+  (The #4 status is recorded above under "Issue #4 — DONE".)

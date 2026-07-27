@@ -90,11 +90,20 @@ export const DatasetsApi = {
     }>(`/datasets/${id}/classify`).then(r => r.data),
   classifyLearn: (id: string, body: { source_system?: string; template_id?: string; target_object?: string }) =>
     api.post<{ learned: boolean; signature: string; id: string }>(`/datasets/${id}/classify-learn`, body).then(r => r.data),
-  upload: (file: File, name?: string, description?: string) => {
+  /** List a workbook's sheets before upload so we can prompt on multi-sheet files. */
+  peekSheets: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return api.post<{ file_name: string; multi: boolean;
+      sheets: { name: string; rows: number; cols: number }[] }>(
+      "/datasets/peek-sheets", fd, { timeout: 120_000 }).then(r => r.data);
+  },
+  upload: (file: File, name?: string, description?: string, sheet?: string) => {
     const fd = new FormData();
     fd.append("file", file);
     if (name) fd.append("name", name);
     if (description) fd.append("description", description);
+    if (sheet) fd.append("sheet", sheet);
     // Large (20-40 MB) files need well beyond the default 60s to upload + parse.
     return api.post<DatasetDetail>("/datasets/upload", fd, { timeout: 300_000 }).then(r => r.data);
   },
@@ -712,6 +721,19 @@ export const OutputApi = {
       params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
       timeout: 120000,
     }).then(r => r.data),
+  /** Banded field-mapping export (Issue #3): POST the computed rows, download the
+   *  clean Excel workbook (Summary + one sheet per confidence band). */
+  mappingExport: async (conversionId: string, title: string, filename: string,
+                        records: any[]) => {
+    const res = await api.post(`/conversions/${conversionId}/mapping-export`,
+      { title, filename, records }, { responseType: "blob", timeout: 120000 });
+    const cd = (res.headers?.["content-disposition"] as string) || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const name = m ? decodeURIComponent(m[1].replace(/"/g, "").trim()) : filename;
+    const url = window.URL.createObjectURL(new Blob([res.data]));
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+  },
   /** Grounded, read-only copilot Q&A for one conversion (mappings/DQ/readiness). */
   copilot: (conversionId: string, question: string) =>
     api.post<{ answer: string; citations: string[]; intent: string; ai_used: boolean;

@@ -23,15 +23,45 @@ def _ds_out(ds: Dataset, columns=None) -> dict:
     return d
 
 
+@router.post("/peek-sheets")
+async def peek_sheets(
+    file: UploadFile = File(...),
+    _: User = Depends(get_current_user),
+):
+    """List a workbook's sheets (name + stored dimensions) WITHOUT persisting a
+    dataset, so the upload UI can prompt when a workbook has several data sheets
+    (Issue #1 — e.g. a Customer + Address workbook). CSV/single-sheet files report
+    one implicit sheet."""
+    import tempfile
+    from pathlib import Path as _P
+    from app.parsers.tabular_parser import list_excel_sheets
+    ext = _P(file.filename or "").suffix.lower()
+    data = await file.read()
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext or ".bin", delete=False) as tf:
+            tf.write(data)
+            tmp = tf.name
+        sheets = list_excel_sheets(tmp)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Could not read '{file.filename}': {exc}")
+    finally:
+        try:
+            _P(tmp).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"file_name": file.filename, "multi": len(sheets) > 1, "sheets": sheets}
+
+
 @router.post("/upload", response_model=DatasetDetailOut)
 async def upload_dataset(
     file: UploadFile = File(...),
     name: str | None = Form(None),
     description: str | None = Form(None),
+    sheet: str | None = Form(None),
     _: User = Depends(get_current_user),
 ):
     try:
-        ds, columns = await create_dataset_from_upload(file, name, description)
+        ds, columns = await create_dataset_from_upload(file, name, description, sheet=sheet)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001 — surface a clear parse reason, not a 500

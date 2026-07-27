@@ -72,6 +72,18 @@ SEMANTIC_DICT: dict[str, tuple[str, ...]] = {
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
+# NetSuite (and similar) custom-field prefixes carry no mapping meaning — they just
+# dilute token overlap so a genuine "custitem_lifecycle_phase" → "Lifecycle Phase"
+# match scores low. Dropped during tokenization (Issue #4). High precision: only
+# these exact, known noise tokens are removed.
+_NOISE_PREFIX = {"custitem", "custentity", "custrecord", "custcol", "custbody",
+                 "custevent", "cseg", "custitemnumber"}
+# Known domain head-nouns whose glued id-suffix should split ("itemid" → item + id).
+# Restricted to a curated set so we never mis-split words like "valid"/"void".
+_ID_STEMS = {"item", "entity", "vendor", "supplier", "customer", "party", "account",
+             "product", "org", "organization", "location", "uom", "subsidiary",
+             "employee", "invoice", "order", "transaction"}
+
 
 def _tokenize(text: str) -> list[str]:
     if not text:
@@ -86,7 +98,18 @@ def _tokenize(text: str) -> list[str]:
     s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
     s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
     s = s.replace("_", " ").replace("-", " ").replace("/", " ")
-    return [t.lower() for t in _TOKEN_RE.findall(s) if t]
+    toks = [t.lower() for t in _TOKEN_RE.findall(s) if t]
+    # Drop custom-field noise prefixes (keep at least one token if that's all there is).
+    stripped = [t for t in toks if t not in _NOISE_PREFIX]
+    toks = stripped or toks
+    # Split a glued id-suffix on known domain stems: "itemid" → ["item","id"].
+    out: list[str] = []
+    for t in toks:
+        if t.endswith("id") and len(t) > 3 and t[:-2] in _ID_STEMS:
+            out.extend([t[:-2], "id"])
+        else:
+            out.append(t)
+    return out
 
 
 def _jaccard(a: Iterable[str], b: Iterable[str]) -> float:

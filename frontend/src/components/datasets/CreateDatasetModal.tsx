@@ -37,25 +37,64 @@ export const CreateDatasetModal: React.FC<Props> = ({ open, onClose, onCreated }
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [connStub, setConnStub] = useState<string | null>(null);
+  // Multi-sheet workbook handling (Issue #1): peek sheets on pick and let the user
+  // choose which to import (each selected sheet becomes its own source dataset).
+  const [sheets, setSheets] = useState<{ name: string; rows: number; cols: number }[] | null>(null);
+  const [selSheets, setSelSheets] = useState<Set<string>>(new Set());
+  const [peeking, setPeeking] = useState(false);
 
   if (!open) return null;
 
-  const reset = () => { setPreview(null); setName(""); setDesc(""); setError(null); setConnStub(null); };
+  const reset = () => {
+    setPreview(null); setName(""); setDesc(""); setError(null); setConnStub(null);
+    setSheets(null); setSelSheets(new Set());
+  };
 
   const close = () => { reset(); onClose(); };
 
-  const onPick = (f: File) => {
+  const onPick = async (f: File) => {
     setPreview(f);
     setName(f.name.replace(/\.[^/.]+$/, ""));
+    setSheets(null); setSelSheets(new Set());
+    if (/\.(xlsx|xlsm|xls)$/i.test(f.name)) {
+      setPeeking(true);
+      try {
+        const r = await DatasetsApi.peekSheets(f);
+        if (r.multi) {
+          setSheets(r.sheets);
+          setSelSheets(new Set(r.sheets.map((s) => s.name)));  // default: import all
+        }
+      } catch { /* fall back to single-sheet upload */ }
+      finally { setPeeking(false); }
+    }
   };
+
+  const toggleSheet = (n: string) =>
+    setSelSheets((prev) => {
+      const next = new Set(prev);
+      next.has(n) ? next.delete(n) : next.add(n);
+      return next;
+    });
 
   const submit = async () => {
     if (!preview) return;
     setBusy(true); setError(null);
     try {
-      const ds = await DatasetsApi.upload(preview, name || undefined, desc || undefined);
-      onCreated(ds);
-      reset();
+      if (sheets && sheets.length > 1 && selSheets.size > 0) {
+        // Import each selected sheet as its own source dataset.
+        const chosen = sheets.filter((s) => selSheets.has(s.name));
+        let last: DatasetDetail | null = null;
+        for (const s of chosen) {
+          last = await DatasetsApi.upload(
+            preview, `${name || preview.name} — ${s.name}`, desc || undefined, s.name);
+          onCreated(last);
+        }
+        reset();
+      } else {
+        const ds = await DatasetsApi.upload(preview, name || undefined, desc || undefined);
+        onCreated(ds);
+        reset();
+      }
     } catch (e: any) {
       setError(e?.response?.data?.detail || "Upload failed");
     } finally { setBusy(false); }
@@ -114,10 +153,39 @@ export const CreateDatasetModal: React.FC<Props> = ({ open, onClose, onCreated }
                 <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Source system, snapshot date…" />
               </div>
             </div>
+            {peeking && (
+              <div className="mt-3 text-[11px] text-ink-muted">Checking workbook sheets…</div>
+            )}
+            {sheets && sheets.length > 1 && (
+              <div className="mt-4 rounded-md border border-brand/30 bg-brand-subtle/30 px-4 py-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-ink">
+                  <Layers className="h-4 w-4 text-brand" />
+                  This workbook has {sheets.length} sheets — choose which to import
+                </div>
+                <div className="mt-1 text-[11px] text-ink-muted">
+                  Each selected sheet becomes its own source dataset (map each to its own interface, e.g. Customer and Address).
+                </div>
+                <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                  {sheets.map((s) => (
+                    <label key={s.name} className="flex items-center gap-2 rounded-md border border-line bg-white px-2.5 py-1.5 text-xs">
+                      <input type="checkbox" checked={selSheets.has(s.name)} onChange={() => toggleSheet(s.name)} />
+                      <span className="font-medium text-ink">{s.name}</span>
+                      <span className="ml-auto text-[10.5px] text-ink-muted">{s.rows.toLocaleString()}×{s.cols}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-1.5 text-[10.5px] text-ink-subtle">{selSheets.size} of {sheets.length} selected.</div>
+              </div>
+            )}
             {error && <div className="mt-3 rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger">{error}</div>}
             <div className="mt-5 flex justify-end gap-2">
               <Button variant="secondary" onClick={close}>Cancel</Button>
-              <Button onClick={submit} loading={busy}>Upload &amp; profile</Button>
+              <Button onClick={submit} loading={busy}
+                disabled={!!(sheets && sheets.length > 1 && selSheets.size === 0)}>
+                {sheets && sheets.length > 1
+                  ? `Upload ${selSheets.size} sheet${selSheets.size === 1 ? "" : "s"} & profile`
+                  : "Upload & profile"}
+              </Button>
             </div>
           </div>
         ) : connStub ? (

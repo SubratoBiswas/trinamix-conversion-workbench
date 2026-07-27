@@ -491,11 +491,13 @@ _AUTHORITATIVE: set[str] = {
 
 
 def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
-                            suppressed: set | None = None) -> pd.DataFrame:
+                            suppressed: set | None = None,
+                            effective: dict | None = None) -> pd.DataFrame:
     n = len(df)
     if n == 0:
         return df
     suppressed = suppressed or set()
+    effective = effective or {}
     for col in df.columns:
         key = str(col).strip().lower().rstrip("*").strip()
         # The user's gold example / prompt marked this field as intentionally
@@ -524,6 +526,13 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
         elif key in _CONTROL_DEFAULTS and bool((df[col].astype(str).str.strip() == "").all()):
             # Other defaults only fill columns the source left entirely blank.
             df[col] = _CONTROL_DEFAULTS[key]
+        elif key in effective and bool((df[col].astype(str).str.strip() == "").all()):
+            # Effective defaults from defaults_service (curated control + learned
+            # example defaults) — the SAME layer the Mapping Review UI and the
+            # mapping export show. Fills blank, non-suppressed columns so the output
+            # FBDI matches what the analyst sees (Issue #2: e.g. Include in Credit
+            # Check / Credit Hold / Send Dunning Letters / Send Statement).
+            df[col] = effective[key]
     return df
 
 
@@ -646,6 +655,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         and not (getattr(_m, "default_value", None) and str(_m.default_value).strip())
     }
 
+    # Effective defaults (curated control + learned example defaults) — the SAME
+    # layer the Mapping Review UI and the mapping export display. Applied to blank,
+    # non-suppressed columns at finalize so the output FBDI matches what the analyst
+    # sees (Issue #2). use_ai=False keeps generation off the model path (fast); the
+    # reported fields are curated/control defaults, so they're covered.
+    _eff_defaults: dict = {}
+    try:
+        from app.services.defaults_service import compute_effective_defaults
+        _eff_defaults = (await compute_effective_defaults(conversion, use_ai=False)).get("defaults", {}) or {}
+    except Exception:  # noqa: BLE001 — defaults are best-effort; never block generation
+        _eff_defaults = {}
+
     fmt = fmt.lower()
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -689,7 +710,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # standard default, not the literal text.
         sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
-        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys)
+        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys, effective=_eff_defaults)
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
         # field_name (before the header rename below).

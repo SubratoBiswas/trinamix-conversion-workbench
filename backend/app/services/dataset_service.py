@@ -86,12 +86,34 @@ def save_upload(upload: UploadFile, subdir: str = "datasets") -> tuple[Path, str
 
 
 async def create_dataset_from_upload(
-    upload: UploadFile, name: str | None, description: str | None
+    upload: UploadFile, name: str | None, description: str | None,
+    sheet: str | None = None,
 ) -> tuple[Dataset, list[DatasetColumnProfile]]:
     ext = Path(upload.filename or "").suffix.lower()
     if ext not in ALLOWED_DATASET_EXTS:
         raise ValueError(f"Unsupported file extension: {ext}")
     file_path, stored_name = save_upload(upload)
+    orig_stem = Path(upload.filename or stored_name).stem
+
+    # Multi-sheet workbook, one sheet chosen (Issue #1): extract THAT sheet into its
+    # own single-sheet CSV and treat it as the dataset's file. This way every
+    # downstream read (profile, preview, generate) sees exactly the chosen sheet
+    # with no sheet-tracking needed, and each sheet of a Customer+Address-style
+    # workbook can become its own source dataset bound to its own interface.
+    if sheet:
+        import re as _re
+        try:
+            _sdf = parse_tabular(file_path, file_type=ext.lstrip("."), sheet=sheet)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"Could not read sheet '{sheet}': {exc}")
+        csv_name = f"{Path(stored_name).stem}__{_re.sub(r'[^A-Za-z0-9]+', '_', sheet).strip('_') or 'sheet'}.csv"
+        csv_path = Path(file_path).with_name(csv_name)
+        _sdf.to_csv(csv_path, index=False)
+        try:
+            Path(file_path).unlink(missing_ok=True)  # keep only the extracted sheet
+        except Exception:  # noqa: BLE001
+            pass
+        file_path, stored_name, ext = str(csv_path), csv_name, ".csv"
 
     # Dedupe: if a byte-identical file was already uploaded, reuse that dataset
     # instead of creating another copy (prevents the Datasets list filling with
@@ -122,7 +144,7 @@ async def create_dataset_from_upload(
     top = suggestions[0] if suggestions else None
 
     ds = Dataset(
-        name=name or Path(upload.filename or stored_name).stem,
+        name=name or (f"{orig_stem} — {sheet}" if sheet else orig_stem),
         description=description,
         file_name=stored_name,
         file_path=str(file_path),

@@ -114,22 +114,56 @@ def _read_sheet_calamine(raw: bytes, sheet_title: str) -> pd.DataFrame:
                          header=None, dtype=str, keep_default_na=False)
 
 
-def _read_excel_robust(file_path: Path, raw: bytes, nrows: int | None = None) -> pd.DataFrame:
-    """Read only the largest sheet of a workbook. For a full read (no row cap) use
-    the fast calamine engine; for a bounded sample stream with openpyxl read-only
-    (stops early). Both avoid loading every sheet in full — the multi-sheet /
-    multi-MB workbook slowdown. Falls back to openpyxl streaming if calamine is
-    unavailable or errors."""
+def list_excel_sheets(file_path: Path | str) -> list[dict]:
+    """List a workbook's sheets with cheap stored dimensions, largest first — used
+    by the upload flow to prompt the user when a workbook has multiple data sheets
+    (e.g. Customer + Address). Non-xlsx files return a single implicit sheet."""
+    file_path = Path(file_path)
+    raw = file_path.read_bytes()
+    if raw[:4] != b"PK\x03\x04" and file_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
+        return [{"name": file_path.stem, "rows": 0, "cols": 0}]
+    try:
+        wb = _load_xlsx_readonly(raw)
+    except Exception:  # noqa: BLE001
+        return [{"name": file_path.stem, "rows": 0, "cols": 0}]
+    try:
+        out = []
+        for ws in wb.worksheets:
+            r, c = (ws.max_row or 0), (ws.max_column or 0)
+            if r == 0 and c == 0:
+                continue  # skip truly empty sheets
+            out.append({"name": ws.title, "rows": int(r), "cols": int(c)})
+        out.sort(key=lambda s: s["rows"] * s["cols"], reverse=True)
+        return out or [{"name": (wb.worksheets[0].title if wb.worksheets else file_path.stem),
+                        "rows": 0, "cols": 0}]
+    finally:
+        try:
+            wb.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _read_excel_robust(file_path: Path, raw: bytes, nrows: int | None = None,
+                       sheet: str | None = None) -> pd.DataFrame:
+    """Read one sheet of a workbook. By default the LARGEST sheet; pass ``sheet``
+    (a title, case-insensitive) to read a specific one — the multi-sheet upload
+    prompt uses this so 'Customer' and 'Address' can each become their own source.
+    Full reads use the fast calamine engine; bounded samples stream with openpyxl."""
     wb = _load_xlsx_readonly(raw)
     try:
         sheets = list(wb.worksheets)
         if not sheets:
             raise ValueError("Workbook has no sheets")
         limit = (nrows + 1) if nrows else None  # +1 for the header row
-        # Rank sheets by stored dimensions (cheap).
-        ranked = sorted(sheets, key=lambda w: (w.max_row or 0) * (w.max_column or 0),
-                        reverse=True)
-        best = ranked[0]
+        best = None
+        if sheet:
+            want = str(sheet).strip().lower()
+            best = next((w for w in sheets if (w.title or "").strip().lower() == want), None)
+        if best is None:
+            # Rank sheets by stored dimensions (cheap).
+            ranked = sorted(sheets, key=lambda w: (w.max_row or 0) * (w.max_column or 0),
+                            reverse=True)
+            best = ranked[0]
         has_dims = (best.max_row or 0) * (best.max_column or 0) > 0
         raw_df = None
         # Fast path: full read via calamine (uncapped output generation).
@@ -219,7 +253,7 @@ def _read_csv_robust(file_path: Path, raw: bytes, nrows: int | None = None) -> p
 
 
 def parse_tabular(file_path: Path | str, file_type: str | None = None,
-                  nrows: int | None = None) -> pd.DataFrame:
+                  nrows: int | None = None, sheet: str | None = None) -> pd.DataFrame:
     """Robust CSV / XLSX / HTML parser. Detects the real format by magic bytes
     (the extension can lie), repairs corrupt xlsx stylesheets, unwraps HTML tables
     exported as .xls(x)/.csv, sniffs CSV encoding (incl. UTF-16 / BOM) and
@@ -229,7 +263,7 @@ def parse_tabular(file_path: Path | str, file_type: str | None = None,
     raw = file_path.read_bytes()
     head = raw[:1024]
     if raw[:4] == b"PK\x03\x04":               # real OOXML/xlsx (zip signature)
-        return _read_excel_robust(file_path, raw, nrows=nrows)
+        return _read_excel_robust(file_path, raw, nrows=nrows, sheet=sheet)
     if _looks_html(head):                        # HTML masquerading as a spreadsheet
         try:
             df = _read_html_table(file_path)
@@ -239,7 +273,7 @@ def parse_tabular(file_path: Path | str, file_type: str | None = None,
     ftype = (file_type or file_path.suffix.lstrip(".")).lower()
     if ftype in ("xlsx", "xls", "xlsm"):
         try:
-            return _read_excel_robust(file_path, raw, nrows=nrows)
+            return _read_excel_robust(file_path, raw, nrows=nrows, sheet=sheet)
         except Exception:  # noqa: BLE001 — last resort: try as delimited text
             return _read_csv_robust(file_path, raw, nrows=nrows)
     return _read_csv_robust(file_path, raw, nrows=nrows)

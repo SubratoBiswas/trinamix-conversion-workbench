@@ -1203,6 +1203,8 @@ export const MappingReviewPage: React.FC = () => {
             aiVerdicts={aiVerdicts}
             onAiVerdicts={mergeAiVerdicts}
             onReload={loadAll}
+            objectName={project?.target_object || project?.name || undefined}
+            sourceName={(project as any)?.dataset_name || (project as any)?.ebs_table_hint || undefined}
           />
         ) : (
         /* Mapping canvas */
@@ -1823,10 +1825,12 @@ const MappingTableView: React.FC<{
   aiVerdicts?: Record<string, Record<string, { verdict: string; reason: string }>>;
   onAiVerdicts?: (m: Record<string, Record<string, { verdict: string; reason: string }>>) => void;
   onReload?: () => void | Promise<void>;
+  objectName?: string;
+  sourceName?: string;
 }> = ({
   conversionId, sourceColumns, targetFields, mappings, visibleTargetIds,
   effectiveDefaults, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
-  aiVerdicts, onAiVerdicts, onReload,
+  aiVerdicts, onAiVerdicts, onReload, objectName, sourceName,
 }) => {
   // Ranked alternatives for every target field (one round-trip), so each row can
   // show the runner-up source columns the matcher scored lower.
@@ -2047,44 +2051,54 @@ const MappingTableView: React.FC<{
     return out;
   }, [viewRows, onlyConfirm, onlyRequired, methodFilter, tableSearch, sortKey, sortDir]);
 
-  const exportCsv = () => {
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    // A candidate's reason: prefer an AI verdict, else the guard's cautions/reasons.
+  const [exporting, setExporting] = useState(false);
+  // Analyst-friendly banded Excel export (Issue #3): one "best suggestion" per target
+  // field, bucketed into confidence bands, built server-side (Summary + band sheets).
+  const exportMapping = async () => {
     const optReason = (c: MappingCandidate): string => {
       if (c.ai_reason) return `${c.ai_verdict ? c.ai_verdict + ": " : ""}${c.ai_reason}`;
       if (c.plausible === false && c.caution) return `implausible — ${c.caution}`;
       return (c.reasons || []).join("; ");
     };
-    const header = [
-      "Source field", "Target FBDI field", "Required", "How it's mapped", "Transform",
-      "Confidence %", "Status", "Needs confirmation", "Why",
-      "Other options (lower probability)", "Other options — reasons",
-      "Cautions (implausible options)", "Notes",
-    ];
-    const lines = rows.map((r) => [
-      r.m?.source_column || (r.dv ? "(constant)" : ""),
-      r.f.field_name,
-      r.req ? "YES" : "",
-      r.method.label + (r.dv && !r.m?.source_column ? ` → ${r.dv}` : ""),
-      r.transform || (r.hasRule ? "custom rule" : ""),
-      r.m?.source_column ? Math.round((r.m.confidence ?? 0) * 100) : "",
-      r.m?.status || "",
-      r.confirm ? "YES" : "",
-      r.confirm || "",
-      r.alts.map((c) => `${c.source_column} (${Math.round((c.confidence ?? 0) * 100)}%)`).join(" | "),
-      // one reason per option, aligned to the "other options" column above
-      r.alts.map((c) => `${c.source_column}: ${optReason(c) || "weak name/type overlap only"}`).join(" | "),
-      r.alts.filter((c) => c.plausible === false)
-        .map((c) => `${c.source_column} — ${c.caution || "unlikely to be a real match"}`).join(" | "),
-      r.isGap ? "Required field with no source and no default." : (r.m?.reason || ""),
-    ].map(esc).join(","));
-    const csv = [header.map(esc).join(","), ...lines].join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "field_mapping.csv";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    const isExcluded = (r: any) =>
+      /do-?not-?map|do not map|analyst rule/i.test(String(r.m?.reason || ""));
+    const records = rows.map((r) => {
+      const top = r.alts && r.alts.length ? r.alts[0] : null;
+      const mappedSrc = r.m?.source_column;
+      // Learned / approved / overridden mappings are exact (100); a plain suggested
+      // mapping keeps its own confidence; unmapped fields take the top candidate's.
+      const approvedLike = ["approved", "overridden"].includes(r.m?.status || "")
+        || /learned|gold/i.test(r.method?.label || "");
+      let suggested = "", confidence = 0, reason = "";
+      if (mappedSrc) {
+        suggested = mappedSrc;
+        confidence = approvedLike ? 100 : Math.round((r.m?.confidence ?? 0) * 100);
+        reason = r.m?.reason || r.method?.label || "";
+      } else if (r.dv) {
+        // Populated by a constant default → treat as an exact, resolved decision.
+        suggested = `(constant) ${r.dv}`;
+        confidence = 100;
+        reason = r.m?.reason || "Default constant";
+      } else if (top) {
+        suggested = top.source_column || "";
+        confidence = Math.round((top.confidence ?? 0) * 100);
+        reason = r.m?.reason || optReason(top) || "weak name/type overlap only";
+      } else {
+        reason = r.m?.reason || (r.isGap ? "Required field with no source and no default." : "No confident match found");
+      }
+      return { target_field: r.f.field_name, suggested_source: suggested,
+               confidence, reason, excluded: isExcluded(r) };
+    });
+    const obj = (objectName || "FBDI").trim();
+    const src = (sourceName || "Source").trim();
+    const title = `${obj} to ${src} Field Mapping`;
+    const filename = `${obj} to ${src} Field Mapping`.replace(/[^\w.-]+/g, "_") + ".xlsx";
+    setExporting(true);
+    try {
+      await OutputApi.mappingExport(conversionId, title, filename, records);
+    } catch {
+      alert("Couldn't build the mapping workbook. Please try again.");
+    } finally { setExporting(false); }
   };
 
   return (
@@ -2188,11 +2202,12 @@ const MappingTableView: React.FC<{
           {vetting ? "Reviewing…" : alreadyVetted ? "AI review done" : "Vet options with AI"}
         </button>
         <button
-          onClick={exportCsv}
-          title="Export the rows currently shown (respects filters and sort) as CSV"
-          className="inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-canvas"
+          onClick={exportMapping}
+          disabled={exporting}
+          title="Download the mapping as an Excel workbook grouped into confidence bands (Summary + one sheet per band)"
+          className="inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-canvas disabled:opacity-50"
         >
-          <Download className="h-3 w-3" /> Export CSV
+          <Download className={cn("h-3 w-3", exporting && "animate-pulse")} /> {exporting ? "Building…" : "Export mapping (Excel)"}
         </button>
       </div>
       <table className="w-full border-collapse text-[12px]">

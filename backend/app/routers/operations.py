@@ -308,6 +308,31 @@ async def project_readiness(project_id: str, _: User = Depends(get_current_user)
     return await assess_project(project_id)
 
 
+@output_router.post("/{conversion_id}/mapping-export")
+async def mapping_export(
+    conversion_id: str,
+    body: dict,
+    _: User = Depends(get_current_user),
+):
+    """Banded field-mapping export (Issue #3). The Mapping Review screen posts the
+    rows it already computed (``records``: target_field / suggested_source /
+    confidence / reason / excluded); returns the clean Excel workbook (Summary +
+    one sheet per non-empty confidence band)."""
+    import asyncio
+    from app.services.mapping_export_service import build_workbook
+    records = (body or {}).get("records") or []
+    title = str((body or {}).get("title") or "Field Mapping")
+    filename = str((body or {}).get("filename") or "Field_Mapping.xlsx")
+    if not filename.lower().endswith(".xlsx"):
+        filename += ".xlsx"
+    data = await asyncio.to_thread(build_workbook, title, records)
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{_safe_name(filename)}"'},
+    )
+
+
 @output_router.get("/project/{project_id}/agentic-plan")
 async def agentic_plan(project_id: str, _: User = Depends(get_current_user)):
     """Agentic PLAN step (checkpoint): draft — but do NOT run — the per-interface
