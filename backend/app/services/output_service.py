@@ -152,7 +152,16 @@ def _merge_dedupe_frames(frames: list[pd.DataFrame], target_object: str | None) 
 
 async def build_converted_dataframe(
     conversion: Conversion, max_rows: int | None = None,
+    collect_frames: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
+    """``collect_frames``: when a dict is passed, it is populated with
+    ``{dataset_id: (converted_frame, source_columns)}`` for every bound source —
+    BEFORE they are merged. Generation uses this to route each Oracle interface
+    sheet to the source sheet that actually feeds it, which a merged frame cannot
+    express when the sources have different row grains (e.g. 5,489 customers vs
+    22,505 addresses in one workbook). All other callers ignore it and keep the
+    existing merged-frame behaviour.
+    """
     # Source rows come from the uploaded file(s) (dataset mode) or are streamed
     # live from Oracle EBS (EBS mode — no dataset). A module/target object can now
     # be fed by SEVERAL source files (priority order): each is converted with the
@@ -262,6 +271,11 @@ async def build_converted_dataframe(
             src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
             odf, lin = await _convert_source(src)
             frames.append(odf)
+            if collect_frames is not None:
+                # Keep the source's own column list: sheet routing decides which
+                # source feeds an interface sheet by counting how many of that
+                # sheet's mapped source columns this file actually contains.
+                collect_frames[str(did)] = (odf, [str(c) for c in src.columns])
             if not lineage:
                 lineage = lin
         if not frames:
@@ -602,7 +616,16 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             await apply_learned_to_conversion(conversion, _pre_maps, force=True)
         except Exception:
             pass  # best-effort — never block output generation on the learning pass
-    df = merged_df if merged_df is not None else (await build_converted_dataframe(conversion))[0]
+    # Per-source frames, kept UNMERGED so each Oracle interface sheet can be fed by
+    # the source sheet that actually supplies it. Only populated when the conversion
+    # is bound to more than one source (e.g. a Customer + Address workbook).
+    _src_frames: dict = {}
+    if merged_df is not None:
+        df = merged_df
+    else:
+        df = (await build_converted_dataframe(conversion, collect_frames=_src_frames))[0]
+    if len(_src_frames) < 2:
+        _src_frames = {}          # single source — nothing to route
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     # Fetch fields (interface sequence) + sheets so we can emit exactly the
@@ -726,6 +749,34 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         if not _template_src_path:
             fmt = "xlsx"  # no source workbook to populate — fall back
 
+    # ── Per-interface-sheet source routing ──────────────────────────────────
+    # One conversion, one FBDI bundle, even when the input spreads the object
+    # across several worksheets. A merged frame cannot express this: a Customer
+    # workbook has 5,489 party rows and 22,505 address rows, so the party sheets
+    # and the address sheets need DIFFERENT row grains. For each interface sheet
+    # we pick the bound source that supplies the most of that sheet's mapped
+    # source columns; ties and no-evidence cases fall back to the merged frame,
+    # which is exactly the previous behaviour.
+    _src_by_field: dict = {}
+    for _m in _all_maps:
+        if _m.source_column:
+            _src_by_field.setdefault(_m.target_field_id, str(_m.source_column))
+
+    def _frame_for(sfields: list) -> pd.DataFrame:
+        if not _src_frames:
+            return df
+        wanted = {_src_by_field.get(f.id) for f in sfields}
+        wanted.discard(None)
+        if not wanted:
+            return df
+        best, best_hits = None, 0
+        for _did, (_odf, _cols) in _src_frames.items():
+            have = {c.strip().lower() for c in _cols}
+            hits = sum(1 for w in wanted if w.strip().lower() in have)
+            if hits > best_hits:
+                best, best_hits = _odf, hits
+        return best if best is not None and best_hits > 0 else df
+
     def _finalize(sfields: list) -> pd.DataFrame:
         # Req 8 — exactly this sheet's interface columns, in sequence, blanks
         # where unmapped, no instruction rows. Data ops (date reformat, control
@@ -733,7 +784,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # LAST step renames columns to Oracle's exact header labels (with the
         # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
-        sdf = df.reindex(columns=cols, fill_value="")
+        sdf = _frame_for(sfields).reindex(columns=cols, fill_value="")
         # Blank legacy null sentinels BEFORE control defaults so a column the
         # source filled entirely with "NULL" is treated as empty and gets its
         # standard default, not the literal text.

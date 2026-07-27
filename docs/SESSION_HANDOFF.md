@@ -787,3 +787,58 @@ holds city, not PRIMARY. (#5) delete a supplier learning, restart the backend, c
 stays gone and appears under retired. (#7) set a fixed value in Mapping Review and check the
 Learning Centre "Default values" tab BEFORE generating. (#1) upload a two-sheet workbook on
 Convert a file and confirm two rows appear with sheet chips.
+
+### 9.16 One conversion, one FBDI bundle, from a multi-sheet input (2026-07-27)
+
+Driven by the real file `Customer Dump Latest available (2).xlsx`: 2 sheets — Customer
+(5,489 rows x 19 cols) and Address (22,505 rows x 16 cols), joined on `internalid` with
+**100% referential integrity** (no orphans either way, 1..355 addresses per customer).
+
+**Why the previous design could not do this.** `build_converted_dataframe` produces ONE wide
+frame that `_finalize(sfields)` then slices per interface sheet. That cannot represent two row
+grains: the party sheets need 5,489 rows and the address sheets 22,505. The existing
+multi-source path made it worse — `_merge_dedupe_frames` ROW-CONCATENATES sources, so binding
+both sheets would stack 5,489 customer rows underneath 22,505 address rows in one frame.
+And before any of that, the parser kept only the LARGEST sheet (Address, 450,120 cells vs
+104,310), so the Customer tab was silently discarded entirely.
+
+**What was built — per-interface-sheet source routing.**
+1. `output_service.build_converted_dataframe(..., collect_frames=dict)` — optional. When
+   passed, it records `{dataset_id: (converted_frame, source_columns)}` for each bound source
+   BEFORE the merge. Every existing caller is untouched and still gets the merged frame.
+2. `generate_output_artifact` collects those frames; if fewer than 2 it clears the dict, so
+   single-source generation takes exactly the old path.
+3. New `_frame_for(sfields)` picks, per interface sheet, the bound source that supplies the
+   MOST of that sheet's mapped source columns; ties or zero evidence fall back to the merged
+   frame (i.e. previous behaviour). `_finalize` now reindexes off `_frame_for(sfields)`.
+4. `mapping_service` source columns are now the UNION across `source_dataset_ids` (primary
+   first, de-duplicated by name). Without this the mapper only saw the primary sheet, so
+   address-only fields were never mapped and the address interface sheets shipped empty.
+5. `ConvertFilePage.generateSetForRow` sends `dataset_ids` for every sheet of the SAME
+   workbook, so one conversion set is bound to all sheets. `POST /conversions/generate-set`
+   already accepted `dataset_ids` and bound all sources — no backend change needed there.
+
+**Verified by replaying the routing against the real column lists:**
+
+| Oracle interface sheet | Routed to | Column hits | Rows |
+|---|---|---|---|
+| HZ_IMP_PARTIES_T | Customer tab | 4/4 | 5,489 |
+| HZ_IMP_ACCOUNTS_T | Customer tab | 3/3 | 5,489 |
+| HZ_IMP_CONTACTPTS_T | Customer tab | 3/3 | 5,489 |
+| HZ_IMP_ADDRESSES_T | Address tab | 6/6 | 22,505 |
+| HZ_IMP_ADDRESSUSES_T | Address tab | 3/3 | 22,505 |
+
+Clean separation, no ambiguity. Backend `ast.parse` clean; 16/16 tests pass; no new tsc
+errors in the edited region.
+
+**NOT yet verified — needs deploy + a live run.** None of this has been exercised against the
+running app: the routing was proven by replaying the real decision function over the real
+column lists, not by generating an actual bundle. Specifically still to confirm live:
+the two sheets import as two datasets and bind to ONE conversion set; the mapper maps
+address-only columns now that it sees the union; the generated bundle has the row counts in
+the table above; and `internalid` lands as the Original System Reference that links the
+address rows back to their party (the Customer-glue pass at `_is_customer` should supply this,
+but it has not been checked against a two-source conversion).
+
+**Also fixed:** `launch_git.bat` now removes `_qa/` renders and `~$` Excel lock files before
+`git add -A` — the same class of stray-file commit that broke a previous deploy.

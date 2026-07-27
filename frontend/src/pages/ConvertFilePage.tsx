@@ -213,8 +213,20 @@ export const ConvertFilePage: React.FC = () => {
     if (!objectType) { setError("Pick a target template first so the object type can be detected."); return; }
     setGenKey(it.key); setError(null); setGenSummary(null);
     try {
+      // Every sheet of the SAME workbook feeds ONE conversion set. A Customer +
+      // Address book produces one FBDI bundle: the party sheets are fed from the
+      // Customer tab and the address sheets from the Address tab, because the
+      // generator routes each interface sheet to the source that supplies its
+      // mapped columns. This row's own sheet leads (priority order).
+      const siblings = items.filter(
+        (o) => o.datasetId && o.file === it.file && o.key !== it.key,
+      );
+      const datasetIds = [it.datasetId, ...siblings.map((o) => o.datasetId!)];
       const r = await ConversionsApi.generateSet({
-        project_id: projectId, dataset_id: it.datasetId, object_type: objectType,
+        project_id: projectId, object_type: objectType,
+        ...(datasetIds.length > 1
+          ? { dataset_ids: datasetIds }
+          : { dataset_id: it.datasetId }),
       });
       const parts = [`${r.created.length} created`];
       if (r.existing?.length) parts.push(`${r.existing.length} already present`);

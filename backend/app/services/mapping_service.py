@@ -313,6 +313,23 @@ async def _sources_for_conversion(conversion: Conversion) -> list[SourceColumn]:
         return []
     dataset = await Dataset.get(conversion.dataset_id)
     sources = await _source_columns_for(dataset)
+    # A conversion can be fed by SEVERAL source files — notably the sheets of one
+    # workbook (Customer + Address). The mapper must see the UNION of their
+    # columns, or the fields that only exist on a secondary sheet are never
+    # mapped at all and its interface sheets ship empty. De-duplicated by name,
+    # primary dataset first so it keeps priority on a name clash.
+    _extra = [d for d in (conversion.source_dataset_ids or []) if d != conversion.dataset_id]
+    if _extra:
+        _seen = {str(getattr(s, "name", s)).strip().lower() for s in sources}
+        for _did in _extra:
+            _ds = await Dataset.get(_did)
+            if not _ds:
+                continue
+            for _s in await _source_columns_for(_ds):
+                _n = str(getattr(_s, "name", _s)).strip().lower()
+                if _n and _n not in _seen:
+                    _seen.add(_n)
+                    sources.append(_s)
     try:
         # Enrich low-cardinality columns with their distinct values. Read via the
         # durable store (the ephemeral file_path is wiped on redeploy) and CAP the
