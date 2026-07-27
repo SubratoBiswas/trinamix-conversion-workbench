@@ -586,6 +586,11 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
     rule_results = RuleBasedMapper().suggest_mappings(sources, targets)
     rule_by_id = {str(r.target_field_id): r for r in rule_results}
     _CONF = 0.60
+    # On very wide templates (Item, 300+ attributes) we still call the LLM for the
+    # low-confidence residual, but cap it (required-first) so the batched call stays
+    # bounded. Previously heavy templates skipped AI entirely — the root cause of
+    # Item mappings averaging < 50% (deterministic name/keyword scoring only).
+    _AI_CAP = 120
 
     # Learning-first: targets already covered by a learned rule (a captured
     # column mapping or suppression for this object) are resolved from the
@@ -616,18 +621,24 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
         if r is None or not r.source_column or (r.confidence or 0) < _CONF:
             weak.append(t)
 
+    # Cap the residual for wide templates (required-first) so the batched AI call
+    # stays bounded; narrow templates send the whole residual as before.
+    weak_for_ai = weak
+    if _heavy and len(weak) > _AI_CAP:
+        weak_for_ai = sorted(weak, key=lambda t: (not t.required, t.field_name))[:_AI_CAP]
+
     ai_by_id: dict = {}
-    if weak and not _heavy and pname in ("anthropic", "openai"):
+    if weak_for_ai and pname in ("anthropic", "openai"):
         if pname == "anthropic":
             from app.ai.llm_provider import anthropic_suggest_batched
             from app.config import settings
             ai_list = await anthropic_suggest_batched(
-                sources, weak,
+                sources, weak_for_ai,
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.ANTHROPIC_MODEL or "claude-sonnet-4-6",
             )
         else:
-            ai_list = provider.suggest_mappings(sources, weak)
+            ai_list = provider.suggest_mappings(sources, weak_for_ai)
         ai_by_id = {str(r.target_field_id): r for r in ai_list}
 
     # Merge: use the AI result for a weak target when it actually found a source;

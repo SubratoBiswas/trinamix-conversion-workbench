@@ -43,20 +43,43 @@ def test_no_false_id_split():
 
 
 def test_genuine_match_scores_high():
+    # Normalised composite + fuzzy coverage lifts an exact-token match well clear
+    # of the old ~0.6 ceiling (was the sub-50% complaint for Item).
     s, reasons = score_pair(_sc("custitem_lifecycle_phase"), _tf("Lifecycle Phase"))
-    assert s >= 0.6, (s, reasons)
+    assert s >= 0.75, (s, reasons)
 
 
 def test_unrelated_stays_low_and_below_genuine():
     good, _ = score_pair(_sc("custitem_lifecycle_phase"), _tf("Lifecycle Phase"))
     bad, _ = score_pair(_sc("createddate", "date"), _tf("Lifecycle Phase"))
-    assert bad < 0.4
-    assert good > bad + 0.25   # genuine clearly beats unrelated
+    assert bad < 0.35            # no inflation of unrelated columns
+    assert good > bad + 0.4      # genuine clearly beats unrelated
 
 
 def test_id_match_surfaces():
+    # itemid -> Item Number: was buried ~0.5; now a confident, review-worthy match.
     s, _ = score_pair(_sc("itemid"), _tf("Item Number"))
-    assert s >= 0.4   # a real identifier match is now review-worthy, not buried
+    assert s >= 0.6
+
+
+def test_fuzzy_abbreviation_matches():
+    # An abbreviation with NO dictionary alias still matches via prefix/fuzzy.
+    s, _ = score_pair(_sc("descr"), _tf("Description"))
+    assert s >= 0.6
+
+
+def test_partial_token_coverage_is_meaningful():
+    # A single source token covering one of two target tokens is a real (not
+    # buried) suggestion — soft coverage keeps it above the noise floor.
+    s, _ = score_pair(_sc("item"), _tf("Item Number"))
+    assert s >= 0.4
+
+
+def test_missing_lov_does_not_dilute():
+    # A name+semantic+type match on a field with NO list-of-values and NO samples
+    # is not dragged down by the (inapplicable) value/LOV weight.
+    s, _ = score_pair(_sc("manufacturer_name"), _tf("Manufacturer Name"))
+    assert s >= 0.7
 
 
 if __name__ == "__main__":

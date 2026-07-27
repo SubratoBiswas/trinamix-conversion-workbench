@@ -26,7 +26,58 @@ BANDS = [
     ("b0",     "0-50%",                1,  50, "0-50pct",                 "Very low confidence suggestion — likely needs manual mapping"),
     ("none",   "0% - No Match Found",  0,   1, "0pct_-_No_Match_Found",   "No plausible source field identified"),
 ]
-_HEADERS = ["Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason", "Excluded (Do-Not-Map Rule)"]
+_HEADERS = ["Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason",
+            "Excluded (Do-Not-Map Rule)", "Vetted Alternatives (AI-checked)",
+            "Value Crosswalks (legacy → Oracle)"]
+
+
+def _fmt_alternatives(alts) -> str:
+    """One line per ranked source candidate: ``source (72%) — accept: reason``.
+    ``alts``: [{source, confidence(0-100|0..1|None), verdict?, reason?}]."""
+    if not isinstance(alts, list):
+        return ""
+    lines = []
+    for a in alts:
+        if not isinstance(a, dict):
+            continue
+        src = str(a.get("source") or a.get("source_column") or "").strip()
+        if not src:
+            continue
+        c = a.get("confidence")
+        try:
+            cf = float(c)
+            if cf <= 1.0:
+                cf *= 100.0
+            pct = f" ({int(round(cf))}%)"
+        except (TypeError, ValueError):
+            pct = ""
+        verdict = str(a.get("verdict") or a.get("ai_verdict") or "").strip()
+        reason = str(a.get("reason") or a.get("ai_reason") or "").strip()
+        tail = ""
+        if verdict:
+            tail = f" — {verdict}" + (f": {reason}" if reason else "")
+        elif reason:
+            tail = f" — {reason}"
+        lines.append(f"{src}{pct}{tail}")
+    return "\n".join(lines)
+
+
+def _fmt_crosswalks(cws) -> str:
+    """One line per value pair: ``legacy → ORACLE_CODE (vetted)``.
+    ``cws``: [{legacy, oracle, status?}]."""
+    if not isinstance(cws, list):
+        return ""
+    lines = []
+    for c in cws:
+        if not isinstance(c, dict):
+            continue
+        legacy = str(c.get("legacy") or c.get("from") or c.get("source_value") or "").strip()
+        oracle = str(c.get("oracle") or c.get("to") or c.get("target_value") or "").strip()
+        if not legacy and not oracle:
+            continue
+        status = str(c.get("status") or "").strip()
+        lines.append(f"{legacy} → {oracle}" + (f"  ({status})" if status else ""))
+    return "\n".join(lines)
 
 
 def band_for(conf) -> str:
@@ -111,7 +162,7 @@ def build_workbook(title: str, records: list[dict]) -> bytes:
         ws.sheet_view.showGridLines = False
         ws["A1"] = f"Confidence Band: {label}  ({len(rows)} field{'s' if len(rows) != 1 else ''})"
         ws["A1"].font = st["title"]
-        ws.merge_cells("A1:E1")
+        ws.merge_cells("A1:G1")
         for i, h in enumerate(_HEADERS):
             c = ws.cell(row=2, column=1 + i, value=h)
             c.font = st["hdr"]; c.fill = st["hdr_fill"]; c.border = st["border"]
@@ -123,7 +174,9 @@ def build_workbook(title: str, records: list[dict]) -> bytes:
             ws.cell(row=r, column=3, value=("" if conf is None else int(round(float(conf)))))
             ws.cell(row=r, column=4, value=rec.get("reason") or "")
             excl = ws.cell(row=r, column=5, value="Yes" if rec.get("excluded") else "")
-            for col in range(1, 6):
+            ws.cell(row=r, column=6, value=_fmt_alternatives(rec.get("alternatives")))
+            ws.cell(row=r, column=7, value=_fmt_crosswalks(rec.get("crosswalks")))
+            for col in range(1, 8):
                 cell = ws.cell(row=r, column=col)
                 cell.border = st["border"]
                 cell.alignment = st["wrap"]
@@ -131,7 +184,7 @@ def build_workbook(title: str, records: list[dict]) -> bytes:
             if rec.get("excluded"):
                 excl.font = st["excl"]
             r += 1
-        for col, w in zip("ABCDE", (34, 34, 12, 60, 16)):
+        for col, w in zip("ABCDEFG", (30, 28, 11, 46, 14, 46, 40)):
             ws.column_dimensions[col].width = w
         ws.freeze_panes = "A3"
 

@@ -13,6 +13,7 @@ Produces a MappingSuggestion per target field with a reason string and an option
 """
 from __future__ import annotations
 
+import difflib
 import re
 from typing import Iterable
 
@@ -30,6 +31,8 @@ SEMANTIC_DICT: dict[str, tuple[str, ...]] = {
     "description": ("desc", "description", "details", "remark", "note"),
     "organization": ("org", "organization", "plant", "facility", "site"),
     "uom": ("uom", "unit", "measure"),
+    "unit": ("unit", "uom", "units", "measure"),
+    "measure": ("measure", "uom", "unit", "measurement"),
     "status": ("status", "active", "state", "flag"),
     "customer": ("cust", "customer", "client", "buyer", "party"),
     "supplier": ("supp", "supplier", "vendor"),
@@ -68,6 +71,20 @@ SEMANTIC_DICT: dict[str, tuple[str, ...]] = {
     "state": ("state", "province", "region"),
     "postal": ("postal", "zip", "zipcode", "postcode", "pincode", "pin"),
     "country": ("country", "nation"),
+    # Item-master (EGP item import) vocabulary — the interface analysts flagged as
+    # averaging < 50% confidence. Kept tight (target-side keys only) so they lift
+    # genuine item matches without stealing unrelated columns.
+    "revision": ("revision", "rev", "version"),
+    "weight": ("weight", "wt", "mass", "grossweight", "netweight"),
+    "volume": ("volume", "vol", "cubage"),
+    "planner": ("planner", "planning", "mrp"),
+    "buyer": ("buyer", "purchaser", "purchasing"),
+    "lead": ("lead", "leadtime", "lt"),
+    "template": ("template", "itemtemplate"),
+    "primary": ("primary", "base", "main"),
+    "serial": ("serial", "serialnumber", "sn"),
+    "lot": ("lot", "batch"),
+    "manufacturer": ("manufacturer", "mfg", "mfr", "maker", "brand"),
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -119,9 +136,56 @@ def _jaccard(a: Iterable[str], b: Iterable[str]) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+def _tok_sim(a: str, b: str) -> float:
+    """Fuzzy similarity between two tokens, 0..1.
+
+    Rewards abbreviations/typos that a pure equality check misses (``descr`` vs
+    ``description``, ``qnty`` vs ``quantity``) WITHOUT the caller needing a
+    hand-maintained alias for every pair:
+      * exact match           -> 1.0
+      * prefix (len>=4 either way, e.g. ``descr``⊂``description``) -> 0.9
+      * high edit-similarity  -> the ratio itself (only when >= 0.86, so
+        unrelated tokens contribute nothing).
+    """
+    if a == b:
+        return 1.0
+    la, lb = len(a), len(b)
+    # Prefix abbreviations are common in ERP columns (``rev``⊂``revision``,
+    # ``uom``⊂``uomcode``, ``org``⊂``organization``). Allow from length 3 — short
+    # enough to catch them, long enough to avoid noise from 1-2 char stubs.
+    if la >= 3 and lb >= 3 and (a.startswith(b) or b.startswith(a)):
+        return 0.9
+    if la >= 4 and lb >= 4:
+        r = difflib.SequenceMatcher(None, a, b).ratio()
+        if r >= 0.86:
+            return r
+    return 0.0
+
+
+def _soft_coverage(source_tokens: list[str], target_tokens: list[str]) -> float:
+    """Fraction of TARGET tokens each covered by its best fuzzy source token.
+
+    Unlike Jaccard (which is punished by extra source tokens and by every target
+    token that has no source), this measures "how much of the target name is
+    accounted for" — so a short source ``item`` fully covers one of the two
+    ``item number`` tokens, and ``descr`` covers ``description``. This is the
+    single biggest lever for lifting genuine-but-cryptic matches off the floor.
+    """
+    if not source_tokens or not target_tokens:
+        return 0.0
+    total = 0.0
+    for t in target_tokens:
+        total += max((_tok_sim(t, s) for s in source_tokens), default=0.0)
+    return total / len(target_tokens)
+
+
 def _semantic_score(source_tokens: list[str], target_tokens: list[str]) -> float:
-    """Score based on semantic synonym hits."""
-    score = 0.0
+    """Score based on semantic synonym hits (fuzzy-aware).
+
+    A target token that is a dictionary key scores when any of its aliases is
+    present in the source tokens — by exact membership OR a strong fuzzy/prefix
+    hit, so ``paymethod`` still fires the ``payment`` alias ``paymentmethod``.
+    """
     matched = 0
     total = 0
     for t in target_tokens:
@@ -129,9 +193,9 @@ def _semantic_score(source_tokens: list[str], target_tokens: list[str]) -> float
         total += 1
         if not aliases:
             continue
-        if any(a in source_tokens for a in aliases):
+        if any(a in source_tokens or any(_tok_sim(a, s) >= 0.9 for s in source_tokens)
+               for a in aliases):
             matched += 1
-            score += 1.0
     return (matched / total) if total else 0.0
 
 
@@ -332,27 +396,61 @@ def score_pair(
     if tgt_desc_tokens is None:
         tgt_desc_tokens = _tokenize(tgt.description or "")
     src_tokens = _tokenize(src.name)
-    # 1. column name similarity
-    name_score = _jaccard(src_tokens, tgt_tokens)
-    # 2. semantic synonym hits
+    # 1. column-name similarity — blend Jaccard (punishes noise tokens) with soft
+    #    coverage (rewards a short source name contained in a longer target name,
+    #    plus fuzzy/abbreviation hits). This is the main lever for cryptic names.
+    name_score = 0.35 * _jaccard(src_tokens, tgt_tokens) + 0.65 * _soft_coverage(src_tokens, tgt_tokens)
+    # 2. semantic synonym hits (fuzzy-aware)
     sem_score = _semantic_score(src_tokens, tgt_tokens)
-    # 3. description tokens
-    desc_score = _jaccard(src_tokens, tgt_desc_tokens) if tgt_desc_tokens else 0.0
+    # 3. description signal — the human meaning of a field often lives in its
+    #    description ("Unit of measure code"); compare source tokens against it by
+    #    overlap AND synonym, take the stronger.
+    if tgt_desc_tokens:
+        desc_score = max(
+            0.4 * _jaccard(src_tokens, tgt_desc_tokens) + 0.6 * _soft_coverage(src_tokens, tgt_desc_tokens),
+            _semantic_score(src_tokens, tgt_desc_tokens),
+        )
+    else:
+        desc_score = 0.0
     # 4. type compatibility
     type_score = _type_compatibility(src, tgt)
-    # 5. value affinity
+    # 5. value affinity (source sample shape vs target)
     val_score, val_reason = _value_affinity(src, tgt)
     # 5b. LOV affinity — do the source VALUES resolve against the target's list
     # of values? (value-aware mapping, not name-only)
     lov_score, lov_reason = _lov_affinity(src, tgt)
-    # 6. required priority bonus when type/name overlap exists
+
+    # ---- Composite: normalise match quality by the weight of the signals that
+    # actually APPLY. A field with no LOV and no sample values must not have its
+    # score diluted by the (unreachable) value/LOV weight — that dilution is
+    # precisely why genuine matches averaged below 50%. Name/semantic always
+    # apply; description/type/value/LOV apply only when there's something to
+    # compare. Unrelated columns still score ~0 (their applicable signals are ~0),
+    # so this lifts real matches without inflating noise.
+    W_NAME, W_SEM, W_DESC, W_TYPE, W_VAL, W_LOV = 0.34, 0.30, 0.14, 0.12, 0.10, 0.18
+    num = name_score * W_NAME + sem_score * W_SEM
+    den = W_NAME + W_SEM
+    if tgt_desc_tokens:
+        num += desc_score * W_DESC
+        den += W_DESC
+    if tgt.data_type or "":
+        num += type_score * W_TYPE
+        den += W_TYPE
+    has_samples = any(isinstance(s, str) and s for s in (src.sample_values or []))
+    if has_samples:
+        num += max(val_score, 0.0) * W_VAL
+        den += W_VAL
+    if tgt.allowed_values:
+        num += max(lov_score, 0.0) * W_LOV
+        den += W_LOV
+    match_quality = (num / den) if den else 0.0
+
+    # Bonuses (added after normalisation; final min() clamps to 1.0).
     bonus = 0.05 if (tgt.required and (name_score or sem_score)) else 0.0
-    # 6b. exact-identity bonus — a source column named exactly like the target
-    # (or exactly its head noun) is a strong, literal signal that should beat a
-    # merely semantic match. This is what makes a legacy "Number" column win
-    # "Supplier Number" over a foreign-system "Coupa Supplier ID" (which only
-    # matches via supplier+id synonyms). Triggers on exact string equality only,
-    # so false positives are limited to genuinely same-named columns.
+    # Exact-identity bonus — a source column named exactly like the target (or
+    # exactly its head noun) is a strong literal signal that should beat a merely
+    # semantic match (legacy "Number" wins "Supplier Number" over "Coupa Supplier
+    # ID"). Exact string equality only, so false positives stay rare.
     identity = 0.0
     if src_tokens and tgt_tokens:
         if set(src_tokens) == set(tgt_tokens):
@@ -360,23 +458,19 @@ def score_pair(
         elif len(src_tokens) == 1 and src_tokens[0] == tgt_tokens[-1]:
             identity = 0.12                                   # head-noun identity
     bonus += identity
-    # 7. fill rate — a well-populated source column produces real output; a
-    # near-empty one yields blank cells.
-    fill = max(0.0, min(1.0, 1.0 - (src.null_percent or 0.0) / 100.0))
-    fill_penalty = 0.15 if (src.null_percent or 0.0) >= 98.0 else 0.0
 
-    composite = min(
-        1.0,
-        name_score * 0.30
-        + sem_score * 0.22
-        + desc_score * 0.08
-        + type_score * 0.08
-        + val_score * 0.05
-        + lov_score * 0.13
-        + fill * 0.14
-        + bonus
-        - fill_penalty,
-    )
+    # Fill: a well-populated column yields real output. Kept as a LIGHT additive
+    # (not in match_quality) so it can never carry an otherwise-unrelated column.
+    fill = max(0.0, min(1.0, 1.0 - (src.null_percent or 0.0) / 100.0))
+    penalty = 0.15 if (src.null_percent or 0.0) >= 98.0 else 0.0
+    # Negative value/LOV signals are genuine "these values don't fit" evidence —
+    # keep them as penalties even though they were excluded from match_quality.
+    if val_score < 0:
+        penalty += -val_score * 0.10
+    if lov_score < 0:
+        penalty += -lov_score * 0.13
+
+    composite = min(1.0, max(0.0, match_quality * 0.86 + fill * 0.12 + bonus - penalty))
 
     reasons: list[str] = []
     if name_score >= 0.5:

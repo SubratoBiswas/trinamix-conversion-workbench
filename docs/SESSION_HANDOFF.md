@@ -513,3 +513,75 @@ disk (folder deletes are permission-gated; user declined) but are git-ignored.
   regenerate the Customer output and confirm the 4 fields are populated. (Sandbox
   can't import beanie modules due to an OpenSSL/pymongo mismatch — env issue, not code.)
   (The #4 status is recorded above under "Issue #4 — DONE".)
+
+### 9.11 Feature Verification Guide — live screenshots embedded
+- `docs/Conversion_Workbench_Feature_Verification_Guide.docx` (built by `docs/_gen_verify_guide.js`)
+  is a UAT checklist: Setup (2) + Everyday (11) + AI (10) feature blocks, each with numbered
+  steps, an Expected line, and a screenshot box. AI features are marked green.
+- Screenshots were captured live from the deployed app (Claude in Chrome, standalone
+  `computer` screenshots with `save_to_disk:true` → `outputs/screenshot-*.jpg`) and embedded
+  into each block via `docx` `ImageRun` (type `jpg`, aspect ratio preserved by a small
+  `jpegSize` JPEG-SOF parser). 20 image instances (17 unique; a few shots are reused where
+  one screen documents two features).
+- Embedded shots: dashboard, Clients (scoping), Datasets list, dataset profiling/anomalies,
+  FBDI Templates, Projects/conversions table (multi-source), Project exec-summary + download-all
+  buttons, conversion detail pipeline, Mapping Review canvas + table (confidence/reasons/Export),
+  Duplicate suspects, Output Preview (converted + zip/csv), Load Management, Gold Standards,
+  Recommendations (AI DQ rules), Cutover-readiness + Ask-the-copilot (with a live grounded
+  answer), and the Agentic conversion plan.
+- 3 interaction-only steps are intentionally left as a dashed box with a "capture live during
+  UAT" note (they can't be staged without side effects): Value crosswalks panel, Plain-English
+  rule author, Explain load errors (needs a failed load run).
+- The generator (`docs/_gen_verify_guide.js`) hardcodes the sandbox `outputs` path for the
+  jpgs; it is a scratch build script (matches `.gitignore` `docs/_*`) — only the built .docx
+  is a deliverable. Re-running it elsewhere needs the jpgs on the same path or a new SHOTS dir.
+
+### 9.12 Mapping confidence improvement (Item avg < 50%) + vetted values in export
+Analyst note (CW_Issues, Item): "confidence scores average below 50 … most only check type
+compatibility and keyword." Three-part fix — deterministic scorer, AI residual, export.
+
+**(A) Deterministic scorer — `app/ai/rule_based.py`.**
+- Added fuzzy token matching `_tok_sim` (exact / prefix ≥3 chars / edit-ratio ≥0.86) and
+  `_soft_coverage` (fraction of TARGET tokens covered by best fuzzy source token). Column-name
+  score is now `0.35*Jaccard + 0.65*soft_coverage`, so a short/cryptic source contained in a
+  longer target name (or an abbreviation like `descr`→`description`, `rev`→`revision`) is
+  rewarded instead of punished by Jaccard.
+- `_semantic_score` is fuzzy-aware (alias hit by exact membership OR prefix/fuzzy).
+- Semantic now also runs against the target DESCRIPTION tokens.
+- **Root fix for the < 50% average:** the composite is now NORMALISED by the weight of the
+  signals that actually APPLY. Previously value/LOV weight (0.18+0.10) was unreachable when a
+  field had no list-of-values and no samples, capping/diluting every score. Now name/semantic
+  always count; description/type/value/LOV count only when present; `match_quality = Σ(score·w
+  applicable)/Σ(w applicable)`. Fill stays a light additive (can't carry an unrelated column);
+  negative value/LOV signals stay as penalties. Result (measured): `custitem_lifecycle_phase`→
+  Lifecycle Phase 96%, `item_description`→Item Description 100%, `itemid`→Item Number 71%,
+  `mfg_name`→Manufacturer Name 71%, `base_uom`→Primary Unit of Measure 46%; unrelated
+  (`createddate`→Item Number) stays 20%. Added Item-master synonyms (revision, weight, volume,
+  planner, buyer, lead, template, primary, serial, lot, manufacturer, unit, measure).
+- Tests: `tests/test_scorer_tokenization.py` extended to 9 (fuzzy abbrev, partial coverage,
+  missing-LOV-no-dilution, higher genuine floor, unrelated stays low). All pass.
+
+**(B) AI residual now runs on WIDE templates — `app/services/mapping_service.py`.**
+- Root cause found: `_heavy = len(targets) > 300` **fully disabled the LLM residual**, so Item
+  (300+ attributes) relied on deterministic scoring ALONE — exactly the analyst complaint.
+- Fix: heavy templates still send the low-confidence residual (< 0.60) to Claude, but CAPPED
+  required-first at `_AI_CAP = 120` so the batched call stays bounded (`anthropic_suggest_batched`
+  already chunks 24 / concurrency 5 / per-chunk fallback). Narrow templates unchanged.
+- Architecture confirmed (no change needed elsewhere): deterministic-first → weak residual to
+  LLM → learned/gold override → item guard → do-not-map exclusions; on-demand `vet-candidates`
+  adds an AI verdict+reason. ANTHROPIC_API_KEY is live on Render (the copilot answered live).
+- **Live-verify after deploy:** re-run AI Auto Map on an Item conversion; confidence should rise
+  and required fields get an AI suggestion. (Beanie path — not unit-testable in the sandbox.)
+
+**(C) Export now carries the AI-vetted values — `app/services/mapping_export_service.py` +
+`frontend/.../MappingReviewPage.tsx`.** Per analyst request (Both, inline):
+- Two new columns on every confidence-band sheet: "Vetted Alternatives (AI-checked)" (ranked
+  source candidates, each `source (conf%) — verdict: reason`) and "Value Crosswalks (legacy →
+  Oracle)" (`legacy → CODE (how)`), rendered by pure `_fmt_alternatives` / `_fmt_crosswalks`.
+- Frontend `exportMapping` enriches each record with `alternatives` (from `r.alts`, top 4, incl.
+  `ai_verdict`/`ai_reason`) and `crosswalks` (fetched once from `MappingApi.codedValues`,
+  non-identity resolved pairs keyed by target field).
+- Tests: `tests/test_mapping_export.py` → 7 (added vetted-columns render + blank-when-absent).
+- Files touched this wave: `app/ai/rule_based.py`, `app/services/mapping_service.py`,
+  `app/services/mapping_export_service.py`, `frontend/src/pages/MappingReviewPage.tsx`,
+  `tests/test_scorer_tokenization.py`, `tests/test_mapping_export.py`.

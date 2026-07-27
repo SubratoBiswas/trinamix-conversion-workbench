@@ -5,11 +5,8 @@ _parser_probe/
 __pycache__/
 *.pyc
 
-# Doc-generation scratch (node deps + one-off build script + render byproducts)
+# Doc-generation scratch (node deps + one-off build scripts + render byproducts)
+docs/_*
 docs/node_modules/
-docs/_gen_docs.js
-docs/_preview/
-docs/Conversion_Workbench_User_Guide.pdf
-docs/Conversion_Workbench_Feature_List.pdf
-docs/Conversion_Workbench_Unit_Tests.pdf
+docs/*.pdf
 node_modules/

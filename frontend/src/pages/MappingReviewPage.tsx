@@ -2062,6 +2062,18 @@ const MappingTableView: React.FC<{
     };
     const isExcluded = (r: any) =>
       /do-?not-?map|do not map|analyst rule/i.test(String(r.m?.reason || ""));
+    // Value crosswalks (AI-vetted legacy → Oracle codes) — fetch the coded-value
+    // audit once and index by target field so each row can carry its pairs.
+    const cwByField: Record<string, { legacy: string; oracle: string; status: string }[]> = {};
+    try {
+      const coded = await MappingApi.codedValues(conversionId);
+      (coded?.columns || []).forEach((c) => {
+        const pairs = (c.resolved || [])
+          .filter((rv) => String(rv.from) !== String(rv.to))   // identity pass-through isn't a crosswalk
+          .map((rv) => ({ legacy: String(rv.from), oracle: String(rv.to), status: rv.how || "" }));
+        if (pairs.length) cwByField[(c.target_field || "").toLowerCase()] = pairs;
+      });
+    } catch { /* coded-values optional — export still works without crosswalks */ }
     const records = rows.map((r) => {
       const top = r.alts && r.alts.length ? r.alts[0] : null;
       const mappedSrc = r.m?.source_column;
@@ -2086,8 +2098,17 @@ const MappingTableView: React.FC<{
       } else {
         reason = r.m?.reason || (r.isGap ? "Required field with no source and no default." : "No confident match found");
       }
+      // Ranked, AI-checked source alternatives (top few) so the analyst sees the
+      // options that were considered, each with the AI verdict/reason when vetted.
+      const alternatives = (r.alts || []).slice(0, 4).map((c: MappingCandidate) => ({
+        source: c.source_column,
+        confidence: c.confidence,
+        verdict: c.ai_verdict || "",
+        reason: c.ai_reason || optReason(c),
+      }));
+      const crosswalks = cwByField[String(r.f.field_name || "").toLowerCase()] || [];
       return { target_field: r.f.field_name, suggested_source: suggested,
-               confidence, reason, excluded: isExcluded(r) };
+               confidence, reason, excluded: isExcluded(r), alternatives, crosswalks };
     });
     const obj = (objectName || "FBDI").trim();
     const src = (sourceName || "Source").trim();

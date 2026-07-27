@@ -15,7 +15,13 @@ RECS = [
     {"target_field": "Item Number", "suggested_source": "itemid", "confidence": 100,
      "reason": "Auto-applied from learning library", "excluded": False},
     {"target_field": "Formatted Description", "suggested_source": "description", "confidence": 54,
-     "reason": "column name overlap (50%)", "excluded": False},
+     "reason": "column name overlap (50%)", "excluded": False,
+     "alternatives": [
+         {"source": "description", "confidence": 54, "verdict": "accept", "reason": "long text"},
+         {"source": "notes", "confidence": 0.31, "verdict": "reject", "reason": "too short"}],
+     "crosswalks": [
+         {"legacy": "ACT", "oracle": "Active", "status": "vetted"},
+         {"legacy": "INA", "oracle": "Inactive", "status": "unverified"}]},
     {"target_field": "Transaction Type", "suggested_source": "custitem_product_type", "confidence": 30,
      "reason": "semantic keyword match", "excluded": False},
     {"target_field": "Item Class Name", "suggested_source": "class", "confidence": 24,
@@ -56,13 +62,38 @@ def test_only_nonempty_bands_get_sheets():
 def test_band_sheet_headers_and_rows():
     wb = _open()
     ws = wb["0-50pct"]
-    assert [ws.cell(row=2, column=c).value for c in range(1, 6)] == [
-        "Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason", "Excluded (Do-Not-Map Rule)"]
+    assert [ws.cell(row=2, column=c).value for c in range(1, 8)] == [
+        "Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason",
+        "Excluded (Do-Not-Map Rule)", "Vetted Alternatives (AI-checked)",
+        "Value Crosswalks (legacy → Oracle)"]
     # excluded row renders "Yes"
     vals = [[ws.cell(row=r, column=c).value for c in range(1, 6)] for r in range(3, 5)]
     excl = {tuple(v[:2]): v[4] for v in vals}
     assert excl[("Item Class Name", "class")] == "Yes"
     assert excl[("Transaction Type", "custitem_product_type")] in (None, "")
+
+
+def test_vetted_alternatives_and_crosswalks_render():
+    wb = _open()
+    ws = wb["50-75pct"]  # the Formatted Description row lives here
+    # find the row for Formatted Description
+    row = next(r for r in range(3, ws.max_row + 1)
+               if ws.cell(row=r, column=1).value == "Formatted Description")
+    alts = ws.cell(row=row, column=6).value or ""
+    cws = ws.cell(row=row, column=7).value or ""
+    # ranked alternatives, normalised to % with AI verdict + reason
+    assert "description (54%) — accept: long text" in alts
+    assert "notes (31%) — reject: too short" in alts       # 0.31 → 31%
+    # value crosswalks legacy → Oracle with status
+    assert "ACT → Active  (vetted)" in cws
+    assert "INA → Inactive  (unverified)" in cws
+
+
+def test_missing_vetted_fields_are_blank():
+    wb = _open()
+    ws = wb["100pct_-_Exact_Match"]  # Item Number row has no alts/crosswalks
+    assert (ws.cell(row=3, column=6).value or "") == ""
+    assert (ws.cell(row=3, column=7).value or "") == ""
 
 
 def test_title_on_summary():
