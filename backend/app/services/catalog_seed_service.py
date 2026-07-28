@@ -350,3 +350,70 @@ async def seed_bom_field_mappings() -> dict:
     res["constants_seeded"] = const_seeded
     res["constants_kept"] = const_kept
     return res
+
+
+_SUPPLIER_STRATEGY = _DATA / "supplier_strategy_defaults.json"
+
+
+async def seed_supplier_strategy_defaults() -> dict:
+    """Seed the NextPower Supplier Conversion Strategy (v1.0, section 7) as
+    client-scoped ``example_default`` learnings.
+
+    The strategy is a SIGNED functional specification, so it is the governing
+    authority for this conversion: seeding it as learnings puts it ahead of the
+    deterministic control constants and ahead of AI in the mapping precedence.
+    Two rules are deliberately NOT seeded (see ``open_items`` in the JSON): the
+    Procurement BU crosswalk does not exist yet, and the PROSPECTIVE branch of
+    Business Relationship needs its source column confirmed — guessing either
+    would put wrong values into a load file that looks correct. Idempotent, and
+    it respects tombstones like every other seeder.
+    """
+    import json as _json
+    if not _SUPPLIER_STRATEGY.exists():
+        return {"seeded": 0, "note": "supplier_strategy_defaults.json not found"}
+    try:
+        doc = _json.loads(_SUPPLIER_STRATEGY.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    nid = await _nextpower_client_id()
+    src = doc.get("_source", "NextPower Supplier Conversion Strategy")
+    seeded = kept = retired = derived = 0
+    for r in doc.get("rules", []):
+        tgt_obj = (r.get("target_object") or "").strip()
+        tgt_field = (r.get("target_field") or "").strip()
+        if not (tgt_obj and tgt_field):
+            continue
+        const = r.get("constant")
+        if const is None:
+            derived += 1        # derive rules (city / BU-city) are mappings, not constants
+            continue
+        existing = await LearnedMapping.find(
+            LearnedMapping.kind == "example_default",
+            LearnedMapping.target_object == tgt_obj,
+            LearnedMapping.target_field == tgt_field,
+            include_deleted=True,
+        ).first_or_none()
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            continue
+        if existing:
+            if existing.resolved_value != str(const):
+                await existing.set({"resolved_value": str(const), "client_id": nid,
+                                    "captured_from": src})
+            kept += 1
+            continue
+        await LearnedMapping(
+            kind="example_default", category="Default Value",
+            original_value="(constant)", resolved_value=str(const),
+            target_object=tgt_obj, target_field=tgt_field,
+            client_id=nid, is_global=False,
+            rule_config={"condition": r.get("condition", ""),
+                         "fill_blank_only": bool(r.get("fill_blank_only"))},
+            captured_from=src,
+        ).insert()
+        seeded += 1
+    logger.info("supplier strategy defaults: seeded %d, kept %d, retired-respected %d, "
+                "derived-skipped %d", seeded, kept, retired, derived)
+    return {"seeded": seeded, "kept": kept, "retired": retired,
+            "derived_not_constant": derived,
+            "open_items": doc.get("open_items", [])}

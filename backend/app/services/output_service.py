@@ -491,8 +491,14 @@ _AUTHORITATIVE: set[str] = {
     "federal reportable",
     # "delivery channel" removed — it is per-row derived (Email/Fax -> EMAIL/FAX/
     # blank), not a forced constant.
-    "address name", "pay", "ordering", "rfq or bidding",
-    "supplier site",
+    "pay", "ordering", "rfq or bidding",
+    # "address name" and "supplier site" REMOVED from the authoritative set. The
+    # signed NextPower Supplier Conversion Strategy (v1.0, section 7.2/7.3) states
+    # Address Name = City Name (e.g. "Austin") and Supplier Site = BU + City
+    # (e.g. "US-Austin"). Forcing the constant "PRIMARY" over a mapped city was
+    # QA issue #8 — the UI showed the correct mapping and the generated file
+    # contained PRIMARY. They stay in _CONTROL_DEFAULTS as a last-resort fill for
+    # a column the source left completely empty, but they no longer overwrite.
     # "user account action" removed — per-row VALUE_MAP from Login Access must win
     # (No -> blank, not the forced constant "NONE").
 }

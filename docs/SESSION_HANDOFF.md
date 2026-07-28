@@ -931,3 +931,49 @@ Verified: backend parses; `tsc` clean for the new identifiers (the two remaining
 `ProjectOverviewPage` errors are pre-existing `conversions`-possibly-null checks on untouched
 lines). NOT verified live — after deploy, confirm a CSV bundle opens with data on row 1 and an
 Excel template still shows its header row, then that On/Off actually flips both.
+
+### 9.20 NextPower Supplier Conversion Strategy seeded as the governing authority
+
+Source: `Next_Power_Supplier_Conversion_Strategy.docx` v1.0 (Sandeep Singhal, 13-Jul-2026),
+section 7 "Defaulting Rules". Distilled into `backend/app/data/supplier_strategy_defaults.json`
+and seeded by `seed_supplier_strategy_defaults()` (registered in `main.py` AFTER
+`seed_supplier_default_values`, so on a clash the strategy wins). Seeded as client-scoped
+`example_default` learnings, which places it ahead of the deterministic control constants and
+ahead of AI in the mapping precedence — "followed first", as requested. Tombstone-aware.
+
+**13 constants seeded** — Supplier: Tax Organization Type CORPORATION, Supplier Type SUPPLIER,
+Business Relationship SPEND_AUTHORIZED, Payment Method G-Treasury (blank-only). Address:
+Ordering Y, Pay Y. Site: Purchasing Y, Pay Y, Payment Terms Net 30 (blank-only), Payment
+Method G-Treasury (blank-only), Invoice Match Option Receipt, Receipt Routing Direct,
+Match Approval Level 3-Way.
+
+**The strategy CONTRADICTED two hardcoded constants — now corrected.**
+`_CONTROL_DEFAULTS` had `address name = "PRIMARY"` and `supplier site = "PRIMARY"`, and both
+sat in `_AUTHORITATIVE`, so they overwrote whatever was mapped. The strategy states
+**Address Name = City Name** (e.g. Austin) and **Supplier Site = BU + City** (e.g. US-Austin).
+Both were removed from `_AUTHORITATIVE`; they remain in `_CONTROL_DEFAULTS` purely as a
+last-resort fill when the source column is entirely empty. Replayed: mapped values
+`Austin/Dallas` and `US-Austin/US-Dallas` now survive; a blank column still falls back to
+PRIMARY rather than shipping empty. **This is the documentary root cause of QA issue #8** —
+the earlier fix was right, and the signed spec now confirms it.
+
+**Deliberately NOT seeded** (recorded in `open_items` in the JSON):
+- **Procurement BU** — derived from Primary Subsidiary via a Subsidiary-to-Procurement-BU
+  crosswalk the strategy itself says is "to be finalized before the Supplier Site FBDI is
+  generated". It does not exist yet; inventing it would put wrong BUs into a file that looks
+  correct.
+- **Business Relationship = PROSPECTIVE** for pending-approval suppliers — needs the
+  approval-status source column confirmed. Only the SPEND_AUTHORIZED default is seeded, so
+  pending suppliers currently get the approved value and must be reviewed.
+- **Address Name / Supplier Site derivations** are mappings, not constants (`derive` rows are
+  counted and skipped by the seeder). Address Name <- city is already a seeded eBOS
+  column_mapping; the `BU + City` concatenation for Supplier Site still needs a CONCAT rule
+  once the Procurement BU crosswalk lands.
+
+**Mapping workbook `NXT Supplier Mapping (1).xlsx` — read, NOT uploaded.** Sheets:
+`Source Mapping`, `Oracle-NetSuite-SyteLine` (164 rows x 92 cols — the real
+Oracle-field / NetSuite-column / eBOS-column grid, header on row 0-2 with a "Proposed to be
+inactive" + "Assignee" band), `AllVendorsTestPhoenixResults` (7,496 rows). Uploading it into
+the tool needs the running app (Mapping Documents > Upload document) and the session is at the
+sign-in screen — credentials are the user's to enter. Once signed in, that upload produces a
+reviewable proposal with conflict detection against these strategy learnings.

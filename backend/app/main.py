@@ -122,6 +122,15 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("supplier default values seed failed")
     try:
+        # NextPower Supplier Conversion Strategy v1.0 section 7 — the SIGNED
+        # functional spec. Seeded last of the supplier seeds so its values win on
+        # a clash, and ahead of the deterministic control constants at generate.
+        from app.services.catalog_seed_service import seed_supplier_strategy_defaults
+        r = await seed_supplier_strategy_defaults()
+        log.info("startup seed — supplier conversion strategy: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier conversion strategy seed failed")
+    try:
         # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
         # Fusion Customer Import): account/party key references + name/tax/email/
         # phone/credit, propagated by field name across the interface sheets.

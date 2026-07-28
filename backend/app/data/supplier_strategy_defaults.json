@@ -1,0 +1,47 @@
+{
+  "_source": "Next_Power_Supplier_Conversion_Strategy.docx v1.0 (Sandeep Singhal, 13-Jul-2026), section 7 Defaulting Rules",
+  "_authority": "This signed functional specification is the governing reference for the NextPower supplier conversion. Rules here are seeded as client-scoped learnings so they are applied BEFORE deterministic control constants and before AI, and they override any conflicting hardcoded default.",
+  "rules": [
+    {"target_object": "Supplier",  "target_field": "Tax Organization Type", "constant": "CORPORATION",
+     "condition": "Applied to all suppliers"},
+    {"target_object": "Supplier",  "target_field": "Supplier Type", "constant": "SUPPLIER",
+     "condition": "Applied to all suppliers"},
+    {"target_object": "Supplier",  "target_field": "Business Relationship", "constant": "SPEND_AUTHORIZED",
+     "condition": "Approved suppliers. Pending-approval suppliers take PROSPECTIVE - conditional, needs the approval-status source column to be confirmed."},
+    {"target_object": "Supplier",  "target_field": "Payment Method", "constant": "G-Treasury",
+     "condition": "Only if no value present in extract", "fill_blank_only": true},
+
+    {"target_object": "Supplier Address", "target_field": "Address Name", "derive": "city",
+     "condition": "Address Name is the City Name (e.g. Austin). NOT the constant 'PRIMARY'."},
+    {"target_object": "Supplier Address", "target_field": "Ordering", "constant": "Y",
+     "condition": "Applied to all addresses"},
+    {"target_object": "Supplier Address", "target_field": "Pay", "constant": "Y",
+     "condition": "Applied to all addresses"},
+
+    {"target_object": "Supplier Site", "target_field": "Supplier Site", "derive": "bu_dash_city",
+     "condition": "BU + City Name (e.g. US-Austin). NOT the constant 'PRIMARY'."},
+    {"target_object": "Supplier Site", "target_field": "Purchasing", "constant": "Y",
+     "condition": "Applied to all sites"},
+    {"target_object": "Supplier Site", "target_field": "Pay", "constant": "Y",
+     "condition": "Applied to all sites"},
+    {"target_object": "Supplier Site", "target_field": "Payment Terms", "constant": "Net 30",
+     "condition": "Only if no value present in extract", "fill_blank_only": true},
+    {"target_object": "Supplier Site", "target_field": "Payment Method", "constant": "G-Treasury",
+     "condition": "Only if no value present in extract", "fill_blank_only": true},
+    {"target_object": "Supplier Site", "target_field": "Invoice Match Option", "constant": "Receipt",
+     "condition": "Receipt for all supplier sites"},
+    {"target_object": "Supplier Site", "target_field": "Receipt Routing", "constant": "Direct",
+     "condition": "Defaulted to Direct"},
+    {"target_object": "Supplier Site", "target_field": "Match Approval Level", "constant": "3-Way",
+     "condition": "3-way for all sites"}
+  ],
+  "open_items": [
+    "Procurement BU is derived from the Primary Subsidiary column via a Subsidiary-to-Procurement-BU crosswalk that the strategy says is 'to be finalized before the Supplier Site FBDI is generated'. NOT seeded - the crosswalk does not exist yet, and guessing it would silently produce wrong BUs.",
+    "Business Relationship PROSPECTIVE for pending-approval suppliers needs the approval-status source column confirmed before it can be made conditional; only the SPEND_AUTHORIZED default is seeded."
+  ],
+  "load_sequence": [
+    "Supplier Import (Header)", "Supplier Address", "Supplier Site",
+    "Supplier Site Assignment", "Supplier Contacts", "Supplier Bank Accounts",
+    "Supplier Attachments"
+  ]
+}
