@@ -842,3 +842,35 @@ but it has not been checked against a two-source conversion).
 
 **Also fixed:** `launch_git.bat` now removes `_qa/` renders and `~$` Excel lock files before
 `git add -A` — the same class of stray-file commit that broke a previous deploy.
+
+### 9.17 Vet options with AI + Export mapping (Excel) in Canvas view
+
+Both buttons were table-only, so an analyst working in canvas had to switch views to reach
+them. First attempt — copying the JSX into the shared header — does NOT work and was reverted:
+they live inside `MappingTableView`, a separate component that is only mounted when
+`viewMode === "table"`, so the parent header cannot see `vetWithAi` / `exportMapping`
+(ten TS2304 "Cannot find name" errors). This is why the earlier "Fill blanks with AI" move
+was easy and this one was not — that handler already lived in the parent.
+
+**What was done.** `runVetPage` / `vetWithAiPage` / `exportMappingPage` now live in
+`MappingReviewPage` itself, alongside `fillBlanksPage`:
+- `vetWithAiPage` vets the currently visible targets (falls back to all), chunked at 150 ids
+  so a 1,254-field Customer template cannot overrun the gateway, and folds the verdicts into
+  the existing shared `aiVerdicts` cache via `mergeAiVerdicts`.
+- `exportMappingPage` fetches the ranked candidates (`MappingApi.candidates`) AND the value
+  crosswalks (`MappingApi.codedValues`) on click, then auto-vets, so a canvas export carries
+  the same "Vetted Alternatives (AI-checked)" and "Value Crosswalks" columns as a table one
+  rather than shipping a workbook with those columns silently empty.
+
+**Deliberate design point — the header pair renders only when `viewMode !== "table"`.**
+The table keeps its own richer pair, built from the row models it already holds (method
+labels from `classifyLayer`, `isGap`, `confirm`). Replacing those with the parent version
+would have been a quiet regression in the Excel deliverable, and showing both at once would
+put two Export buttons on screen. So: table view uses its originals, canvas uses these.
+The cost is two implementations of the export record shape — if one is changed, check the
+other (`MappingReviewPage.exportMappingPage` and `MappingTableView.exportMapping`).
+
+Verified: `tsc` clean for this file apart from the pre-existing numeric-id noise; JSX balance
+confirmed. NOT verified live — needs a click-through in canvas after deploy to confirm the
+buttons appear, the vet message renders, and the downloaded workbook has populated reason and
+crosswalk columns.

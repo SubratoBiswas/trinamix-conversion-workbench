@@ -231,6 +231,125 @@ export const MappingReviewPage: React.FC = () => {
     } finally { setFillingPage(false); }
   };
 
+  // ── Vet + Export ────────────────────────────────────────────────────────
+  // Both live HERE rather than in MappingTableView so the shared header can offer
+  // them in canvas as well as table (the table view is only mounted in table mode,
+  // so a handler owned by it is unreachable from canvas). Export pulls the ranked
+  // candidates on click, so the workbook keeps its AI-vetted reason columns even
+  // when the analyst never opened the table.
+  const [vettingPage, setVettingPage] = useState(false);
+  const [exportingPage, setExportingPage] = useState(false);
+  const [vetMsgPage, setVetMsgPage] = useState<string | null>(null);
+  const [vettedOnce, setVettedOnce] = useState(false);
+
+  /** AI-vet the uncertain candidates for the given targets. Returns the merged
+   *  verdict map so the export can annotate without waiting on React state. */
+  const runVetPage = async (targetFieldIds: string[], force = false) => {
+    if (!pid || !targetFieldIds.length) return {};
+    const merged: Record<string, Record<string, { verdict: string; reason: string }>> = {};
+    const CHUNK = 150;                       // keep a wide template off the gateway timeout
+    for (let i = 0; i < targetFieldIds.length; i += CHUNK) {
+      const slice = targetFieldIds.slice(i, i + CHUNK);
+      try {
+        const r = await MappingApi.vetCandidates(pid, { targetFieldIds: slice, force });
+        for (const [fid, byCol] of Object.entries(r.ai || {})) {
+          merged[fid] = { ...(merged[fid] || {}), ...(byCol as any) };
+        }
+      } catch { /* partial vetting is still useful — keep what we got */ }
+    }
+    if (Object.keys(merged).length) { mergeAiVerdicts(merged); setVettedOnce(true); }
+    return merged;
+  };
+
+  const vetWithAiPage = async () => {
+    if (!pid) return;
+    setVettingPage(true);
+    setVetMsgPage("Reviewing options with AI…");
+    try {
+      const ids = targetFields.filter((f) => visibleTargetIds.has(f.id)).map((f) => String(f.id));
+      const m = await runVetPage(ids.length ? ids : targetFields.map((f) => String(f.id)), true);
+      const n = Object.keys(m).length;
+      setVetMsgPage(n ? `AI reviewed ${n} field(s) — reasons are shown.` : "Nothing uncertain enough to need AI review.");
+    } finally { setVettingPage(false); }
+  };
+
+  const exportMappingPage = async () => {
+    if (!pid) return;
+    setExportingPage(true);
+    try {
+      // Ranked alternatives + any stored verdicts, fetched now so canvas exports
+      // are as complete as table exports.
+      let altBy: Record<string, any[]> = {};
+      try {
+        const groups = await MappingApi.candidates(pid, { topN: 4 });
+        for (const g of groups) altBy[String(g.target_field_id)] = g.candidates || [];
+      } catch { /* export still works from mappings alone */ }
+      // Value crosswalks, so a canvas export carries the same columns as a table one.
+      const cwBy: Record<string, { legacy: string; oracle: string; status: string }[]> = {};
+      try {
+        const coded = await MappingApi.codedValues(pid);
+        (coded?.columns || []).forEach((c: any) => {
+          const pairs = (c.resolved || [])
+            .filter((rv: any) => String(rv.from) !== String(rv.to))
+            .map((rv: any) => ({ legacy: String(rv.from), oracle: String(rv.to), status: rv.how || "" }));
+          if (pairs.length) cwBy[(c.target_field || "").toLowerCase()] = pairs;
+        });
+      } catch { /* crosswalk column just stays empty */ }
+      setVetMsgPage("AI-checking options for the export…");
+      const verdicts = await runVetPage(targetFields.map((f) => String(f.id)), false);
+      setVetMsgPage(null);
+
+      const mByField = new Map(mappings.map((m) => [m.target_field_id, m]));
+      const records = targetFields.map((f) => {
+        const m = mByField.get(f.id);
+        const alts = altBy[String(f.id)] || [];
+        const dv = effectiveDefaults[(f.field_name || "").toLowerCase().replace(/\*/g, "").trim()];
+        const approvedLike = ["approved", "overridden"].includes(m?.status || "");
+        let suggested = "", confidence = 0;
+        if (m?.source_column) {
+          suggested = m.source_column;
+          confidence = approvedLike ? 100 : Math.round((m.confidence ?? 0) * 100);
+        } else if (dv) {
+          suggested = `(constant) ${dv}`; confidence = 100;
+        } else if (alts[0]) {
+          suggested = alts[0].source_column || "";
+          confidence = Math.round((alts[0].confidence ?? 0) * 100);
+        }
+        const fv = verdicts[String(f.id)] || {};
+        return {
+          target_field: f.field_name,
+          suggested_source: suggested,
+          confidence,
+          reason: m?.reason || (suggested ? "" : "No confident match found"),
+          excluded: /do-?not-?map|analyst rule/i.test(String(m?.reason || "")),
+          required: !!(f as any).required,
+          how_mapped: m?.source_column ? (approvedLike ? "Approved / learned" : "Suggested")
+                    : dv ? "Default constant" : "Unmapped",
+          transform: (m?.suggested_transformation as any)?.rule_type || "",
+          status: m?.status ? String(m.status).replace(/_/g, " ") : "",
+          needs_confirmation: m?.review_required ? "YES" : "",
+          notes: m?.reason || "",
+          crosswalks: cwBy[(f.field_name || "").toLowerCase()] || [],
+          alternatives: alts.slice(0, 4).map((c: any) => {
+            const v = fv[c.source_column];
+            return {
+              source: c.source_column,
+              confidence: c.confidence,
+              verdict: v?.verdict || c.ai_verdict || "",
+              reason: v?.reason || c.ai_reason || (c.reasons || []).join("; "),
+            };
+          }),
+        };
+      });
+      const obj = (project?.target_object || project?.name || "FBDI").trim();
+      const title = `${obj} Field Mapping`;
+      await OutputApi.mappingExport(pid, title,
+        title.replace(/[^\w.-]+/g, "_") + ".xlsx", records);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.detail || "Couldn't build the mapping workbook.");
+    } finally { setExportingPage(false); setVetMsgPage(null); }
+  };
+
   const loadAll = async () => {
     if (!pid) return;
     setLoadingConversion(true);
@@ -1005,6 +1124,39 @@ export const MappingReviewPage: React.FC = () => {
             {fillingPage ? <Spinner /> : <Sparkles className="h-3 w-3" />}
             {fillingPage ? "Filling…" : (filter === "unmapped" || filter === "required") ? "Fill required blanks with AI" : "Fill blanks with AI"}
           </button>
+
+          {/* Vet + Export in CANVAS. The table view has its own pair in its toolbar,
+              built from the row models it already holds; these fetch the same data on
+              click so canvas is not a second-class view. Rendered only for canvas so
+              the two never appear at once. */}
+          {viewMode !== "table" && (
+          <>
+          {vetMsgPage && <span className="max-w-[220px] truncate text-[10px] text-ink-subtle" title={vetMsgPage}>{vetMsgPage}</span>}
+          <button
+            onClick={vetWithAiPage}
+            disabled={vettingPage}
+            title="Ask AI to judge the uncertain alternatives and explain why each does or doesn't fit. Adds reasons to the table and the Excel export."
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50",
+              vettedOnce
+                ? "border-success/40 bg-success-subtle text-success hover:bg-success/10"
+                : "border-brand/40 bg-brand-subtle text-brand hover:bg-brand/10",
+            )}
+          >
+            {vettingPage ? <Spinner /> : vettedOnce ? <Check className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
+            {vettingPage ? "Reviewing…" : vettedOnce ? "AI review done" : "Vet options with AI"}
+          </button>
+          <button
+            onClick={exportMappingPage}
+            disabled={exportingPage}
+            title="Download the mapping as an Excel workbook — a flat All Fields sheet plus one sheet per confidence band"
+            className="inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-canvas disabled:opacity-50"
+          >
+            <Download className={cn("h-3 w-3", exportingPage && "animate-pulse")} />
+            {exportingPage ? "Building…" : "Export mapping (Excel)"}
+          </button>
+          </>
+          )}
 
           {/* View toggle — canvas graph vs tabular field-mapping detail */}
           <div className="flex items-center rounded-md border border-line bg-white p-0.5">
