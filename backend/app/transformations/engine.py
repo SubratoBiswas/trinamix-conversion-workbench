@@ -246,6 +246,19 @@ def apply_rule(
             return value
         return cfg.get("default", "")
 
+    if rt == "BLANK_IF_EQUALS":
+        # Blank this field when it duplicates ANOTHER COLUMN's value. Oracle does
+        # not want a redundant alias: NextPower's rule is that Alternate Name is
+        # left empty when it is identical to Supplier Name. Row-aware, and the
+        # comparison is case/whitespace-insensitive so "ACME Inc" vs "Acme  Inc "
+        # is still treated as a duplicate. cfg: {"other_column": "<name>"}.
+        other = cfg.get("other_column")
+        if row is None or not other:
+            return value
+        def _norm(v):
+            return " ".join(_to_str(v).strip().lower().split())
+        return "" if _norm(value) and _norm(value) == _norm(row.get(other, "")) else value
+
     if rt == "CONDITIONAL":
         # Legacy single-equality conditional kept for back-compat.
         col = cfg.get("if_column")

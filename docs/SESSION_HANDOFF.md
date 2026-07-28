@@ -977,3 +977,39 @@ inactive" + "Assignee" band), `AllVendorsTestPhoenixResults` (7,496 rows). Uploa
 the tool needs the running app (Mapping Documents > Upload document) and the session is at the
 sign-in screen — credentials are the user's to enter. Once signed in, that upload produces a
 reviewable proposal with conflict detection against these strategy learnings.
+
+### 9.21 Analyst rules from the 28-Jul live review (supplier header)
+
+Captured in `supplier_strategy_defaults.json` under `analyst_rules`, seeded by the same
+`seed_supplier_strategy_defaults()`:
+
+| Field | Rule | Status |
+|---|---|---|
+| Alternate Name | Blank it when it duplicates Supplier Name | **Implemented** — new engine rule `BLANK_IF_EQUALS` |
+| Tax Organization Type | CORPORATION | Already seeded (strategy 7.1) |
+| Business Relationship | SPEND_AUTHORIZED | Already seeded (strategy 7.1) |
+| Inactive Date | Always blank | Seeded as `suppress_field` |
+| Customer Number | Always blank | Seeded as `suppress_field` |
+| Parent Supplier | Parent Vendor Id → row where Internal Id matches → that row's Name | **NOT implemented** |
+
+`BLANK_IF_EQUALS` (engine.py) compares case/whitespace-insensitively, so
+`"ACME  Inc "` vs `"acme inc"` is treated as a duplicate. Replayed against the real workbook
+values: `Advantage Electric Supply`/`Allied Electronics` blank out, a genuine alternate
+(`Trading As Northwind` vs `Northwind Traders Ltd`) is preserved.
+
+**Parent Supplier needs a new rule type.** It is a SELF-JOIN across the extract — resolve the
+parent's *name* by looking up another row — and `apply_rule` is row-local: it only sees the
+current row, so it cannot reach the row whose Internal Id matches. Implementing it means a
+`SELF_LOOKUP` rule resolved at frame level in `_transform_frame` (build an
+`Internal Id -> Name` map once per frame, then map the `Parent Vendor Id` column), not inside
+`apply_rule`. Config is already recorded in the JSON.
+
+**Analyst wrote "Corporation", seeded as CORPORATION** — that is the Oracle lookup CODE and it
+matches strategy 7.1. Flag if the target instance actually expects mixed case.
+
+**Needs a further deploy.** 9.20 and 9.21 both landed after the last `launch_git.bat`, so the
+strategy + analyst learnings are NOT yet on the running backend. The mapping workbook was
+copied to `NXT_Supplier_Mapping.xlsx` in the repo root so the browser can reach it, and the
+Mapping Documents screen already lists an older `NXT Supplier Mapping.xlsx`
+(75 new / 17 same / 25 conflicting, awaiting review) whose analysis PREDATES the strategy seed
+— re-analyse after deploying so conflicts are judged against the strategy.

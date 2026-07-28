@@ -412,8 +412,54 @@ async def seed_supplier_strategy_defaults() -> dict:
             captured_from=src,
         ).insert()
         seeded += 1
+    # Analyst refinements captured in live review: blank-on-purpose fields and
+    # row-aware rules (e.g. Alternate Name blanked when it duplicates Supplier
+    # Name). Seeded as suppress_field / column_mapping-with-rule learnings.
+    a_sup = a_rule = a_skip = 0
+    for r in (doc.get("analyst_rules", {}) or {}).get("rules", []):
+        tgt_obj = (r.get("target_object") or "").strip()
+        tgt_field = (r.get("target_field") or "").strip()
+        if not (tgt_obj and tgt_field):
+            continue
+        if r.get("suppress"):
+            kind, cat, orig, res, rtype, rcfg = ("suppress_field", "Suppressed (analyst rule)",
+                                                 "(blank)", "", "suppress", {})
+        elif r.get("rule_type") == "BLANK_IF_EQUALS":
+            kind, cat = "rule", "Transformation Rule"
+            orig = (r.get("rule_config") or {}).get("other_column", "")
+            res, rtype, rcfg = tgt_field, "BLANK_IF_EQUALS", r.get("rule_config") or {}
+        else:
+            a_skip += 1        # constants already covered above, or not implementable yet
+            continue
+        existing = await LearnedMapping.find(
+            LearnedMapping.kind == kind,
+            LearnedMapping.target_object == tgt_obj,
+            LearnedMapping.target_field == tgt_field,
+            include_deleted=True,
+        ).first_or_none()
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            continue
+        if existing:
+            kept += 1
+            continue
+        await LearnedMapping(
+            kind=kind, category=cat, original_value=orig, resolved_value=res,
+            target_object=tgt_obj, target_field=tgt_field,
+            rule_type=rtype, rule_config=rcfg,
+            client_id=nid, is_global=False,
+            captured_from=(doc.get("analyst_rules", {}) or {}).get("_source", src),
+        ).insert()
+        if kind == "suppress_field":
+            a_sup += 1
+        else:
+            a_rule += 1
+
     logger.info("supplier strategy defaults: seeded %d, kept %d, retired-respected %d, "
-                "derived-skipped %d", seeded, kept, retired, derived)
+                "derived-skipped %d | analyst: %d suppressions, %d rules, %d skipped",
+                seeded, kept, retired, derived, a_sup, a_rule, a_skip)
     return {"seeded": seeded, "kept": kept, "retired": retired,
             "derived_not_constant": derived,
+            "analyst_suppressions": a_sup, "analyst_rules": a_rule,
+            "analyst_skipped": a_skip,
             "open_items": doc.get("open_items", [])}
