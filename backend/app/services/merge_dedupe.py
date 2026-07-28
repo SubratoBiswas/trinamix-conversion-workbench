@@ -20,6 +20,12 @@ def _norm(s) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s).lower())
 
 
+# Interfaces that legitimately hold MANY rows per entity — never collapse these
+# to one row per business key.
+_CHILD_OBJECT_HINTS = ("site", "address", "contact", "bank", "assignment",
+                       "structure", "component", "attachment")
+
+
 def key_col_for(df0: pd.DataFrame, target_object: Optional[str], key_registry: dict) -> Optional[str]:
     """The business-key column to de-dupe a merged frame on, or None.
 
@@ -36,14 +42,19 @@ def key_col_for(df0: pd.DataFrame, target_object: Optional[str], key_registry: d
             break
     if not keys:
         return None
+    # Master vs child is decided by the OBJECT, not by how unique the data happens
+    # to be. The old rule ("key is >=90% unique") was self-defeating for
+    # single-source de-dup: a file with genuinely duplicated suppliers looked like
+    # a child interface, so the very duplicates we needed to collapse caused the
+    # key to be rejected. Child interfaces legitimately carry many rows per entity
+    # (a supplier HAS many sites/addresses/contacts) and must never collapse to one
+    # row per entity — they get exact-row de-dup instead.
+    if any(h in o for h in _CHILD_OBJECT_HINTS):
+        return None
     norm = {_norm(c): c for c in df0.columns}
     for k in keys:
         c = norm.get(_norm(k))
-        if c is None:
-            continue
-        s = df0[c].astype(str).str.strip()
-        nb = int((s != "").sum())
-        if nb > 0 and s[s != ""].nunique() >= 0.9 * nb:
+        if c is not None:
             return c
     return None
 
@@ -56,12 +67,13 @@ def merge_dedupe(frames: list, target_object: Optional[str], key_registry: dict,
     row is a GOLDEN RECORD: each field takes the first NON-BLANK value across the
     sources in priority order, so a blank in the top source is filled from a lower
     one. Without survivorship it's plain keep-first. Blank-key rows are all kept.
-    A single frame is returned unchanged (aside from index reset)."""
+    De-duplication runs for ONE source as well as many: duplicates inside a single
+    extract are just as real as duplicates across two, and a single-file conversion
+    is the normal case. (This previously returned a lone frame untouched, so
+    within-file duplicates passed straight through to the FBDI.)"""
     frames = [f for f in frames if f is not None]
     if not frames:
         return pd.DataFrame()
-    if len(frames) == 1:
-        return frames[0].reset_index(drop=True)
     key_col = key_col_for(frames[0], target_object, key_registry)
     merged = pd.concat(frames, ignore_index=True).drop_duplicates(keep="first")
     if key_col is not None and key_col in merged.columns:

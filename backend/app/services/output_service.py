@@ -281,7 +281,14 @@ async def build_converted_dataframe(
         if not frames:
             raise ValueError("No readable source files for this conversion")
         if len(frames) == 1:
-            out_df = frames[0]
+            # De-duplicate a SINGLE source too. Previously dedupe only ran on the
+            # multi-source merge, so duplicates WITHIN one extract passed straight
+            # through — and a single-file conversion is the normal case. Same
+            # rules either way: master objects collapse on the natural business
+            # key, child interfaces (Site/Address/Contacts) fall back to exact-row
+            # de-dup so one supplier keeps its many addresses.
+            obj = (template.business_object if template else None) or conversion.target_object
+            out_df = _merge_dedupe_frames(frames, obj)
         else:
             # Multi-source: converge the per-source outputs, then de-duplicate by
             # the object's natural business key with SOURCE PRIORITY (earlier source
