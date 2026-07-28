@@ -624,7 +624,12 @@
     "source_field": "Country",
     "source_label": null,
     "fbdi_sheet": "POZ_SUPPLIER_SITES_INT",
-    "confidence": "High"
+    "confidence": "High",
+    "rule_type": "COUNTRY_ISO2",
+    "rule_config": {
+      "output": "iso2"
+    },
+    "note": "Oracle expects the 2-char ISO country code. Analyst 28-Jul: 'in the same way, you can map the address country' - same derivation as the address country, i.e. lookup not truncation."
   },
   {
     "source_system": "netsuite",

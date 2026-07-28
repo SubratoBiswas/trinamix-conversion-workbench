@@ -414,6 +414,20 @@
         "source_hint": "Fax",
         "note": "Split the single legacy fax string into its Oracle parts. Country code and area code go in their OWN columns; the Fax column keeps ONLY the bare number (no country/area prefix, no duplication).",
         "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Fax\") then seed all three together."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "RFQ Or Bidding",
+        "suppress": true,
+        "note": "Blank if not mapped. Analyst raised it on the Address sheet (1:01:01) and it applies wherever the column appears - the standing rule is 'if not mapped then keep it blank'.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier Address",
+        "target_field": "RFQ Or Bidding",
+        "suppress": true,
+        "note": "Blank if not mapped. Analyst raised it on the Address sheet (1:01:01) and it applies wherever the column appears - the standing rule is 'if not mapped then keep it blank'.",
+        "status": "SEEDED as suppress_field"
       }
     ],
     "pattern_rules": [
