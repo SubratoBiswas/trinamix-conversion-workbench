@@ -580,10 +580,14 @@ async def download_all_outputs(
                         cand = e
                 art = cand
             if art is None:
-                if not regenerate:
-                    # Nothing pre-generated for this object and we won't rebuild inline.
-                    stale.append(obj)
-                    continue
+                # MISSING is not the same as STALE. ``regenerate`` means "rebuild
+                # even though a good file exists"; it must not mean "silently omit
+                # an object that has no file in this format yet". The 28-Jul
+                # "FBDI templates" download shipped only 2 of the 7 supplier
+                # interfaces — the other 5 had csv-family artifacts from the
+                # earlier CSV run but no xlsx/xlsm, so they fell into this branch
+                # and vanished from a bundle that gave no hint it was incomplete.
+                # A partial load file set is worse than a slow download.
                 try:
                     art = await generate_merged_artifact(project_id, obj, fmt=fmt)
                 except Exception:
@@ -629,6 +633,11 @@ async def download_all_outputs(
             "Content-Disposition": f'attachment; filename="{zip_name}"',
             "X-Files-Added": str(added),
             "X-Files-Skipped": str(len(skipped)),
+            # A load-file bundle that is missing interfaces is dangerous in a way a
+            # failed download is not, so make incompleteness machine-readable
+            # instead of leaving the caller to count the entries.
+            "X-Files-Expected": str(len(objs)),
+            "X-Objects-Skipped": ", ".join(skipped)[:400],
         },
     )
 

@@ -480,6 +480,34 @@
         "source_hint": "1099 Eligible",
         "note": "Sandeep 28-Jul: 'if it is no, means we need to map to N. If it is yes, then we need to map to Y.' The extract carries eligible/not-eligible/yes/no; Oracle wants strictly Y or N. Blank source stays blank rather than defaulting to N - an unknown 1099 status is not the same as 'not reportable', and guessing it wrong is a tax-reporting error.",
         "status": "IMPLEMENTED - MAP_BOOLEAN. Confirm the source column is named '1099 Eligible'."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Supplier Name New",
+        "suppress": true,
+        "note": "Supplier Name New is the RENAME column - it is only populated on an UPDATE that changes a supplier's name. On a CREATE load it must be blank. The 28-Jul run copied Supplier Name into it on all 5,831 rows, which asks Fusion to rename every supplier to the name it is being created with.",
+        "status": "IMPLEMENTED - write-time suppression"
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Supplier Site New",
+        "suppress": true,
+        "note": "Same rename-column reasoning as Supplier Name New; blank on CREATE.",
+        "status": "IMPLEMENTED - write-time suppression"
+      },
+      {
+        "target_object": "Supplier Bank Account",
+        "target_field": "Delivery Channel Code",
+        "suppress": true,
+        "note": "Subrato 28-Jul: 'Keep the delivery channel and Delivery method separate, dont do this'. The 28-Jul bank run put EMAIL in BOTH Delivery Channel Code and Remit Delivery Method on the payees sheet. Delivery Channel is a payment-system channel code, not the remittance-advice medium; only Remit Delivery Method takes the EMAIL/FAX derivation.",
+        "status": "IMPLEMENTED - write-time suppression"
+      },
+      {
+        "target_object": "Supplier Payee",
+        "target_field": "Delivery Channel Code",
+        "suppress": true,
+        "note": "Alias of the above - the payees interface is registered under both object names across the template records.",
+        "status": "IMPLEMENTED - write-time suppression"
       }
     ],
     "pattern_rules": [

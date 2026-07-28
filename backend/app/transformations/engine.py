@@ -227,7 +227,16 @@ def apply_rule(
         cols = cfg.get("columns", [])
         if not row:
             return value
-        return sep.join(_to_str(row.get(c, "")) for c in cols)
+        parts = [_to_str(row.get(c, "")) for c in cols]
+        # A CONCAT whose every input is missing must not emit the separator alone.
+        # Supplier Site was configured as CONCAT("Country Code", "-", "City"); neither
+        # column exists in the NetSuite extract, so all 8,561 rows shipped the literal
+        # "-" — a required, must-be-unique key filled with a guaranteed-invalid,
+        # guaranteed-duplicate value. Falling back to the incoming value makes the
+        # misconfiguration visible instead of manufacturing a bad key.
+        if not any(p.strip() for p in parts):
+            return value
+        return sep.join(parts)
 
     if rt == "SPLIT":
         sep = cfg.get("separator", " ")

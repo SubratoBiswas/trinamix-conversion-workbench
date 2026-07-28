@@ -22,7 +22,11 @@ from app.models.transformation import TransformationRule
 from app.parsers import parse_tabular
 from app.services.learning_service import REFERENCE_KEY_FIELDS
 from app.transformations import apply_pipeline
-from app.services.strategy_overlay import directive_for as _strategy_directive
+from app.services.strategy_overlay import (
+    directive_for as _strategy_directive,
+    blank_fields as _strategy_blank_fields,
+    apply_frame_rules as _strategy_frame_rules,
+)
 
 
 async def _get_reference_standards(target_object: str | None) -> dict:
@@ -805,6 +809,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         or "fbdi"
     )
 
+    # Fields the signed strategy / analyst rules say must ship BLANK. Merged into
+    # the suppression set so neither the auto-number sequence nor the "fill an empty
+    # column" control default can resurrect them (both did, in the 28-Jul run).
+    _strategy_blanks = _strategy_blank_fields(obj_name)
+
     # "template" output = the REAL Oracle FBDI workbook, filled in. Materialize the
     # bundled source file (disk, or rehydrated from Mongo after a redeploy). If the
     # template has no stored file we can't fill it, so degrade gracefully to a fresh
@@ -877,8 +886,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # standard default, not the literal text.
         sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
-        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys, effective=_eff_defaults,
+        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys | _strategy_blanks,
+                                      effective=_eff_defaults,
                                       explicitly_mapped=explicitly_mapped_keys)
+        # Cross-column strategy rules need the finished frame (see
+        # strategy_overlay.apply_frame_rules) — e.g. blank Alternate Name where it
+        # duplicates Supplier Name. Runs AFTER control defaults so a default that
+        # re-creates the duplicate is caught too.
+        sdf = _strategy_frame_rules(sdf, obj_name)
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
         # field_name (before the header rename below).
