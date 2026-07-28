@@ -47,6 +47,74 @@ async def store_template_bytes(tpl: FBDITemplate, filename: str, contents: bytes
         logger.exception(f"Failed to store template bytes in Mongo for {tpl.id}: {exc}")
 
 
+_BUNDLED_DIR = Path(__file__).resolve().parent.parent / "data" / "fbdi_templates"
+
+# Interface-table token -> bundled Oracle workbook. Keyed on the table name because
+# that is what the file names and the templates' primary sheet names agree on;
+# business_object spellings drift ("Supplier Site" / "Supplier Sites" / "SupplierSite").
+_BUNDLED_BY_TABLE: dict[str, str] = {
+    "pozsuppliersint": "1_SupplierImport_POZ_SUPPLIERS_INT.xlsm",
+    "pozsupplieraddressesint": "2_SupplierAddress_POZ_SUPPLIER_ADDRESSES_INT.xlsm",
+    "pozsuppliersitesint": "3_SupplierSite_POZ_SUPPLIER_SITES_INT.xlsm",
+    "pozsiteassignmentsint": "4_SupplierSiteAssignment_POZ_SITE_ASSIGNMENTS_INT.xlsm",
+    "pozsupcontacts": "5_SupplierContacts_POZ_SUP_CONTACTS.xlsm",
+    "ibytempextpayees": "6_SupplierBank_IBY_TEMP_EXT_PAYEES__modifiedAS400.xlsm",
+    "hzimp": "CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm",
+    "egpsystemitemsinterface": "ItemImport_EGP_SYSTEM_ITEMS_INTERFACE.xlsm",
+    "egpstructuresint": "BOMItemStructure_EGP_STRUCTURES_INT.xlsm",
+}
+
+# Business-object spellings that map to an interface table, for templates whose
+# sheets aren't loaded (materialize is called with just the template record).
+_BUNDLED_BY_OBJECT: dict[str, str] = {
+    "supplier": "pozsuppliersint",
+    "supplierimport": "pozsuppliersint",
+    "supplieraddress": "pozsupplieraddressesint",
+    "supplieraddresses": "pozsupplieraddressesint",
+    "suppliersite": "pozsuppliersitesint",
+    "suppliersites": "pozsuppliersitesint",
+    "suppliersiteassignment": "pozsiteassignmentsint",
+    "suppliersiteassignments": "pozsiteassignmentsint",
+    "suppliercontact": "pozsupcontacts",
+    "suppliercontacts": "pozsupcontacts",
+    "supplierbank": "ibytempextpayees",
+    "supplierbanks": "ibytempextpayees",
+    "supplierbankaccount": "ibytempextpayees",
+    "supplierbankaccounts": "ibytempextpayees",
+    "customer": "hzimp",
+    "customerimport": "hzimp",
+    "item": "egpsystemitemsinterface",
+    "itemimport": "egpsystemitemsinterface",
+    "itemstructure": "egpstructuresint",
+    "bom": "egpstructuresint",
+}
+
+
+def _bundled_template_for(tpl: FBDITemplate) -> Path | None:
+    """The Oracle workbook shipped in the repo for this template's interface."""
+    import re as _re
+
+    def _n(s) -> str:
+        return _re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+    for cand in (tpl.business_object, tpl.name, tpl.file_name):
+        key = _BUNDLED_BY_OBJECT.get(_n(cand))
+        if not key:
+            # The stored name often carries the table itself
+            # ("Supplier Site POZ_SUPPLIER_SITES_INT").
+            key = next((t for t in _BUNDLED_BY_TABLE if t in _n(cand)), None)
+        if key:
+            p = _BUNDLED_DIR / _BUNDLED_BY_TABLE[key]
+            if p.exists():
+                logger.info("template %s (%r): no stored file — using bundled %s",
+                            tpl.id, tpl.business_object, p.name)
+                return p
+    logger.warning("template %s (%r): no stored file and no bundled workbook — "
+                   "output will be a synthesised xlsx, not the Oracle template",
+                   tpl.id, tpl.business_object)
+    return None
+
+
 async def materialize_template_file(tpl: FBDITemplate) -> Path | None:
     """Return a filesystem path to the template's raw file for parsing.
 
@@ -59,7 +127,15 @@ async def materialize_template_file(tpl: FBDITemplate) -> Path | None:
         return Path(tpl.file_path)
     rec = await FBDITemplateFile.find_one(FBDITemplateFile.template_id == tpl.id)
     if not rec or not rec.content:
-        return None
+        # Last resort: the Oracle workbook bundled in the repo for this interface.
+        # A template record whose file was never stored used to fall through to a
+        # SYNTHESISED xlsx — the columns are right (they come from the parsed field
+        # records) but the workbook is not Oracle's: no "Instructions and CSV
+        # Generation" sheet, no macros, .xlsx instead of .xlsm. That is what the
+        # 28-Jul "FBDI templates" download shipped for Supplier Site, and nothing in
+        # the file says so. The real workbooks are already in app/data/fbdi_templates,
+        # so prefer them over degrading.
+        return _bundled_template_for(tpl)
     name = rec.file_name or tpl.file_name or f"{tpl.id}.xlsx"
     target = settings.upload_path / "fbdi" / name
     target.parent.mkdir(parents=True, exist_ok=True)

@@ -74,13 +74,32 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
         logger.warning("catalog seed: could not read %s: %s", path.name, exc)
         return {"seeded": 0, "skipped": 0, "error": str(exc)}
 
-    seeded = updated = deduped = skipped = retired = 0
+    seeded = updated = deduped = skipped = retired = superseded = 0
     for r in rows:
         tgt_obj = (r.get("target_object") or "").strip()
         tgt_field = (r.get("target_field") or "").strip()
         src_field = (r.get("source_field") or "").strip()
         if not (tgt_obj and tgt_field and src_field):
             continue
+        # A later analyst document can RE-POINT a target field at a different source
+        # column. Seeding the new pair alone leaves the old one in place, so the
+        # target ends up with two competing column_mappings and which one reaches
+        # the FBDI depends on the per-target dedup tie-break (QA issue #6). Rows may
+        # therefore declare the source(s) they supersede; those learnings are
+        # retired here. User-deleted rows are left alone — they are already retired,
+        # and resurrecting one just to delete it again would clear the tombstone.
+        for old_src in (r.get("replaces_source_field") or []):
+            if str(old_src).strip() == src_field:
+                continue
+            for prior in await LearnedMapping.find(
+                LearnedMapping.kind == "column_mapping",
+                LearnedMapping.target_object == tgt_obj,
+                LearnedMapping.target_field == tgt_field,
+                LearnedMapping.original_value == str(old_src).strip(),
+            ).to_list():
+                await prior.delete()
+                superseded += 1
+
         rule_type = r.get("rule_type")
         rule_config = (r.get("rule_config") if rule_type else {
             "source_column": src_field, "source_label": r.get("source_label"),
@@ -136,12 +155,14 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
         ).insert()
         seeded += 1
 
-    if seeded or updated or deduped or skipped or retired:
+    if seeded or updated or deduped or skipped or retired or superseded:
         logger.info("%s: seeded %d, upgraded %d, de-duped %d, skipped %d, "
-                    "retired-respected %d (of %d rows)",
-                    path.name, seeded, updated, deduped, skipped, retired, len(rows))
+                    "retired-respected %d, superseded %d (of %d rows)",
+                    path.name, seeded, updated, deduped, skipped, retired,
+                    superseded, len(rows))
     return {"seeded": seeded, "updated": updated, "deduped": deduped,
-            "skipped": skipped, "retired": retired, "total": len(rows)}
+            "skipped": skipped, "retired": retired, "superseded": superseded,
+            "total": len(rows)}
 
 
 async def _nextpower_client_id():

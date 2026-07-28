@@ -1,57 +1,75 @@
 [
   {
+    "_note": "NextPower Customer field mapping. Source: 'NXT Customer Field Mapping (6).xlsx' -> 'Source Files Mapping' tab, the 26 Green/Mapped rows with Bring to Oracle = Yes. The 23 Yellow 'Question to Nextpower' rows are deliberately NOT seeded: their Oracle Field Name cells are analyst notes ('contact ?', 'creditr hold', 'part relation ship'), not Oracle fields. Rows without target_object/target_field/source_field are ignored by the seeder, so this entry is inert.",
+    "_open_items": [
+      "datecreated -> Account Established Date: the workbook maps BOTH startdate and datecreated to this one field. Only startdate is seeded (relationship start vs NetSuite record-creation stamp). Confirm with NextPower which is intended.",
+      "externalid -> 'DFF': not seedable. 'DFF' names a category, not a field - the specific descriptive flexfield attribute (context + segment) is needed.",
+      "fax -> 'Phone Line Type/Number': not seedable as a column mapping. In HZ_IMP_CONTACTPTS_T a fax is a separate CONTACT POINT ROW (Phone Line Type = FAX) alongside the phone row, not a second column on the same row. Needs row fan-out, which is a generator change.",
+      "Party Number: the prior seed took it from entityid, but the workbook re-points the party key to `id` (entityid is now the ACCOUNT key). Left as-is because the workbook is silent on Party Number - but Party Original System Reference and Party Number now derive from different columns, which is incoherent. Confirm whether Party Number should follow `id` or be left blank for auto-generation.",
+      "The workbook column 'addressinternalid' does not exist in the Address tab; its actual header is 'internalid'. Seeded as internalid."
+    ]
+  },
+  {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Customer Account Source System Reference",
-    "source_field": "entitynumber",
-    "source_label": "Legacy NetSuite account number — the account key propagated across every HZ_IMP/RA interface sheet.",
+    "source_field": "entityid",
+    "source_label": "Account key. Workbook: entityid -> Customer Account Source System Reference | Account Number.",
     "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
-    "confidence": "High"
+    "confidence": "High",
+    "replaces_source_field": [
+      "entitynumber"
+    ],
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Account Number",
-    "source_field": "entitynumber",
+    "source_field": "entityid",
     "source_label": "Human-facing account number.",
     "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
-    "confidence": "High"
+    "confidence": "High",
+    "replaces_source_field": [
+      "entitynumber"
+    ],
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Party Original System Reference",
-    "source_field": "entityid",
-    "source_label": "Legacy NetSuite party key propagated across the party/site/classification/profile sheets.",
+    "source_field": "id",
+    "source_label": "NetSuite internal id = party key. Workbook row 'id -> Party Original System Reference'.",
     "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Customer",
-    "target_field": "Party Number",
-    "source_field": "entityid",
-    "source_label": "Human-facing party number.",
-    "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "High"
+    "confidence": "High",
+    "replaces_source_field": [
+      "entityid"
+    ],
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Organization Name",
     "source_field": "companyname",
-    "source_label": "NextPower Solar Inc",
+    "source_label": "Customer legal/company name.",
     "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "High"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Account Description",
-    "source_field": "custentity_enl_legalname",
-    "source_label": "NextPower Solar Incorporated",
+    "source_field": "companyname",
+    "source_label": "Workbook: companyname -> Organization Name | Account Description.",
     "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
-    "confidence": "High"
+    "confidence": "High",
+    "replaces_source_field": [
+      "custentity_enl_legalname"
+    ],
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
@@ -60,60 +78,237 @@
     "source_field": "vatregnumber",
     "source_label": "VAT / tax registration number.",
     "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "High"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Person First Name",
     "source_field": "firstname",
-    "source_label": "Contact first name (person parties).",
+    "source_label": "Person party first name.",
     "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "High"
-  },
-  {
-    "source_system": "netsuite",
-    "target_object": "Customer",
-    "target_field": "Person Last Name",
-    "source_field": "lastname",
-    "source_label": "Contact last name (person parties).",
-    "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "High"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Person Middle Name",
     "source_field": "middlename",
-    "source_label": "Contact middle name (person parties).",
+    "source_label": "Person party middle name.",
     "fbdi_sheet": "HZ_IMP_PARTIES_T",
-    "confidence": "Medium"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Person Last Name",
+    "source_field": "lastname",
+    "source_label": "Person party last name.",
+    "fbdi_sheet": "HZ_IMP_PARTIES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Language Name",
+    "source_field": "language",
+    "source_label": "Customer language.",
+    "fbdi_sheet": "HZ_IMP_PARTIES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Email Address",
     "source_field": "email",
-    "source_label": "ap@nextpower.com",
+    "source_label": "Primary e-mail contact point.",
     "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
-    "confidence": "High"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Phone Number",
     "source_field": "phone",
-    "source_label": "555-0100",
+    "source_label": "Primary phone contact point.",
     "fbdi_sheet": "HZ_IMP_CONTACTPTS_T",
-    "confidence": "High"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   },
   {
     "source_system": "netsuite",
     "target_object": "Customer",
     "target_field": "Credit Limit",
     "source_field": "creditlimit",
-    "source_label": "50000",
+    "source_label": "Credit limit on the customer profile.",
     "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
-    "confidence": "High"
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Last Review Date",
+    "source_field": "custentity_last_credit_review_submitdate",
+    "source_label": "Date the credit review was last submitted.",
+    "fbdi_sheet": "RA_CUSTOMER_PROFILES_INT_ALL",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Account Established Date",
+    "source_field": "startdate",
+    "source_label": "Date the customer relationship began. NOTE: the workbook also lists `datecreated` against this same field; only one source can win, and startdate is the relationship start where datecreated is the NetSuite record-creation stamp. datecreated is NOT seeded - see open_items.",
+    "fbdi_sheet": "HZ_IMP_ACCOUNTS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Identifying Address",
+    "source_field": "defaultbillingaddress",
+    "source_label": "Flags the primary/identifying site.",
+    "fbdi_sheet": "HZ_IMP_PARTYSITES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Party Site Original System Reference",
+    "source_field": "internalid",
+    "source_label": "Address key. Workbook calls this column `addressinternalid`; the Address tab's actual header is `internalid`.",
+    "fbdi_sheet": "HZ_IMP_PARTYSITES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Location Original System Reference",
+    "source_field": "internalid",
+    "source_label": "Same address key on the location sheet.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Party Site Number",
+    "source_field": "internalid",
+    "source_label": "Same address key as the site number.",
+    "fbdi_sheet": "HZ_IMP_PARTYSITES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Account Site Source System Reference",
+    "source_field": "internalid",
+    "source_label": "Same address key on the account-site sheet.",
+    "fbdi_sheet": "HZ_IMP_ACCTSITES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Account Site Purpose Source System Reference",
+    "source_field": "internalid",
+    "source_label": "Same address key on the account-site-purpose sheet.",
+    "fbdi_sheet": "HZ_IMP_ACCTSITEUSES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Party Site Name",
+    "source_field": "address_label",
+    "source_label": "Site name from the address label.",
+    "fbdi_sheet": "HZ_IMP_PARTYSITES_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Address Line 1",
+    "source_field": "addr1",
+    "source_label": "Address line 1.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Address Line 2",
+    "source_field": "addr2",
+    "source_label": "Address line 2.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Address Line 3",
+    "source_field": "addr3",
+    "source_label": "Address line 3.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "City",
+    "source_field": "city",
+    "source_label": "City.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "State",
+    "source_field": "state",
+    "source_label": "State / province.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Postal Code",
+    "source_field": "zip",
+    "source_label": "Postal code.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
+  },
+  {
+    "source_system": "netsuite",
+    "target_object": "Customer",
+    "target_field": "Country",
+    "source_field": "country",
+    "source_label": "Country.",
+    "fbdi_sheet": "HZ_IMP_LOCATIONS_T",
+    "confidence": "High",
+    "captured_from_doc": "NXT Customer Field Mapping (6).xlsx — 'Source Files Mapping' tab, Green/Mapped rows with Bring to Oracle = Yes"
   }
 ]
