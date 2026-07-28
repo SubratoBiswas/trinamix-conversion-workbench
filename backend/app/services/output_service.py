@@ -933,13 +933,15 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         return pd.DataFrame(columns=cols)
 
     def _apply_supplier_layout(sdf: pd.DataFrame, sheet_name: str,
-                               with_end: bool = True) -> pd.DataFrame:
+                               with_end: bool = True,
+                               batch_id_first: bool = False) -> pd.DataFrame:
         # Delegate to the pure, unit-tested module (reorder to the analyst tab
         # sequence + END terminator); no-op for non-supplier objects.
         # END is a CSV record terminator for the FBDI loader — it must NOT be
         # written into an Excel workbook (the real Oracle template has no END
         # column), so the xlsx branch passes with_end=False.
-        return _supplier_layout(sdf, sheet_name, _is_supplier, with_end=with_end)
+        return _supplier_layout(sdf, sheet_name, _is_supplier, with_end=with_end,
+                                batch_id_first=batch_id_first)
 
     def _write_all() -> tuple[str, str, int, int]:
         """Serialize to disk, STREAMING one interface sheet at a time so peak memory
@@ -1004,7 +1006,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                             _cust_apply(sdf)
                         else:
                             sdf = _headers_only(fields_by_sheet[s.id])
-                        sdf = _apply_supplier_layout(sdf, s.sheet_name, with_end=False)
+                        # NO supplier CSV layout here. The two outputs follow
+                        # different rules, and conflating them was the bug:
+                        #   FBDI / Excel -> the ORIGINAL Oracle template's own
+                        #     column structure. `_finalize` already reindexes to
+                        #     the template's field sequence, so applying the
+                        #     analyst CSV order on top rewrote it into CSV shape
+                        #     (which is what made the "FBDI" download look like
+                        #     the CSV, and shifted Batch ID out of column 1).
+                        #   CSV -> the analyst column order + END terminator,
+                        #     applied in the CSV branches below.
+                        # Nothing to do: sdf is already in template order.
+                        pass
                         sdf.to_excel(xw, index=False, header=_hdr, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                         total_rows = max(total_rows, len(sdf))
                         total_cols += len(sdf.columns)

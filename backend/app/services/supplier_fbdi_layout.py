@@ -75,7 +75,7 @@ def csv_name_for(sheet_name: str) -> str:
 
 
 def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: bool,
-                          with_end: bool = True) -> "pd.DataFrame":
+                          with_end: bool = True, batch_id_first: bool = False) -> "pd.DataFrame":
     """Supplier only: reorder a primary interface sheet's columns to the analyst tab
     sequence (matched by normalized header; columns the tab doesn't list are kept and
     appended after, so nothing is dropped), then append an ``END`` record-terminator
@@ -84,7 +84,14 @@ def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: boo
     ``with_end=False`` keeps the reorder but omits the END column. END is a CSV
     record terminator for the FBDI loader; it does NOT belong in an Excel workbook
     a human opens, and the real Oracle template has no END column — so the xlsx
-    output must not carry it."""
+    output must not carry it.
+
+    ``batch_id_first=True`` moves the Batch ID column to position 1. The two
+    layouts genuinely differ: in the FBDI workbook Batch ID is the FIRST column,
+    while the generated CSV carries it near the END (which is the order the
+    column-order file encodes). Shipping the CSV order in the FBDI made every
+    later column look shifted during review — a Batch ID value showed up under
+    Registry ID and was reported as a mapping bug when nothing was mis-mapped."""
     if not is_supplier:
         return sdf
     order = supplier_col_order().get(norm_hdr(safe_sheet_name(sheet_name)))
@@ -106,6 +113,12 @@ def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: boo
         sdf = sdf[ordered].copy()
     else:
         sdf = sdf.copy()
+    if batch_id_first:
+        # Header spelling varies across the templates (Batch_id / Batch ID /
+        # BatchId), so match on the normalised header rather than an exact string.
+        bcol = next((c for c in sdf.columns if norm_hdr(c) == "batchid"), None)
+        if bcol is not None and list(sdf.columns).index(bcol) != 0:
+            sdf = sdf[[bcol] + [c for c in sdf.columns if c != bcol]].copy()
     if with_end:
         sdf["END"] = "END"
     return sdf
