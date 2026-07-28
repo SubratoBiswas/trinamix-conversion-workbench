@@ -9,7 +9,9 @@ import type {
   Dataset,
   DatasetDetail,
   DatasetPreview,
+  DecisionInput,
   Dependency,
+  DuplicateCandidates,
   Environment,
   EnvironmentRun,
   FBDIField,
@@ -27,6 +29,7 @@ import type {
   Project,
   PropagationCandidates,
   PropagationResult,
+  ReviewBundle,
   TemplateSuggestion,
   TransformationRule,
   User,
@@ -717,16 +720,22 @@ export const OutputApi = {
   /** Fuzzy duplicate / entity resolution over the merged interface data — clusters
    *  of records likely to be the same entity despite non-identical keys/names. */
   duplicateCandidates: (conversionId: string, opts?: { threshold?: number; useAi?: boolean }) =>
-    api.get<{
-      object?: string; rows_scanned: number; identity_fields: string[]; anchor?: string;
-      cluster_count?: number; duplicate_rows?: number; truncated?: boolean; note?: string;
-      ai_used?: boolean; sources?: string[];
-      clusters: { confidence: number; size: number; fields: string[];
-        verdict?: string; ai_reason?: string;
-        members: { row: number; values: Record<string, any> }[] }[];
-    }>(`/conversions/${conversionId}/duplicate-candidates`, {
+    api.get<DuplicateCandidates>(`/conversions/${conversionId}/duplicate-candidates`, {
       params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
       timeout: 120000,
+    }).then(r => r.data),
+  /** Everything still to adjudicate before generation: open cleansing findings plus
+   *  the counts the generation gate warns on. Duplicates stay a separate lazy call. */
+  reviewBundle: (conversionId: string) =>
+    api.get<ReviewBundle>(`/conversions/${conversionId}/review`).then(r => r.data),
+  /** Record duplicate/cleansing verdicts (upsert by decision_key). */
+  saveDecisions: (conversionId: string, decisions: DecisionInput[]) =>
+    api.post<{ saved: number }>(`/conversions/${conversionId}/decisions`, { decisions })
+      .then(r => r.data),
+  /** Undo one decision (by key) or every decision on this conversion (omit the key). */
+  clearDecisions: (conversionId: string, decisionKey?: string) =>
+    api.delete<{ cleared: number }>(`/conversions/${conversionId}/decisions`, {
+      params: decisionKey ? { decision_key: decisionKey } : undefined,
     }).then(r => r.data),
   /** Banded field-mapping export (Issue #3): POST the computed rows, download the
    *  clean Excel workbook (Summary + one sheet per confidence band). */

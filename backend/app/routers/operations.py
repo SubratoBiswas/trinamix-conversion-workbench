@@ -261,7 +261,128 @@ async def duplicate_candidates(
     result["sources"] = names
     if use_ai:
         result = await ai_adjudicate_clusters(result)
+    # Attach the STABLE identity keys plus any verdict already recorded — for this
+    # conversion, or learned from an earlier one for the same client + object. The
+    # scanner reports positional row indices, which are meaningless once the frame
+    # is rebuilt at generation time; the UI must save decisions against these keys.
+    from app.services.decision_service import (annotate_clusters, load_decisions,
+                                               load_learned_keep_all,
+                                               identity_columns_for)
+    decided = {d["decision_key"]: d for d in await load_decisions(c.id)}
+    learned = await load_learned_keep_all(
+        getattr(c, "client_id", None) or await _conversion_client_id(c), c.target_object)
+    # find_duplicate_clusters reports identity_fields as plain column names in the
+    # happy path but as {column, kind, weight} dicts on the early-return branches —
+    # accept either rather than assume.
+    idc = [f if isinstance(f, str) else f.get("column")
+           for f in (result.get("identity_fields") or [])]
+    idc = [c2 for c2 in idc if c2] or identity_columns_for(merged, c.target_object)
+    result["clusters"] = annotate_clusters(result.get("clusters", []), merged, idc,
+                                           decided=decided, learned_keep_all=learned)
+    result["identity_columns"] = idc
+    result["decided_count"] = sum(1 for cl in result["clusters"] if cl.get("decision"))
+    result["undecided_count"] = len(result["clusters"]) - result["decided_count"]
     return result
+
+
+async def _conversion_client_id(c):
+    """The client a conversion belongs to (via its project) — decisions are
+    promoted to client scope, so this is what makes a verdict reusable."""
+    try:
+        from app.models.project import Project
+        p = await Project.get(c.project_id)
+        return getattr(p, "client_id", None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@output_router.get("/{conversion_id}/review")
+async def review_bundle(
+    conversion_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Everything the user has to adjudicate before the file is generated, in one
+    payload: open cleansing/validation findings plus the counts the generation gate
+    warns on. Duplicates come from ``/duplicate-candidates`` (it is slow and
+    parameterised, so it stays a separate lazy call)."""
+    c = await _require_conversion(conversion_id)
+    from app.models.validation import ValidationIssue
+    from app.models.row_decision import RowDecision
+    issues = await ValidationIssue.find(
+        ValidationIssue.conversion_id == c.id).limit(500).to_list()
+    dec = await RowDecision.find(RowDecision.conversion_id == c.id).to_list()
+    cleansed = {d.decision_key: d.verdict for d in dec if d.scope == "cleansing"}
+    out = []
+    for i in issues:
+        key = f"{i.field_name or ''}|{i.issue_type or ''}"
+        out.append({"key": key, "category": i.category, "field_name": i.field_name,
+                    "issue_type": i.issue_type, "severity": i.severity,
+                    "message": i.message, "suggested_fix": i.suggested_fix,
+                    "auto_fixable": i.auto_fixable, "impacted_count": i.impacted_count,
+                    "verdict": cleansed.get(key)})
+    return {"conversion_id": str(c.id), "target_object": c.target_object,
+            "cleansing": out,
+            "cleansing_open": sum(1 for o in out if not o["verdict"]),
+            "duplicate_decisions": sum(1 for d in dec if d.scope == "duplicate")}
+
+
+@output_router.post("/{conversion_id}/decisions")
+async def save_decisions(
+    conversion_id: str,
+    payload: dict,
+    user: User = Depends(get_current_user),
+):
+    """Record duplicate/cleansing verdicts. Upsert by ``decision_key`` so
+    re-deciding a cluster replaces the earlier call instead of stacking.
+
+    ``promote=true`` (default for keep_all) also makes the verdict reusable across
+    conversions for this client + object, so the next extract does not re-ask about
+    the same look-alike records."""
+    from app.models.row_decision import RowDecision, DUP_VERDICTS, CLEANSE_VERDICTS
+    c = await _require_conversion(conversion_id)
+    client_id = getattr(c, "client_id", None) or await _conversion_client_id(c)
+    saved = 0
+    for d in (payload.get("decisions") or []):
+        scope = (d.get("scope") or "duplicate").strip()
+        verdict = (d.get("verdict") or "").strip()
+        key = (d.get("decision_key") or "").strip()
+        allowed = DUP_VERDICTS if scope == "duplicate" else CLEANSE_VERDICTS
+        if not key or verdict not in allowed:
+            continue
+        existing = await RowDecision.find_one(
+            RowDecision.conversion_id == c.id, RowDecision.decision_key == key)
+        fields = dict(verdict=verdict, scope=scope, client_id=client_id,
+                      target_object=c.target_object,
+                      survivor_key=d.get("survivor_key"),
+                      member_keys=d.get("member_keys") or [],
+                      label=d.get("label"), note=d.get("note"),
+                      decided_by=getattr(user, "email", None),
+                      decided_at=datetime.utcnow(),
+                      promoted=bool(d.get("promote", verdict == "keep_all")))
+        if existing:
+            await existing.set(fields)
+        else:
+            await RowDecision(conversion_id=c.id, decision_key=key, **fields).insert()
+        saved += 1
+    return {"saved": saved}
+
+
+@output_router.delete("/{conversion_id}/decisions")
+async def clear_decisions(
+    conversion_id: str,
+    decision_key: str | None = Query(None),
+    _: User = Depends(get_current_user),
+):
+    """Undo one decision, or all of them for this conversion."""
+    from app.models.row_decision import RowDecision
+    c = await _require_conversion(conversion_id)
+    q = [RowDecision.conversion_id == c.id]
+    if decision_key:
+        q.append(RowDecision.decision_key == decision_key)
+    docs = await RowDecision.find(*q).to_list()
+    for d in docs:
+        await d.delete()
+    return {"cleared": len(docs)}
 
 
 @output_router.get("/{conversion_id}/cross-client-suggestions")

@@ -683,6 +683,91 @@ export interface OutputPreview {
   lineage: Record<string, { source_column: string | null; default_value?: string | null; rules: any[]; status: string; confidence: number }>;
 }
 
+// ─── Duplicate / cleansing review (row-level decisions) ───
+/** Verdicts the backend accepts for a duplicate cluster (RowDecision.DUP_VERDICTS). */
+export type DuplicateVerdict = "keep_survivor" | "merge" | "keep_all" | "exclude";
+/** Verdicts the backend accepts for a cleansing finding (RowDecision.CLEANSE_VERDICTS). */
+export type CleansingVerdict = "apply" | "ignore";
+
+export interface DuplicateMember {
+  row: number;
+  /** Stable identity hash — null when the row could not be keyed. */
+  key: string | null;
+  values: Record<string, string>;
+}
+
+export interface DuplicateDecision {
+  verdict: DuplicateVerdict;
+  survivor_key: string | null;
+  /** "learned" = carried over from an earlier conversion for this client + object. */
+  source: "conversion" | "learned";
+}
+
+export interface DuplicateCluster {
+  confidence: number;
+  size: number;
+  fields: string[];
+  /** AI adjudication (only present when the scan ran with use_ai=true). */
+  verdict?: "same" | "different" | "unsure";
+  ai_reason?: string;
+  cluster_key: string;
+  member_keys: string[];
+  decision: DuplicateDecision | null;
+  members: DuplicateMember[];
+}
+
+export interface DuplicateCandidates {
+  object?: string;
+  rows_scanned: number;
+  /** Plain column names in the happy path, may be absent on early-return branches. */
+  identity_fields: string[];
+  /** Always plain column names — prefer this for rendering member values. */
+  identity_columns?: string[];
+  anchor?: string;
+  cluster_count?: number;
+  duplicate_rows?: number;
+  truncated?: boolean;
+  note?: string;
+  ai_used?: boolean;
+  sources?: string[];
+  decided_count?: number;
+  undecided_count?: number;
+  clusters: DuplicateCluster[];
+}
+
+export interface CleansingFinding {
+  key: string;
+  category: string | null;
+  field_name: string | null;
+  issue_type: string | null;
+  severity: string;
+  message: string;
+  suggested_fix: string | null;
+  auto_fixable: boolean;
+  impacted_count: number;
+  verdict: CleansingVerdict | null;
+}
+
+export interface ReviewBundle {
+  conversion_id: string;
+  target_object: string | null;
+  cleansing: CleansingFinding[];
+  cleansing_open: number;
+  duplicate_decisions: number;
+}
+
+export interface DecisionInput {
+  scope: "duplicate" | "cleansing";
+  decision_key: string;
+  verdict: DuplicateVerdict | CleansingVerdict;
+  survivor_key?: string | null;
+  member_keys?: string[];
+  label?: string;
+  note?: string;
+  /** Reuse this verdict for the same client + object next time (defaults true for keep_all). */
+  promote?: boolean;
+}
+
 export interface LoadRun {
   id: number;
   conversion_id: number;

@@ -1,15 +1,70 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Download, FileOutput, FolderDown, Sparkles, Copy } from "lucide-react";
+import {
+  AlertTriangle, ArrowLeft, Copy, Download, FileOutput, FolderDown, RotateCcw, Sparkles, Wand2,
+} from "lucide-react";
 import { ConversionsApi, OutputApi } from "@/api";
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill, Tabs,
+  Button, Card, CardBody, EmptyState, Modal, PageLoader, PageTitle, Pill, Tabs,
 } from "@/components/ui/Primitives";
-import { confidenceTone } from "@/lib/utils";
+import { confidenceTone, severityTone } from "@/lib/utils";
 import type {
+  CleansingFinding,
+  CleansingVerdict,
   Conversion,
+  DecisionInput,
+  DuplicateCandidates,
+  DuplicateCluster,
+  DuplicateDecision,
+  DuplicateVerdict,
   OutputPreview,
+  ReviewBundle,
 } from "@/types";
+
+// ─── Decision vocabulary (mirrors RowDecision.DUP_VERDICTS on the backend) ───
+const DUP_LABEL: Record<DuplicateVerdict, string> = {
+  merge: "Merged into a golden record",
+  keep_survivor: "Keeping the nominated survivor only",
+  keep_all: "Keeping all — genuinely different",
+  exclude: "Excluded from the output",
+};
+const DUP_TONE: Record<DuplicateVerdict, "brand" | "success" | "danger" | "info"> = {
+  merge: "brand",
+  keep_survivor: "brand",
+  keep_all: "success",
+  exclude: "danger",
+};
+const NEEDS_SURVIVOR: DuplicateVerdict[] = ["merge", "keep_survivor"];
+const HIGH_CONFIDENCE = 0.95;
+const SEVERITY_ORDER = ["critical", "error", "warning", "info"];
+
+/** A cleansing finding key can repeat across issue rows — collapse to one card. */
+interface GroupedFinding extends CleansingFinding {
+  occurrences: number;
+}
+
+const errText = (e: unknown): string => {
+  const err = e as { response?: { data?: { detail?: unknown } }; message?: string };
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === "string" && detail) return detail;
+  return err?.message || "Something went wrong. Please try again.";
+};
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** Recompute the decided/undecided counters the generation gate reads. */
+const withCounts = (d: DuplicateCandidates, clusters: DuplicateCluster[]): DuplicateCandidates => {
+  const decided = clusters.filter(c => c.decision).length;
+  return { ...d, clusters, decided_count: decided, undecided_count: clusters.length - decided };
+};
+
+interface ConfirmState {
+  title: string;
+  body: React.ReactNode;
+  confirmLabel: string;
+  tone: "primary" | "danger";
+  onConfirm: () => void;
+}
 
 export const OutputPreviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -21,23 +76,62 @@ export const OutputPreviewPage: React.FC = () => {
   const [downloading, setDownloading] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
   // Fuzzy duplicate / entity resolution (loaded on demand when the tab opens).
-  const [dupes, setDupes] = useState<any>(null);
+  const [dupes, setDupes] = useState<DuplicateCandidates | null>(null);
   const [dupLoading, setDupLoading] = useState(false);
   const [dupAi, setDupAi] = useState(false);
+  const [dupError, setDupError] = useState<string | null>(null);
+  // Cleansing findings + the counters the generation gate warns on (cheap, load on mount).
+  const [review, setReview] = useState<ReviewBundle | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  // Per-cluster / per-finding UI state.
+  const [survivors, setSurvivors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [rowError, setRowError] = useState<Record<string, string>>({});
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  // A saved decision changes what generation would produce — the file on disk is stale.
+  const [decisionsDirty, setDecisionsDirty] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+
+  const setBusyKey = (key: string, on: boolean) =>
+    setBusy(prev => ({ ...prev, [key]: on }));
+  const setErrorKey = (key: string, msg: string | null) =>
+    setRowError(prev => {
+      const next = { ...prev };
+      if (msg) next[key] = msg; else delete next[key];
+      return next;
+    });
 
   const loadDupes = async (useAi = false) => {
+    if (!pid) return;
     setDupLoading(true);
+    setDupError(null);
     try {
-      setDupes(await OutputApi.duplicateCandidates(pid!, { useAi }));
-    } catch {
-      setDupes({ clusters: [], note: "Couldn't analyze duplicates — generate/preview the output first." });
+      setDupes(await OutputApi.duplicateCandidates(pid, { useAi }));
+    } catch (e) {
+      setDupes(null);
+      setDupError(
+        `Couldn't analyze duplicates — generate/preview the output first. (${errText(e)})`,
+      );
     } finally { setDupLoading(false); }
+  };
+
+  const loadReview = async (silent = false) => {
+    if (!pid) return;
+    if (!silent) setReviewLoading(true);
+    try {
+      setReview(await OutputApi.reviewBundle(pid));
+      setReviewError(null);
+    } catch (e) {
+      if (!silent) { setReview(null); setReviewError(errText(e)); }
+    } finally { if (!silent) setReviewLoading(false); }
   };
 
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      await OutputApi.download(pid, `${project?.template_name ?? "output"}.csv`);
+      await OutputApi.download(pid!, `${project?.template_name ?? "output"}.csv`);
     } catch {
       alert("No output file found — please generate output first.");
     } finally {
@@ -68,28 +162,617 @@ export const OutputPreviewPage: React.FC = () => {
 
   const refresh = async () => {
     setData(null);
-    OutputApi.preview(pid, 50).then(setData).catch(() => setData(null));
+    OutputApi.preview(pid!, 50).then(setData).catch(() => setData(null));
   };
 
   useEffect(() => {
     if (!pid) return;
     ConversionsApi.get(pid).then(setProject);
     refresh();
+    loadReview();
   }, [pid]);
 
-  const generate = async () => {
+  const runGenerate = async () => {
     setGenerating(true);
     try {
       // Async: kick off + poll until the artifact is ready (nothing blocks the
       // request thread, so heavy multi-sheet objects can't hit the gateway timeout).
-      await OutputApi.generateAndWait(pid, "csv");
+      await OutputApi.generateAndWait(pid!, "csv");
+      setDecisionsDirty(false);
       await refresh();
+      await loadReview(true);
     } catch (e: any) {
       alert(e?.message || "Couldn't generate the output. Please try again.");
     } finally { setGenerating(false); }
   };
 
+  // ─── Generation gate: warn (never block) when adjudication is still open ───
+  const undecidedDupes = dupes?.undecided_count ?? 0;
+  const openCleansing = review?.cleansing_open ?? 0;
+
+  const generate = () => {
+    if (undecidedDupes === 0 && openCleansing === 0) { void runGenerate(); return; }
+    const parts: string[] = [];
+    if (undecidedDupes > 0) parts.push(plural(undecidedDupes, "duplicate cluster"));
+    if (openCleansing > 0) parts.push(plural(openCleansing, "cleansing finding"));
+    const subject = parts.join(" and ");
+    const verb = (undecidedDupes > 0 && openCleansing > 0) || undecidedDupes > 1 || openCleansing > 1
+      ? "are" : "is";
+    setConfirm({
+      title: "Undecided review items",
+      confirmLabel: "Generate anyway",
+      tone: "primary",
+      body: (
+        <div className="space-y-2 text-sm text-ink-muted">
+          <p className="text-ink">{subject} {verb} undecided — generate anyway?</p>
+          <p>
+            Undecided duplicates are written out as-is (no merge, no exclusion) and undecided
+            cleansing fixes are not applied. You can decide them on the{" "}
+            <span className="font-medium">Duplicate suspects</span> and{" "}
+            <span className="font-medium">Cleansing</span> tabs and re-generate at any time.
+          </p>
+        </div>
+      ),
+      onConfirm: () => { setConfirm(null); void runGenerate(); },
+    });
+  };
+
+  // ─── Duplicate decisions (optimistic, reverted on error) ───
+  const patchCluster = (clusterKey: string, decision: DuplicateDecision | null) =>
+    setDupes(prev => prev
+      ? withCounts(prev, prev.clusters.map(c => c.cluster_key === clusterKey ? { ...c, decision } : c))
+      : prev);
+
+  const decideCluster = async (cl: DuplicateCluster, verdict: DuplicateVerdict) => {
+    if (!pid) return;
+    const survivor = survivors[cl.cluster_key] ?? cl.decision?.survivor_key ?? null;
+    if (NEEDS_SURVIVOR.includes(verdict) && !survivor) {
+      setErrorKey(cl.cluster_key, "Nominate which record survives first.");
+      return;
+    }
+    const survivorKey = NEEDS_SURVIVOR.includes(verdict) ? survivor : null;
+    const previous = cl.decision;
+    setErrorKey(cl.cluster_key, null);
+    setBusyKey(cl.cluster_key, true);
+    patchCluster(cl.cluster_key, { verdict, survivor_key: survivorKey, source: "conversion" });
+    try {
+      await OutputApi.saveDecisions(pid, [{
+        scope: "duplicate",
+        decision_key: cl.cluster_key,
+        verdict,
+        survivor_key: survivorKey,
+        member_keys: cl.member_keys,
+        label: cl.fields.join(", "),
+      }]);
+      setDecisionsDirty(true);
+      void loadReview(true);
+    } catch (e) {
+      patchCluster(cl.cluster_key, previous);
+      setErrorKey(cl.cluster_key, errText(e));
+    } finally { setBusyKey(cl.cluster_key, false); }
+  };
+
+  const undoCluster = async (cl: DuplicateCluster) => {
+    if (!pid) return;
+    const previous = cl.decision;
+    setErrorKey(cl.cluster_key, null);
+    setBusyKey(cl.cluster_key, true);
+    patchCluster(cl.cluster_key, null);
+    try {
+      await OutputApi.clearDecisions(pid, cl.cluster_key);
+      setDecisionsDirty(true);
+      void loadReview(true);
+    } catch (e) {
+      patchCluster(cl.cluster_key, previous);
+      setErrorKey(cl.cluster_key, errText(e));
+    } finally { setBusyKey(cl.cluster_key, false); }
+  };
+
+  const highConfidenceTargets = useMemo(
+    () => (dupes?.clusters ?? []).filter(c => c.confidence >= HIGH_CONFIDENCE && !c.decision),
+    [dupes],
+  );
+
+  const mergeHighConfidence = async (targets: DuplicateCluster[]) => {
+    if (!pid || targets.length === 0) return;
+    const snapshot = new Map(targets.map(c => [c.cluster_key, c.decision] as const));
+    setBulkError(null);
+    setBulkBusy(true);
+    const payload: DecisionInput[] = targets.map(c => ({
+      scope: "duplicate",
+      decision_key: c.cluster_key,
+      verdict: "merge",
+      survivor_key: survivors[c.cluster_key] ?? null,
+      member_keys: c.member_keys,
+      label: c.fields.join(", "),
+    }));
+    setDupes(prev => prev ? withCounts(prev, prev.clusters.map(c => snapshot.has(c.cluster_key)
+      ? { ...c, decision: { verdict: "merge", survivor_key: survivors[c.cluster_key] ?? null, source: "conversion" } }
+      : c)) : prev);
+    try {
+      await OutputApi.saveDecisions(pid, payload);
+      setDecisionsDirty(true);
+      void loadReview(true);
+    } catch (e) {
+      setDupes(prev => prev ? withCounts(prev, prev.clusters.map(c => snapshot.has(c.cluster_key)
+        ? { ...c, decision: snapshot.get(c.cluster_key) ?? null } : c)) : prev);
+      setBulkError(errText(e));
+    } finally { setBulkBusy(false); }
+  };
+
+  const clearAllDecisions = async () => {
+    if (!pid) return;
+    const snapshot = dupes?.clusters ?? [];
+    setBulkError(null);
+    setBulkBusy(true);
+    // Verdicts learned from an earlier conversion are not this conversion's to clear.
+    setDupes(prev => prev ? withCounts(prev, prev.clusters.map(c =>
+      c.decision?.source === "conversion" ? { ...c, decision: null } : c)) : prev);
+    try {
+      await OutputApi.clearDecisions(pid);
+      setDecisionsDirty(true);
+      await loadReview(true);
+    } catch (e) {
+      setDupes(prev => prev ? withCounts(prev, prev.clusters.map(c => {
+        const before = snapshot.find(s => s.cluster_key === c.cluster_key);
+        return before ? { ...c, decision: before.decision } : c;
+      })) : prev);
+      setBulkError(errText(e));
+    } finally { setBulkBusy(false); }
+  };
+
+  // ─── Cleansing decisions ───
+  const patchFinding = (key: string, verdict: CleansingVerdict | null) =>
+    setReview(prev => {
+      if (!prev) return prev;
+      const cleansing = prev.cleansing.map(f => f.key === key ? { ...f, verdict } : f);
+      return { ...prev, cleansing, cleansing_open: cleansing.filter(f => !f.verdict).length };
+    });
+
+  const decideFinding = async (f: GroupedFinding, verdict: CleansingVerdict | null) => {
+    if (!pid) return;
+    const previous = f.verdict;
+    setErrorKey(f.key, null);
+    setBusyKey(f.key, true);
+    patchFinding(f.key, verdict);
+    try {
+      if (verdict === null) {
+        await OutputApi.clearDecisions(pid, f.key);
+      } else {
+        await OutputApi.saveDecisions(pid, [{
+          scope: "cleansing", decision_key: f.key, verdict,
+          label: f.field_name ?? f.issue_type ?? undefined,
+        }]);
+      }
+      setDecisionsDirty(true);
+    } catch (e) {
+      patchFinding(f.key, previous);
+      setErrorKey(f.key, errText(e));
+    } finally { setBusyKey(f.key, false); }
+  };
+
+  /** Identity column names — identity_columns is always plain strings; identity_fields
+   *  can arrive as objects on the scanner's early-return branches, so filter it. */
+  const idCols: string[] = useMemo(() => {
+    const cols = dupes?.identity_columns?.length ? dupes.identity_columns : (dupes?.identity_fields ?? []);
+    return cols.filter((c): c is string => typeof c === "string");
+  }, [dupes]);
+
+  const cleansingGroups = useMemo(() => {
+    const byKey = new Map<string, GroupedFinding>();
+    for (const f of review?.cleansing ?? []) {
+      const seen = byKey.get(f.key);
+      if (seen) {
+        seen.occurrences += 1;
+        seen.impacted_count += f.impacted_count ?? 0;
+      } else {
+        byKey.set(f.key, { ...f, occurrences: 1 });
+      }
+    }
+    const all = [...byKey.values()];
+    const buckets = SEVERITY_ORDER
+      .map(sev => ({ severity: sev, items: all.filter(f => (f.severity || "").toLowerCase() === sev) }))
+      .filter(b => b.items.length > 0);
+    const other = all.filter(f => !SEVERITY_ORDER.includes((f.severity || "").toLowerCase()));
+    if (other.length) buckets.push({ severity: "other", items: other });
+    return buckets;
+  }, [review]);
+
+  const cleansingCount = useMemo(
+    () => cleansingGroups.reduce((n, b) => n + b.items.length, 0), [cleansingGroups]);
+
   if (!project) return <PageLoader />;
+
+  // ─── Tab renderers ───
+  const renderData = (d: OutputPreview) => (
+    d.columns.length === 0 ? (
+      <CardBody><EmptyState
+        title="No converted output yet"
+        description="Approve at least one mapping then click Re-generate."
+      /></CardBody>
+    ) : (
+      <div className="overflow-x-auto">
+        <table className="table-shell">
+          <thead>
+            <tr>
+              <th>#</th>
+              {d.columns.map(c => <th key={c} className="whitespace-nowrap">{c}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {d.rows.map((row, i) => (
+              <tr key={i}>
+                <td className="text-ink-muted">{i + 1}</td>
+                {d.columns.map(col => (
+                  <td key={col} className="whitespace-nowrap text-ink-muted">{String(row[col] ?? "")}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  );
+
+  const renderLineage = (d: OutputPreview) => (
+    <table className="table-shell">
+      <thead>
+        <tr>
+          <th>Target Field</th><th>Source Column</th>
+          <th>Default</th><th>Rules Applied</th>
+          <th>Confidence</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {Object.entries(d.lineage).map(([target, lin]) => {
+          const tone = confidenceTone(lin.confidence);
+          return (
+            <tr key={target}>
+              <td className="font-medium">{target}</td>
+              <td>{lin.source_column ? <code className="rounded bg-canvas px-1.5 py-0.5 text-[12px]">{lin.source_column}</code> : <span className="text-ink-subtle">— (default)</span>}</td>
+              <td className="text-ink-muted">{lin.default_value || "—"}</td>
+              <td>
+                {(lin.rules || []).length === 0 ? <span className="text-ink-subtle">—</span> : (
+                  <div className="flex flex-wrap gap-1">
+                    {(lin.rules || []).map((r: any, i: number) =>
+                      <Pill key={i} tone="brand">{r.rule_type}</Pill>)}
+                  </div>
+                )}
+              </td>
+              <td className="font-mono text-xs tabular-nums">
+                <span className={
+                  tone === "success" ? "text-success" :
+                  tone === "warning" ? "text-warning" : "text-danger"
+                }>{Math.round(lin.confidence * 100)}%</span>
+              </td>
+              <td><Pill tone={lin.status === "approved" ? "success" : "neutral"}>{lin.status}</Pill></td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+
+  const renderCluster = (cl: DuplicateCluster) => {
+    const chosen = survivors[cl.cluster_key] ?? cl.decision?.survivor_key ?? null;
+    const working = !!busy[cl.cluster_key];
+    const err = rowError[cl.cluster_key];
+    const decision = cl.decision;
+    const learned = decision?.source === "learned";
+    return (
+      <div key={cl.cluster_key} className="rounded-lg border border-line bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Pill tone={cl.confidence >= 0.92 ? "danger" : cl.confidence >= 0.8 ? "warning" : "neutral"}>
+              {Math.round(cl.confidence * 100)}% match
+            </Pill>
+            <span className="text-xs text-ink-muted">{plural(cl.size, "record")}</span>
+            {cl.verdict && (
+              <Pill tone={cl.verdict === "same" ? "danger" : cl.verdict === "different" ? "success" : "neutral"}>
+                AI: {cl.verdict}
+              </Pill>
+            )}
+            {decision && (
+              <Pill tone={learned ? "info" : DUP_TONE[decision.verdict]}>
+                {DUP_LABEL[decision.verdict]}
+                {learned ? " · learned from an earlier run" : " · decided here"}
+              </Pill>
+            )}
+          </div>
+          <span className="text-[11px] text-ink-subtle">on {cl.fields.join(", ")}</span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="table-shell">
+            <thead>
+              <tr>
+                <th className="whitespace-nowrap">Survivor</th>
+                <th>Row</th>
+                {idCols.map(f => <th key={f} className="whitespace-nowrap">{f}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {cl.members.map(m => {
+                const isSurvivor = !!m.key && m.key === chosen;
+                return (
+                  <tr key={`${cl.cluster_key}-${m.row}`} className={isSurvivor ? "bg-brand-subtle/60" : undefined}>
+                    <td>
+                      <label className="flex items-center gap-1.5 text-[11px] text-ink-muted">
+                        <input
+                          type="radio"
+                          name={`survivor-${cl.cluster_key}`}
+                          className="h-3.5 w-3.5 accent-brand"
+                          checked={isSurvivor}
+                          disabled={!m.key || working}
+                          onChange={() => {
+                            if (!m.key) return;
+                            setSurvivors(prev => ({ ...prev, [cl.cluster_key]: m.key as string }));
+                            setErrorKey(cl.cluster_key, null);
+                          }}
+                        />
+                        {isSurvivor ? <span className="font-medium text-brand-dark">keep</span> : null}
+                      </label>
+                    </td>
+                    <td className="text-ink-muted">{m.row + 1}</td>
+                    {idCols.map(f => (
+                      <td key={f} className="whitespace-nowrap">{String(m.values?.[f] ?? "")}</td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {cl.ai_reason && (
+          <div className="border-t border-line px-3 py-1.5 text-[11px] text-ink-muted">
+            <Sparkles className="mr-1 inline h-3 w-3" />{cl.ai_reason}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-line bg-canvas px-3 py-2">
+          <Button variant="primary" disabled={!chosen || working}
+                  title={chosen ? undefined : "Nominate a survivor first"}
+                  onClick={() => void decideCluster(cl, "merge")}>
+            Merge
+          </Button>
+          <Button variant="secondary" disabled={!chosen || working}
+                  title={chosen ? undefined : "Nominate a survivor first"}
+                  onClick={() => void decideCluster(cl, "keep_survivor")}>
+            Keep survivor only
+          </Button>
+          <Button variant="secondary" disabled={working}
+                  onClick={() => void decideCluster(cl, "keep_all")}>
+            Keep all
+          </Button>
+          <Button variant="danger" disabled={working}
+                  onClick={() => void decideCluster(cl, "exclude")}>
+            Exclude all
+          </Button>
+          {/* A learned verdict lives on the earlier conversion — there is nothing to
+              undo here; deciding this cluster overrides it for this run instead. */}
+          {decision && !learned && (
+            <Button variant="ghost" disabled={working} onClick={() => void undoCluster(cl)}>
+              <RotateCcw className="h-4 w-4" /> Undo
+            </Button>
+          )}
+          {learned && (
+            <span className="text-[11px] text-ink-subtle">
+              Carried over from an earlier run — pick an action to override it here.
+            </span>
+          )}
+          {!chosen && !learned && (
+            <span className="text-[11px] text-ink-subtle">
+              Pick a survivor to enable Merge / Keep survivor only.
+            </span>
+          )}
+          {err && <span className="text-[11px] font-medium text-danger">{err}</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const renderDupes = () => (
+    <CardBody>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <p className="max-w-2xl text-xs text-ink-muted">
+          Records likely to be the <span className="font-medium">same entity</span> despite different keys/names —
+          what the exact-key de-duplication can't catch.
+          {dupes?.anchor && <> Matched on <code className="rounded bg-canvas px-1 py-0.5">{dupes.anchor}</code> + identity fields.</>}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => void loadDupes(false)} loading={dupLoading}>
+            <Copy className="h-4 w-4" /> Re-scan
+          </Button>
+          <Button variant="secondary" onClick={() => { setDupAi(true); void loadDupes(true); }} loading={dupLoading && dupAi}>
+            <Sparkles className="h-4 w-4" /> Adjudicate with AI
+          </Button>
+        </div>
+      </div>
+
+      {dupLoading ? <PageLoader /> : !dupes || dupes.clusters.length === 0 ? (
+        <EmptyState
+          title="No likely duplicates found"
+          description={dupError || dupes?.note
+            || `Scanned ${dupes?.rows_scanned ?? 0} records — no near-duplicate entities above the match threshold.`}
+        />
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
+            <Pill tone="warning">{plural(dupes.cluster_count ?? dupes.clusters.length, "suspected group")}</Pill>
+            <Pill tone="neutral">{plural(dupes.duplicate_rows ?? 0, "record")}</Pill>
+            <Pill tone="neutral">{dupes.rows_scanned} scanned</Pill>
+            <Pill tone="success">{dupes.decided_count ?? 0} decided</Pill>
+            <Pill tone={undecidedDupes > 0 ? "danger" : "neutral"}>{undecidedDupes} undecided</Pill>
+            {dupes.ai_used && <Pill tone="brand">AI-adjudicated</Pill>}
+          </div>
+
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-canvas px-3 py-2">
+            <Button
+              variant="secondary"
+              loading={bulkBusy}
+              disabled={highConfidenceTargets.length === 0}
+              onClick={() => setConfirm({
+                title: "Merge all high-confidence groups",
+                confirmLabel: `Merge ${highConfidenceTargets.length}`,
+                tone: "primary",
+                body: (
+                  <div className="space-y-2 text-sm text-ink-muted">
+                    <p className="text-ink">
+                      {plural(highConfidenceTargets.length, "undecided group")} at {Math.round(HIGH_CONFIDENCE * 100)}% match or
+                      above will be merged into a golden record.
+                    </p>
+                    <p>
+                      Groups where you nominated a survivor keep that record as the base; the rest
+                      collapse field-by-field (first non-blank value wins). Groups you already decided
+                      are left untouched. You can undo any of them afterwards.
+                    </p>
+                  </div>
+                ),
+                onConfirm: () => { setConfirm(null); void mergeHighConfidence(highConfidenceTargets); },
+              })}
+            >
+              <Wand2 className="h-4 w-4" /> Merge all high-confidence (≥{Math.round(HIGH_CONFIDENCE * 100)}%)
+              {highConfidenceTargets.length > 0 && ` · ${highConfidenceTargets.length}`}
+            </Button>
+            <Button
+              variant="ghost"
+              loading={bulkBusy}
+              onClick={() => setConfirm({
+                title: "Clear all decisions",
+                confirmLabel: "Clear everything",
+                tone: "danger",
+                body: (
+                  <div className="space-y-2 text-sm text-ink-muted">
+                    <p className="text-ink">
+                      Every duplicate and cleansing decision recorded on this conversion will be deleted.
+                    </p>
+                    <p>
+                      Verdicts learned from an earlier run for this client + object stay in place —
+                      they belong to that run, not this one.
+                    </p>
+                  </div>
+                ),
+                onConfirm: () => { setConfirm(null); void clearAllDecisions(); },
+              })}
+            >
+              <RotateCcw className="h-4 w-4" /> Clear all decisions
+            </Button>
+            {bulkError && <span className="text-[11px] font-medium text-danger">{bulkError}</span>}
+          </div>
+
+          <div className="space-y-3">{dupes.clusters.map(renderCluster)}</div>
+        </>
+      )}
+    </CardBody>
+  );
+
+  const renderCleansing = () => (
+    <CardBody>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <p className="max-w-2xl text-xs text-ink-muted">
+          Data-quality findings raised against this interface. <span className="font-medium">Apply</span> lets the
+          suggested fix run at generation time; <span className="font-medium">Ignore</span> records that the value is
+          correct as-is. Anything left undecided is carried through untouched.
+        </p>
+        <Button variant="secondary" onClick={() => void loadReview()} loading={reviewLoading}>
+          <Copy className="h-4 w-4" /> Refresh
+        </Button>
+      </div>
+
+      {reviewLoading ? <PageLoader /> : reviewError ? (
+        <EmptyState title="Couldn't load the review bundle" description={reviewError} />
+      ) : cleansingCount === 0 ? (
+        <EmptyState
+          title="No cleansing findings"
+          description="Nothing has been flagged for this interface — run validation to re-check."
+        />
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
+            <Pill tone="neutral">{plural(cleansingCount, "finding")}</Pill>
+            <Pill tone={openCleansing > 0 ? "warning" : "success"}>{openCleansing} undecided</Pill>
+            <Pill tone="neutral">{plural(review?.duplicate_decisions ?? 0, "duplicate decision")}</Pill>
+          </div>
+
+          <div className="space-y-4">
+            {cleansingGroups.map(group => (
+              <div key={group.severity}>
+                <div className="mb-2 flex items-center gap-2">
+                  <Pill tone={severityTone(group.severity)}>{group.severity}</Pill>
+                  <span className="text-[11px] text-ink-subtle">{plural(group.items.length, "finding")}</span>
+                </div>
+                <div className="space-y-2">
+                  {group.items.map(f => {
+                    const working = !!busy[f.key];
+                    const err = rowError[f.key];
+                    return (
+                      <div key={f.key} className="rounded-lg border border-line bg-white px-3 py-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-ink">
+                                {f.field_name || f.category || "Record"}
+                              </span>
+                              {f.issue_type && <Pill tone="neutral">{f.issue_type}</Pill>}
+                              {f.auto_fixable && <Pill tone="brand">auto-fixable</Pill>}
+                              {f.occurrences > 1 && <Pill tone="neutral">{f.occurrences} findings</Pill>}
+                              <span className="text-[11px] text-ink-subtle">
+                                {plural(f.impacted_count ?? 0, "row")} impacted
+                              </span>
+                              {f.verdict && (
+                                <Pill tone={f.verdict === "apply" ? "success" : "neutral"}>
+                                  {f.verdict === "apply" ? "Fix will be applied" : "Ignored"}
+                                </Pill>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs text-ink-muted">{f.message}</p>
+                            {f.suggested_fix && (
+                              <p className="mt-1 text-xs text-ink-muted">
+                                <span className="font-medium text-ink">Suggested fix:</span>{" "}
+                                <code className="rounded bg-canvas px-1 py-0.5 text-[11px]">{f.suggested_fix}</code>
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <Button
+                              variant={f.verdict === "apply" ? "primary" : "secondary"}
+                              disabled={working}
+                              onClick={() => void decideFinding(f, "apply")}
+                            >Apply</Button>
+                            <Button
+                              variant={f.verdict === "ignore" ? "primary" : "secondary"}
+                              disabled={working}
+                              onClick={() => void decideFinding(f, "ignore")}
+                            >Ignore</Button>
+                            {f.verdict && (
+                              <Button variant="ghost" disabled={working}
+                                      onClick={() => void decideFinding(f, null)}>
+                                <RotateCcw className="h-4 w-4" /> Undo
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                        {err && <div className="mt-1 text-[11px] font-medium text-danger">{err}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </CardBody>
+  );
+
+  const renderTab = () => {
+    if (tab === "dupes") return renderDupes();
+    if (tab === "cleansing") return renderCleansing();
+    if (data === null) return <PageLoader />;
+    if (tab === "data") return renderData(data);
+    return renderLineage(data);
+  };
 
   return (
     <>
@@ -112,150 +795,54 @@ export const OutputPreviewPage: React.FC = () => {
         </>}
       />
 
+      {decisionsDirty && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning bg-warning-subtle px-4 py-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <div>
+              <div className="text-sm font-semibold text-ink">
+                Decisions changed since this file was generated — re-generate
+              </div>
+              <div className="text-xs text-ink-muted">
+                The file on disk still reflects the previous duplicate/cleansing verdicts.
+                Download will hand out stale data until you re-generate.
+              </div>
+            </div>
+          </div>
+          <Button variant="primary" onClick={generate} loading={generating}>
+            <FileOutput className="h-4 w-4" /> Re-generate now
+          </Button>
+        </div>
+      )}
+
       <Card>
         <Tabs
           value={tab}
-          onChange={(v) => { setTab(v); if (v === "dupes" && dupes === null) loadDupes(false); }}
+          onChange={(v) => { setTab(v); if (v === "dupes" && dupes === null && !dupError) void loadDupes(false); }}
           items={[
             { value: "data", label: "Converted Data", count: data?.total_rows },
             { value: "lineage", label: "Lineage", count: data ? Object.keys(data.lineage).length : 0 },
             { value: "dupes", label: "Duplicate suspects", count: dupes?.cluster_count },
+            { value: "cleansing", label: "Cleansing", count: cleansingCount },
           ]}
         />
-        {tab === "dupes" ? (
-          <CardBody>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-xs text-ink-muted">
-                Records likely to be the <span className="font-medium">same entity</span> despite different keys/names —
-                what the exact-key de-duplication can't catch.
-                {dupes?.anchor && <> Matched on <code className="rounded bg-canvas px-1 py-0.5">{dupes.anchor}</code> + identity fields.</>}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button variant="secondary" onClick={() => loadDupes(false)} loading={dupLoading}>
-                  <Copy className="h-4 w-4" /> Re-scan
-                </Button>
-                <Button variant="secondary" onClick={() => { setDupAi(true); loadDupes(true); }} loading={dupLoading && dupAi}>
-                  <Sparkles className="h-4 w-4" /> Adjudicate with AI
-                </Button>
-              </div>
-            </div>
-            {dupLoading ? <PageLoader /> : !dupes || !(dupes.clusters?.length) ? (
-              <EmptyState
-                title="No likely duplicates found"
-                description={dupes?.note || `Scanned ${dupes?.rows_scanned ?? 0} records — no near-duplicate entities above the match threshold.`}
-              />
-            ) : (
-              <>
-                <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
-                  <Pill tone="warning">{dupes.cluster_count} suspected group{dupes.cluster_count === 1 ? "" : "s"}</Pill>
-                  <Pill tone="neutral">{dupes.duplicate_rows} records</Pill>
-                  <Pill tone="neutral">{dupes.rows_scanned} scanned</Pill>
-                  {dupes.ai_used && <Pill tone="brand">AI-adjudicated</Pill>}
-                </div>
-                <div className="space-y-3">
-                  {dupes.clusters.map((cl: any, i: number) => (
-                    <div key={i} className="rounded-lg border border-line bg-white">
-                      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <Pill tone={cl.confidence >= 0.92 ? "danger" : cl.confidence >= 0.8 ? "warning" : "neutral"}>
-                            {Math.round(cl.confidence * 100)}% match
-                          </Pill>
-                          <span className="text-xs text-ink-muted">{cl.size} records</span>
-                          {cl.verdict && <Pill tone={cl.verdict === "same" ? "danger" : cl.verdict === "different" ? "success" : "neutral"}>AI: {cl.verdict}</Pill>}
-                        </div>
-                        <span className="text-[11px] text-ink-subtle">on {cl.fields.join(", ")}</span>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="table-shell">
-                          <thead><tr><th>Row</th>{(dupes.identity_fields || []).map((f: string) => <th key={f} className="whitespace-nowrap">{f}</th>)}</tr></thead>
-                          <tbody>
-                            {cl.members.map((m: any) => (
-                              <tr key={m.row}>
-                                <td className="text-ink-muted">{m.row + 1}</td>
-                                {(dupes.identity_fields || []).map((f: string) => (
-                                  <td key={f} className="whitespace-nowrap">{String(m.values[f] ?? "")}</td>
-                                ))}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      {cl.ai_reason && <div className="border-t border-line px-3 py-1.5 text-[11px] text-ink-muted"><Sparkles className="mr-1 inline h-3 w-3" />{cl.ai_reason}</div>}
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </CardBody>
-        ) : data === null ? <PageLoader /> :
-          tab === "data" ? (
-            data.columns.length === 0 ? (
-              <CardBody><EmptyState
-                title="No converted output yet"
-                description="Approve at least one mapping then click Re-generate."
-              /></CardBody>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="table-shell">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      {data.columns.map(c => <th key={c} className="whitespace-nowrap">{c}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.rows.map((row, i) => (
-                      <tr key={i}>
-                        <td className="text-ink-muted">{i + 1}</td>
-                        {data.columns.map(col => (
-                          <td key={col} className="whitespace-nowrap text-ink-muted">{String(row[col] ?? "")}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          ) : (
-            <table className="table-shell">
-              <thead>
-                <tr>
-                  <th>Target Field</th><th>Source Column</th>
-                  <th>Default</th><th>Rules Applied</th>
-                  <th>Confidence</th><th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(data.lineage).map(([target, lin]) => {
-                  const tone = confidenceTone(lin.confidence);
-                  return (
-                    <tr key={target}>
-                      <td className="font-medium">{target}</td>
-                      <td>{lin.source_column ? <code className="rounded bg-canvas px-1.5 py-0.5 text-[12px]">{lin.source_column}</code> : <span className="text-ink-subtle">— (default)</span>}</td>
-                      <td className="text-ink-muted">{lin.default_value || "—"}</td>
-                      <td>
-                        {(lin.rules || []).length === 0 ? <span className="text-ink-subtle">—</span> : (
-                          <div className="flex flex-wrap gap-1">
-                            {(lin.rules || []).map((r: any, i: number) =>
-                              <Pill key={i} tone="brand">{r.rule_type}</Pill>)}
-                          </div>
-                        )}
-                      </td>
-                      <td className="font-mono text-xs tabular-nums">
-                        <span className={
-                          tone === "success" ? "text-success" :
-                          tone === "warning" ? "text-warning" : "text-danger"
-                        }>{Math.round(lin.confidence * 100)}%</span>
-                      </td>
-                      <td><Pill tone={lin.status === "approved" ? "success" : "neutral"}>{lin.status}</Pill></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )
-        }
+        {renderTab()}
       </Card>
+
+      <Modal
+        open={!!confirm}
+        onClose={() => setConfirm(null)}
+        title={confirm?.title ?? ""}
+        size="sm"
+        footer={<>
+          <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
+          <Button variant={confirm?.tone ?? "primary"} onClick={() => confirm?.onConfirm()}>
+            {confirm?.confirmLabel ?? "Confirm"}
+          </Button>
+        </>}
+      >
+        {confirm?.body}
+      </Modal>
     </>
   );
 };

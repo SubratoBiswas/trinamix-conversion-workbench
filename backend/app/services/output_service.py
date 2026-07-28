@@ -360,6 +360,32 @@ async def build_converted_dataframe(
             src = src.head(max_rows)
         out_df, lineage = await _convert_source(src)
 
+    # ── User duplicate/cleansing decisions ───────────────────────────────────
+    # Applied HERE, on the assembled frame, because this is the single point every
+    # writer reads from: the CSV bundle, the plain xlsx, the filled Oracle template
+    # and both project-level zip downloads all branch off `out_df`. Runs AFTER
+    # automatic de-duplication (the user is adjudicating what that left behind) and
+    # BEFORE LOV enforcement and the DQ report, so the report describes the file
+    # that actually ships.
+    from app.services.decision_service import apply_conversion_decisions
+    out_df = await apply_conversion_decisions(
+        out_df, conversion,
+        (template.business_object if template else None) or conversion.target_object)
+
+    # Per-interface-sheet frames follow the same decisions. A multi-source
+    # conversion routes some sheets to their own source frame via `_frame_for`, so
+    # filtering only the merged frame would leave excluded suppliers alive on the
+    # Address and Site sheets — a partially-applied decision is a data-integrity
+    # bug, not a cosmetic one.
+    if collect_frames:
+        _obj = (template.business_object if template else None) or conversion.target_object
+        for _k, _v in list(collect_frames.items()):
+            # Each entry is (converted_frame, source_column_names) — the second
+            # element drives sheet routing and must be preserved as-is.
+            _f, _cols = _v
+            collect_frames[_k] = (
+                await apply_conversion_decisions(_f, conversion, _obj), _cols)
+
     # Coded (LOV) columns last, on the assembled (merged) frame so the audit counts
     # distinct values across the whole file. Row-local, so it stays chunk-safe.
     if fields:
@@ -603,19 +629,27 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
             continue
         keyc = key.replace(" ", "")
         if keyc in _SEQ_FIELDS:
-            if keyc in _SEQ_PREFER_SOURCE:
-                # Supplier number: keep the mapped legacy "Number" where present,
-                # only auto-number the rows the source left blank.
-                cur = df[col].astype(str).str.strip()
-                blanks = {"", "nan", "none", "null", "na", "<na>"}
-                df[col] = [
-                    cur.iat[i] if cur.iat[i].lower() not in blanks else str(seq_start + i)
-                    for i in range(n)
-                ]
-            else:
-                # Running key column — authoritative: Fusion needs a clean
-                # sequential id, not whatever source column auto-map guessed.
-                df[col] = [str(seq_start + i) for i in range(n)]
+            # NEVER invent a key. Keep whatever the source mapped; leave the rest
+            # BLANK so Fusion assigns its own on the CREATE load.
+            #
+            # These columns used to be back-filled with a running 100000, 100001…
+            # sequence whenever the source left them empty. Three things went wrong:
+            #   * the NetSuite extract leaves Supplier Number empty on every row, so
+            #     EVERY supplier got a fabricated number, which would have become its
+            #     permanent Fusion supplier number with no link to the legacy system;
+            #   * these are the de-dup business keys, so handing every row a distinct
+            #     value made genuine duplicates look unique and the golden-record
+            #     collapse could never fire;
+            #   * reviewers saw five "3X Motion Technologies" rows numbered
+            #     100005-100009 and reasonably read them as five different suppliers.
+            # Analyst 28-Jul: "due to that number we have so many duplicate fields,
+            # please do not generate it if its not mapped" and "same for other auto
+            # generated fields as well, if there is no input in the tool or no
+            # mapping, do not generate auto number."
+            cur = df[col].astype(str).str.strip()
+            _blanks = {"", "nan", "none", "null", "na", "<na>"}
+            df[col] = ["" if cur.iat[i].lower() in _blanks else cur.iat[i]
+                       for i in range(n)]
         elif key in _AUTHORITATIVE and key not in explicitly_mapped:
             # Gold-constant control field — write the standard value, overriding a
             # wrong AUTO-MAPPED source guess. Skipped when the analyst explicitly
