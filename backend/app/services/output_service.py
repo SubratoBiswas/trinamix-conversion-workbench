@@ -22,6 +22,7 @@ from app.models.transformation import TransformationRule
 from app.parsers import parse_tabular
 from app.services.learning_service import REFERENCE_KEY_FIELDS
 from app.transformations import apply_pipeline
+from app.services.strategy_overlay import directive_for as _strategy_directive
 
 
 async def _get_reference_standards(target_object: str | None) -> dict:
@@ -76,7 +77,7 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
 
 def _transform_frame(
     src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
-    context_cols: set[str] | None = None,
+    context_cols: set[str] | None = None, target_object: str | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -158,9 +159,27 @@ def _transform_frame(
             ]
         else:
             col_values = [dv or ""] * n_rows
+        # ── Strategy overlay (write-time guarantee) ──────────────────────
+        # Seeded learnings demonstrably did NOT reach the output — see
+        # strategy_overlay for the evidence. Enforce the analyst rules here,
+        # after mapping, where nothing downstream can undo them.
+        _ov = _strategy_directive(target_object, tgt.field_name)
+        if _ov:
+            if _ov.get("blank"):
+                col_values = [""] * n_rows
+            elif "constant" in _ov:
+                cv = _ov["constant"]
+                col_values = ([v if str(v).strip() else cv for v in col_values]
+                              if _ov.get("fill_blank_only") else [cv] * n_rows)
+            elif "rule" in _ov:
+                if records is None:
+                    records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
+                col_values = [apply_pipeline([_ov["rule"]], col_values[i], row=records[i])
+                              for i in range(n_rows)]
         out_cols[tgt.field_name] = col_values
         lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
-                                   "rules": rules, "status": m.status, "confidence": m.confidence}
+                                   "rules": rules, "status": m.status, "confidence": m.confidence,
+                                   "strategy_overlay": bool(_ov)}
     return pd.DataFrame(out_cols), lineage
 
 
@@ -254,6 +273,12 @@ async def build_converted_dataframe(
         mappings,
         key=lambda m: (fields_by_id.get(m.target_field_id).sequence if fields_by_id.get(m.target_field_id) else 0),
     )
+    # Object name used to resolve the write-time strategy overlay. Prefer the
+    # template's business object (the precise interface, e.g. "Supplier Address")
+    # and fall back to the conversion's own target object.
+    _tpl_ov = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+    _obj_name_for_overlay = ((_tpl_ov.business_object if _tpl_ov else None)
+                             or getattr(conversion, "target_object", None) or "")
 
     async def _convert_source(src: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         """Prune to the mapped/referenced columns, then chunk-transform ONE source
@@ -268,13 +293,15 @@ async def build_converted_dataframe(
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
-                _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols)
+                _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
+                _obj_name_for_overlay)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
             odf, lin = await asyncio.to_thread(
-                _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols)
+                _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
+                _obj_name_for_overlay)
             parts.append(odf)
             if not lin0:
                 lin0 = lin
