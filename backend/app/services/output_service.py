@@ -569,8 +569,10 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                                    include_header: bool | None = None,
                                    merged_df: "pd.DataFrame | None" = None) -> ConvertedOutput:
-    """``include_header``: None = auto (supplier CSVs headerless per the Oracle load
-    format, every other object keeps its column-label row); True/False = the user's
+    """``include_header``: None = auto, decided by FORMAT rather than by object —
+    the filled Oracle Excel templates keep their column-label row, and CSV/zip
+    output is headerless because that is what the FBDI loader expects (a header
+    line is read as data and rejects the first record). True/False = the user's
     explicit toggle, forcing headers on/off for every sheet of this output.
 
     ``merged_df``: when provided, this ALREADY-BUILT frame is written instead of
@@ -920,9 +922,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         total_cols = 0
         multi = bool(sheets_with_fields)
         _ref_cache = _cust_ref()
-        # Header row inclusion. User toggle wins; otherwise auto — supplier FBDI
-        # load files are headerless (data only), every other object keeps headers.
-        _hdr = include_header if include_header is not None else (not _is_supplier)
+        # Header row inclusion. The user toggle always wins. Otherwise the default
+        # follows the FORMAT, not the object: an Excel/filled-template download is
+        # for humans and keeps its header row, while CSV (and the zipped CSV
+        # bundle) is the machine-readable FBDI load file and must be headerless —
+        # Oracle reads a header line as a data row and rejects it. Previously this
+        # keyed off _is_supplier, so non-supplier objects shipped CSVs WITH a
+        # header and had to be hand-edited before loading.
+        _hdr = include_header if include_header is not None else fmt in ("xlsx", "template")
 
         # Filled Oracle template: write each sheet's finalized frame INTO the real
         # bundled workbook (macros/instructions/formatting preserved), clearing the

@@ -874,3 +874,60 @@ Verified: `tsc` clean for this file apart from the pre-existing numeric-id noise
 confirmed. NOT verified live — needs a click-through in canvas after deploy to confirm the
 buttons appear, the vet message renders, and the downloaded workbook has populated reason and
 crosswalk columns.
+
+### 9.18 Docs refreshed for this session's work (2026-07-27)
+
+`docs/_gen_docs.js` (the Feature List + User Guide generator) gained the new capabilities, and
+the Feature List was regenerated:
+- New H2 **"Multi-sheet source workbooks"** — every sheet imported, one conversion / one bundle,
+  per-interface-sheet routing, different row grains respected, union of source columns.
+- New H2 **"Mapping documentation & export"** — banded workbook, flat All Fields sheet, reasons
+  per alternative, value-crosswalk column, available in both canvas and table.
+- **Output generation** gained "Explicit mapping outranks constants" and "Approved defaults
+  reach the file".
+- **Learning & reuse library** gained "Retired learnings stay retired", "Restore a retired
+  learning", "Defaults learned on save", "Editable saved rules".
+
+Content verified by reading `word/document.xml` directly — note `markitdown` does NOT return
+docx table cells, so it reports these as missing; don't use it to check this file.
+
+**PDF regeneration is blocked by file locks.** Six `docs/.~lock.*.pdf#` files exist, i.e. the
+PDFs are open in a viewer on the Windows side, and LibreOffice fails with
+`Io Class:Abort Code:27` when overwriting. The refreshed copy was therefore written as
+`docs/FeatureList_27Jul2026.{docx,pdf}`. Close the open PDFs and re-run
+`node docs/_gen_docs.js` + the soffice convert to refresh the canonical filenames.
+
+**Screenshots — NOT added, and why.** The request was to include screenshots. That needs two
+things this session could not satisfy: (1) the deployed app is still the pre-fix build, so the
+new surfaces (canvas Vet/Export, multi-sheet import rows, retired-learnings list) do not exist
+to photograph yet; and (2) the app sits at the sign-in screen and entering credentials is
+out of scope — the user signs in. Chrome IS connected (`Browser 1`, Windows) and the frontend
+at `https://trinamix-conversion-frontend.onrender.com` responds, so once the user has deployed
+and signed in, capture is a short task: navigate, screenshot each surface, drop the JPEGs in
+`docs/_shots/`, and add `ImageRun` entries to `_gen_docs.js` beside the matching feature rows.
+
+### 9.19 Header row: format-driven default + a toggle on Conversion Objects
+
+**Default changed from object-driven to FORMAT-driven** — `output_service.py`:
+```
+_hdr = include_header if include_header is not None else fmt in ("xlsx", "template")
+```
+was `... else (not _is_supplier)`. That old rule meant only SUPPLIER csvs were headerless;
+every other object (Customer, Item, BOM, Employee…) shipped its FBDI CSV **with** a header
+row, which the Oracle loader reads as a data record and rejects — so those bundles had to be
+hand-edited before loading. Now the filled Excel templates keep their column labels (they are
+for humans) and every CSV / zipped CSV bundle is headerless (it is the machine-readable load
+file). The explicit user toggle still wins over both.
+
+**New Header Auto / On / Off control** on the Conversion Objects card in
+`ProjectOverviewPage.tsx`, sitting with "Generate all & download (.zip)" and "Filled Excel
+templates (.zip)" and applying to both. `headerMode` maps to `headerFlag`
+(`auto -> undefined`, i.e. let the backend rule decide). Threaded through
+`OutputApi.downloadAll(..., onTick, includeHeader)` -> `generateMergedAllAndWait` ->
+`generateMergedAll`, which already accepted `include_header`; `downloadAll` had been
+hard-coding `undefined`, so the toggle had no route to the backend from this screen.
+
+Verified: backend parses; `tsc` clean for the new identifiers (the two remaining
+`ProjectOverviewPage` errors are pre-existing `conversions`-possibly-null checks on untouched
+lines). NOT verified live — after deploy, confirm a CSV bundle opens with data on row 1 and an
+Excel template still shows its header row, then that On/Off actually flips both.

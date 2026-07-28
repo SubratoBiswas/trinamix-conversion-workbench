@@ -807,9 +807,12 @@ export const OutputApi = {
   downloadAll: async (
     projectId: string, filename = "FBDI.zip", fmt: "csv" | "xlsx" | "template" = "csv",
     onTick?: (sec: number, done: number, total: number) => void,
+    includeHeader?: boolean,
   ) => {
     // 1) Build every merged interface file in the background, wait for all.
-    const results = await OutputApi.generateMergedAllAndWait(projectId, fmt, undefined, onTick);
+    //    includeHeader undefined = backend default (Excel/templates keep headers,
+    //    CSV bundles are headerless because the FBDI loader reads a header row as data).
+    const results = await OutputApi.generateMergedAllAndWait(projectId, fmt, includeHeader, onTick);
     // 2) Fast zip — reuses the files just generated (regenerate=false).
     const response = await api.get(`/conversions/project/${projectId}/download-all`, {
       responseType: "blob",

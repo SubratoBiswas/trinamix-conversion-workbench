@@ -188,6 +188,13 @@ export const ProjectOverviewPage: React.FC = () => {
   // isn't mapped yet → generate each object's FBDI output → package all into one
   // zip (load-ordered) and download. The client drives each step so it can show
   // exactly what's happening instead of a bare spinner.
+  // Header row for the generated bundle. "auto" = the Oracle-correct default:
+  // filled Excel templates keep their column labels, CSV/FBDI bundles are
+  // headerless because the loader treats a header line as a data row. On/Off
+  // force it either way for both buttons.
+  const [headerMode, setHeaderMode] = useState<"auto" | "on" | "off">("auto");
+  const headerFlag = headerMode === "auto" ? undefined : headerMode === "on";
+
   const downloadAllFbdi = async (fmt: "csv" | "template" = "csv") => {
     setDlAll(true);
     const objName = (c: Conversion) =>
@@ -247,6 +254,7 @@ export const ProjectOverviewPage: React.FC = () => {
         `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_${_suffix}.zip`,
         fmt,
         (sec, done, total) => setDlStatus(`Merging & generating ${_kind} files… ${done}/${total} (${sec}s)`),
+        headerFlag,
       );
       const failed = (results || []).filter((r) => !r.ready);
       flash(failed.length
@@ -571,6 +579,27 @@ export const ProjectOverviewPage: React.FC = () => {
                   <Upload className={cn("h-3 w-3", goldBusy && "animate-pulse")} />
                   {goldBusy ? (goldStatus ?? "Applying gold…") : "Upload gold outputs"}
                 </button>
+                {/* Header row control for both bundle downloads. Auto is the
+                    Oracle-correct default: Excel templates keep their column
+                    labels, CSV bundles are headerless because the FBDI loader
+                    reads a header line as a data row and rejects that record. */}
+                <div className="inline-flex items-center gap-1 rounded-md border border-line bg-white p-0.5"
+                     title="Header row in the generated files. Auto = Excel templates with headers, FBDI CSVs without (what Oracle expects). Override if you need them either way.">
+                  <span className="px-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-subtle">Header</span>
+                  {([["auto", "Auto"], ["on", "On"], ["off", "Off"]] as const).map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setHeaderMode(v)}
+                      disabled={dlAll}
+                      className={cn(
+                        "rounded px-1.5 py-0.5 text-[11px] font-medium transition disabled:opacity-50",
+                        headerMode === v ? "bg-brand text-white" : "text-ink-muted hover:text-ink",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 {/* Generate every object's FBDI output and download them together
                     as one zip (ordered by the supplier load sequence). */}
                 <button
