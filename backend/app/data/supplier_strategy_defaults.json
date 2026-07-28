@@ -449,6 +449,37 @@
         "suppress": true,
         "note": "Blank if not mapped. Analyst raised it on the Address sheet (1:01:01) and it applies wherever the column appears - the standing rule is 'if not mapped then keep it blank'.",
         "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Federal Reportable",
+        "rule_type": "MAP_BOOLEAN",
+        "rule_config": {
+          "true_values": [
+            "yes",
+            "y",
+            "1",
+            "true",
+            "eligible",
+            "1099 eligible",
+            "x"
+          ],
+          "false_values": [
+            "no",
+            "n",
+            "0",
+            "false",
+            "not eligible",
+            "non eligible",
+            "ineligible"
+          ],
+          "true_output": "Y",
+          "false_output": "N",
+          "default": ""
+        },
+        "source_hint": "1099 Eligible",
+        "note": "Sandeep 28-Jul: 'if it is no, means we need to map to N. If it is yes, then we need to map to Y.' The extract carries eligible/not-eligible/yes/no; Oracle wants strictly Y or N. Blank source stays blank rather than defaulting to N - an unknown 1099 status is not the same as 'not reportable', and guessing it wrong is a tax-reporting error.",
+        "status": "IMPLEMENTED - MAP_BOOLEAN. Confirm the source column is named '1099 Eligible'."
       }
     ],
     "pattern_rules": [

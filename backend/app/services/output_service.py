@@ -39,6 +39,20 @@ async def _get_reference_standards(target_object: str | None) -> dict:
 _TRANSFORM_CHUNK_ROWS = 25_000
 
 
+_ATTR_RE = re.compile(r"^(global[_ ]?)?attribute([_ ]?(category|date|number|timestamp|char))?[_ ]?\d*$")
+
+
+def _is_attribute_column(name: str | None) -> bool:
+    """True for any Oracle descriptive-flexfield (DFF) attribute column.
+
+    Covers ATTRIBUTE1..30, ATTRIBUTE_CATEGORY, ATTRIBUTE_DATE/NUMBER/TIMESTAMP/CHAR n
+    and the GLOBAL_ATTRIBUTE* variants, in any spacing/casing the templates use.
+    NextPower does not use DFFs; populating them risks failing DFF validation on load.
+    """
+    n = re.sub(r"[^a-z0-9_ ]", "", str(name or "").strip().lower())
+    return bool(_ATTR_RE.match(n.replace(" ", "_")))
+
+
 def _rule_referenced_columns(rules: list[dict]) -> set[str]:
     """Source columns a rule reads OTHER than the cell's own mapped column —
     CASE_WHEN/CONDITIONAL ``if_column`` and CONCAT/COALESCE ``columns``. These must
@@ -88,6 +102,16 @@ def _transform_frame(
     for m in sorted_mappings:
         tgt = fields_by_id.get(m.target_field_id)
         if not tgt:
+            continue
+        # DFF/attribute columns are never populated. Analyst 28-Jul: "no attribute
+        # shouldn't be populated, remove all that" / "it should be empty" — raised
+        # as repeat feedback ("this one is already I informed"). Enforced here, at
+        # the single point every value passes through, because a per-field
+        # suppression learning cannot express the wildcard: the templates carry
+        # ATTRIBUTE1..30, ATTRIBUTE_CATEGORY, ATTRIBUTE_DATE/NUMBER/TIMESTAMP n and
+        # GLOBAL_ATTRIBUTE*. Blocking at map time alone would still let a stray
+        # default or gold value through, so it is blocked at WRITE time.
+        if _is_attribute_column(tgt.field_name):
             continue
         # Statuses that DISCARD the mapped source column:
         #   not_applicable — the gold/user marked the field "leave blank".
