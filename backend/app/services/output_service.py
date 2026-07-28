@@ -491,7 +491,13 @@ _AUTHORITATIVE: set[str] = {
     "federal reportable",
     # "delivery channel" removed — it is per-row derived (Email/Fax -> EMAIL/FAX/
     # blank), not a forced constant.
-    "pay", "ordering", "rfq or bidding",
+    # "pay" and "ordering" stay authoritative — strategy 7.2 sets both to Y for
+    # ALL addresses. "rfq or bidding" removed: the analyst rule is "blank if not
+    # mapped", and there is no strategy default for it, so force-writing a control
+    # constant over every row contradicted the requirement (same defect class as
+    # Address Name / QA #8). It remains in _CONTROL_DEFAULTS only as a fill for a
+    # wholly empty column, and the seeded suppress_field learning blanks it.
+    "pay", "ordering",
     # "address name" and "supplier site" REMOVED from the authoritative set. The
     # signed NextPower Supplier Conversion Strategy (v1.0, section 7.2/7.3) states
     # Address Name = City Name (e.g. "Austin") and Supplier Site = BU + City
@@ -746,6 +752,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # template has no stored file we can't fill it, so degrade gracefully to a fresh
     # xlsx workbook rather than failing the whole generation.
     _template_src_path: str | None = None
+    _template_fallback = False
     if fmt == "template":
         if template:
             try:
@@ -755,6 +762,20 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             except Exception:  # noqa: BLE001
                 _template_src_path = None
         if not _template_src_path:
+            # SILENT DEGRADATION WAS THE BUG: falling back to "xlsx" builds a fresh
+            # workbook whose columns are the MAPPED set (i.e. the CSV column
+            # structure), not the Oracle template's own layout — and the user was
+            # given no indication that "Filled Excel templates" had not actually
+            # used the template. Still degrade rather than fail the whole run, but
+            # make it loud so the cause (no stored template file) is diagnosable.
+            log.warning(
+                "template fill unavailable for conversion %s (object=%r, template=%r): "
+                "no stored FBDI workbook to populate — falling back to a generated "
+                "xlsx whose columns follow the mapped/CSV structure, NOT the original "
+                "Oracle template layout. Re-upload the FBDI template for this object.",
+                conversion.id, obj_name, getattr(template, "name", None),
+            )
+            _template_fallback = True
             fmt = "xlsx"  # no source workbook to populate — fall back
 
     # ── Per-interface-sheet source routing ──────────────────────────────────
@@ -911,10 +932,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         cols = _dedup([_header_label(f) for f in sfields])
         return pd.DataFrame(columns=cols)
 
-    def _apply_supplier_layout(sdf: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    def _apply_supplier_layout(sdf: pd.DataFrame, sheet_name: str,
+                               with_end: bool = True) -> pd.DataFrame:
         # Delegate to the pure, unit-tested module (reorder to the analyst tab
         # sequence + END terminator); no-op for non-supplier objects.
-        return _supplier_layout(sdf, sheet_name, _is_supplier)
+        # END is a CSV record terminator for the FBDI loader — it must NOT be
+        # written into an Excel workbook (the real Oracle template has no END
+        # column), so the xlsx branch passes with_end=False.
+        return _supplier_layout(sdf, sheet_name, _is_supplier, with_end=with_end)
 
     def _write_all() -> tuple[str, str, int, int]:
         """Serialize to disk, STREAMING one interface sheet at a time so peak memory
@@ -979,7 +1004,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                             _cust_apply(sdf)
                         else:
                             sdf = _headers_only(fields_by_sheet[s.id])
-                        sdf = _apply_supplier_layout(sdf, s.sheet_name)
+                        sdf = _apply_supplier_layout(sdf, s.sheet_name, with_end=False)
                         sdf.to_excel(xw, index=False, header=_hdr, sheet_name=_safe_sheet_name(s.sheet_name)[:31])
                         total_rows = max(total_rows, len(sdf))
                         total_cols += len(sdf.columns)

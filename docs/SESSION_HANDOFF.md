@@ -1013,3 +1013,34 @@ copied to `NXT_Supplier_Mapping.xlsx` in the repo root so the browser can reach 
 Mapping Documents screen already lists an older `NXT Supplier Mapping.xlsx`
 (75 new / 17 same / 25 conflicting, awaiting review) whose analysis PREDATES the strategy seed
 — re-analyse after deploying so conflicts are judged against the strategy.
+
+### 9.22 "Filled Excel templates" silently fell back to CSV column structure
+
+**Root cause of "the FBDI template download follows the CSV column structure".**
+`generate_output_artifact` materializes the bundled Oracle workbook for `fmt="template"`;
+if there is no stored file it did `fmt = "xlsx"` with only a comment. That fallback builds a
+FRESH workbook whose columns are the MAPPED set — i.e. exactly the CSV column structure —
+instead of the Oracle template's own layout, and the user got no signal that "Filled Excel
+templates (.zip)" had not used a template at all.
+
+`fill_template()` itself is correct: it opens the real .xlsm/.xlsx, matches df columns to
+template columns by normalised header, clears the shipped sample rows, and preserves macros.
+So the fix is not in the fill logic — it is that the template FILE is missing for that object.
+
+Now logs a WARNING naming the conversion, object and template, and sets `_template_fallback`.
+**Still to do:** surface that flag on the ConvertedOutput record so the UI can show
+"template not used — re-upload the FBDI template", rather than only appearing in server logs.
+**Action for the user:** re-upload the supplier FBDI templates (FBDI Library > Templates) —
+without a stored workbook the template download can never match the original layout.
+
+### 9.23 Delivery Method rule (captured, NOT yet seeded — conflicts with an existing rule)
+
+`Delivery Method`: if the remittance EMAIL column has a value -> `EMAIL`; else if the
+remittance FAX column has a value -> `FAX`; else blank. EMAIL takes preference, encoded as
+CASE_WHEN branch order with `notblank` ops (both already supported by the engine).
+
+**Conflict — do not seed blind.** `supplier_transform_mappings.json` ALREADY seeds Delivery
+Method / Delivery Channel from the Email/Fax **transaction flags**. This new rule keys off the
+remittance email/fax **value columns**. Two CASE_WHEN rules on one target field will fight;
+reconcile which is authoritative first. The two source column names also need confirming
+against the actual extract before this can be seeded.

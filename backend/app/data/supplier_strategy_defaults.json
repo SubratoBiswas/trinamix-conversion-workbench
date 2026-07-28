@@ -48,8 +48,17 @@
     {
       "target_object": "Supplier Site",
       "target_field": "Supplier Site",
-      "derive": "bu_dash_city",
-      "condition": "BU + City Name (e.g. US-Austin). NOT the constant 'PRIMARY'."
+      "derive": "country_code_dash_city",
+      "condition": "COUNTRY CODE + \"-\" + City, e.g. US-Chicago. Analyst clarified 28-Jul: the \"US\" in the strategy 7.3 example US-Austin is the COUNTRY code, not the Procurement BU. This removes the site NAME dependency on the missing Subsidiary-to-Procurement-BU crosswalk (the Procurement BU FIELD still needs it). NOT the constant PRIMARY.",
+      "rule_type": "CONCAT",
+      "rule_config": {
+        "columns": [
+          "Country Code",
+          "City"
+        ],
+        "separator": "-"
+      },
+      "status": "CLARIFIED - CONCAT(Country Code, \"-\", City). Source column names need confirming; use the 2-char ISO code (COUNTRY_ISO2) so it is US-Chicago not UnitedStates-Chicago."
     },
     {
       "target_object": "Supplier Site",
@@ -86,8 +95,8 @@
     {
       "target_object": "Supplier Site",
       "target_field": "Receipt Routing",
-      "constant": "Direct",
-      "condition": "Defaulted to Direct"
+      "constant": "DIRECT",
+      "condition": "DIRECT for all sites (analyst confirmed upper-case lookup code 28-Jul; was \"Direct\")."
     },
     {
       "target_object": "Supplier Site",
@@ -162,7 +171,284 @@
         },
         "note": "Resolve the parent's NAME, not its id: take Parent Vendor Id, find the row whose Internal Id equals it, return that row's Name. This is a self-join across the extract, not a row-local transform.",
         "status": "NOT IMPLEMENTED - needs a new SELF_LOOKUP rule type; the engine is row-local and cannot see other rows"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Delivery Method",
+        "rule_type": "CASE_WHEN",
+        "rule_config": {
+          "branches": [
+            {
+              "if_column": "Remittance E-Mail",
+              "op": "notblank",
+              "then": "EMAIL"
+            },
+            {
+              "if_column": "Remittance Fax",
+              "op": "notblank",
+              "then": "FAX"
+            }
+          ],
+          "default": ""
+        },
+        "note": "EMAIL takes preference: if Remittance E-Mail has a value use EMAIL; else if Remittance Fax has a value use FAX; else blank. Source column names CONFIRMED by analyst 28-Jul. Exact-match lookup, so the hyphen in E-Mail matters.",
+        "status": "AUTHORITATIVE - analyst confirmed 28-Jul: this NEW remittance-column rule SUPERSEDES the older flag-based one.",
+        "supersedes": "supplier_transform_mappings.json Delivery Method / Delivery Channel derived from the Email/Fax TRANSACTION FLAGS. That seeded rule must be RETIRED (Learning Centre > delete, now tombstoned) or the two CASE_WHENs will both target this field."
+      },
+      {
+        "target_object": "Supplier Address",
+        "target_field": "Address Name New",
+        "suppress": true,
+        "note": "Leave blank when not mapped. DISTINCT from \"Address Name\" (strategy 7.2 = the City, e.g. Austin). Address Name New is Oracle RENAME field on Supplier Address import - populating it would rename an existing address, so it stays empty on a create-only load.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Tax Reporting Name",
+        "suppress": true,
+        "note": "Leave blank - not mapped from the extract. Seeded as suppress_field so the mapper cannot AI-guess a source for it: an unmapped field is blank by default, but without a suppression the auto-mapper may still propose a plausible-looking column.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Registry ID",
+        "suppress": true,
+        "note": "Leave blank - not mapped from the extract. Seeded as suppress_field so the mapper cannot AI-guess a source for it: an unmapped field is blank by default, but without a suppression the auto-mapper may still propose a plausible-looking column.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier Address",
+        "target_field": "Province",
+        "suppress": true,
+        "note": "Leave blank - not mapped from the extract. Seeded as suppress_field so the mapper cannot AI-guess a source for it: an unmapped field is blank by default, but without a suppression the auto-mapper may still propose a plausible-looking column.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Taxpayer Country",
+        "rule_type": "COUNTRY_ISO2",
+        "rule_config": {},
+        "note": "Oracle expects the 2-character ISO 3166-1 alpha-2 country code. Resolved by lookup (United States->US, Italy->IT), never truncation. Already-valid 2-char codes pass through; an unrecognised country is left unchanged so it surfaces in review rather than becoming a wrong code.",
+        "status": "IMPLEMENTED - engine rule COUNTRY_ISO2 added, reusing the curated COUNTRY_TO_ISO table",
+        "decision_needed": "ANALYST SAID \"United Kingdom is UK\" BUT ISO 3166-1 alpha-2 for the UK is GB, and Oracle Fusion TERRITORY_CODE uses ISO. The rule currently returns GB (and also maps a literal \"UK\" input to GB). If the target instance genuinely expects UK, say so and the table needs an override - otherwise GB is correct and UK would be rejected on load."
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "RFQ Or Bidding",
+        "suppress": true,
+        "note": "Blank when not mapped.",
+        "status": "SEEDED as suppress_field",
+        "conflict_warning": "CONFLICTS WITH CODE: \"rfq or bidding\" is still in _AUTHORITATIVE in output_service._apply_control_defaults, so a control constant is force-written over the column on every row. Same defect class as Address Name (QA #8). The suppress learning routes through suppressed_keys and should win, but the _AUTHORITATIVE entry should be removed so the two layers do not disagree."
+      },
+      {
+        "target_object": "Supplier Address",
+        "target_field": "Delivery Method",
+        "rule_type": "CASE_WHEN",
+        "rule_config": {
+          "branches": [
+            {
+              "if_column": "Remittance E-Mail",
+              "op": "notblank",
+              "then": "EMAIL"
+            },
+            {
+              "if_column": "Remittance Fax",
+              "op": "notblank",
+              "then": "FAX"
+            }
+          ],
+          "default": ""
+        },
+        "note": "Same formula as the Supplier header - analyst confirmed the Address sheet uses the identical Delivery Method derivation.",
+        "status": "AUTHORITATIVE - analyst confirmed 28-Jul: this NEW remittance-column rule SUPERSEDES the older flag-based one.",
+        "supersedes": "supplier_transform_mappings.json Delivery Method / Delivery Channel derived from the Email/Fax TRANSACTION FLAGS. That seeded rule must be RETIRED (Learning Centre > delete, now tombstoned) or the two CASE_WHENs will both target this field."
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Alternate Site Name",
+        "suppress": true,
+        "note": "Leave blank on every row.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Customer Number",
+        "suppress": true,
+        "note": "Leave blank. Already suppressed on the Supplier header; analyst confirmed the Site sheet too.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Enable B2B Messaging",
+        "suppress": true,
+        "note": "Leave blank on every row.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Invoice Amount Limit",
+        "suppress": true,
+        "note": "Leave blank on every row.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Payment Hold Date",
+        "suppress": true,
+        "note": "Leave blank on every row.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Tax Registration Number-Obsoleted",
+        "suppress": true,
+        "note": "Leave blank. Oracle has marked this column obsolete on the Supplier Import template - it must not be populated.",
+        "status": "SEEDED as suppress_field"
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "ATTRIBUTE*",
+        "suppress": true,
+        "is_pattern": true,
+        "note": "Remove ALL attribute columns on the Site sheet - ATTRIBUTE1..ATTRIBUTE20, ATTRIBUTE_CATEGORY, ATTRIBUTE_DATE/NUMBER/TIMESTAMP variants and the global/DFF equivalents. These are descriptive flexfields NextPower is not using; populating them risks failing DFF validation.",
+        "status": "CAPTURED as a PATTERN suppression - the seeder currently writes ONE suppress_field per exact field name, so this needs either a wildcard-aware suppression or the concrete column list expanding from the Site template."
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Delivery Method",
+        "rule_type": "CASE_WHEN",
+        "rule_config": {
+          "branches": [
+            {
+              "if_column": "Remittance E-Mail",
+              "op": "notblank",
+              "then": "EMAIL"
+            },
+            {
+              "if_column": "Remittance Fax",
+              "op": "notblank",
+              "then": "FAX"
+            }
+          ],
+          "default": ""
+        },
+        "note": "Same formula as the Supplier header: EMAIL wins if the remittance e-mail column has a value, else FAX if the remittance fax column has a value, else blank.",
+        "status": "CAPTURED - mirrors the header rule; source column names still to confirm."
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Remittance E-Mail",
+        "copy_of": "Supplier.Remittance E-Mail",
+        "note": "Site sheet carries its own Remittance E-Mail; follows the same treatment as the header field.",
+        "status": "CAPTURED - confirm whether the Site value comes from the same source column as the header."
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Remittance Fax",
+        "copy_of": "Supplier.Remittance Fax",
+        "note": "Site sheet carries its own Remittance Fax; follows the same treatment as the header field.",
+        "status": "CAPTURED - confirm whether the Site value comes from the same source column as the header."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Phone Country Code",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "country"
+        },
+        "source_hint": "Phone",
+        "note": "Split the single legacy phone string into its Oracle parts. Country code and area code go in their OWN columns; the Phone column keeps ONLY the bare number (no country/area prefix, no duplication).",
+        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Phone\") then seed all three together."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Phone Area Code",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "area"
+        },
+        "source_hint": "Phone",
+        "note": "Split the single legacy phone string into its Oracle parts. Country code and area code go in their OWN columns; the Phone column keeps ONLY the bare number (no country/area prefix, no duplication).",
+        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Phone\") then seed all three together."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Phone",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "Phone",
+        "note": "Split the single legacy phone string into its Oracle parts. Country code and area code go in their OWN columns; the Phone column keeps ONLY the bare number (no country/area prefix, no duplication).",
+        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Phone\") then seed all three together."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Fax Country Code",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "country"
+        },
+        "source_hint": "Fax",
+        "note": "Split the single legacy fax string into its Oracle parts. Country code and area code go in their OWN columns; the Fax column keeps ONLY the bare number (no country/area prefix, no duplication).",
+        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Fax\") then seed all three together."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Fax Area Code",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "area"
+        },
+        "source_hint": "Fax",
+        "note": "Split the single legacy fax string into its Oracle parts. Country code and area code go in their OWN columns; the Fax column keeps ONLY the bare number (no country/area prefix, no duplication).",
+        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Fax\") then seed all three together."
+      },
+      {
+        "target_object": "Supplier",
+        "target_field": "Fax",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "Fax",
+        "note": "Split the single legacy fax string into its Oracle parts. Country code and area code go in their OWN columns; the Fax column keeps ONLY the bare number (no country/area prefix, no duplication).",
+        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Fax\") then seed all three together."
+      }
+    ],
+    "pattern_rules": [
+      {
+        "target_object": "Supplier Site",
+        "field_pattern": "^attribute",
+        "suppress": true,
+        "examples": [
+          "Attribute Category",
+          "Attribute1..Attribute20",
+          "Attribute Date1..",
+          "Attribute Number1..",
+          "Attribute Timestamp1.."
+        ],
+        "note": "Remove ALL descriptive-flexfield attribute columns from the Supplier Site sheet - leave every one blank. These are Oracle DFF placeholders that auto-map picks up from loosely-named source columns and populates with junk.",
+        "status": "NOT IMPLEMENTED - needs PATTERN suppression. Every suppression so far is keyed to one exact target_field; there is no wildcard support in the seeder or in output_service suppressed_keys. Implement as a regex-matched suppression evaluated against the sheet field list at generate time."
+      },
+      {
+        "target_object": "*",
+        "field_pattern": "obsolete",
+        "suppress": true,
+        "examples": [
+          "Tax Registration Number-Obsoleted",
+          "any other column Oracle has marked Obsolete on any supplier sheet"
+        ],
+        "note": "Every column whose name contains \"Obsolete\" must be blank, on EVERY supplier sheet - not just the Tax Registration Number one already captured. Oracle keeps obsoleted columns in the template for backward compatibility; populating them is at best ignored and at worst rejected.",
+        "status": "NOT IMPLEMENTED - same pattern-suppression mechanism as the Site attribute rule. Cross-object (target_object \"*\")."
       }
     ]
+  },
+  "blank_sheets": {
+    "_note": "Interface sheets that must ship with HEADERS ONLY - no data rows. Oracle still expects the file to exist in the bundle.",
+    "sheets": [
+      "Third_Party_Pay_Relationships"
+    ],
+    "status": "CAPTURED - NOT yet enforced. output_service._sheet_carries_data() decides headers-only per sheet from whether any field is mapped; it has no explicit always-blank list. Needs that list wired in so an accidental auto-map cannot put rows into this sheet."
   }
 }

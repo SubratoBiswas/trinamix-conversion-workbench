@@ -74,11 +74,17 @@ def csv_name_for(sheet_name: str) -> str:
         norm_hdr(safe_sheet_name(sheet_name))) or safe_sheet_name(sheet_name))
 
 
-def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: bool) -> "pd.DataFrame":
+def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: bool,
+                          with_end: bool = True) -> "pd.DataFrame":
     """Supplier only: reorder a primary interface sheet's columns to the analyst tab
     sequence (matched by normalized header; columns the tab doesn't list are kept and
     appended after, so nothing is dropped), then append an ``END`` record-terminator
-    column (literal 'END' on the header + every data row). No-op for non-supplier."""
+    column (literal 'END' on the header + every data row). No-op for non-supplier.
+
+    ``with_end=False`` keeps the reorder but omits the END column. END is a CSV
+    record terminator for the FBDI loader; it does NOT belong in an Excel workbook
+    a human opens, and the real Oracle template has no END column — so the xlsx
+    output must not carry it."""
     if not is_supplier:
         return sdf
     order = supplier_col_order().get(norm_hdr(safe_sheet_name(sheet_name)))
@@ -100,5 +106,6 @@ def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: boo
         sdf = sdf[ordered].copy()
     else:
         sdf = sdf.copy()
-    sdf["END"] = "END"
+    if with_end:
+        sdf["END"] = "END"
     return sdf

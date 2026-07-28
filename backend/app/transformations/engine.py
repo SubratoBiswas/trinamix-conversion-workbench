@@ -246,6 +246,52 @@ def apply_rule(
             return value
         return cfg.get("default", "")
 
+    if rt == "PHONE_STRIP_AREA":
+        # Oracle stores Area Code and Phone Number in SEPARATE columns. When the
+        # extract already has the area code in its own column, leaving it on the
+        # front of the number duplicates it (e.g. area 512 + number "512-555-0134"
+        # loads as "512 512-555-0134"). Strip it — but ONLY when the number really
+        # begins with that area code, so a number that was already clean, or one
+        # that happens to start with the same digits by coincidence of formatting,
+        # is left alone. Digits-only comparison, original formatting preserved on
+        # whatever remains. cfg: {"area_code_column": "<name>"}.
+        col = cfg.get("area_code_column")
+        raw = _to_str(value).strip()
+        if row is None or not col or not raw:
+            return value
+        area = "".join(ch for ch in _to_str(row.get(col, "")) if ch.isdigit())
+        if not area:
+            return value
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        if not digits.startswith(area) or len(digits) <= len(area):
+            return value          # not a duplicated prefix — leave untouched
+        # Walk the original string and drop the leading separators + area digits.
+        seen = 0
+        for i, ch in enumerate(raw):
+            if ch.isdigit():
+                seen += 1
+                if seen == len(area):
+                    return raw[i + 1:].lstrip(" -.()/").strip()
+        return value
+
+    if rt == "COUNTRY_ISO2":
+        # Resolve a country NAME to its 2-character ISO 3166-1 alpha-2 code
+        # (United States -> US, Italy -> IT). This is a lookup, never a truncation:
+        # slicing "United States" to 2 chars gives "Un". Reuses the curated
+        # COUNTRY_TO_ISO table (plus its fuzzy fallback) already used by the value
+        # crosswalk service, so the two layers cannot disagree. A value that is
+        # already a valid 2-char code passes through unchanged; anything
+        # unresolvable is left AS-IS rather than guessed, so a bad country is
+        # visible in review instead of silently becoming a wrong code.
+        from app.services.deterministic import COUNTRY_TO_ISO, _ISO_SET
+        raw = _to_str(value).strip()
+        if not raw:
+            return ""
+        if len(raw) == 2 and raw.upper() in _ISO_SET:
+            return raw.upper()
+        key = "".join(ch for ch in raw.lower() if ch.isalnum())
+        return COUNTRY_TO_ISO.get(key, raw)
+
     if rt == "BLANK_IF_EQUALS":
         # Blank this field when it duplicates ANOTHER COLUMN's value. Oracle does
         # not want a redundant alias: NextPower's rule is that Alternate Name is

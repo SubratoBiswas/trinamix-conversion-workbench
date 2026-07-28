@@ -247,7 +247,8 @@ export const ProjectOverviewPage: React.FC = () => {
       // objects can't hit the gateway timeout, then download the fast reuse-zip.
       const nObjs = new Set(convs.map((c) => objName(c))).size;
       const _kind = fmt === "template" ? "filled Excel template" : "FBDI";
-      const _suffix = fmt === "template" ? "FBDI_templates" : "FBDI";
+      // CSV bundle is named _CSV; the filled Oracle workbooks keep _FBDI_templates.
+      const _suffix = fmt === "template" ? "FBDI_templates" : "CSV";
       setDlStatus(`Merging & generating ${nObjs} ${_kind} file${nObjs === 1 ? "" : "s"}…`);
       const results = await OutputApi.downloadAll(
         pid,
