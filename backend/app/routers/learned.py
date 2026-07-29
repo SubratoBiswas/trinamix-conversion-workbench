@@ -515,15 +515,80 @@ async def delete_learned(
     item = await LearnedMapping.get(PydanticObjectId(learned_id))
     if not item:
         raise HTTPException(404, "Not found")
+    # Retiring the rule is only half of it. Applying a learning WRITES a
+    # MappingSuggestion (status approved, approved_by learning-engine), and
+    # generation reads those, not the library — so a deleted learning kept
+    # shipping through every conversion it had already touched. The tombstone
+    # only ever stopped it being applied AGAIN.
+    reverted = await _revert_applied_mappings(item, user.email)
     if purge:
         await item.delete()
-        return {"deleted": learned_id, "purged": True}
+        return {"deleted": learned_id, "purged": True, **reverted}
     await item.set({
         "is_deleted": True,
         "deleted_at": datetime.utcnow(),
         "deleted_by": user.email,
     })
-    return {"deleted": learned_id, "purged": False}
+    return {"deleted": learned_id, "purged": False, **reverted}
+
+
+async def _revert_applied_mappings(item: LearnedMapping, actor: str) -> dict:
+    """Undo the mappings this learning wrote, and stale the outputs built on them.
+
+    Only rows the LEARNING ENGINE approved are touched. A mapping an analyst
+    approved or overrode is their decision even if a learning first proposed it,
+    and silently reverting it would be worse than the bug being fixed.
+
+    Reverted rows go back to ``suggested`` with review_required set, rather than
+    being blanked: the source column may still be the right answer, and the
+    analyst should see it flagged rather than find the field empty.
+    """
+    from app.models.conversion import Conversion
+    from app.models.fbdi import FBDIField
+    from app.models.mapping import MappingSuggestion
+    from app.models.output import ConvertedOutput
+
+    tgt = (item.target_field or "").strip().lower()
+    src = (item.original_value or "").strip().lower()
+    obj = (item.target_object or "").strip().lower()
+    if not tgt or not obj:
+        return {"mappings_reverted": 0, "outputs_marked_stale": 0}
+
+    reverted, stale, seen = 0, 0, set()
+    for conv in await Conversion.find_all().to_list():
+        if (conv.target_object or "").strip().lower() != obj:
+            continue
+        if item.client_id is not None:
+            from app.services.client_service import client_id_for_conversion
+            if await client_id_for_conversion(conv) != item.client_id:
+                continue
+        fields = {f.id: f.field_name for f in await FBDIField.find(
+            FBDIField.template_id == conv.template_id).to_list()} if conv.template_id else {}
+        for m in await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == conv.id).to_list():
+            if m.approved_by != "learning-engine":
+                continue
+            if (fields.get(m.target_field_id) or "").strip().lower() != tgt:
+                continue
+            # Match the source too when the learning names one, so retiring a
+            # rule for a field does not revert a different rule on that field.
+            if src and (m.source_column or "").strip().lower() != src:
+                continue
+            await m.set({"status": "suggested", "approved_by": None,
+                         "approved_at": None, "review_required": 1,
+                         "comment": f"Reverted — the learning behind this was "
+                                    f"retired by {actor}."})
+            reverted += 1
+            seen.add(conv.id)
+
+    for cid in seen:
+        for o in await ConvertedOutput.find(ConvertedOutput.conversion_id == cid).to_list():
+            if o.status != "stale":
+                await o.set({"status": "stale",
+                             "stale_reason": "A learning it was built on was retired",
+                             "stale_since": datetime.utcnow()})
+                stale += 1
+    return {"mappings_reverted": reverted, "outputs_marked_stale": stale}
 
 
 @router.post("/{learned_id}/restore")

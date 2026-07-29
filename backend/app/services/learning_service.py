@@ -47,9 +47,55 @@ async def _business_object_for(conversion: Conversion) -> str | None:
     return conversion.target_object
 
 
+async def source_erp_for_conversion(conversion) -> str | None:
+    """The legacy system a conversion reads FROM, used to scope learnings.
+
+    Dataset first, then the project: a project can be pinned to one source while
+    an individual conversion is fed by a file extracted from another, and the
+    dataset is the more specific fact.
+    """
+    try:
+        from app.models.dataset import Dataset
+        for did in (getattr(conversion, "source_dataset_ids", None) or []):
+            ds = await Dataset.get(did)
+            if ds and getattr(ds, "source_system", None):
+                return ds.source_system
+    except Exception:                                           # noqa: BLE001
+        pass
+    try:
+        from app.models.project import Project
+        pid = getattr(conversion, "project_id", None)
+        if pid:
+            proj = await Project.get(pid)
+            if proj and getattr(proj, "source_system", None):
+                return proj.source_system
+    except Exception:                                           # noqa: BLE001
+        pass
+    return None
+
+
+def source_scope(source_erp: str | None) -> dict:
+    """Read filter: this source's learnings PLUS the source-agnostic ones.
+
+    Item maps differently out of NetSuite than out of SyteLine, so a learning
+    captured from one must not be handed to a conversion reading the other.
+    Keying on (object, field, client) alone let the two collide on write and
+    cross over on read.
+
+    Legacy rows carry no ``source_erp`` — that is every learning captured before
+    this scoping existed. They are still returned, because filtering strictly
+    would silently strand the entire existing library. New captures are always
+    stamped, so the untagged set only shrinks.
+    """
+    if not source_erp:
+        return {}
+    return {"$or": [{"source_erp": source_erp},
+                    {"source_erp": None}, {"source_erp": {"$exists": False}}]}
+
+
 async def _upsert_learned(kind, business_object, field_name, *, original, resolved,
                           rule_type=None, rule_config=None, captured_from="auto-capture",
-                          client_id=None):
+                          client_id=None, source_erp=None):
     """Upsert one reusable object-level learned rule. Never downgrades a rule
     captured from a gold example / prompt / accepted crosswalk with an
     auto-captured one (human/gold signals outrank auto-capture).
@@ -57,7 +103,11 @@ async def _upsert_learned(kind, business_object, field_name, *, original, resolv
     Captured learnings are CLIENT-SCOPED (is_global=False, client_id set) — they
     encode one client's source data, so they must not leak to other clients. The
     existing-row lookup is keyed by client too, so two clients keep independent
-    rules for the same object/field."""
+    rules for the same object/field.
+
+    It is keyed by SOURCE SYSTEM as well: NetSuite's Item mapping is not
+    SyteLine's, so without this the second capture overwrites the first and both
+    conversions then inherit whichever was written last."""
     if not business_object or not field_name:
         return False
     existing = await LearnedMapping.find_one(
@@ -65,6 +115,7 @@ async def _upsert_learned(kind, business_object, field_name, *, original, resolv
         LearnedMapping.target_object == business_object,
         LearnedMapping.target_field == field_name,
         LearnedMapping.client_id == client_id,
+        LearnedMapping.source_erp == source_erp,
         include_deleted=True,
     )
     # Retired by the user — auto-capture after Generate Output must not bring it
@@ -82,6 +133,7 @@ async def _upsert_learned(kind, business_object, field_name, *, original, resolv
         "target_object": business_object, "target_field": field_name,
         "rule_type": rule_type, "rule_config": rule_config or {},
         "client_id": client_id, "is_global": False,
+        "source_erp": source_erp,
         "captured_from": captured_from, "captured_at": datetime.utcnow(),
     }
     if existing:
@@ -103,6 +155,8 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
         return {"captured": 0}
     from app.services.client_service import client_id_for_conversion
     _cid = await client_id_for_conversion(conversion)
+    # Learnings are keyed by source system too — see source_scope.
+    _src = await source_erp_for_conversion(conversion)
     fields = {f.id: f.field_name for f in await FBDIField.find(
         FBDIField.template_id == conversion.template_id).to_list()}
     maps = await MappingSuggestion.find(
@@ -131,21 +185,22 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
             # defaults never appeared in the Learning Centre.
             if await _upsert_learned("suppress_field", business_object, fname,
                                      original="(blank)", resolved="", rule_type="suppress",
-                                     client_id=_cid):
+                                     client_id=_cid, source_erp=_src):
                 n += 1
         elif m.source_column and trustworthy:
             st = m.suggested_transformation or {}
             if await _upsert_learned("column_mapping", business_object, fname,
                                      original=m.source_column, resolved=fname,
                                      rule_type=st.get("rule_type"), rule_config=st.get("config"),
-                                     client_id=_cid):
+                                     client_id=_cid, source_erp=_src):
                 n += 1
         elif _dv and (trustworthy or m.status == "not_applicable"):
             # An explicit default the analyst typed is a decision regardless of the
             # mapping's confidence — capture it (issue #7).
             if await _upsert_learned("example_default", business_object, fname,
                                      original="(default)", resolved=_dv,
-                                     rule_type="default", client_id=_cid):
+                                     rule_type="default", client_id=_cid,
+                                     source_erp=_src):
                 n += 1
     return {"captured": n, "object": business_object}
 
@@ -168,7 +223,8 @@ def _category_for(rule_type: str | None) -> str:
 async def _upsert(*, kind, category, original_value, resolved_value,
                   target_object=None, target_field=None, rule_type=None,
                   rule_config=None, project_id=None, captured_from, captured_by,
-                  client_id=None, revive: bool = False) -> LearnedMapping | None:
+                  client_id=None, source_erp=None,
+                  revive: bool = False) -> LearnedMapping | None:
     """Insert or update a learning.
 
     ``revive=False`` (the default) honours the tombstone from QA issue #5: if the
@@ -179,12 +235,16 @@ async def _upsert(*, kind, category, original_value, resolved_value,
     """
     # Client-scoped (is_global=False): an interactively captured rule encodes one
     # client's source data. Dedup is keyed by client too, so clients stay separate.
+    # source_erp is part of the identity: the same target field is fed by a
+    # different column depending on which legacy system the extract came from,
+    # so NetSuite's Item rule and SyteLine's must be two rows, not one.
     query = {
         "kind": kind,
         "target_object": target_object,
         "target_field": target_field,
         "rule_type": rule_type,
         "client_id": client_id,
+        "source_erp": source_erp,
     }
     norm_orig = _normalize(original_value)
     existing = await LearnedMapping.find(query).to_list()
@@ -198,6 +258,7 @@ async def _upsert(*, kind, category, original_value, resolved_value,
                 "captured_from": captured_from, "captured_by": captured_by,
                 "captured_at": datetime.utcnow(),
                 "project_id": project_id, "client_id": client_id, "is_global": False,
+                "source_erp": source_erp,
             }
             if revive and getattr(lm, "is_deleted", False):
                 patch.update({"is_deleted": False, "deleted_at": None, "deleted_by": None})
@@ -208,7 +269,7 @@ async def _upsert(*, kind, category, original_value, resolved_value,
         resolved_value=resolved_value, target_object=target_object,
         target_field=target_field, rule_type=rule_type, rule_config=rule_config or {},
         project_id=project_id, captured_from=captured_from, captured_by=captured_by,
-        client_id=client_id, is_global=False,
+        client_id=client_id, is_global=False, source_erp=source_erp,
     )
     await lm.insert()
     return lm
@@ -247,6 +308,8 @@ async def record_learning_from_mapping(
     captured_from = f"{conversion.name} -- {target_field}"
     from app.services.client_service import client_id_for_conversion
     _cid = await client_id_for_conversion(conversion)
+    # Learnings are keyed by source system too — see source_scope.
+    _src = await source_erp_for_conversion(conversion)
     if not mapping.source_column:
         # Default-only decision → an example_default learning, so it shows up in
         # the Learning Centre's "Default values" tab immediately on save.
@@ -255,7 +318,7 @@ async def record_learning_from_mapping(
             original_value="(default)", resolved_value=_default,
             target_object=business_object, target_field=target_field,
             rule_type="default", rule_config={"default_value": _default},
-            project_id=conversion.project_id, client_id=_cid,
+            project_id=conversion.project_id, client_id=_cid, source_erp=_src,
             captured_from=captured_from, captured_by=captured_by,
         )
     lm = await _upsert(
@@ -263,7 +326,7 @@ async def record_learning_from_mapping(
         original_value=mapping.source_column, resolved_value=target_field,
         target_object=business_object, target_field=target_field,
         rule_type=rule_type, rule_config=rule_config,
-        project_id=conversion.project_id, client_id=_cid,
+        project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
     )
     if rule_type and _is_master_key_field(business_object, target_field):
@@ -272,7 +335,7 @@ async def record_learning_from_mapping(
             original_value=target_field, resolved_value=target_field,
             target_object=business_object, target_field=target_field,
             rule_type=rule_type, rule_config=rule_config,
-            project_id=conversion.project_id, client_id=_cid,
+            project_id=conversion.project_id, client_id=_cid, source_erp=_src,
             captured_from=captured_from, captured_by=captured_by,
         )
     return lm
@@ -294,12 +357,14 @@ async def record_learning_from_rule(
     captured_from = f"{conversion.name} -- {target_field} (manual)"
     from app.services.client_service import client_id_for_conversion
     _cid = await client_id_for_conversion(conversion)
+    # Learnings are keyed by source system too — see source_scope.
+    _src = await source_erp_for_conversion(conversion)
     lm = await _upsert(
         kind="rule", category=_category_for(rule.rule_type),
         original_value=rule.source_column or "", resolved_value=target_field,
         target_object=business_object, target_field=target_field,
         rule_type=rule.rule_type, rule_config=rule.rule_config or {},
-        project_id=conversion.project_id, client_id=_cid,
+        project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
     )
     if _is_master_key_field(business_object, target_field):
@@ -308,7 +373,7 @@ async def record_learning_from_rule(
             original_value=target_field, resolved_value=target_field,
             target_object=business_object, target_field=target_field,
             rule_type=rule.rule_type, rule_config=rule.rule_config or {},
-            project_id=conversion.project_id, client_id=_cid,
+            project_id=conversion.project_id, client_id=_cid, source_erp=_src,
             captured_from=captured_from, captured_by=captured_by,
         )
     return lm
@@ -335,14 +400,31 @@ async def apply_learned_to_conversion(
     # future client inheriting NextPower's source-system mappings.
     from app.services.client_service import client_id_for_conversion, scope_query
     _scope = await scope_query(await client_id_for_conversion(conversion))
-    learned = await LearnedMapping.find({
-        "kind": "column_mapping", "target_object": business_object, **_scope
-    }).to_list()
-    suppressed = await LearnedMapping.find({
-        "kind": "suppress_field", "target_object": business_object, **_scope
-    }).to_list()
+    # Scope to the legacy system this conversion actually reads from. Without it
+    # a SyteLine Item conversion inherits NetSuite's Item mappings, which point
+    # at columns its extract does not have. `$and` rather than merging keys,
+    # because scope_query already owns `$or` for the client scope and a second
+    # `$or` would overwrite it.
+    _src = await source_erp_for_conversion(conversion)
+    _srcq = source_scope(_src)
+
+    def _q(kind: str) -> dict:
+        base = {"kind": kind, "target_object": business_object}
+        if _scope and _srcq:
+            return {**base, "$and": [_scope, _srcq]}
+        return {**base, **_scope, **_srcq}
+
+    learned = await LearnedMapping.find(_q("column_mapping")).to_list()
+    suppressed = await LearnedMapping.find(_q("suppress_field")).to_list()
     if not learned and not suppressed:
         return 0
+    # An exact source match beats a legacy untagged row for the same target, so
+    # migrating the library does not require touching old rows: the moment a
+    # source-specific learning exists it takes over.
+    if _src:
+        _exact = {lm.target_field for lm in learned if lm.source_erp == _src}
+        learned = [lm for lm in learned
+                   if lm.source_erp == _src or lm.target_field not in _exact]
     suppressed_targets = {lm.target_field for lm in suppressed if lm.target_field}
     by_target: dict[str, list[LearnedMapping]] = {}
     for lm in learned:
