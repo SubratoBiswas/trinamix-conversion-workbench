@@ -567,6 +567,53 @@ async def translate_rule_endpoint(
     )
 
 
+@router.post("/conversions/{conversion_id}/rules/author")
+async def author_rule_endpoint(
+    conversion_id: str, payload: dict, user: User = Depends(get_current_user)
+):
+    """Write a rule once in plain English, learn it for several modules.
+
+    The Rule Author's translation box is opened FROM a target field and stamps
+    its learning with that one conversion's object, so an Item rule never reached
+    BOM. This takes the same sentence plus an EXPLICIT list of modules and writes
+    one learning each — client-scoped and stamped with the source system, so a
+    convention stated once governs every module the analyst names, and no more.
+
+    Body: {description, target_field, objects[], target_field_id?, source_column?}
+    """
+    from app.services.rule_authoring_service import (KNOWN_OBJECTS,
+                                                     author_rule_for_objects)
+
+    conv = await _require_conversion(conversion_id)
+    description = (payload.get("description") or "").strip()
+    target_field = (payload.get("target_field") or "").strip()
+    objects = payload.get("objects") or []
+    if not description:
+        raise HTTPException(400, "Describe the rule in a sentence first.")
+    if not target_field:
+        raise HTTPException(400, "Pick the target field the rule writes to.")
+    if not objects:
+        raise HTTPException(
+            400, f"Pick at least one module. Known: {', '.join(KNOWN_OBJECTS[:6])}…")
+
+    res = await author_rule_for_objects(
+        conv, description, target_field=target_field, objects=objects,
+        captured_by=getattr(user, "email", ""),
+        target_field_id=payload.get("target_field_id"),
+        source_column=payload.get("source_column"),
+    )
+    if res.get("error") and not res.get("written"):
+        raise HTTPException(422, res["error"])
+    return res
+
+
+@router.get("/rule-authoring/objects")
+async def rule_authoring_objects(_: User = Depends(get_current_user)):
+    """Modules a plain-English rule can be learned for."""
+    from app.services.rule_authoring_service import KNOWN_OBJECTS
+    return {"objects": list(KNOWN_OBJECTS)}
+
+
 @router.get("/conversions/{conversion_id}/rules", response_model=list[TransformationRuleOut])
 async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
     rules = await TransformationRule.find(

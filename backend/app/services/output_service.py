@@ -168,13 +168,28 @@ def _transform_frame(
         # strategy_overlay for the evidence. Enforce the analyst rules here,
         # after mapping, where nothing downstream can undo them.
         _ov = _strategy_directive(target_object, tgt.field_name)
+        # An analyst who APPROVED a source column for this field has overruled the
+        # strategy constant, and overwriting it produced the reported bug: Tax
+        # Organization Type showed CORPORATION on every row despite being mapped
+        # and approved. Same guard as _apply_control_defaults (QA #8), which this
+        # overlay was written after and never inherited.
+        #
+        # "suggested" deliberately does NOT count: auto-map guessing is exactly
+        # what the strategy constants exist to correct, so only a deliberate
+        # approve/override wins.
+        _explicit = bool(str(m.source_column or "").strip()
+                         and m.status in ("approved", "overridden"))
         if _ov:
-            if _ov.get("blank"):
+            if _ov.get("blank") and not _explicit:
                 col_values = [""] * n_rows
             elif "constant" in _ov:
                 cv = _ov["constant"]
+                # Filling blanks is always safe — it adds a value where the mapped
+                # column had none, which is what the constant is for. Replacing
+                # every row is the part an explicit mapping overrules.
                 col_values = ([v if str(v).strip() else cv for v in col_values]
-                              if _ov.get("fill_blank_only") else [cv] * n_rows)
+                              if (_ov.get("fill_blank_only") or _explicit)
+                              else [cv] * n_rows)
             elif "rule" in _ov:
                 if records is None:
                     records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
@@ -183,7 +198,11 @@ def _transform_frame(
         out_cols[tgt.field_name] = col_values
         lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
                                    "rules": rules, "status": m.status, "confidence": m.confidence,
-                                   "strategy_overlay": bool(_ov)}
+                                   "strategy_overlay": bool(_ov),
+                                   # Why a strategy constant did NOT take effect —
+                                   # otherwise "the overlay ran" and "the overlay
+                                   # was overruled" look identical in the trace.
+                                   "strategy_overruled_by_mapping": bool(_ov and _explicit)}
     return pd.DataFrame(out_cols), lineage
 
 

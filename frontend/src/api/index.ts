@@ -533,6 +533,28 @@ export const MappingApi = {
       }>(`/conversions/${conversionId}/rules/preview`, body)
       .then((r) => r.data),
   // Plain-English → structured rule (the "Describe this rule in plain English" box).
+  /** Write a rule once in plain English and LEARN it for several modules.
+   *  translateRule below only returns a rule for the current field; this stores
+   *  it, client- and source-scoped, against every module named — so a convention
+   *  stated for Item also governs BOM instead of being retyped there. */
+  authorRule: (
+    conversionId: string,
+    body: {
+      description: string;
+      target_field: string;
+      objects: string[];
+      target_field_id?: string;
+      source_column?: string;
+    }
+  ) =>
+    api.post<{
+      written: number;
+      objects: string[];
+      unknown?: string[];
+      source_erp?: string | null;
+      translated?: { rule_type?: string; explanation?: string; ambiguities?: string[] } | null;
+    }>(`/conversions/${conversionId}/rules/author`, body, { timeout: 120000 })
+      .then(r => r.data),
   translateRule: (
     conversionId: string,
     body: {

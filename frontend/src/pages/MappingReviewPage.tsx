@@ -1453,6 +1453,21 @@ export const MappingReviewPage: React.FC = () => {
 // number, or a delimited value → parts), or several source columns → one target
 // (CONCAT). Wires the mapping + its transform via the existing MappingApi so it
 // flows straight into Generate.
+/** Modules a plain-English rule can be learned for. Mirrors
+ *  rule_authoring_service.KNOWN_OBJECTS — the backend rejects anything else, so
+ *  a drift here shows up as "not a known module, skipped" rather than silently. */
+const RULE_MODULES = ["Supplier", "Customer", "Item", "BOM", "Employee",
+  "Subinventory", "Locator", "Price List", "Lot Number", "Serial Number"] as const;
+
+interface AuthoredRule {
+  written: number;
+  objects: string[];
+  unknown?: string[];
+  translated?: {
+    rule_type?: string; explanation?: string; ambiguities?: string[];
+  } | null;
+}
+
 const CompositeMappingModal: React.FC<{
   open: boolean;
   conversionId: number;
@@ -1462,9 +1477,16 @@ const CompositeMappingModal: React.FC<{
   onClose: () => void;
   onDone: (msg: string) => void | Promise<void>;
 }> = ({ open, conversionId, sourceColumns, targetFields, mappings, onClose, onDone }) => {
-  const [mode, setMode] = useState<"split" | "combine">("split");
+  const [mode, setMode] = useState<"split" | "combine" | "describe">("split");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // describe — one sentence, learned for every module the analyst names, so a
+  // convention stated once for Item also governs BOM instead of being retyped.
+  const [ruleText, setRuleText] = useState("");
+  const [ruleTarget, setRuleTarget] = useState("");
+  const [ruleObjects, setRuleObjects] = useState<string[]>([]);
+  const [ruleResult, setRuleResult] = useState<AuthoredRule | null>(null);
 
   // split
   const [srcCol, setSrcCol] = useState("");
@@ -1481,6 +1503,7 @@ const CompositeMappingModal: React.FC<{
   React.useEffect(() => {
     if (open) {
       setMode("split"); setErr(null); setSrcCol(""); setPreset("phone");
+      setRuleText(""); setRuleTarget(""); setRuleObjects([]); setRuleResult(null);
       setPhoneParts({}); setSep("-"); setSplitRows([{ fieldId: "", index: 0 }]);
       setCombineTarget(""); setCombineCols([]); setCombineSep(" ");
     }
@@ -1506,6 +1529,21 @@ const CompositeMappingModal: React.FC<{
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
+      if (mode === "describe") {
+        if (!ruleText.trim()) throw new Error("Describe the rule in a sentence first.");
+        if (!ruleTarget) throw new Error("Pick the target field the rule writes to.");
+        if (!ruleObjects.length) throw new Error("Pick at least one module.");
+        const res = await MappingApi.authorRule(String(conversionId), {
+          description: ruleText.trim(),
+          target_field: ruleTarget,
+          objects: ruleObjects,
+        });
+        setRuleResult(res);
+        // Deliberately does NOT close: the translation is only visible now, and
+        // closing would hide what was actually saved.
+        await onDone(`Learned "${ruleTarget}" for ${res.objects.join(", ")}.`);
+        return;
+      }
       if (mode === "split") {
         if (!srcCol) throw new Error("Pick the source column to split.");
         let n = 0;
@@ -1554,11 +1592,13 @@ const CompositeMappingModal: React.FC<{
       </>}>
       <div className="space-y-4 text-sm">
         <div className="flex gap-1.5">
-          {(["split", "combine"] as const).map((mo) => (
+          {(["split", "combine", "describe"] as const).map((mo) => (
             <button key={mo} onClick={() => setMode(mo)}
               className={cn("rounded-md border px-3 py-1 text-xs",
                 mode === mo ? "border-brand bg-brand text-white" : "border-line text-ink-muted hover:text-ink")}>
-              {mo === "split" ? "One source → many fields" : "Many sources → one field"}
+              {mo === "split" ? "One source → many fields"
+                : mo === "combine" ? "Many sources → one field"
+                : "Describe a rule"}
             </button>
           ))}
         </div>
@@ -1640,6 +1680,85 @@ const CompositeMappingModal: React.FC<{
               <input value={combineSep} onChange={(e) => setCombineSep(e.target.value)}
                 className="w-24 rounded-md border border-line px-2 py-1.5 text-xs" />
             </div>
+          </>
+        )}
+
+        {mode === "describe" && (
+          <>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Describe the rule</div>
+              <textarea
+                value={ruleText}
+                onChange={(e) => setRuleText(e.target.value)}
+                rows={3}
+                placeholder={"e.g. Trim the part number and upper-case it\n"
+                  + "e.g. If the remittance email has a value set Delivery Method to EMAIL, else FAX"}
+                className="w-full rounded-md border border-line px-2.5 py-2 text-xs"
+              />
+              <p className="mt-1 text-[11px] text-ink-subtle">
+                Written in plain English and turned into a transformation rule. You
+                see the translation before anything is saved.
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Target field it writes to</div>
+              <select value={ruleTarget} onChange={(e) => setRuleTarget(e.target.value)}
+                className="w-full rounded-md border border-line px-2 py-1.5 text-xs">
+                <option value="">Choose a target field…</option>
+                {targetFields.map((f) => (
+                  <option key={String(f.id)} value={f.field_name}>{f.field_name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-ink">Learn it for these modules</div>
+              {/* Explicit, never inferred. Guessing that an Item rule also suits
+                  Customer is the kind of silent over-reach that makes a learning
+                  library untrustworthy. */}
+              <div className="flex flex-wrap gap-1.5">
+                {RULE_MODULES.map((o) => {
+                  const on = ruleObjects.includes(o);
+                  return (
+                    <button key={o} type="button"
+                      onClick={() => setRuleObjects((xs) =>
+                        on ? xs.filter((x) => x !== o) : [...xs, o])}
+                      className={cn("rounded-full border px-2.5 py-1 text-[11px]",
+                        on ? "border-brand bg-brand-subtle text-brand-dark"
+                           : "border-line text-ink-muted hover:text-ink")}>
+                      {o}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[11px] text-ink-subtle">
+                Saved against this client and source system only — a rule about this
+                extract is not a fact about NetSuite generally.
+              </p>
+            </div>
+
+            {ruleResult && (
+              <div className="rounded-lg border border-line bg-canvas p-2.5 text-[11px]">
+                <div className="font-medium text-ink">
+                  Learned for {ruleResult.objects.join(", ") || "nothing"} as{" "}
+                  <span className="font-mono">{ruleResult.translated?.rule_type}</span>
+                </div>
+                {ruleResult.translated?.explanation && (
+                  <div className="mt-0.5 text-ink-muted">{ruleResult.translated.explanation}</div>
+                )}
+                {!!ruleResult.translated?.ambiguities?.length && (
+                  <div className="mt-1 text-warning">
+                    Check: {ruleResult.translated.ambiguities.join(" · ")}
+                  </div>
+                )}
+                {!!ruleResult.unknown?.length && (
+                  <div className="mt-1 text-danger">
+                    Not a known module, skipped: {ruleResult.unknown.join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 
