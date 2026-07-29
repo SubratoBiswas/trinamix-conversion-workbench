@@ -33,23 +33,29 @@ HARD_ERROR_TYPES = {
 }
 
 
-def apply_cleansing(df: pd.DataFrame, rules: Optional[list] = None) -> tuple[pd.DataFrame, list]:
-    """Cleanse the merged converted frame. Always trims leading/trailing whitespace,
-    then applies each custom cleansing rule for a named field. Returns (df, fixes)
-    where fixes = [{field, rule, count}]."""
+def apply_cleansing(df: pd.DataFrame, rules: Optional[list] = None,
+                    profile: Optional[dict] = None) -> tuple[pd.DataFrame, list]:
+    """Cleanse the merged converted frame, then apply each custom cleansing rule
+    for a named field. Returns (df, fixes) where fixes = [{field, rule, count}].
+
+    The standing cleanse is the ``cleansing_rules`` profile — whitespace and edge
+    punctuation plus unicode/control-character normalisation by default, with case
+    and legal-suffix standardisation available per field. It supersedes the bare
+    whitespace trim that used to live here.
+
+    Runs AFTER duplicate decisions (``build_converted_dataframe`` applies those
+    first), so only rows that actually ship get cleansed.
+    """
     fixes: list = []
     if df is None or len(df) == 0:
         return df, fixes
     df = df.copy()
-    # Universal safe cleanse: strip whitespace on text columns.
-    for c in df.columns:
-        if df[c].dtype == object:
-            before = df[c]
-            stripped = before.map(lambda v: v.strip() if isinstance(v, str) else v)
-            n = int((stripped.astype(str) != before.astype(str)).sum())
-            if n:
-                fixes.append({"field": str(c), "rule": "TRIM", "count": n})
-            df[c] = stripped
+
+    from app.services.cleansing_rules import cleanse_frame
+    df, findings = cleanse_frame(df, profile)
+    fixes.extend({"field": f["field"], "rule": f["rule"], "count": f["count"],
+                  "label": f.get("label"), "examples": f.get("examples", [])}
+                 for f in findings)
 
     for r in (rules or []):
         f = r.get("field") or r.get("target_field")

@@ -5,6 +5,7 @@ import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -239,6 +240,11 @@ async def duplicate_candidates(
     threshold: float = Query(0.86, ge=0.5, le=1.0),
     use_ai: bool = Query(False),
     max_rows: int = Query(8000, ge=100, le=50000),
+    # The scanner caps the clusters it RETURNS while `cluster_count` reports the
+    # true total. At the old fixed cap of 100 a 343-cluster scan left 243 groups
+    # unreachable — and the decided/undecided counters described only the visible
+    # slice, so the screen read as fully reviewed when it was not.
+    max_clusters: int = Query(100, ge=10, le=2000),
     _: User = Depends(get_current_user),
 ):
     """Fuzzy duplicate / entity resolution over this interface's MERGED data —
@@ -257,7 +263,7 @@ async def duplicate_candidates(
     import asyncio as _aio
     result = await _aio.to_thread(
         find_duplicate_clusters, merged, c.target_object or "", threshold=threshold,
-        max_rows=max_rows)
+        max_rows=max_rows, max_clusters=max_clusters)
     result["sources"] = names
     if use_ai:
         result = await ai_adjudicate_clusters(result)
@@ -281,7 +287,14 @@ async def duplicate_candidates(
                                            decided=decided, learned_keep_all=learned)
     result["identity_columns"] = idc
     result["decided_count"] = sum(1 for cl in result["clusters"] if cl.get("decision"))
+    # Undecided counts only what was RETURNED. `hidden_count` names the rest
+    # explicitly rather than letting the difference against `cluster_count` pass
+    # unnoticed — a silently truncated review list reads as a completed one.
     result["undecided_count"] = len(result["clusters"]) - result["decided_count"]
+    result["returned_count"] = len(result["clusters"])
+    result["hidden_count"] = max(
+        0, int(result.get("cluster_count") or 0) - len(result["clusters"]))
+    result["max_clusters"] = max_clusters
     return result
 
 
@@ -324,6 +337,85 @@ async def review_bundle(
             "cleansing": out,
             "cleansing_open": sum(1 for o in out if not o["verdict"]),
             "duplicate_decisions": sum(1 for d in dec if d.scope == "duplicate")}
+
+
+@output_router.get("/{conversion_id}/cleansing-profile")
+async def get_cleansing_profile(
+    conversion_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Which cleansing families run at generation for this conversion.
+
+    Returns the catalogue too, so the UI does not hardcode family names or which
+    of them rewrite business values — that judgement belongs next to the rules.
+    """
+    from app.services import cleansing_rules as cr
+    c = await _require_conversion(conversion_id)
+    prof = getattr(c, "cleansing_profile", None) or cr.default_profile([])
+    return {
+        "conversion_id": str(c.id),
+        "profile": prof,
+        "is_default": not getattr(c, "cleansing_profile", None),
+        "families": [
+            {"key": f, "label": cr.FAMILY_LABEL[f],
+             "safe": f in cr.SAFE_FAMILIES,
+             "enabled": f in (prof.get("families") or [])}
+            for f in cr.FAMILIES
+        ],
+    }
+
+
+@output_router.put("/{conversion_id}/cleansing-profile")
+async def put_cleansing_profile(
+    conversion_id: str,
+    payload: dict,
+    _: User = Depends(get_current_user),
+):
+    """Replace the conversion's cleansing profile. Unknown family names are
+    dropped rather than stored, so a typo cannot silently disable cleansing."""
+    from app.services import cleansing_rules as cr
+    c = await _require_conversion(conversion_id)
+    fams = [f for f in (payload.get("families") or []) if f in cr.FAMILIES]
+    per_field = {str(k): [f for f in (v or []) if f in cr.FAMILIES]
+                 for k, v in (payload.get("per_field") or {}).items()}
+    profile = {
+        "families": fams,
+        "ascii_fold": bool(payload.get("ascii_fold")),
+        "per_field": per_field,
+        "exclude_fields": [str(x) for x in (payload.get("exclude_fields") or [])],
+    }
+    c.cleansing_profile = profile
+    c.updated_at = datetime.utcnow()
+    await c.save()
+    return {"conversion_id": str(c.id), "profile": profile}
+
+
+@output_router.get("/{conversion_id}/cleansing-preview")
+async def cleansing_preview(
+    conversion_id: str,
+    families: Optional[str] = Query(
+        None, description="Comma-separated family keys; omit to use the saved profile."),
+    max_rows: int = Query(2000, ge=50, le=20000),
+    _: User = Depends(get_current_user),
+):
+    """Dry run: what the cleansing families WOULD change, without changing it.
+
+    Deliberately previewable for families the conversion has not enabled — deciding
+    whether to turn one on is the whole reason to look. Runs on the same converted
+    frame generation uses, so the before/after pairs are the real values.
+    """
+    from app.services import cleansing_rules as cr
+    from app.services.output_service import build_converted_dataframe
+    import asyncio as _aio
+    c = await _require_conversion(conversion_id)
+    df, _lineage = await build_converted_dataframe(c, max_rows=max_rows)
+    fam = ([f.strip() for f in families.split(",") if f.strip() in cr.FAMILIES]
+           if families else None)
+    rep = await _aio.to_thread(
+        cr.preview_frame, df, getattr(c, "cleansing_profile", None), families=fam)
+    rep["rows_scanned"] = int(len(df)) if df is not None else 0
+    rep["conversion_id"] = str(c.id)
+    return rep
 
 
 @output_router.post("/{conversion_id}/decisions")

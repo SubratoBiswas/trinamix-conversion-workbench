@@ -7,9 +7,12 @@ import { ConversionsApi, OutputApi } from "@/api";
 import {
   Button, Card, CardBody, EmptyState, Modal, PageLoader, PageTitle, Pill, Tabs,
 } from "@/components/ui/Primitives";
-import { confidenceTone, severityTone } from "@/lib/utils";
+import { cn, confidenceTone, severityTone } from "@/lib/utils";
 import type {
+  CleansingFamily,
   CleansingFinding,
+  CleansingPreview,
+  CleansingProfileInfo,
   CleansingVerdict,
   Conversion,
   DecisionInput,
@@ -93,6 +96,14 @@ export const OutputPreviewPage: React.FC = () => {
   // A saved decision changes what generation would produce — the file on disk is stale.
   const [decisionsDirty, setDecisionsDirty] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // Cleansing rule families: which run at generation, and a dry-run of what they
+  // would change. Kept separate from the findings list because these are STANDING
+  // rules, not one-off verdicts on a specific flagged value.
+  const [profile, setProfile] = useState<CleansingProfileInfo | null>(null);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [cleansePreview, setCleansePreview] = useState<CleansingPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   const setBusyKey = (key: string, on: boolean) =>
     setBusy(prev => ({ ...prev, [key]: on }));
@@ -170,6 +181,7 @@ export const OutputPreviewPage: React.FC = () => {
     ConversionsApi.get(pid).then(setProject);
     refresh();
     loadReview();
+    void loadProfile();
   }, [pid]);
 
   const runGenerate = async () => {
@@ -321,6 +333,49 @@ export const OutputPreviewPage: React.FC = () => {
     } finally { setBulkBusy(false); }
   };
 
+  // ─── Cleansing rule families ───
+  const loadProfile = async () => {
+    if (!pid) return;
+    setProfileError(null);
+    try {
+      setProfile(await OutputApi.cleansingProfile(pid));
+    } catch (e) { setProfileError(errText(e)); }
+  };
+
+  const toggleFamily = async (key: CleansingFamily) => {
+    if (!pid || !profile) return;
+    const on = profile.profile.families.includes(key);
+    const families = on
+      ? profile.profile.families.filter(f => f !== key)
+      : [...profile.profile.families, key];
+    const next = { ...profile.profile, families };
+    setProfile({ ...profile, profile: next, is_default: false,
+                 families: profile.families.map(f =>
+                   f.key === key ? { ...f, enabled: !on } : f) });
+    setProfileBusy(true);
+    setProfileError(null);
+    try {
+      await OutputApi.saveCleansingProfile(pid, next);
+      // The rules change what generation writes, exactly like a duplicate verdict,
+      // so the same "re-generate" banner applies.
+      setDecisionsDirty(true);
+      setCleansePreview(null);
+    } catch (e) {
+      setProfileError(errText(e));
+      await loadProfile();                       // roll back to the server's truth
+    } finally { setProfileBusy(false); }
+  };
+
+  const runCleansePreview = async (families?: CleansingFamily[]) => {
+    if (!pid) return;
+    setPreviewBusy(true);
+    setProfileError(null);
+    try {
+      setCleansePreview(await OutputApi.cleansingPreview(pid, families));
+    } catch (e) { setProfileError(errText(e)); }
+    finally { setPreviewBusy(false); }
+  };
+
   // ─── Cleansing decisions ───
   const patchFinding = (key: string, verdict: CleansingVerdict | null) =>
     setReview(prev => {
@@ -459,6 +514,25 @@ export const OutputPreviewPage: React.FC = () => {
     const err = rowError[cl.cluster_key];
     const decision = cl.decision;
     const learned = decision?.source === "learned";
+
+    // What each row's fate WOULD be. Driven by the saved verdict when there is
+    // one, otherwise by the pending survivor selection — so picking a radio shows
+    // immediately which rows drop, instead of leaving the list looking untouched
+    // until the file is regenerated.
+    const pendingVerdict: DuplicateVerdict | null =
+      decision?.verdict ?? (chosen ? "keep_survivor" : null);
+    const fateOf = (memberKey: string | null | undefined): "keep" | "drop" | null => {
+      if (!pendingVerdict || !memberKey) return null;
+      if (pendingVerdict === "keep_all") return "keep";
+      if (pendingVerdict === "exclude") return "drop";
+      return memberKey === chosen ? "keep" : "drop";   // merge | keep_survivor
+    };
+    const survivingRows =
+      pendingVerdict === "keep_all" ? cl.members.length
+        : pendingVerdict === "exclude" ? 0
+        : pendingVerdict ? 1 : cl.members.length;
+    const projected = pendingVerdict && survivingRows !== cl.members.length;
+
     return (
       <div key={cl.cluster_key} className="rounded-lg border border-line bg-white">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
@@ -466,7 +540,15 @@ export const OutputPreviewPage: React.FC = () => {
             <Pill tone={cl.confidence >= 0.92 ? "danger" : cl.confidence >= 0.8 ? "warning" : "neutral"}>
               {Math.round(cl.confidence * 100)}% match
             </Pill>
-            <span className="text-xs text-ink-muted">{plural(cl.size, "record")}</span>
+            <span className="text-xs text-ink-muted">
+              {plural(cl.size, "record")}
+              {projected && (
+                <span className="ml-1 font-medium text-brand-dark">
+                  → {survivingRows} in the file
+                  {!decision && " (not saved yet)"}
+                </span>
+              )}
+            </span>
             {cl.verdict && (
               <Pill tone={cl.verdict === "same" ? "danger" : cl.verdict === "different" ? "success" : "neutral"}>
                 AI: {cl.verdict}
@@ -493,9 +575,20 @@ export const OutputPreviewPage: React.FC = () => {
             </thead>
             <tbody>
               {cl.members.map(m => {
+                // Row keys are per-row (identity hash + content + occurrence), so
+                // this matches exactly one row. It used to be the identity hash
+                // alone, which every identical-name twin shared — selecting one
+                // lit up three and "keep survivor" could not say which to keep.
                 const isSurvivor = !!m.key && m.key === chosen;
+                const fate = fateOf(m.key);
                 return (
-                  <tr key={`${cl.cluster_key}-${m.row}`} className={isSurvivor ? "bg-brand-subtle/60" : undefined}>
+                  <tr
+                    key={`${cl.cluster_key}-${m.key ?? m.row}`}
+                    className={cn(
+                      isSurvivor && "bg-brand-subtle/60",
+                      fate === "drop" && "text-ink-subtle line-through opacity-60",
+                    )}
+                  >
                     <td>
                       <label className="flex items-center gap-1.5 text-[11px] text-ink-muted">
                         <input
@@ -510,7 +603,14 @@ export const OutputPreviewPage: React.FC = () => {
                             setErrorKey(cl.cluster_key, null);
                           }}
                         />
-                        {isSurvivor ? <span className="font-medium text-brand-dark">keep</span> : null}
+                        {fate === "keep" && (
+                          <span className="font-medium text-brand-dark">
+                            {decision?.verdict === "merge" ? "merged into" : "keep"}
+                          </span>
+                        )}
+                        {fate === "drop" && (
+                          <span className="font-medium text-ink-subtle">drop</span>
+                        )}
                       </label>
                     </td>
                     <td className="text-ink-muted">{m.row + 1}</td>
@@ -607,6 +707,18 @@ export const OutputPreviewPage: React.FC = () => {
             {dupes.ai_used && <Pill tone="brand">AI-adjudicated</Pill>}
           </div>
 
+          {/* The scanner returns at most `max_clusters`; `cluster_count` is the true
+              total. Without this the decided/undecided pills describe only the
+              visible slice and the list looks complete when it is not. */}
+          {(dupes.hidden_count ?? 0) > 0 && (
+            <div className="mb-3 rounded-lg border border-line bg-warning-subtle px-3 py-2 text-[11px] text-warning">
+              Showing the {dupes.returned_count ?? dupes.clusters.length} highest-confidence
+              groups. <strong>{dupes.hidden_count} more are not listed</strong> and cannot be
+              decided here — the counters above cover the visible groups only. Raise the
+              limit to review them all.
+            </div>
+          )}
+
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-canvas px-3 py-2">
             <Button
               variant="secondary"
@@ -667,8 +779,129 @@ export const OutputPreviewPage: React.FC = () => {
     </CardBody>
   );
 
+  const renderCleansingRules = () => {
+    if (!profile) return null;
+    const active = profile.profile.families;
+    return (
+      <div className="mb-4 rounded-lg border border-line bg-canvas p-3">
+        <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-xs font-medium text-ink">Cleansing rules</p>
+            <p className="mt-0.5 max-w-2xl text-[11px] text-ink-muted">
+              Standing rules applied to every value at generation, after duplicate
+              decisions — so only the rows that actually ship get cleansed.
+              {profile.is_default && " Using the safe defaults."}
+            </p>
+          </div>
+          <Button variant="secondary" loading={previewBusy}
+                  onClick={() => void runCleansePreview(
+                    active.length ? active : undefined)}>
+            <Sparkles className="h-4 w-4" /> Preview changes
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {profile.families.map(f => {
+            const on = active.includes(f.key);
+            return (
+              <label
+                key={f.key}
+                className={cn(
+                  "flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] transition",
+                  on ? "border-brand bg-brand-subtle/40" : "border-line bg-white",
+                  profileBusy && "pointer-events-none opacity-60",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-3.5 w-3.5 accent-brand"
+                  checked={on}
+                  disabled={profileBusy}
+                  onChange={() => void toggleFamily(f.key)}
+                />
+                <span>
+                  <span className="font-medium text-ink">{f.label}</span>
+                  {/* An unsafe family REWRITES business values. Saying so on the
+                      control matters more than in a doc nobody opens — "Acme
+                      Limited" becoming "Acme Ltd" changes a legal name in a
+                      client-facing FBDI. */}
+                  {!f.safe && (
+                    <span className="ml-1 text-warning">· rewrites values</span>
+                  )}
+                  <span className="block text-ink-subtle">
+                    {f.key === "whitespace_punct" && "Trims, collapses runs, drops trailing dots"}
+                    {f.key === "special_chars" && "Control/zero-width chars, smart quotes, dashes"}
+                    {f.key === "case" && "Title case for names, upper for codes"}
+                    {f.key === "legal_suffix" && "Ltd. / Limited → one canonical form"}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        {profileError && (
+          <p className="mt-2 text-[11px] text-danger">{profileError}</p>
+        )}
+
+        {cleansePreview && (
+          <div className="mt-3 rounded-lg border border-line bg-white p-2.5">
+            <p className="mb-2 text-[11px] text-ink-muted">
+              <span className="font-medium text-ink">
+                {cleansePreview.total_changes.toLocaleString()} value(s)
+              </span>{" "}
+              across {plural(cleansePreview.fields_affected, "field")} would change
+              {typeof cleansePreview.rows_scanned === "number"
+                && ` (${cleansePreview.rows_scanned.toLocaleString()} rows scanned)`}.
+              Nothing has been written — this is a dry run.
+            </p>
+            {cleansePreview.findings.length === 0 ? (
+              <p className="text-[11px] text-ink-subtle">
+                No value would change under these rules.
+              </p>
+            ) : (
+              <div className="max-h-72 overflow-y-auto">
+                <table className="table-shell">
+                  <thead>
+                    <tr>
+                      <th>Field</th><th>Rule</th><th>Rows</th>
+                      <th>Before</th><th>After</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cleansePreview.findings.slice(0, 40).map(f => (
+                      <tr key={`${f.field}-${f.rule}`}>
+                        <td className="whitespace-nowrap font-medium">{f.field}</td>
+                        <td className="whitespace-nowrap text-ink-muted">
+                          {f.label ?? f.rule}
+                        </td>
+                        <td className="text-ink-muted">{f.count.toLocaleString()}</td>
+                        <td className="max-w-xs truncate text-ink-subtle line-through">
+                          {f.examples[0]?.before ?? ""}
+                        </td>
+                        <td className="max-w-xs truncate text-ink">
+                          {f.examples[0]?.after ?? ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {cleansePreview.findings.length > 40 && (
+                  <p className="mt-1 text-[11px] text-ink-subtle">
+                    Showing the 40 highest-impact of {cleansePreview.findings.length} field/rule pairs.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderCleansing = () => (
     <CardBody>
+      {renderCleansingRules()}
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <p className="max-w-2xl text-xs text-ink-muted">
           Data-quality findings raised against this interface. <span className="font-medium">Apply</span> lets the

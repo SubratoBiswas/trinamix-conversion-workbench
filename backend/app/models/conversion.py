@@ -39,6 +39,12 @@ class Conversion(Document):
     output_status: Optional[str] = None
     output_error: Optional[str] = None
     output_started_at: Optional[datetime] = None
+    # Which cleansing families run at generation, and any per-field overrides.
+    # See services/cleansing_rules.default_profile — None means "use the safe
+    # defaults" (whitespace/punctuation + unicode), which is what an untouched
+    # conversion gets. Case and legal-suffix standardisation rewrite legal entity
+    # names, so they are only ever active because someone switched them on here.
+    cleansing_profile: Optional[dict] = None
     created_by: str = "admin"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

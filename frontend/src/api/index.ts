@@ -1,6 +1,9 @@
 import { api } from "./client";
 import type {
   AutoPopulateResult,
+  CleansingPreview,
+  CleansingProfile,
+  CleansingProfileInfo,
   Conversion,
   ConversionProject,            // alias kept for legacy callers
   ConvertedOutput,
@@ -719,9 +722,30 @@ export const OutputApi = {
       `/conversions/${conversionId}/reconciliation`).then(r => r.data),
   /** Fuzzy duplicate / entity resolution over the merged interface data — clusters
    *  of records likely to be the same entity despite non-identical keys/names. */
-  duplicateCandidates: (conversionId: string, opts?: { threshold?: number; useAi?: boolean }) =>
+  duplicateCandidates: (conversionId: string,
+                        opts?: { threshold?: number; useAi?: boolean; maxClusters?: number }) =>
     api.get<DuplicateCandidates>(`/conversions/${conversionId}/duplicate-candidates`, {
-      params: { threshold: opts?.threshold ?? 0.86, use_ai: opts?.useAi ?? false },
+      params: {
+        threshold: opts?.threshold ?? 0.86,
+        use_ai: opts?.useAi ?? false,
+        // The scan caps what it RETURNS while cluster_count reports the true
+        // total; at the server default of 100 a 343-cluster scan hid 243 groups.
+        max_clusters: opts?.maxClusters ?? 100,
+      },
+      timeout: 120000,
+    }).then(r => r.data),
+  /** Which cleansing families run at generation, plus the family catalogue. */
+  cleansingProfile: (conversionId: string) =>
+    api.get<CleansingProfileInfo>(`/conversions/${conversionId}/cleansing-profile`)
+      .then(r => r.data),
+  saveCleansingProfile: (conversionId: string, profile: CleansingProfile) =>
+    api.put<{ profile: CleansingProfile }>(
+      `/conversions/${conversionId}/cleansing-profile`, profile).then(r => r.data),
+  /** Dry run — what the families WOULD change. `families` overrides the saved
+   *  profile so a family can be previewed before it is switched on. */
+  cleansingPreview: (conversionId: string, families?: string[]) =>
+    api.get<CleansingPreview>(`/conversions/${conversionId}/cleansing-preview`, {
+      params: families?.length ? { families: families.join(",") } : undefined,
       timeout: 120000,
     }).then(r => r.data),
   /** Everything still to adjudicate before generation: open cleansing findings plus

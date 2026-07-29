@@ -727,12 +727,61 @@ export interface DuplicateCandidates {
   cluster_count?: number;
   duplicate_rows?: number;
   truncated?: boolean;
+  /** How many clusters were actually returned (at most `max_clusters`). */
+  returned_count?: number;
+  /** cluster_count - returned_count: groups the scan found but did NOT send, so
+   *  they cannot be reviewed or decided here. decided_count / undecided_count
+   *  describe the RETURNED groups only. */
+  hidden_count?: number;
+  max_clusters?: number;
   note?: string;
   ai_used?: boolean;
   sources?: string[];
   decided_count?: number;
   undecided_count?: number;
   clusters: DuplicateCluster[];
+}
+
+/** Cleansing rule families — mirrors services/cleansing_rules.FAMILIES. */
+export type CleansingFamily =
+  | "whitespace_punct" | "special_chars" | "case" | "legal_suffix";
+
+export interface CleansingProfile {
+  families: CleansingFamily[];
+  ascii_fold?: boolean;
+  /** Per-column override; a column listed here ignores `families`. */
+  per_field?: Record<string, CleansingFamily[]>;
+  exclude_fields?: string[];
+}
+
+export interface CleansingProfileInfo {
+  conversion_id: string;
+  profile: CleansingProfile;
+  /** True while the conversion has never been configured (safe defaults apply). */
+  is_default: boolean;
+  families: {
+    key: CleansingFamily;
+    label: string;
+    /** Safe families only remove meaningless characters. The others REWRITE
+     *  business values (casing, legal suffixes), so they default to off. */
+    safe: boolean;
+    enabled: boolean;
+  }[];
+}
+
+export interface CleansingPreview {
+  conversion_id?: string;
+  families: CleansingFamily[];
+  total_changes: number;
+  fields_affected: number;
+  rows_scanned?: number;
+  findings: {
+    field: string;
+    rule: CleansingFamily;
+    label?: string;
+    count: number;
+    examples: { before: string; after: string }[];
+  }[];
 }
 
 export interface CleansingFinding {

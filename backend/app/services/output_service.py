@@ -761,7 +761,9 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         _cid = await client_id_for_conversion(conversion)
         _cleanse_rules = await load_rules(_dq_obj, _cid, "cleansing")
         _val_rules = await load_rules(_dq_obj, _cid, "validation")
-        df, _dq_fixes = await asyncio.to_thread(apply_cleansing, df, _cleanse_rules)
+        df, _dq_fixes = await asyncio.to_thread(
+            apply_cleansing, df, _cleanse_rules,
+            getattr(conversion, "cleansing_profile", None))
         _tf = [{"field_name": f.field_name, "required": bool(f.required),
                 "data_type": f.data_type, "max_length": f.max_length,
                 "format_mask": f.format_mask} for f in fields]
@@ -1302,7 +1304,9 @@ async def preload_report(conversion: Conversion, sample_rows: int = 3000) -> dic
     cid = await client_id_for_conversion(conversion)
     cleanse_rules = await load_rules(obj, cid, "cleansing")
     val_rules = await load_rules(obj, cid, "validation")
-    df2, fixes = await asyncio.to_thread(apply_cleansing, df, cleanse_rules)
+    df2, fixes = await asyncio.to_thread(
+        apply_cleansing, df, cleanse_rules,
+        getattr(conversion, "cleansing_profile", None))
     tf = [{"field_name": f.field_name, "required": bool(f.required), "data_type": f.data_type,
            "max_length": f.max_length, "format_mask": f.format_mask} for f in fields]
     issues = await asyncio.to_thread(validate_frame, df2, tf, val_rules, sample_rows)
