@@ -40,6 +40,17 @@ class LearnedMapping(Document):
     deleted_at: Optional[datetime] = None
     deleted_by: Optional[str] = None
 
+    # ── Sheet scope ──────────────────────────────────────────────────────
+    # A learning is keyed by target field NAME, and Oracle repeats the same name
+    # across many interface sheets — Customer has 19. So approving one mapping
+    # applied it to EVERY sheet carrying that name, including ones where the
+    # field must stay blank (bank, pay). These two lists make that controllable:
+    # `sheets` restricts a learning to a named set, `exclude_sheets` removes it
+    # from specific ones. Both empty = every sheet, which is the previous
+    # behaviour and what every existing row means, so nothing needs migrating.
+    sheets: list[str] = Field(default_factory=list)
+    exclude_sheets: list[str] = Field(default_factory=list)
+
     class Settings:
         name = "learned_mappings"
 

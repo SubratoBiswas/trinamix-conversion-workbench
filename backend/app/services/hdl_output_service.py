@@ -18,6 +18,7 @@ fan-out.
 """
 from __future__ import annotations
 
+import io
 import logging
 import re
 import zipfile
@@ -97,6 +98,10 @@ def render_cell(spec: dict, resolve) -> str:
     kind = spec.get("kind")
     if kind == "const":
         return _clean(spec.get("value"))
+    if kind == "const_if_blank":
+        # The extract wins; the constant is the open-ended fallback (strategy 9.1).
+        got = _clean(resolve(spec["name"], spec.get("source")))
+        return got or _clean(spec.get("value"))
     if kind == "blank":
         return ""
     if kind == "key":
@@ -185,6 +190,34 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             return row[col] if col else None
         return render_cell(spec, _resolve)
 
+    # ── Scope: active employees only (strategy assumptions A-02 / A-03) ──────
+    # "An employee is active and in scope if ActiveStatus = Active"; inactive and
+    # terminated employees are excluded from the load file. Every row was going in.
+    #
+    # Fails OPEN: if the column is absent or nothing matches, NOTHING is dropped.
+    # Silently emitting an empty load file because a column was renamed would be
+    # far worse than loading a few leavers, and the count below makes the
+    # exclusion visible either way.
+    _ACTIVE_VALUES = {"active", "a", "y", "yes", "true", "1"}
+    _excluded_inactive = 0
+    _active_col = col_by_norm.get(_norm("Active Status")) or col_by_norm.get(_norm("ActiveStatus"))
+    if _active_col is not None:
+        _mask = src[_active_col].map(lambda v: _clean(v).lower() in _ACTIVE_VALUES)
+        _kept = int(_mask.sum())
+        if _kept:
+            _excluded_inactive = int(len(src) - _kept)
+            src = src[_mask]
+            if _excluded_inactive:
+                logger.info("HDL: excluded %d inactive/terminated employee row(s) "
+                         "per strategy A-02/A-03", _excluded_inactive)
+        else:
+            logger.warning("HDL: no row matched ActiveStatus=Active in %r — keeping "
+                        "ALL rows rather than shipping an empty load file",
+                        _active_col)
+    else:
+        logger.warning("HDL: no Active Status column found — every row kept; "
+                    "strategy A-03 expects inactive employees to be excluded")
+
     def _rows_for(scope: str, dedup_source: str | None):
         if scope == "none":
             return []
@@ -215,8 +248,13 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
         # number is meaningful; column_count = total attributes across components.
         total_rows = 0
         total_attrs = 0
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for obj in HDL_LOAD_ORDER:
+        # HCM Data Loader takes ONE .dat per zip, and strategy section 11 loads the
+        # objects in strict sequence — each depends on records the previous one
+        # created. A single zip holding all nine forces the analyst to unpack and
+        # re-zip before every step, so each object gets its own zip, numbered in
+        # load order, inside the download bundle (CW_Issues #26).
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as outer:
+            for seq, obj in enumerate(HDL_LOAD_ORDER, start=1):
                 spec = HDL_OBJECTS[obj]
                 rows = _rows_for(spec["row_scope"], spec.get("dedup_source"))
                 total_rows = max(total_rows, len(rows))
@@ -228,7 +266,14 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                     for r in rows:
                         vals = [_cell(r, f) for f in comp_fields]
                         lines.append("MERGE|" + comp_name + "|" + "|".join(vals))
-                zf.writestr(spec["dat"], "\n".join(lines) + "\n")
+                dat = "\n".join(lines) + "\n"
+
+                inner = io.BytesIO()
+                with zipfile.ZipFile(inner, "w", zipfile.ZIP_DEFLATED) as iz:
+                    iz.writestr(spec["dat"], dat)
+                # The numeric prefix is the load sequence, so the upload order is
+                # not something the analyst has to remember from the document.
+                outer.writestr(f"{seq:02d}_{obj}.zip", inner.getvalue())
         return total_rows, total_attrs
 
     import asyncio

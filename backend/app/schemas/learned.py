@@ -32,6 +32,12 @@ class LearnedMappingUpdate(BaseModel):
     target_field: Optional[str] = None
     rule_type: Optional[str] = None
     rule_config: Optional[Any] = None
+    # Restrict a learning to specific interface sheets, or remove it from some.
+    # Both empty = every sheet (the previous behaviour). Needed because Oracle
+    # repeats a field name across sheets, so one approval used to reach all of
+    # them — including sheets where the field must stay blank.
+    sheets: Optional[list[str]] = None
+    exclude_sheets: Optional[list[str]] = None
 
 
 class LearnedMappingOut(LearnedMappingBase):

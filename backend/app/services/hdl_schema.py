@@ -65,6 +65,17 @@ def _const(name, value, required=True):
     return {"name": name, "kind": "const", "value": value, "required": required}
 
 
+def _const_if_blank(name, value, source, required=True):
+    """Constant used ONLY when the extract supplies no value for ``source``.
+
+    Strategy 9.1 words EffectiveEndDate as "applied when no end date is present
+    in the extract (open-ended)". A plain constant overwrites a real end date the
+    extract does provide, which is a different rule from the one signed off.
+    """
+    return {"name": name, "kind": "const_if_blank", "value": value,
+            "source": source, "required": required}
+
+
 def _key(name, prefix, sep="_", key_source=_EMP_ID, required=True):
     return {"name": name, "kind": "key", "prefix": prefix, "sep": sep,
             "key_source": key_source, "required": required}
@@ -90,7 +101,9 @@ LOCATION = ("Location", [
     _const("SetCode", "COMMON"),
     _vmap("ActiveStatus", "Active Status", ACTIVE_STATUS_MAP),
     _date("EffectiveStartDate", _HIRE),
-    _const("EffectiveEndDate", "4712/12/31", required=False),
+    # Strategy 9.1: open-ended ONLY when the extract has no end date.
+    _const_if_blank("EffectiveEndDate", "4712/12/31", "Location End Date",
+                    required=False),
     _src("LocationCode", "Location"),
     _src("LocationName", "Location"),
     _blank("AddressLine1", required=False),

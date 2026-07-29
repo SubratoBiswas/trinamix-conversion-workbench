@@ -74,6 +74,36 @@ async def source_erp_for_conversion(conversion) -> str | None:
     return None
 
 
+def sheet_allowed(learning, sheet_name: str | None) -> bool:
+    """May this learning touch this interface sheet?
+
+    Oracle repeats a field name across sheets — Customer has 19 — and learnings
+    are keyed by name, so one approval reached all of them. That is right for
+    ``id -> Party Original System Reference`` and wrong for the same field on
+    HZ_IMP_CLASSIFICS_T, and wrong for Receipt Method on the banks sheet where it
+    must stay blank.
+
+    Empty lists mean every sheet: that is the behaviour every existing row was
+    captured under, so turning this on changes nothing until someone narrows a
+    learning deliberately. Exclusion wins over inclusion — a sheet named in both
+    is excluded, because a person listing it under "never" is stating the
+    stronger intent.
+    """
+    only = [s for s in (getattr(learning, "sheets", None) or []) if str(s).strip()]
+    never = [s for s in (getattr(learning, "exclude_sheets", None) or []) if str(s).strip()]
+    if not only and not never:
+        return True
+    name = _normalize(sheet_name)
+    if not name:
+        # Unknown sheet: allow when the learning only EXCLUDES (nothing says this
+        # is the excluded one), refuse when it names an allow-list it cannot be
+        # shown to be part of.
+        return not only
+    if any(_normalize(s) == name for s in never):
+        return False
+    return not only or any(_normalize(s) == name for s in only)
+
+
 def source_scope(source_erp: str | None) -> dict:
     """Read filter: this source's learnings PLUS the source-agnostic ones.
 
@@ -495,9 +525,23 @@ async def apply_learned_to_conversion(
         for c in cols:
             src_index[_normalize(c.column_name)] = c.column_name
     fields_map: dict = {}
+    # Which SHEET each target field belongs to. Needed because a learning is
+    # keyed by field NAME and Oracle repeats names across sheets, so without this
+    # one approval reaches all 19 Customer sheets — see sheet_allowed.
+    field_sheet: dict = {}
     if conversion.template_id:
         fields = await FBDIField.find(FBDIField.template_id == conversion.template_id).to_list()
         fields_map = {f.id: f.field_name for f in fields}
+        sheet_names: dict = {}
+        try:
+            from app.models.fbdi import FBDISheet
+            sheet_names = {sh.id: sh.sheet_name for sh in await FBDISheet.find(
+                FBDISheet.template_id == conversion.template_id).to_list()}
+        except Exception:                                       # noqa: BLE001
+            sheet_names = {}
+        for f in fields:
+            field_sheet[f.id] = (getattr(f, "sheet_name", None)
+                                 or sheet_names.get(getattr(f, "sheet_id", None)))
     auto_count = 0
     now = datetime.utcnow()
     for m in mappings:
@@ -510,6 +554,10 @@ async def apply_learned_to_conversion(
         if not candidates:
             continue
         for lm in candidates:
+            # Respect the learning's sheet scope before anything else — an
+            # excluded sheet must not even be considered a candidate.
+            if not sheet_allowed(lm, field_sheet.get(m.target_field_id)):
+                continue
             actual_src = src_index.get(_normalize(lm.original_value))
             if not actual_src:
                 continue
