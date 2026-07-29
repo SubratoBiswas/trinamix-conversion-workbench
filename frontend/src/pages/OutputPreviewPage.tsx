@@ -30,12 +30,14 @@ const DUP_LABEL: Record<DuplicateVerdict, string> = {
   keep_survivor: "Keeping the nominated survivor only",
   keep_all: "Keeping all — genuinely different",
   exclude: "Excluded from the output",
+  keep_subset: "Keeping the selected records",
 };
 const DUP_TONE: Record<DuplicateVerdict, "brand" | "success" | "danger" | "info"> = {
   merge: "brand",
   keep_survivor: "brand",
   keep_all: "success",
   exclude: "danger",
+  keep_subset: "brand",
 };
 const NEEDS_SURVIVOR: DuplicateVerdict[] = ["merge", "keep_survivor"];
 const HIGH_CONFIDENCE = 0.95;
@@ -89,6 +91,10 @@ export const OutputPreviewPage: React.FC = () => {
   const [reviewError, setReviewError] = useState<string | null>(null);
   // Per-cluster / per-finding UI state.
   const [survivors, setSurvivors] = useState<Record<string, string>>({});
+  // Pending "keep these rows" ticks, per cluster. Absent = the user has not
+  // touched the checkboxes, so the saved verdict (or none) still describes the
+  // cluster; present = they are mid-edit and it overrides the saved one.
+  const [subsetKeeps, setSubsetKeeps] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -235,24 +241,41 @@ export const OutputPreviewPage: React.FC = () => {
       ? withCounts(prev, prev.clusters.map(c => c.cluster_key === clusterKey ? { ...c, decision } : c))
       : prev);
 
-  const decideCluster = async (cl: DuplicateCluster, verdict: DuplicateVerdict) => {
+  const decideCluster = async (cl: DuplicateCluster, verdict: DuplicateVerdict,
+                               keepKeys?: string[]) => {
     if (!pid) return;
     const survivor = survivors[cl.cluster_key] ?? cl.decision?.survivor_key ?? null;
     if (NEEDS_SURVIVOR.includes(verdict) && !survivor) {
       setErrorKey(cl.cluster_key, "Nominate which record survives first.");
       return;
     }
+    if (verdict === "keep_subset" && !keepKeys?.length) {
+      setErrorKey(cl.cluster_key, "Tick at least one record to keep.");
+      return;
+    }
     const survivorKey = NEEDS_SURVIVOR.includes(verdict) ? survivor : null;
+    const keep = verdict === "keep_subset" ? keepKeys ?? [] : [];
     const previous = cl.decision;
+    // Any other verdict supersedes a half-edited tick-list; leaving it pending
+    // would keep overriding the verdict just saved.
+    if (verdict !== "keep_subset") {
+      setSubsetKeeps(prev => {
+        const next = { ...prev };
+        delete next[cl.cluster_key];
+        return next;
+      });
+    }
     setErrorKey(cl.cluster_key, null);
     setBusyKey(cl.cluster_key, true);
-    patchCluster(cl.cluster_key, { verdict, survivor_key: survivorKey, source: "conversion" });
+    patchCluster(cl.cluster_key, { verdict, survivor_key: survivorKey,
+                                   keep_keys: keep, source: "conversion" });
     try {
       await OutputApi.saveDecisions(pid, [{
         scope: "duplicate",
         decision_key: cl.cluster_key,
         verdict,
         survivor_key: survivorKey,
+        keep_keys: keep,
         member_keys: cl.member_keys,
         label: cl.fields.join(", "),
       }]);
@@ -269,6 +292,13 @@ export const OutputPreviewPage: React.FC = () => {
     const previous = cl.decision;
     setErrorKey(cl.cluster_key, null);
     setBusyKey(cl.cluster_key, true);
+    // Undo has to clear the pending ticks too, or the cluster would still render
+    // as a subset even though the saved decision is gone.
+    setSubsetKeeps(prev => {
+      const next = { ...prev };
+      delete next[cl.cluster_key];
+      return next;
+    });
     patchCluster(cl.cluster_key, null);
     try {
       await OutputApi.clearDecisions(pid, cl.cluster_key);
@@ -519,19 +549,46 @@ export const OutputPreviewPage: React.FC = () => {
     // one, otherwise by the pending survivor selection — so picking a radio shows
     // immediately which rows drop, instead of leaving the list looking untouched
     // until the file is regenerated.
-    const pendingVerdict: DuplicateVerdict | null =
-      decision?.verdict ?? (chosen ? "keep_survivor" : null);
+    const allKeys = cl.members.map(m => m.key).filter(Boolean) as string[];
+    const savedKeep = decision?.verdict === "keep_subset"
+      ? decision.keep_keys ?? [] : null;
+    // A pending tick-list wins over the saved verdict — the user is editing it.
+    const keepSet: string[] | null = subsetKeeps[cl.cluster_key] ?? savedKeep;
+
+    const pendingVerdict: DuplicateVerdict | null = keepSet
+      ? "keep_subset"
+      : decision?.verdict ?? (chosen ? "keep_survivor" : null);
     const fateOf = (memberKey: string | null | undefined): "keep" | "drop" | null => {
-      if (!pendingVerdict || !memberKey) return null;
+      if (!memberKey) return null;
+      if (keepSet) return keepSet.includes(memberKey) ? "keep" : "drop";
+      if (!pendingVerdict) return null;
       if (pendingVerdict === "keep_all") return "keep";
       if (pendingVerdict === "exclude") return "drop";
       return memberKey === chosen ? "keep" : "drop";   // merge | keep_survivor
     };
     const survivingRows =
-      pendingVerdict === "keep_all" ? cl.members.length
+      keepSet ? keepSet.length
+        : pendingVerdict === "keep_all" ? cl.members.length
         : pendingVerdict === "exclude" ? 0
         : pendingVerdict ? 1 : cl.members.length;
-    const projected = pendingVerdict && survivingRows !== cl.members.length;
+    const projected = !!pendingVerdict && survivingRows !== cl.members.length;
+
+    const toggleKeep = (memberKey: string) =>
+      setSubsetKeeps(prev => {
+        // First tick starts from "everything kept", so unticking reads as
+        // removing rows rather than building a selection from nothing.
+        const cur = prev[cl.cluster_key] ?? savedKeep ?? allKeys;
+        const next = cur.includes(memberKey)
+          ? cur.filter(k => k !== memberKey)
+          : [...cur, memberKey];
+        return { ...prev, [cl.cluster_key]: next };
+      });
+    const clearSubset = () =>
+      setSubsetKeeps(prev => {
+        const next = { ...prev };
+        delete next[cl.cluster_key];
+        return next;
+      });
 
     return (
       <div key={cl.cluster_key} className="rounded-lg border border-line bg-white">
@@ -564,10 +621,28 @@ export const OutputPreviewPage: React.FC = () => {
           <span className="text-[11px] text-ink-subtle">on {cl.fields.join(", ")}</span>
         </div>
 
+        {/* Two different tax registrations across a cluster usually mean two legal
+            entities, and merging would pick one of them arbitrarily. Flagged, not
+            auto-split: it can also be one source recording the number wrong, and
+            splitting would hide that duplicate. */}
+        {(cl.id_conflicts?.length ?? 0) > 0 && (
+          <div className="border-b border-line bg-warning-subtle px-3 py-1.5 text-[11px] text-warning">
+            {cl.id_conflicts!.map(c => (
+              <div key={c.column}>
+                <strong>{c.values.length} different {c.column} values</strong> in this
+                group ({c.values.slice(0, 4).join(", ")}
+                {c.values.length > 4 ? ", …" : ""}) — likely separate entities.
+                Merging keeps only one of them.
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="table-shell">
             <thead>
               <tr>
+                <th className="whitespace-nowrap">Keep</th>
                 <th className="whitespace-nowrap">Survivor</th>
                 <th>Row</th>
                 {idCols.map(f => <th key={f} className="whitespace-nowrap">{f}</th>)}
@@ -589,6 +664,19 @@ export const OutputPreviewPage: React.FC = () => {
                       fate === "drop" && "text-ink-subtle line-through opacity-60",
                     )}
                   >
+                    <td>
+                      {/* Ticking rows expresses "keep these, drop the rest" — the
+                          verdict a partly-duplicated cluster needs, which merge
+                          (1 row) and keep-all (every row) cannot describe. */}
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 accent-brand"
+                        checked={fate !== "drop"}
+                        disabled={!m.key || working}
+                        title="Keep this record in the output"
+                        onChange={() => m.key && toggleKeep(m.key)}
+                      />
+                    </td>
                     <td>
                       <label className="flex items-center gap-1.5 text-[11px] text-ink-muted">
                         <input
@@ -641,8 +729,14 @@ export const OutputPreviewPage: React.FC = () => {
                   onClick={() => void decideCluster(cl, "keep_survivor")}>
             Keep survivor only
           </Button>
+          {keepSet && keepSet.length > 0 && keepSet.length < cl.members.length && (
+            <Button variant="primary" disabled={working}
+                    onClick={() => void decideCluster(cl, "keep_subset", keepSet)}>
+              Keep selected ({keepSet.length})
+            </Button>
+          )}
           <Button variant="secondary" disabled={working}
-                  onClick={() => void decideCluster(cl, "keep_all")}>
+                  onClick={() => { clearSubset(); void decideCluster(cl, "keep_all"); }}>
             Keep all
           </Button>
           <Button variant="danger" disabled={working}
@@ -654,6 +748,13 @@ export const OutputPreviewPage: React.FC = () => {
           {decision && !learned && (
             <Button variant="ghost" disabled={working} onClick={() => void undoCluster(cl)}>
               <RotateCcw className="h-4 w-4" /> Undo
+            </Button>
+          )}
+          {/* Ticks are unsaved state, so Undo (which deletes a saved decision)
+              would not clear them — this does. */}
+          {subsetKeeps[cl.cluster_key] !== undefined && (
+            <Button variant="ghost" disabled={working} onClick={clearSubset}>
+              <RotateCcw className="h-4 w-4" /> Reset ticks
             </Button>
           )}
           {learned && (

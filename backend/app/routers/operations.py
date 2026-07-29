@@ -447,6 +447,7 @@ async def save_decisions(
                       target_object=c.target_object,
                       survivor_key=d.get("survivor_key"),
                       member_keys=d.get("member_keys") or [],
+                      keep_keys=d.get("keep_keys") or [],
                       label=d.get("label"), note=d.get("note"),
                       decided_by=getattr(user, "email", None),
                       decided_at=datetime.utcnow(),

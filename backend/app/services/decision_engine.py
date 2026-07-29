@@ -20,6 +20,14 @@ KEEP_SURVIVOR = "keep_survivor"
 MERGE = "merge"
 KEEP_ALL = "keep_all"
 EXCLUDE = "exclude"
+KEEP_SUBSET = "keep_subset"
+
+# Identity columns strong enough that two different non-blank values mean two
+# different registered entities, not one entity spelled two ways. A PwC cluster
+# matching at 100% on name can carry a US EIN, a second US EIN and a Canadian
+# business number across its rows — merging picks one of them arbitrarily.
+_STRONG_ID_HINTS = ("taxpayer id", "tax registration", "tax id", "taxid",
+                    "duns", "vat", "registration number", "company number")
 
 _BLANKS = {"", "nan", "none", "null", "na", "<na>"}
 
@@ -112,6 +120,35 @@ def cluster_key(member_keys: Iterable[str]) -> str:
     return hashlib.sha1("|".join(idents).encode("utf-8")).hexdigest()[:20]
 
 
+def id_conflicts(members: list[dict], columns: Iterable[str]) -> list[dict]:
+    """Strong-ID columns where the cluster's members disagree.
+
+    Advisory only — deliberately does NOT split the cluster. A differing tax id
+    usually means separate legal entities, but it can also be one source
+    recording the number wrong, and auto-splitting would hide that duplicate. So
+    the conflict is surfaced and the analyst decides.
+
+    Reads ``member["values"]``, which the scanner already populates for the shown
+    identity columns, so this needs no second pass over the frame.
+    """
+    out: list[dict] = []
+    for c in columns or []:
+        name = str(c).strip().lower()
+        if not any(h in name for h in _STRONG_ID_HINTS):
+            continue
+        vals: list[str] = []
+        for m in members:
+            v = (m.get("values") or {}).get(c, "")
+            if _is_blank(v):
+                continue
+            s = str(v).strip()
+            if s not in vals:
+                vals.append(s)
+        if len(vals) > 1:
+            out.append({"column": str(c), "values": vals})
+    return out
+
+
 def golden_record(rows: list[dict], columns: list[str]) -> dict:
     """First NON-BLANK value per column, in the given row order.
 
@@ -178,7 +215,8 @@ def apply_decisions(df: pd.DataFrame, identity_columns: list[str],
     for d in decisions:
         verdict = (d.get("verdict") or "").strip()
         members = [k for k in (d.get("member_keys") or []) if positions_for(k)]
-        if not members or verdict not in {KEEP_SURVIVOR, MERGE, KEEP_ALL, EXCLUDE}:
+        if not members or verdict not in {KEEP_SURVIVOR, MERGE, KEEP_ALL,
+                                          EXCLUDE, KEEP_SUBSET}:
             report["stale"] += 1
             continue
         # A key can still match several rows (byte-identical twins, or a legacy
@@ -195,6 +233,20 @@ def apply_decisions(df: pd.DataFrame, identity_columns: list[str],
             continue
         if verdict == EXCLUDE:
             drop.update(positions)
+            report["applied"] += 1
+            continue
+        if verdict == KEEP_SUBSET:
+            keep: set[int] = set()
+            for k in (d.get("keep_keys") or []):
+                keep.update(positions_for(k))
+            keep &= set(positions)
+            if not keep:
+                # Every nominated row has gone from the data. Dropping the whole
+                # cluster here would silently delete rows the analyst asked to
+                # KEEP, so refuse and report it instead.
+                report["stale"] += 1
+                continue
+            drop.update(p for p in positions if p not in keep)
             report["applied"] += 1
             continue
 

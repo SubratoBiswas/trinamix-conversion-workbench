@@ -27,7 +27,12 @@ KEEP_SURVIVOR = "keep_survivor"   # keep one nominated row, drop the rest
 MERGE = "merge"                   # collapse to a golden record, first non-blank wins
 KEEP_ALL = "keep_all"             # genuinely distinct entities — leave every row
 EXCLUDE = "exclude"               # drop the whole cluster from the output
-DUP_VERDICTS = {KEEP_SURVIVOR, MERGE, KEEP_ALL, EXCLUDE}
+# Keep a NAMED SUBSET. The all-or-one verdicts above cannot describe a cluster
+# that is partly duplicated — five PricewaterhouseCoopers rows carrying three
+# different tax registrations are three real entities plus one duplicate pair,
+# so neither merging to one nor keeping all five is correct.
+KEEP_SUBSET = "keep_subset"
+DUP_VERDICTS = {KEEP_SURVIVOR, MERGE, KEEP_ALL, EXCLUDE, KEEP_SUBSET}
 
 # Cleansing-finding verdicts
 APPLY = "apply"                   # apply the suggested fix
@@ -51,6 +56,8 @@ class RowDecision(Document):
     # Duplicates only.
     survivor_key: Optional[str] = None
     member_keys: list[str] = Field(default_factory=list)
+    # keep_subset only: the rows to keep. Everything else in member_keys drops.
+    keep_keys: list[str] = Field(default_factory=list)
     # Human-readable identity of the cluster, for the audit trail and for showing
     # a promoted learning in the UI without rebuilding the frame.
     label: Optional[str] = None

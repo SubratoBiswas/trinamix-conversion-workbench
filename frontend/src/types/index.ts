@@ -685,7 +685,10 @@ export interface OutputPreview {
 
 // ─── Duplicate / cleansing review (row-level decisions) ───
 /** Verdicts the backend accepts for a duplicate cluster (RowDecision.DUP_VERDICTS). */
-export type DuplicateVerdict = "keep_survivor" | "merge" | "keep_all" | "exclude";
+export type DuplicateVerdict =
+  | "keep_survivor" | "merge" | "keep_all" | "exclude"
+  /** Keep a named subset — for a cluster that is only PARTLY duplicated. */
+  | "keep_subset";
 /** Verdicts the backend accepts for a cleansing finding (RowDecision.CLEANSE_VERDICTS). */
 export type CleansingVerdict = "apply" | "ignore";
 
@@ -699,6 +702,8 @@ export interface DuplicateMember {
 export interface DuplicateDecision {
   verdict: DuplicateVerdict;
   survivor_key: string | null;
+  /** keep_subset only: the member keys to keep. Everything else drops. */
+  keep_keys?: string[];
   /** "learned" = carried over from an earlier conversion for this client + object. */
   source: "conversion" | "learned";
 }
@@ -712,6 +717,10 @@ export interface DuplicateCluster {
   ai_reason?: string;
   cluster_key: string;
   member_keys: string[];
+  /** Strong identifiers (tax id, DUNS) whose values DISAGREE across the cluster.
+   *  Advisory: two different tax registrations usually mean two legal entities,
+   *  so merging would pick one arbitrarily. The cluster is never auto-split. */
+  id_conflicts?: { column: string; values: string[] }[];
   decision: DuplicateDecision | null;
   members: DuplicateMember[];
 }
@@ -811,6 +820,8 @@ export interface DecisionInput {
   verdict: DuplicateVerdict | CleansingVerdict;
   survivor_key?: string | null;
   member_keys?: string[];
+  /** keep_subset only. */
+  keep_keys?: string[];
   label?: string;
   note?: string;
   /** Reuse this verdict for the same client + object next time (defaults true for keep_all). */

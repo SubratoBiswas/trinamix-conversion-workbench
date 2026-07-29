@@ -153,6 +153,104 @@ def test_keep_all_and_exclude_unchanged():
     check("exclude drops every row", len(out) == 0)
 
 
+# ── 2b. keep_subset: keep SOME of a partly-duplicated cluster ────────────────
+# The real PwC cluster: five 100%-name-matches carrying three different tax
+# registrations, so it is three entities plus one duplicate pair.
+PWC = pd.DataFrame([
+    {"Supplier Name": "PricewaterhouseCoopers",        "Taxpayer ID": "",               "City": "New York"},
+    {"Supplier Name": "PricewaterhouseCoopers LLP",    "Taxpayer ID": "13-4008324",     "City": "New York"},
+    {"Supplier Name": "PricewaterhouseCoopers LLP.",   "Taxpayer ID": "98-0330214",     "City": "London"},
+    {"Supplier Name": "PRICEWATERHOUSECOOPERS LLP.",   "Taxpayer ID": "870576089RT0001", "City": "Toronto"},
+    {"Supplier Name": "Pricewaterhousecoopers, LLP.",  "Taxpayer ID": "870576089RT0001", "City": "Toronto"},
+])
+
+
+def test_keep_subset_keeps_exactly_the_nominated_rows():
+    keys = row_keys_for(PWC, IDC)
+    keep = [keys[1], keys[2], keys[3]]           # the three distinct registrations
+    out, rep = apply_decisions(PWC, IDC, [{
+        "decision_key": "pwc", "verdict": "keep_subset",
+        "member_keys": keys, "keep_keys": keep}])
+    check("3 of 5 rows survive", len(out) == 3, f"got {len(out)}")
+    check("the stub and the duplicate pair member are gone",
+          sorted(out["Taxpayer ID"]) == ["13-4008324", "870576089RT0001", "98-0330214"],
+          f"got {sorted(out['Taxpayer ID'])}")
+    check("2 removed", rep["rows_removed"] == 2)
+    check("applied, not stale", rep["applied"] == 1 and rep["stale"] == 0)
+
+
+def test_keep_subset_survives_a_reshuffle():
+    keys = row_keys_for(PWC, IDC)
+    keep = [keys[1], keys[3]]
+    shuffled = PWC.iloc[[4, 0, 3, 1, 2]].reset_index(drop=True)
+    out, _ = apply_decisions(shuffled, IDC, [{
+        "decision_key": "pwc", "verdict": "keep_subset",
+        "member_keys": keys, "keep_keys": keep}])
+    check("the same two rows survive after reordering",
+          sorted(out["Taxpayer ID"]) == ["13-4008324", "870576089RT0001"],
+          f"got {sorted(out['Taxpayer ID'])}")
+
+
+def test_keep_subset_with_no_resolvable_rows_refuses():
+    """Dropping the cluster because the nominated rows vanished would delete
+    exactly the rows the analyst asked to KEEP."""
+    keys = row_keys_for(PWC, IDC)
+    out, rep = apply_decisions(PWC, IDC, [{
+        "decision_key": "pwc", "verdict": "keep_subset",
+        "member_keys": keys, "keep_keys": ["deadbeef-cafe0"]}])
+    check("no rows dropped", len(out) == len(PWC), f"got {len(out)}")
+    check("reported stale", rep["stale"] == 1)
+
+
+def test_keep_subset_of_one_equals_keep_survivor():
+    keys = row_keys_for(PWC, IDC)
+    a, _ = apply_decisions(PWC, IDC, [{"decision_key": "p", "verdict": "keep_subset",
+                                       "member_keys": keys, "keep_keys": [keys[1]]}])
+    b, _ = apply_decisions(PWC, IDC, [{"decision_key": "p", "verdict": "keep_survivor",
+                                       "member_keys": keys, "survivor_key": keys[1]}])
+    check("both leave the same single row",
+          a.reset_index(drop=True).equals(b.reset_index(drop=True)))
+
+
+# ── 2c. Conflicting strong identifiers are flagged, never auto-split ─────────
+def test_id_conflicts_detected():
+    from app.services.decision_engine import id_conflicts
+    members = [{"values": {"Supplier Name": r["Supplier Name"],
+                           "Taxpayer ID": r["Taxpayer ID"]}}
+               for _, r in PWC.iterrows()]
+    conf = id_conflicts(members, IDC)
+    check("one conflicting column reported", len(conf) == 1, f"got {conf}")
+    check("it is the Taxpayer ID", conf and conf[0]["column"] == "Taxpayer ID")
+    check("three distinct values, blanks ignored, dupes collapsed",
+          conf and len(conf[0]["values"]) == 3, f"got {conf[0]['values'] if conf else None}")
+
+
+def test_no_conflict_when_ids_agree_or_are_blank():
+    from app.services.decision_engine import id_conflicts
+    members = [{"values": {"Supplier Name": "ACME", "Taxpayer ID": "1"}},
+               {"values": {"Supplier Name": "ACME", "Taxpayer ID": ""}},
+               {"values": {"Supplier Name": "ACME", "Taxpayer ID": "1"}}]
+    check("one value + blanks is not a conflict",
+          id_conflicts(members, IDC) == [], f"got {id_conflicts(members, IDC)}")
+
+
+def test_name_columns_are_not_treated_as_strong_ids():
+    from app.services.decision_engine import id_conflicts
+    members = [{"values": {"Supplier Name": "ACME", "Taxpayer ID": "1"}},
+               {"values": {"Supplier Name": "ACME Inc", "Taxpayer ID": "1"}}]
+    check("differing names alone raise no conflict",
+          id_conflicts(members, IDC) == [])
+
+
+def test_clustering_is_not_split_by_a_conflict():
+    """The CRRC cluster has one tax id and blanks; PwC has three. Both stay whole —
+    id_conflicts is advisory and apply_decisions never consults it."""
+    keys = row_keys_for(PWC, IDC)
+    out, _ = apply_decisions(PWC, IDC, [{"decision_key": "p", "verdict": "keep_all",
+                                         "member_keys": keys}])
+    check("keep_all still keeps all five despite the conflict", len(out) == 5)
+
+
 # ── 3. Cleansing families ────────────────────────────────────────────────────
 def test_edge_punctuation():
     f = [WHITESPACE_PUNCT]

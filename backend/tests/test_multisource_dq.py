@@ -69,7 +69,11 @@ def test_cleansing_trims_and_applies_rules():
                                           {"field": "Code", "rule_type": "UPPERCASE"}])
     assert cleaned["Supplier Name"].iloc[0] == "ACME"
     assert cleaned["Code"].iloc[0] == "ABC"
-    assert any(f["rule"] == "TRIM" for f in fixes)
+    # The standing cleanse used to be a bare whitespace trim reported as "TRIM".
+    # It is now the cleansing_rules profile, so the automatic pass reports its
+    # family key; custom authored rules still report their own rule_type.
+    assert any(f["rule"] == "whitespace_punct" for f in fixes)
+    assert any(f["rule"] == "UPPERCASE" for f in fixes)
 
 
 def test_validation_and_report_block_on_hard_error():

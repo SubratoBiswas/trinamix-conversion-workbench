@@ -17,7 +17,7 @@ import pandas as pd
 
 from app.models.row_decision import RowDecision
 from app.services.decision_engine import (
-    KEEP_ALL, apply_decisions, cluster_key, row_keys_for,
+    KEEP_ALL, apply_decisions, cluster_key, id_conflicts, row_keys_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,8 @@ async def load_decisions(conversion_id, scope: str = "duplicate") -> list[dict]:
         RowDecision.scope == scope,
     ).to_list()
     return [{"decision_key": d.decision_key, "verdict": d.verdict,
-             "survivor_key": d.survivor_key, "member_keys": d.member_keys}
+             "survivor_key": d.survivor_key, "member_keys": d.member_keys,
+             "keep_keys": getattr(d, "keep_keys", []) or []}
             for d in docs]
 
 
@@ -115,8 +116,12 @@ def annotate_clusters(clusters: list[dict], df: pd.DataFrame,
         ck = cluster_key(mk)
         cl["cluster_key"] = ck
         cl["member_keys"] = mk
+        # Advisory: strong identifiers that disagree across the cluster. Surfaced,
+        # never acted on — see id_conflicts for why auto-splitting is wrong.
+        cl["id_conflicts"] = id_conflicts(cl.get("members", []), identity_columns)
         d = decided.get(ck)
         cl["decision"] = ({"verdict": d["verdict"], "survivor_key": d.get("survivor_key"),
+                           "keep_keys": d.get("keep_keys") or [],
                            "source": "conversion"} if d
                           else {"verdict": KEEP_ALL, "survivor_key": None,
                                 "source": "learned"} if ck in learned_keep_all
