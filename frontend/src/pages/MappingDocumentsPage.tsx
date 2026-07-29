@@ -22,6 +22,17 @@ type Proposal = {
   count_new: number; count_unchanged: number; count_conflict: number; count_skipped: number;
   learnings_written?: number; conversions_touched?: number;
   uploaded_at?: string; applied_at?: string | null; rows?: Row[];
+  /** Applied and nothing later replaced it — this is the file in force. */
+  is_authoritative?: boolean;
+  superseded_by?: string | null;
+  superseded_by_file?: string | null;
+  superseded_at?: string | null;
+  supersedes?: string[];
+  /** Modules this document covers; governance is per client + module. */
+  objects?: string[];
+  /** What taking over cost: older mappings switched off, outputs invalidated. */
+  retired_learnings?: number;
+  outputs_marked_stale?: number;
 };
 
 const Pill: React.FC<{ tone: string; children: React.ReactNode }> = ({ tone, children }) => (
@@ -214,6 +225,17 @@ export const MappingDocumentsPage: React.FC = () => {
             Set Module when the file has no object column — the Item tabs, for example.
           </span>
         </div>
+        {/* The governance rule, stated where the file is chosen rather than
+            discovered after applying — it retires mappings and invalidates
+            generated files, which is not something to find out afterwards. */}
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <strong>Only the newest document governs a module.</strong> Applying a file for a
+          client and module puts it in force and marks any earlier document for that same
+          combination <em>superseded</em>: mappings it asserted but this one does not are
+          switched off, and files already generated are marked stale so they get
+          re-generated. Nothing is deleted — superseded documents stay listed, and retired
+          mappings can be restored one by one from the Learning Centre.
+        </div>
         {msg && <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm">{msg}</div>}
       </div>
 
@@ -225,22 +247,41 @@ export const MappingDocumentsPage: React.FC = () => {
         </div>
         {!list.length && <p className="px-4 py-6 text-sm text-muted">Nothing uploaded yet.</p>}
         {list.map(p => (
-          <div key={p.id} className="flex items-center gap-3 border-b px-4 py-3 text-sm last:border-0">
+          <div key={p.id}
+               className={`flex items-center gap-3 border-b px-4 py-3 text-sm last:border-0 ${
+                 p.status === "superseded" ? "bg-slate-50" : ""}`}>
             <FileSpreadsheet size={16} className="text-muted" />
             <button className="flex-1 text-left font-medium hover:underline"
                     onClick={async () => setOpen(await LearningApi.getProposal(p.id))}>
-              {p.file_name}
+              <span className={p.status === "superseded" ? "text-muted line-through" : ""}>
+                {p.file_name}
+              </span>
               <span className="ml-2 text-xs font-normal text-muted">
                 {p.target_object || "module from file"} · layout: {p.layout_method}
               </span>
+              {/* A superseded file still LOOKS applied unless the row says so —
+                  which is exactly how a stale mapping keeps being trusted. */}
+              {p.status === "superseded" && p.superseded_by_file && (
+                <span className="ml-2 text-xs font-normal text-amber-700">
+                  replaced by {p.superseded_by_file}
+                </span>
+              )}
             </button>
+            {p.is_authoritative && (
+              <Pill tone="bg-indigo-600 text-white">in force</Pill>
+            )}
             <Pill tone="bg-emerald-50 text-emerald-700">{p.count_new} new</Pill>
             <Pill tone="bg-slate-100 text-slate-600">{p.count_unchanged} same</Pill>
             {p.count_conflict > 0
               ? <Pill tone="bg-amber-100 text-amber-800">{p.count_conflict} conflicting</Pill>
               : <Pill tone="bg-slate-100 text-slate-500">no conflicts</Pill>}
-            <Pill tone={p.status === "applied" ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600"}>
-              {p.status === "applied" ? "applied" : "awaiting review"}
+            <Pill tone={
+              p.status === "applied" ? "bg-indigo-100 text-indigo-700"
+                : p.status === "superseded" ? "bg-amber-100 text-amber-800"
+                : "bg-slate-100 text-slate-600"}>
+              {p.status === "applied" ? "applied"
+                : p.status === "superseded" ? "superseded"
+                : "awaiting review"}
             </Pill>
             <button className="text-muted hover:text-rose-600"
                     onClick={async () => { await LearningApi.discardProposal(p.id); if (open?.id === p.id) setOpen(null); refresh(); }}>
@@ -286,8 +327,28 @@ export const MappingDocumentsPage: React.FC = () => {
           )}
           {open.status === "applied" && (
             <p className="border-b bg-indigo-50 px-4 py-2 text-xs text-indigo-800">
-              Applied — {open.learnings_written} mapping(s) written, {open.conversions_touched} existing
-              conversion(s) updated.
+              <strong>In force</strong> for {open.objects?.length
+                ? open.objects.join(", ") : "this module"} — {open.learnings_written} mapping(s)
+              written, {open.conversions_touched} existing conversion(s) updated.
+              {/* Supersession is a destructive-looking side effect, so it is
+                  stated with numbers rather than left to be discovered. */}
+              {(open.retired_learnings ?? 0) > 0 && (
+                <> Replacing the previous document switched off{" "}
+                  <strong>{open.retired_learnings} mapping(s)</strong> it no longer asserts.</>
+              )}
+              {(open.outputs_marked_stale ?? 0) > 0 && (
+                <> <strong>{open.outputs_marked_stale} generated file(s)</strong> were marked
+                  stale — re-generate them to pick this up.</>
+              )}
+            </p>
+          )}
+          {open.status === "superseded" && (
+            <p className="border-b bg-amber-50 px-4 py-2 text-xs text-amber-900">
+              <strong>Superseded</strong>
+              {open.superseded_by_file ? <> by <strong>{open.superseded_by_file}</strong></> : null}
+              {open.superseded_at ? ` on ${new Date(open.superseded_at).toLocaleDateString()}` : ""}.
+              Its mappings no longer apply. Kept for reference — retired mappings can be
+              restored individually from the Learning Centre.
             </p>
           )}
 

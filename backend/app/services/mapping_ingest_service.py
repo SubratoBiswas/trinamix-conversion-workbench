@@ -429,15 +429,140 @@ async def apply_proposal(proposal: MappingProposal, *, applied_by: str = "") -> 
             except Exception:                                   # noqa: BLE001
                 continue        # one bad conversion must not abort the rollout
 
+    from datetime import datetime as _dt
     proposal.status = "applied"
     proposal.learnings_written = written
     proposal.conversions_touched = touched
     proposal.applied_by = applied_by
-    from datetime import datetime as _dt
     proposal.applied_at = _dt.utcnow()
     await proposal.save()
+
+    # This document now GOVERNS its modules. Everything the previous one asserted
+    # and this one does not must stop applying, or the two files stay silently in
+    # force together — see supersede_previous.
+    sup = await supersede_previous(proposal, applied_by=applied_by)
+
     return {"learnings_written": written, "conversions_touched": touched,
-            "objects": sorted(objects)}
+            "objects": sorted(objects), **sup}
+
+
+async def _asserted_pairs(proposal: MappingProposal) -> set[tuple[str, str]]:
+    """(target_object, target_field) this document actually put into force."""
+    out: set[tuple[str, str]] = set()
+    for r in proposal.rows:
+        if r.decision == "rejected":
+            continue
+        if r.status == "conflict" and r.decision != "approved":
+            continue
+        if r.target_object and r.target_field:
+            out.add((str(r.target_object).strip().lower(),
+                     str(r.target_field).strip().lower()))
+    return out
+
+
+async def supersede_previous(proposal: MappingProposal, *,
+                             applied_by: str = "") -> dict:
+    """Retire everything the older mapping documents for these modules asserted.
+
+    The rule the analysts asked for: for one client and one module, only the
+    NEWEST mapping document counts. Without this, applying a v2 file leaves every
+    v1 mapping it no longer mentions quietly in force — a field dropped or
+    re-pointed in v2 keeps its v1 behaviour, and nothing on screen says so. That
+    is the worst kind of stale rule, because the tool looks like it was updated.
+
+    Three effects, all reversible:
+      * older applied proposals for the same client + module become "superseded";
+      * learnings captured from those files that this file does NOT re-assert are
+        TOMBSTONED (soft, so `/learned-mappings/{id}/restore` can undo it);
+      * outputs generated for the affected conversions are marked stale rather
+        than deleted — the handed-over file may still need to be inspected.
+    """
+    from datetime import datetime as _dt
+
+    from app.models.conversion import Conversion
+    from app.models.output import ConvertedOutput
+
+    objects = {str(r.target_object).strip().lower()
+               for r in proposal.rows if r.target_object}
+    if not objects:
+        return {"superseded": 0, "retired_learnings": 0, "outputs_marked_stale": 0}
+
+    # Same client (or both global) and applied strictly EARLIER. Comparing on
+    # applied_at rather than uploaded_at because governance follows what was put
+    # into force, not what happened to be uploaded first.
+    q = {"status": "applied", "_id": {"$ne": proposal.id},
+         "client_id": proposal.client_id}
+    olders = [p for p in await MappingProposal.find(q).to_list()
+              if (p.applied_at or p.uploaded_at) < (proposal.applied_at or _dt.utcnow())
+              and {str(r.target_object).strip().lower()
+                   for r in p.rows if r.target_object} & objects]
+    if not olders:
+        return {"superseded": 0, "retired_learnings": 0, "outputs_marked_stale": 0}
+
+    keep = await _asserted_pairs(proposal)
+    retired = 0
+    for old in olders:
+        # Only learnings this file does not re-state. A pair present in BOTH was
+        # already updated in place by apply_proposal, so retiring it here would
+        # delete the new value.
+        stale_pairs = {
+            (str(r.target_object).strip().lower(), str(r.target_field).strip().lower())
+            for r in old.rows
+            if r.target_object and r.target_field
+            and (str(r.target_object).strip().lower(),
+                 str(r.target_field).strip().lower()) not in keep
+        }
+        if stale_pairs:
+            marker = f"mapping document: {old.file_name}"
+            candidates = await LearnedMapping.find(
+                LearnedMapping.client_id == proposal.client_id,
+                LearnedMapping.kind == "column_mapping",
+            ).to_list()
+            for lm in candidates:
+                if (lm.captured_from or "") != marker:
+                    continue
+                pair = (str(lm.target_object or "").strip().lower(),
+                        str(lm.target_field or "").strip().lower())
+                if pair in stale_pairs:
+                    await lm.set({"is_deleted": True, "deleted_at": _dt.utcnow(),
+                                  "deleted_by": applied_by
+                                  or f"superseded by {proposal.file_name}"})
+                    retired += 1
+
+        old.status = "superseded"
+        old.superseded_by = proposal.id
+        old.superseded_by_file = proposal.file_name
+        old.superseded_at = _dt.utcnow()
+        await old.save()
+
+    # Every generated file for an affected conversion now predates the governing
+    # document. Flagged, never deleted.
+    stale = 0
+    reason = f"Superseded by mapping document {proposal.file_name}"
+    for conv in await Conversion.find_all().to_list():
+        if str(conv.target_object or "").strip().lower() not in objects:
+            continue
+        try:
+            from app.services.client_service import client_id_for_conversion
+            if proposal.client_id is not None:
+                if await client_id_for_conversion(conv) != proposal.client_id:
+                    continue
+        except Exception:                                       # noqa: BLE001
+            continue
+        outs = await ConvertedOutput.find(
+            ConvertedOutput.conversion_id == conv.id).to_list()
+        for o in outs:
+            if o.status != "stale":
+                await o.set({"status": "stale", "stale_reason": reason,
+                             "stale_since": _dt.utcnow()})
+                stale += 1
+
+    proposal.supersedes = [p.id for p in olders]
+    proposal.retired_learnings = retired
+    proposal.outputs_marked_stale = stale
+    await proposal.save()
+    return {"superseded": len(olders), "retired_learnings": retired,
+            "outputs_marked_stale": stale}
 
 
 async def vet_proposal_with_ai(proposal: MappingProposal, *, only_no_verdict: bool = True) -> dict:

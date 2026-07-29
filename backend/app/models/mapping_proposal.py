@@ -84,11 +84,25 @@ class MappingProposal(Document):
     count_conflict: int = 0
     count_skipped: int = 0
 
-    status: str = "awaiting_review"          # awaiting_review | applied | discarded
+    # awaiting_review | applied | discarded | superseded
+    # "superseded" = a LATER document was applied for the same client + module.
+    # Only the newest applied document governs a module. Two mapping files both in
+    # force is exactly the ambiguity the review step exists to remove — whichever
+    # learning happened to be written last would silently win.
+    status: str = "awaiting_review"
     applied_at: Optional[datetime] = None
     applied_by: Optional[str] = None
     learnings_written: int = 0
     conversions_touched: int = 0
+    # Set on the OLDER document when a newer one takes over.
+    superseded_by: Optional[PydanticObjectId] = None
+    superseded_at: Optional[datetime] = None
+    superseded_by_file: Optional[str] = None
+    # Set on the NEWER document — what taking over actually cost, so the effect is
+    # auditable rather than a silent background sweep.
+    supersedes: list[PydanticObjectId] = Field(default_factory=list)
+    retired_learnings: int = 0
+    outputs_marked_stale: int = 0
 
     uploaded_by: Optional[str] = None
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)

@@ -17,6 +17,14 @@ def _out(p: MappingProposal) -> dict:
     d = p.model_dump()
     d["id"] = str(p.id)
     d["client_id"] = str(p.client_id) if p.client_id else None
+    d["superseded_by"] = str(p.superseded_by) if p.superseded_by else None
+    d["supersedes"] = [str(x) for x in (p.supersedes or [])]
+    # The modules this document covers — the UI groups by these to show which
+    # file currently governs each one.
+    d["objects"] = sorted({str(r.target_object).strip()
+                           for r in p.rows if r.target_object})
+    # Only an APPLIED document that nothing later replaced is in force.
+    d["is_authoritative"] = p.status == "applied" and not p.superseded_by
     for r in d.get("rows", []):
         if r.get("existing_learning_id"):
             r["existing_learning_id"] = str(r["existing_learning_id"])
