@@ -38,6 +38,7 @@ async def init_db() -> None:
     from app.models.environment import Environment, EnvironmentRun
     from app.models.app_setting import AppSetting
     from app.models.row_decision import RowDecision
+    from app.models.address_decision import AddressDecision
     from app.models.v10 import (
         SourceConnection, DiscoveryRun, DiscoveredObject,
         AuditEvent, CoaStructure, CoaSegment, CoaValueCrosswalk,
@@ -67,5 +68,6 @@ async def init_db() -> None:
             ReconciliationCheck,
             AppSetting,
             RowDecision,
+            AddressDecision,
         ],
     )

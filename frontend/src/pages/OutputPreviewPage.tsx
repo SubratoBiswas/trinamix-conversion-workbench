@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, Copy, Download, FileOutput, FolderDown, RotateCcw, Sparkles, Wand2,
 } from "lucide-react";
-import { ConversionsApi, OutputApi } from "@/api";
+import { ConversionsApi, OutputApi, QualityApi } from "@/api";
 import {
   Button, Card, CardBody, EmptyState, Modal, PageLoader, PageTitle, Pill, Tabs,
 } from "@/components/ui/Primitives";
@@ -459,6 +459,21 @@ export const OutputPreviewPage: React.FC = () => {
     const next = { ...(p.value_overrides ?? {}) };
     if (Object.keys(forField).length) next[field] = forField; else delete next[field];
     void saveProfile({ ...p, value_overrides: next });
+  };
+
+  /** Profile the source dataset for data-quality findings.
+   *  Lives on the Data Quality page and Conversion detail, but the findings are
+   *  REVIEWED here — so without this the list can only ever be empty for anyone
+   *  who starts on Output Preview. */
+  const runProfileCleansing = async () => {
+    if (!pid) return;
+    setProfileBusy(true);
+    setProfileError(null);
+    try {
+      await QualityApi.runCleansing(pid);
+      await loadReview(true);
+    } catch (e) { setProfileError(errText(e)); }
+    finally { setProfileBusy(false); }
   };
 
   // ─── Cleansing decisions ───
@@ -1165,9 +1180,23 @@ export const OutputPreviewPage: React.FC = () => {
       {reviewLoading ? <PageLoader /> : reviewError ? (
         <EmptyState title="Couldn't load the review bundle" description={reviewError} />
       ) : cleansingCount === 0 ? (
+        // This list is NOT the rules panel above. It holds ValidationIssue rows
+        // profiled from the SOURCE dataset, which only exist once someone runs
+        // the check — so "none found" almost always means "never run", and the
+        // old empty state said "run validation" without offering a way to.
         <EmptyState
-          title="No cleansing findings"
-          description="Nothing has been flagged for this interface — run validation to re-check."
+          title="No cleansing findings — the check hasn't been run"
+          description={
+            "These are data-quality observations profiled from the source file "
+            + "(high nulls, mixed types, odd patterns), separate from the standing "
+            + "cleansing rules above. Run it to populate them."
+          }
+          action={
+            <Button variant="secondary" loading={profileBusy}
+                    onClick={() => void runProfileCleansing()}>
+              <Sparkles className="h-4 w-4" /> Run cleansing check
+            </Button>
+          }
         />
       ) : (
         <>

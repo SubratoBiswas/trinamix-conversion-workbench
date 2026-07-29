@@ -43,11 +43,14 @@ _failures = []
 
 
 def check(name, cond, detail=""):
+    """Record AND raise — pytest judges a test by whether it throws, so a check
+    that only printed FAIL would report the file green."""
     if cond:
         print(f"  PASS  {name}")
-    else:
-        print(f"  FAIL  {name} {detail}")
-        _failures.append(name)
+        return
+    print(f"  FAIL  {name} {detail}")
+    _failures.append(name)
+    raise AssertionError(f"{name} {detail}".strip())
 
 
 # ── 1. Row keys are now per-row ──────────────────────────────────────────────
@@ -306,18 +309,24 @@ def test_case_normalisation():
 
 
 def test_legal_suffix():
+    # A column is now REQUIRED for this family: legal-suffix standardisation only
+    # runs on name-kind columns, so that Tax Organization Type = CORPORATION (an
+    # Oracle lookup code) is never rewritten to Corp.
     f = [LEGAL_SUFFIX]
-    check("Limited -> Ltd", clean_value("Acme Limited", families=f) == "Acme Ltd")
-    check("LTD -> Ltd", clean_value("Acme LTD", families=f) == "Acme Ltd")
-    check("Incorporated -> Inc",
-          clean_value("Acme Incorporated", families=f) == "Acme Inc")
-    check("llc -> LLC", clean_value("Acme llc", families=f) == "Acme LLC")
+    col = "Supplier Name"
+
+    def cv(v):
+        return clean_value(v, column=col, families=f)
+
+    check("Limited -> Ltd", cv("Acme Limited") == "Acme Ltd")
+    check("LTD -> Ltd", cv("Acme LTD") == "Acme Ltd")
+    check("Incorporated -> Inc", cv("Acme Incorporated") == "Acme Inc")
+    check("llc -> LLC", cv("Acme llc") == "Acme LLC")
     check("mid-name token untouched (outside the window)",
-          clean_value("Limited Brands Holdings International Group", families=f)
+          cv("Limited Brands Holdings International Group")
           == "Limited Brands Holdings International Group")
     check("ambiguous 2-letter token untouched",
-          clean_value("Nextracker AS Holdings", families=f)
-          == "Nextracker AS Holdings")
+          cv("Nextracker AS Holdings") == "Nextracker AS Holdings")
 
 
 def test_family_order_legal_beats_case():
@@ -509,7 +518,10 @@ if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         print(f"\n{fn.__name__}")
-        fn()
+        try:
+            fn()
+        except AssertionError:
+            pass          # already recorded; keep going so one run shows them all
     print(f"\n{'=' * 60}")
     if _failures:
         print(f"{len(_failures)} FAILED: {_failures}")
