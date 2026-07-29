@@ -1044,3 +1044,204 @@ Method / Delivery Channel from the Email/Fax **transaction flags**. This new rul
 remittance email/fax **value columns**. Two CASE_WHEN rules on one target field will fight;
 reconcile which is authoritative first. The two source column names also need confirming
 against the actual extract before this can be seeded.
+
+---
+
+## 10. Continuation session — 2026-07-28
+
+Everything in section 10 is **deployed** (user ran `launch_git.bat` after `npm run build`
+in `frontend/`, not the repo root — `package.json` does not exist at the root).
+
+### 10.1 The central lesson repeated: enforce at WRITE time, verify on REAL output
+
+Two rounds of live testing this session both ended the same way: a rule that looked applied in
+the UI/registry was **not** in the generated file. The fix is always to enforce it at the point
+every value passes through, then replay the real output to prove it. Do not trust a seeded
+learning to reach the FBDI — check the file.
+
+### 10.2 Strategy blanks were being resurrected downstream (FIXED)
+
+`strategy_overlay` blanked fields correctly inside `_transform_frame`, then **two later stages
+put values back**:
+
+* `_SEQ_FIELDS` auto-numbered Customer Number -> `100000, 100001…`
+* `_CONTROL_DEFAULTS` refilled RFQ Or Bidding -> `Y`, because "column is entirely empty" is
+  exactly what a *successfully blanked* column looks like.
+
+Fix: `strategy_overlay.blank_fields(obj)` returns the control-default key spellings, merged
+into `_apply_control_defaults(suppressed=…)`. Verified on the real 5,831 / 7,099 / 7,339-row
+files: `supplier name new`, `customer number`, `rfq or bidding`, `enable b2b messaging`,
+`invoice amount limit` all went from fully populated to 0 populated.
+
+### 10.3 BLANK_IF_EQUALS could never have worked (FIXED)
+
+Configured as `other_column: "Supplier Name"` — a **target** field — but the engine's per-row
+context holds **source** columns. The lookup missed on every row and all **3,407** duplicate
+Alternate Names survived. Fixed with `strategy_overlay.apply_frame_rules(df, obj)`, a
+frame-level pass where both sides are output columns. Now 0 duplicates, 2,278 genuine aliases
+preserved.
+
+### 10.4 CONCAT emitted a bare separator (FIXED)
+
+`Supplier Site*` was `CONCAT("Country Code", "City")`; **neither column exists in the NetSuite
+extract**, so all 8,561 rows shipped the literal `"-"` into a required, must-be-unique key.
+`engine.py` now returns the incoming value when every CONCAT input is missing, so the
+misconfiguration is visible instead of manufacturing a bad key. **The real source columns still
+need naming by Sandeep.**
+
+### 10.5 The FBDI templates bundle shipped 2 of 7 objects (FIXED — three stacked causes)
+
+1. `regenerate=False` was read as *"omit any object with no file in this format yet"* rather
+   than *"don't rebuild what exists"*. All 7 objects had csv-family artifacts; only 2 had
+   xlsx/xlsm. Missing objects are now built inline. Response carries `X-Files-Expected` and
+   `X-Objects-Skipped` so a short bundle is machine-detectable.
+2. Of the 2 delivered, **only `06_Supplier_Banks.xlsm` was a real Oracle workbook**.
+   `03_Supplier_Site.xlsx` was a synthesised fallback — correct columns (they come from the
+   parsed field records) but no "Instructions and CSV Generation" sheet, no macros, `.xlsx`
+   not `.xlsm`. Nothing in the file said so; it is convincing enough to be mistaken for real.
+   **Diagnostic: compare `wb.sheetnames` against the bundled template — a missing Instructions
+   sheet means it is synthesised.**
+3. Root cause: template records with no stored file (ephemeral Render disk after redeploy).
+   `materialize_template_file` now falls back to the workbook bundled in
+   `app/data/fbdi_templates/`, matched on business object or interface table, before degrading.
+   All 9 resolve, including messy spellings; unknown objects return `None` with a warning
+   rather than a wrong file. **This supersedes §9.22's "re-upload the templates" action — that
+   would have created duplicate records.**
+
+### 10.6 Auto-generated key numbers removed (analyst instruction)
+
+> "due to that number we have so many duplicate fields, please do not generate it if its not
+> mapped" … "same for other auto generated fields as well, if there is no input in the tool or
+> no mapping, do not generate auto number."
+
+`_apply_control_defaults` no longer invents values for **any** of `_SEQ_FIELDS`
+(`suppliernumber`, `supplierpartynumber`, `partynumber`, `customernumber`,
+`customeraccountnumber`). Mapped values are kept; gaps stay blank; the `_SEQ_PREFER_SOURCE`
+split is gone. Three reasons this mattered:
+
+* the extract leaves Supplier Number empty on every row, so every supplier got a fabricated
+  number that would have become its **permanent Fusion supplier number** with no legacy link;
+* Supplier Number is the **de-dup business key** — distinct values per row made genuine
+  duplicates look unique and the golden-record collapse could never fire;
+* reviewers saw five "3X Motion Technologies" rows numbered 100005-100009 and read them as
+  five different suppliers.
+
+`Batch ID` (`900001`) is deliberately **kept** — one required constant identifying the load
+batch, not a per-row invented identity.
+
+**WATCH:** `Party Number` / `Customer Account Number` previously fed the Customer 19-sheet
+parent/child linkage. The customer glue block generates its own `ORIG_SYSTEM` keys separately
+so breakage is not expected, but **the customer load has not been exercised since this change.**
+
+### 10.7 NEW FEATURE — duplicate + cleansing review with user decisions
+
+User asked for: duplicates and cleansing issues highlighted, user chooses what they want, and
+the CSV/FBDI generated accordingly. Chosen design (user-confirmed): **both** surfaces (Output
+Preview tabs + a pre-generation gate), verdicts **pick survivor / merge / keep all / exclude**,
+and decisions **learn across conversions**.
+
+**Key design decision — stable identity hashes, never row numbers.** `/duplicate-candidates`
+reports `member.row` as a positional index into the frame it built for that request;
+generation builds a different frame. A decision stored against a position would eventually drop
+the wrong supplier. Keys are sha1 over normalised identity-field values (case/whitespace
+insensitive); cluster keys sort members first so a re-scan does not appear to lose decisions.
+
+New files:
+
+* `backend/app/models/row_decision.py` — `RowDecision` (collection `row_decisions`), registered
+  in `database.py`.
+* `backend/app/services/decision_engine.py` — pure/pandas-only, unit-testable: `row_key`,
+  `row_keys_for`, `cluster_key`, `golden_record`, `apply_decisions`.
+* `backend/app/services/decision_service.py` — Mongo-aware wrapper, `annotate_clusters`,
+  `load_learned_keep_all`.
+
+Wiring: applied in `build_converted_dataframe` right after `_merge_dedupe_frames` — the single
+point the CSV bundle, xlsx, filled template and both project-level zip downloads all read from.
+**Also applied to each `collect_frames` entry** (which is a `(frame, source_columns)` tuple),
+otherwise an excluded supplier survives on the Address/Site sheets of a multi-source conversion.
+
+Endpoints on `output_router` (prefix is `/api/conversions`, **not** `/api/output/conversions`):
+`GET /{id}/review`, `POST /{id}/decisions`, `DELETE /{id}/decisions?decision_key=`, plus
+`/{id}/duplicate-candidates` now returning `cluster_key`, `member_keys`, `decision`,
+`identity_columns`, `decided_count`, `undecided_count`.
+
+Cross-conversion learning uses `RowDecision` itself (client_id + target_object + `keep_all`),
+**not** `LearnedMapping` — that is field-grain and its reseed/tombstone rules would fight a
+row-grain verdict.
+
+Frontend: `OutputPreviewPage.tsx` reworked (nested ternary -> `renderTab()`), cluster cards with
+survivor radios, 4 actions, undo, bulk "merge all ≥0.95", new **Cleansing** tab from
+`reviewBundle`, generation-gate confirm modal, and a "decisions changed — re-generate" banner.
+
+Verified: 19/19 engine unit tests + 12/12 against the real 5,831-row supplier file
+(**54 clusters / 114 duplicate rows** found). Merge produces a golden record no less populated
+than the best single row; keys survive a full frame reshuffle; no rows invented across a bulk
+merge of all 54.
+
+**Known gap:** a *learned* `keep_all` cannot be undone from this screen — `DELETE /decisions`
+only clears the current conversion's rows, so Undo is hidden for learned clusters. Needs a
+management surface.
+
+### 10.8 Customer field mapping seeded from the analyst workbook
+
+`NXT Customer Field Mapping (6).xlsx` -> "Source Files Mapping" tab. 49 rows have an Oracle
+Field Name but only the **26 Green/Mapped, Bring-to-Oracle=Yes** rows were seeded (the 23
+Yellow rows are notes — "contact ?", "creditr hold", "part relation ship" — not field names).
+29 pairs written to `customer_field_mappings.json`; verified every source column exists in the
+real extract tabs and no target has competing sources.
+
+**The workbook contradicted 4 existing seeds**, so `_seed_catalog_file` gained
+`replaces_source_field` — it retires superseded learnings instead of leaving two competing
+column_mappings per target (the QA #6 defect class):
+
+| Target | Was | Now |
+|---|---|---|
+| Customer Account Source System Reference | `entitynumber` | `entityid` |
+| Account Number | `entitynumber` | `entityid` |
+| Party Original System Reference | `entityid` | `id` |
+| Account Description | `custentity_enl_legalname` | `companyname` |
+
+Not seeded, recorded as `_open_items` in the JSON: `datecreated` (workbook maps both it and
+`startdate` to Account Established Date), `externalid -> "DFF"` (a category, not a field),
+`fax -> "Phone Line Type/Number"` (a separate contact-point ROW in `HZ_IMP_CONTACTPTS_T`, needs
+row fan-out), and **`Party Number`** — still fed by `entityid`, which is now the *account* key,
+so Party OSR and Party Number derive from different columns. Incoherent; needs a decision.
+Also: the workbook's `addressinternalid` does not exist — the Address tab header is `internalid`.
+
+### 10.9 UNVERIFIED — live Output Preview hung
+
+After deploy, `/conversions/6a68dd690f420d1177f743bd/output` was **still spinning after ~40s**.
+Could be a Render cold start; could be a regression. **First suspect: the `collect_frames`
+tuple unwrap in §10.7** — newest, least-exercised edit in the request path. Reload once; if it
+hangs again, check Render logs for a traceback around `apply_conversion_decisions` /
+`collect_frames`. Everything verifiable offline passes; only the live round-trip is unconfirmed.
+
+### 10.10 Open items carried forward
+
+**Blocked on people:**
+
+* `Supplier Site*` — real source columns for the country/city concat (Sandeep).
+* **`Address Name` disagrees between sheets** — city on the Address file, street address
+  (`Rua Pará, 126`) on the Site file. That is the FK between them; **the site load will fail on
+  every row.** Highest-severity open item.
+* `Third_Party_Pay_Relationships` — 12,630 auto-populated junk rows, `Remit-to Supplier*` = `Y`
+  where a supplier *name* belongs. Nothing in scope asked for this sheet.
+* `Procurement BU` ships the raw NetSuite subsidiary path
+  (`Nextracker Consolidated : Brazil Consolidation : Nextpower Brasil Ltda`) — crosswalk still
+  missing, and it is now visible in a client-facing file.
+* Supplier Number strategy (Raja) — now blank; decide legacy `id` vs Fusion auto-assign.
+* Match Approval Level code (Ramanjaneyulu — `3-Way` is still a guess); payment-terms naming
+  (Finance); bank sheet review.
+
+**Code:**
+
+* Learned `keep_all` needs an undo/management surface (§10.7).
+* Customer load unexercised since the auto-number change (§10.6).
+* Third Party Pay Relationship absent from all seeds.
+* Parent Supplier `SELF_LOOKUP` — frame-level self-join; engine is row-local.
+* Taxpayer Country needs routing through `COUNTRY_ISO2` (overlay alone won't fix).
+* Allowed-value validation from template cell comments.
+* Surface `_template_fallback` in the UI.
+* **187 pre-existing TypeScript errors repo-wide** (`npm run lint` = `tsc --noEmit`; `npm run
+  build` = `vite build`, which does NOT typecheck). 5 in `api/index.ts` are types imported from
+  `@/types` that exist nowhere — fixing them means inventing API contracts.
