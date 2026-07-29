@@ -591,6 +591,12 @@ const ObjectDetail: React.FC<{ group: LearnedObjectGroup; clientFilter: string; 
                 <th className="px-3 py-1.5">{kind === "column_mapping" ? "Source column" : "From"}</th>
                 <th className="w-6" />
                 <th className="px-3 py-1.5">{kind === "example_default" ? "Value written" : "To"}</th>
+                {/* Two learnings can name the same FBDI field and differ only by the
+                    legacy system they came from (NetSuite Item vs SyteLine Item) or by
+                    the interface sheets they apply to. Both were stored and enforced
+                    but absent from the payload, so the rows looked identical and a
+                    sheet exclusion could not be confirmed after it was set. */}
+                <th className="px-3 py-1.5">Scope</th>
                 <th className="px-3 py-1.5">Learned from</th>
                 <th className="w-8" />
               </tr>
@@ -604,6 +610,27 @@ const ObjectDetail: React.FC<{ group: LearnedObjectGroup; clientFilter: string; 
                     <ArrowRight className="h-3 w-3" />
                   </td>
                   <td className="px-3 py-1.5 font-mono text-success">{r.resolved_value || "—"}</td>
+                  <td className="px-3 py-1.5 text-[11px] text-ink-muted">
+                    <div className="flex flex-wrap items-center gap-1">
+                      {r.source_erp
+                        ? <Pill tone="info">{r.source_erp}</Pill>
+                        : <span className="text-ink-subtle">any source</span>}
+                      {(r.sheets?.length ?? 0) > 0 && (
+                        <span title={r.sheets!.join(", ")}>
+                          <Pill tone="neutral">
+                            only {r.sheets!.length} sheet{r.sheets!.length === 1 ? "" : "s"}
+                          </Pill>
+                        </span>
+                      )}
+                      {(r.exclude_sheets?.length ?? 0) > 0 && (
+                        <span title={r.exclude_sheets!.join(", ")}>
+                          <Pill tone="warning">
+                            not on {r.exclude_sheets!.length} sheet{r.exclude_sheets!.length === 1 ? "" : "s"}
+                          </Pill>
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-3 py-1.5 text-[11px] text-ink-muted">
                     {r.captured_from || formatDate(r.captured_at)}
                   </td>

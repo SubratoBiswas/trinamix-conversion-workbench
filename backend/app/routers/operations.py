@@ -1,6 +1,7 @@
 """Output, load, workflow, dependency, and dashboard endpoints."""
 # deploy-nudge: re-trigger backend build for wave-2 (commit 8782692)
 import io
+import logging
 import re
 import zipfile
 from datetime import datetime
@@ -27,6 +28,8 @@ from app.services.auth_service import get_current_user
 from app.services.dashboard_service import get_kpis
 from app.services.output_service import generate_output_artifact, get_output_preview
 from app.services.quality_service import build_load_summary, simulate_conversion_load
+
+log = logging.getLogger(__name__)
 
 
 async def _require_conversion(conversion_id: str) -> Conversion:
@@ -339,6 +342,47 @@ async def review_bundle(
             "duplicate_decisions": sum(1 for d in dec if d.scope == "duplicate")}
 
 
+async def run_required_check(conversion_id: str, max_rows: int = 20000) -> dict:
+    """The required-field gate, callable from ordinary Python.
+
+    Kept SEPARATE from the endpoint because the endpoint's ``max_rows`` default is a
+    FastAPI ``Query(...)`` object. Calling the endpoint function directly (as
+    ``mapping-report`` did) therefore handed a ``Query`` instance to pandas'
+    ``nrows``, the call raised, the caller's ``except`` swallowed it, and the report's
+    whole required-field section silently read zero — on every conversion, since the
+    deployment. Confirmed live on 29-Jul: ``include_required=true`` and ``=false``
+    returned byte-identical sections.
+    """
+    from app.services import required_fields_service as rf
+    from app.services.output_service import build_sheet_frames
+    import asyncio as _aio
+
+    c = await _require_conversion(conversion_id)
+    obj = c.target_object or ""
+    required = rf.load_required(obj)
+    if not required:
+        return {"conversion_id": str(c.id), "target_object": obj,
+                "required_total": 0, "failed_count": 0, "partial_count": 0,
+                "blocked": False, "sheets": [], "failures": [], "partials": [],
+                "message": f"No curated required-field list for {obj or 'this object'}."}
+
+    # Per-interface-sheet frames, routed and defaulted exactly as generation writes
+    # them. This used to pass ``collect_frames`` straight through — but that dict is
+    # keyed by DATASET ID, so no required sheet name ever matched, every field read
+    # as absent, and the gate returned blocked=true on healthy conversions. A gate
+    # that always fires is worse than no gate. Found by the 29-Jul live run against
+    # the deployed service, not by the unit tests: those fed check_sheets
+    # sheet-named frames directly and so never crossed this seam.
+    sheets, df = await build_sheet_frames(c, max_rows=max_rows)
+    # Objects with no sheeted template: the merged frame IS what generation writes.
+    if not sheets:
+        sheets = {name: df for name in required}
+    res = await _aio.to_thread(rf.check_sheets, sheets, required)
+    res.update({"conversion_id": str(c.id), "target_object": obj,
+                "message": rf.explain(res)})
+    return res
+
+
 @output_router.get("/{conversion_id}/required-check")
 async def required_check(
     conversion_id: str,
@@ -352,32 +396,7 @@ async def required_check(
     from this extract, or satisfied by a control default with no mapping at all.
     Only the output gets all three right (§10.1).
     """
-    from app.services import required_fields_service as rf
-    from app.services.output_service import build_converted_dataframe
-    import asyncio as _aio
-
-    c = await _require_conversion(conversion_id)
-    obj = c.target_object or ""
-    required = rf.load_required(obj)
-    if not required:
-        return {"conversion_id": str(c.id), "target_object": obj,
-                "required_total": 0, "failed_count": 0, "partial_count": 0,
-                "blocked": False, "sheets": [], "failures": [], "partials": [],
-                "message": f"No curated required-field list for {obj or 'this object'}."}
-
-    frames: dict = {}
-    df, _lin = await build_converted_dataframe(c, max_rows=max_rows,
-                                               collect_frames=frames)
-    # Per-sheet frames when the conversion is multi-source; otherwise the merged
-    # frame stands in for every sheet, which is what single-source generation
-    # actually writes.
-    sheets = {k: v[0] if isinstance(v, tuple) else v for k, v in (frames or {}).items()}
-    if not sheets:
-        sheets = {name: df for name in required}
-    res = await _aio.to_thread(rf.check_sheets, sheets, required)
-    res.update({"conversion_id": str(c.id), "target_object": obj,
-                "message": rf.explain(res)})
-    return res
+    return await run_required_check(conversion_id, max_rows=max_rows)
 
 
 @output_router.get("/{conversion_id}/mapping-report")
@@ -418,11 +437,19 @@ async def mapping_report(
         pass
 
     req = None
+    req_error = None
     if include_required:
         try:
-            req = await required_check(conversion_id, _=_)      # reuse the gate
-        except Exception:                                       # noqa: BLE001
+            # Plain helper, NOT the endpoint function — see run_required_check.
+            req = await run_required_check(conversion_id)
+        except Exception as _rq:                                # noqa: BLE001
+            # Surface the reason instead of reporting a silent clean pass. The
+            # previous bare `req = None` is why a total failure of this section
+            # looked identical to "nothing required" for weeks.
             req = None
+            req_error = f"{type(_rq).__name__}: {_rq}"[:300]
+            log.exception("required-field gate failed for conversion %s",
+                          conversion_id)
 
     rep = mr.build_report(
         conversion={"id": str(c.id), "target_object": c.target_object,
@@ -443,6 +470,8 @@ async def mapping_report(
         custom_rules=[{"id": str(r.id)} for r in rules],
     )
     rep["output_stale"] = bool(latest and latest.status == "stale")
+    if req_error:
+        rep["required_fields"]["error"] = req_error
     return rep
 
 
@@ -1120,9 +1149,13 @@ async def ai_explain_load_errors(run_id: str, _: User = Depends(get_current_user
     if not errors:
         return []
     conv = await Conversion.get(run.conversion_id)
-    from app.services.ai_error_service import explain_load_errors
+    # Aliased: this module also defines an ENDPOINT called explain_load_errors, and
+    # an unaliased import shadows it here. It resolves correctly today only because
+    # the import is function-local — one refactor that hoists it silently swaps a
+    # service call for an HTTP handler call.
+    from app.services.ai_error_service import explain_load_errors as _ai_explain
     dicts = [e.model_dump() for e in errors]
-    enriched = await explain_load_errors(dicts, conv.target_object if conv else None)
+    enriched = await _ai_explain(dicts, conv.target_object if conv else None)
     by_msg = {(d.get("error_message") or ""): d for d in enriched}
     out = []
     for e in errors:

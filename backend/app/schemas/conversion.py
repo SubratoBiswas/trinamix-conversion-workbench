@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.oid import ApiOut
+
 
 class ConversionCreate(BaseModel):
     project_id: str
@@ -33,7 +35,7 @@ class ConversionUpdate(BaseModel):
     output_mode: Optional[str] = None       # "fbdi_download" | "fusion_load"
 
 
-class ConversionOut(BaseModel):
+class ConversionOut(ApiOut):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str

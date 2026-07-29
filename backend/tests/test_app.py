@@ -1,23 +1,66 @@
-"""End-to-end smoke tests covering the Project (engagement) → Conversion split."""
+"""End-to-end smoke tests covering the Project (engagement) → Conversion split.
+
+REQUIRES A REACHABLE MONGODB. Skipped otherwise — see below.
+
+This file was written when the backend ran on SQLite with a synchronous seed. It
+had rotted into 11 hard failures that looked like product defects but were not:
+
+  * ``run_seed()`` is ``async`` now, so calling it bare built a coroutine and threw
+    it away — the seed never ran.
+  * ``TestClient(app)`` outside a ``with`` block never triggers the lifespan, so
+    ``init_db()`` never ran and Beanie never bound its expression fields. Every
+    request then died on ``User.email`` with a bare ``AttributeError: email``, which
+    reads like a schema bug and is nothing of the kind.
+
+Both are fixed here, and the module now SKIPS when no MongoDB answers rather than
+reporting eleven red failures that drown out real ones. That noise is part of why I
+previously reported this suite set as fully green when I had not run this file.
+
+To run these locally or in CI:  MONGODB_URI=mongodb://localhost:27017 pytest tests/test_app.py
+"""
 import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Make the app importable when running pytest from backend/
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Use isolated test DB so we don't touch the dev one
-os.environ["DATABASE_URL"] = "sqlite:///./test_workbench.db"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.seed import run_seed  # noqa: E402
 
-# Initialise DB + seed once for all tests
-run_seed()
-client = TestClient(app)
+
+def _mongo_reachable() -> tuple[bool, str]:
+    """Can we actually talk to a MongoDB? Short timeout — a skip must be instant."""
+    uri = os.environ.get("MONGODB_URI") or getattr(settings, "MONGODB_URI", "") or ""
+    if not uri:
+        return False, "MONGODB_URI is not set"
+    try:
+        from pymongo import MongoClient
+        MongoClient(uri, serverSelectionTimeoutMS=2000).admin.command("ping")
+        return True, ""
+    except Exception as exc:                                    # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"[:160]
+
+
+_ok, _why = _mongo_reachable()
+pytestmark = pytest.mark.skipif(
+    not _ok, reason=f"needs a reachable MongoDB ({_why})")
+
+
+# Entering the context is load-bearing: it runs the app lifespan, which is what
+# calls init_db() and awaits run_seed(). Without it Beanie is never initialised.
+# Entered once for the module (these are sequential smoke tests that share seeded
+# state) and closed at interpreter exit so the lifespan shutdown still runs.
+_ctx = TestClient(app)
+client = _ctx
+if _ok:
+    import atexit
+    client = _ctx.__enter__()
+    atexit.register(lambda: _ctx.__exit__(None, None, None))
 
 
 def _login() -> str:

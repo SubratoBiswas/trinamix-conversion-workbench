@@ -1,6 +1,8 @@
 """Auth request/response schemas."""
 from pydantic import BaseModel, EmailStr
 
+from app.schemas.oid import ApiOut
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -13,7 +15,7 @@ class TokenResponse(BaseModel):
     user: "UserOut"
 
 
-class UserOut(BaseModel):
+class UserOut(ApiOut):
     id: str
     name: str
     email: EmailStr

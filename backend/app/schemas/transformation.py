@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import Any
 from pydantic import BaseModel
 
+from app.schemas.oid import ApiOut
+
 
 class TransformationRuleCreate(BaseModel):
     target_field_id: str | None = None
@@ -12,7 +14,7 @@ class TransformationRuleCreate(BaseModel):
     description: str | None = None
 
 
-class TransformationRuleOut(BaseModel):
+class TransformationRuleOut(ApiOut):
     id: str
     conversion_id: str
     target_field_id: str | None = None
@@ -34,7 +36,7 @@ class CrosswalkCreate(BaseModel):
     target_value: str
 
 
-class CrosswalkOut(BaseModel):
+class CrosswalkOut(ApiOut):
     id: str
     conversion_id: str
     name: str

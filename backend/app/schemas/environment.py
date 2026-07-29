@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.oid import ApiOut
 
-class EnvironmentOut(BaseModel):
+
+class EnvironmentOut(ApiOut):
     model_config = ConfigDict(from_attributes=True)
     id: str
     project_id: str
@@ -16,7 +18,7 @@ class EnvironmentOut(BaseModel):
     created_at: datetime
 
 
-class EnvironmentRunOut(BaseModel):
+class EnvironmentRunOut(ApiOut):
     model_config = ConfigDict(from_attributes=True)
     id: str
     environment_id: str

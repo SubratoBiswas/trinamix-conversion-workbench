@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel
 
+from app.schemas.oid import ApiOut
 
-class MappingOut(BaseModel):
+
+class MappingOut(ApiOut):
     id: str
     conversion_id: str
     target_field_id: str

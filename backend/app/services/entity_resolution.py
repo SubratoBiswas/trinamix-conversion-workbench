@@ -58,6 +58,11 @@ _IDENTITY = {
 _CHILD_HINTS = ("site", "address", "contact", "assignment", "bank", "component",
                 "revision", "category", "relationship", "association")
 
+# Sorted-neighbourhood window for name groups too large to compare pairwise. 20 is
+# generous for the failure this exists to catch — near-identical names sort adjacent,
+# so real duplicates land within a few positions of each other, not twenty.
+_WINDOW = 20
+
 
 def _norm(s) -> str:
     if s is None:
@@ -174,25 +179,54 @@ def find_duplicate_clusters(
     recs = work.to_dict("records")
     n = len(recs)
 
-    # Blocking: group by first 4 alnum chars of the normalized anchor name.
+    # Blocking: group by the first 4 alnum chars of the normalized anchor name.
+    # Comparison is O(block²), so an oversized block cannot simply be compared.
+    # It used to be DROPPED — silently, with truncated=False and no note — so on a
+    # large extract "0 duplicates" could mean "thousands of rows were never
+    # examined". Split it on a longer prefix instead, and count whatever is still
+    # too big so the caller can say so out loud.
     blocks: dict[str, list[int]] = {}
+    rows_without_anchor = 0
     for i, r in enumerate(recs):
         k = _norm_key(_norm(r.get(anchor, "")))[:4]
         if k:
             blocks.setdefault(k, []).append(i)
+        else:
+            rows_without_anchor += 1
+
+    # An oversized block is handled by the SORTED-NEIGHBOURHOOD method rather than
+    # dropped: sort its rows by normalised name and compare each against the next
+    # ``window`` neighbours. Near-duplicate names sort adjacently, so this keeps most
+    # of the recall at O(k · window) instead of O(k²) — 2,000 rows becomes 40,000
+    # pair scores, not four million. Splitting on a longer prefix was the other
+    # option and is worse: "ACME Holdings LLC" and "ACME Holdings Inc" diverge at
+    # character 13 and would land in different blocks, never compared at all.
+    pairs_to_score: list[tuple[int, int]] = []
+    rows_compared = 0
+    windowed_blocks, rows_windowed = 0, 0
+    for idxs in blocks.values():
+        if len(idxs) < 2:
+            continue
+        rows_compared += len(idxs)
+        if len(idxs) <= max_block:
+            for ai in range(len(idxs)):
+                for bi in range(ai + 1, len(idxs)):
+                    pairs_to_score.append((idxs[ai], idxs[bi]))
+            continue
+        windowed_blocks += 1
+        rows_windowed += len(idxs)
+        ordered = sorted(idxs, key=lambda i: _norm_key(_norm(recs[i].get(anchor, ""))))
+        for pos, i in enumerate(ordered):
+            for j in ordered[pos + 1:pos + 1 + _WINDOW]:
+                pairs_to_score.append((i, j))
 
     uf = _UF(n)
     pair_conf: dict[tuple, tuple] = {}
-    for idxs in blocks.values():
-        if len(idxs) < 2 or len(idxs) > max_block:
-            continue
-        for ai in range(len(idxs)):
-            for bi in range(ai + 1, len(idxs)):
-                i, j = idxs[ai], idxs[bi]
-                score, ev = _pair_score(recs[i], recs[j], fields)
-                if score >= threshold:
-                    uf.union(i, j)
-                    pair_conf[(min(i, j), max(i, j))] = (score, ev)
+    for i, j in pairs_to_score:
+        score, ev = _pair_score(recs[i], recs[j], fields)
+        if score >= threshold:
+            uf.union(i, j)
+            pair_conf[(min(i, j), max(i, j))] = (score, ev)
 
     # Assemble clusters from the union-find groups that actually had ≥1 qualifying pair.
     members_of: dict[int, list[int]] = {}
@@ -218,6 +252,19 @@ def find_duplicate_clusters(
         })
     clusters.sort(key=lambda c: (-c["confidence"], -c["size"]))
     truncated = len(clusters) > max_clusters
+    # Say what was NOT examined. "0 duplicates" and "0 duplicates among the rows we
+    # could compare" are different answers, and only one of them is safe to act on.
+    coverage_notes = []
+    if rows_windowed:
+        coverage_notes.append(
+            f"{rows_windowed} row(s) in {windowed_blocks} large name group(s) were "
+            f"compared against their {_WINDOW} nearest neighbours by name rather than "
+            f"against every other row — a distant pair inside such a group can be "
+            f"missed")
+    if rows_without_anchor:
+        coverage_notes.append(
+            f"{rows_without_anchor} row(s) have no value in {anchor!r} and cannot be "
+            f"matched by name")
     return {
         "object": target_object,
         "rows_scanned": n,
@@ -227,6 +274,11 @@ def find_duplicate_clusters(
         "cluster_count": len(clusters),
         "duplicate_rows": sum(c["size"] for c in clusters),
         "truncated": truncated,
+        "rows_compared": rows_compared,
+        "rows_windowed": rows_windowed,
+        "windowed_blocks": windowed_blocks,
+        "rows_without_anchor": rows_without_anchor,
+        "coverage_note": " · ".join(coverage_notes),
     }
 
 

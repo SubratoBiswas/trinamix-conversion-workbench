@@ -28,6 +28,13 @@ from app.services.strategy_overlay import (
     apply_frame_rules as _strategy_frame_rules,
 )
 
+# Which mapping status wins when several rows target the same field. An analyst
+# override beats an approval, an approval beats a deliberate "not applicable", and
+# "suggested" (auto-map guessing) always loses. Module level so generation and the
+# required-field gate agree on the winning row — two copies would drift.
+_SPRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1,
+          "suggested": 0}
+
 
 async def _get_reference_standards(target_object: str | None) -> dict:
     from app.models.learned import LearnedMapping
@@ -214,6 +221,36 @@ def _merge_dedupe_frames(frames: list[pd.DataFrame], target_object: str | None) 
     natural business key with source priority. Delegates to the unit-tested
     merge_dedupe module, passing the natural-key registry."""
     return _merge_dedupe(frames, target_object, REFERENCE_KEY_FIELDS)
+
+
+def route_frame(wanted: Any, src_frames: dict | None,
+                fallback: pd.DataFrame) -> pd.DataFrame:
+    """Pick the bound source frame that supplies the most of ``wanted`` columns.
+
+    ``src_frames`` is the ``collect_frames`` dict produced by
+    ``build_converted_dataframe``: ``{dataset_id: (converted_frame, source_columns)}``.
+    Note the KEY is a dataset id, never an interface-sheet name — routing is decided
+    by which file actually contains the columns a sheet needs, and a caller that
+    treats those keys as sheet names silently matches nothing.
+
+    Ties and no-evidence cases return ``fallback`` (the merged frame), which is the
+    single-source behaviour. Extracted from generation so the required-field gate
+    routes identically instead of re-deriving it — §9.15 and the strategy overlay
+    are the standing lesson that a second copy of a rule drifts from the first.
+    """
+    if not src_frames:
+        return fallback
+    wanted = {str(w).strip().lower() for w in (wanted or []) if w is not None}
+    if not wanted:
+        return fallback
+    best, best_hits = None, 0
+    for _did, entry in src_frames.items():
+        _odf, _cols = entry if isinstance(entry, tuple) else (entry, [])
+        have = {str(c).strip().lower() for c in (_cols or [])}
+        hits = sum(1 for w in wanted if w in have)
+        if hits > best_hits:
+            best, best_hits = _odf, hits
+    return best if best is not None and best_hits > 0 else fallback
 
 
 async def build_converted_dataframe(
@@ -415,6 +452,108 @@ async def build_converted_dataframe(
     return out_df, lineage
 
 
+async def build_sheet_frames(
+    conversion: Conversion, max_rows: int | None = None,
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """``({interface sheet name: frame}, merged_frame)`` — what generation will write.
+
+    WHY THIS EXISTS
+    ---------------
+    The required-field gate has to answer "does this sheet's required column hold a
+    value", and three separate things can satisfy a required field: a mapped source
+    column, a control default with no mapping at all, and a per-sheet route to a
+    different source file. ``build_converted_dataframe`` gives none of them per
+    sheet — its ``collect_frames`` is keyed by DATASET ID, so a caller that looks a
+    sheet name up in it matches nothing and every required field reads as absent.
+    That is precisely the 29-Jul live finding: ``required-check`` returned
+    ``blocked: true`` with ``sheet_generated: false`` on every sheet of a healthy
+    Supplier conversion, i.e. the gate fired 100% of the time.
+
+    So: route each sheet the way generation routes it (``route_frame``), give it that
+    sheet's own columns, and apply the same control defaults / suppression sets
+    ``_finalize`` applies. Columns stay keyed by ``field_name`` (no ``*`` header
+    rename) — callers normalise names anyway, and the raw name is easier to match.
+
+    Returns ``({}, merged)`` when the conversion has no template or no sheeted
+    fields; callers then fall back to the merged frame, the previous behaviour.
+    """
+    from app.models.fbdi import FBDISheet
+
+    src_frames: dict = {}
+    df, _lin = await build_converted_dataframe(
+        conversion, max_rows=max_rows, collect_frames=src_frames)
+    if len(src_frames) < 2:
+        src_frames = {}                     # single source — nothing to route
+
+    template = (await FBDITemplate.get(conversion.template_id)
+                if conversion.template_id else None)
+    if template is None:
+        return {}, df
+    fields = await FBDIField.find(
+        FBDIField.template_id == template.id).sort(+FBDIField.sequence).to_list()
+    sheets = await FBDISheet.find(
+        FBDISheet.template_id == template.id).sort(+FBDISheet.sequence).to_list()
+    if not fields or not sheets:
+        return {}, df
+
+    by_sheet: dict[Any, list] = {}
+    for f in fields:
+        by_sheet.setdefault(f.sheet_id, []).append(f)
+
+    maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == conversion.id).to_list()
+    best: dict = {}
+    for m in maps:
+        cur = best.get(m.target_field_id)
+        if cur is None or _SPRIO.get(m.status or "suggested", 0) > _SPRIO.get(
+                cur.status or "suggested", 0):
+            best[m.target_field_id] = m
+    fbyid = {f.id: f for f in fields}
+
+    def _key(f) -> str:
+        return (f.field_name or "").strip().lower().rstrip("*").strip()
+
+    suppressed = {
+        _key(fbyid[tid]) for tid, m in best.items()
+        if m.status == "not_applicable" and tid in fbyid and fbyid[tid].field_name
+        and not (getattr(m, "default_value", None) and str(m.default_value).strip())
+    }
+    explicit = {
+        _key(fbyid[tid]) for tid, m in best.items()
+        if tid in fbyid and fbyid[tid].field_name
+        and (m.source_column or "").strip()
+        and (m.status or "") in ("approved", "overridden")
+    }
+    src_by_field = {m.target_field_id: str(m.source_column)
+                    for m in maps if m.source_column}
+
+    obj_name = (template.business_object or conversion.target_object or "")
+    suppressed |= _strategy_blank_fields(obj_name)
+    eff: dict = {}
+    try:
+        from app.services.defaults_service import compute_effective_defaults
+        eff = (await compute_effective_defaults(
+            conversion, use_ai=False)).get("defaults", {}) or {}
+    except Exception:                                           # noqa: BLE001
+        eff = {}
+
+    out: dict[str, pd.DataFrame] = {}
+    for s in sheets:
+        sfields = by_sheet.get(s.id) or []
+        if not sfields:
+            continue
+        wanted = {src_by_field.get(f.id) for f in sfields}
+        wanted.discard(None)
+        cols = _dedup([f.field_name for f in sfields])
+        sdf = route_frame(wanted, src_frames, df).reindex(columns=cols, fill_value="")
+        sdf = _blank_null_sentinels(sdf)
+        sdf = _apply_control_defaults(sdf, suppressed=suppressed, effective=eff,
+                                      explicitly_mapped=explicit)
+        sdf = _strategy_frame_rules(sdf, obj_name)
+        out[str(s.sheet_name or "")] = sdf
+    return out, df
+
+
 # Coded-value (LOV) enforcement lives in lov_service alongside the code that mines
 # the accepted values out of the template descriptions. Re-exported here because
 # this is where it's applied.
@@ -427,27 +566,67 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Input date spellings we accept, in priority order. Ambiguous DD/MM vs MM/DD is
+# resolved US-first (%m/%d/%Y) to match the existing behaviour and the US-sourced
+# extracts in play; a value that only parses as DD/MM still parses on the next pass.
+#
+# The two timestamp forms with a DASH date were missing, which is how the most
+# common database spelling of all — "2020-01-15 00:00:00", what every SQL/ODBC
+# export writes — reached the loader unconverted. "15-JAN-2020" is Oracle's own
+# default DATE display, so EBS/SQL*Plus extracts carry it constantly.
+_DATE_INPUT_FORMATS = (
+    "%Y%m%d",
+    "%Y-%m-%d", "%Y/%m/%d",
+    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
+    "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m-%d-%Y",
+    "%d/%m/%Y", "%d-%m-%Y",
+    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
+)
+
+
+def to_fbdi_date(v: Any) -> Any:
+    """One cell → Oracle's ``YYYYMMDD``, or the value untouched if it is not a date.
+
+    Untouched is deliberate: a column that turns out to hold free text must not be
+    mangled, and an unparseable date is more useful in the reject report as the
+    analyst's original string than as a blank.
+    """
+    if v is None or str(v).strip() == "":
+        return v
+    s = str(v).strip()
+    # Fractional seconds ("2020-01-15 00:00:00.000") — strptime has no optional
+    # group for them, so drop the fraction before matching.
+    core = re.sub(r"\.\d+$", "", s)
+    for fmt_in in _DATE_INPUT_FORMATS:
+        try:
+            return datetime.strptime(core, fmt_in).strftime("%Y%m%d")
+        except ValueError:
+            pass
+    return v
+
+
 def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
-    """Reformat any date/Date columns to YYYYMMDD as required by Oracle FBDI."""
+    """Reformat any date/Date columns to YYYYMMDD as required by Oracle FBDI.
+
+    Matched on a NORMALISED name (case and punctuation folded), because the frame's
+    headers and the template's field names routinely disagree on both: the EBS path
+    runs ``_normalize_columns`` first, so ``EffectiveStartDate`` arrives as
+    ``EFFECTIVE_START_DATE``. The previous exact ``col in date_field_names`` test
+    therefore matched nothing on that path and shipped ``2020-01-15`` to a loader
+    that only accepts ``20200115`` — every dated row rejected, silently. Found by
+    tests/test_ebs_output.py, which encoded the intent from the start; the
+    implementation never met it.
+    """
     date_field_names = {
-        f.field_name
+        re.sub(r"[^a-z0-9]", "", (f.field_name or "").lower())
         for f in fields
         if (f.data_type or "").lower() in ("date", "datetime")
     }
+    date_field_names.discard("")
     for col in df.columns:
-        if col in date_field_names:
-            def _reformat(v: Any) -> Any:
-                if v is None or str(v).strip() == "":
-                    return v
-                s = str(v).strip()
-                for fmt_in in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y",
-                               "%Y%m%d", "%Y/%m/%d %H:%M:%S"):
-                    try:
-                        return datetime.strptime(s, fmt_in).strftime("%Y%m%d")
-                    except ValueError:
-                        pass
-                return v
-            df[col] = df[col].apply(_reformat)
+        if re.sub(r"[^a-z0-9]", "", str(col).lower()) in date_field_names:
+            df[col] = df[col].apply(to_fbdi_date)
     return df
 
 
@@ -808,7 +987,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     _all_maps = await MappingSuggestion.find(
         MappingSuggestion.conversion_id == conversion.id
     ).to_list()
-    _SPRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
     _best_m: dict = {}
     for _m in _all_maps:
         _c = _best_m.get(_m.target_field_id)
@@ -914,19 +1092,9 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             _src_by_field.setdefault(_m.target_field_id, str(_m.source_column))
 
     def _frame_for(sfields: list) -> pd.DataFrame:
-        if not _src_frames:
-            return df
         wanted = {_src_by_field.get(f.id) for f in sfields}
         wanted.discard(None)
-        if not wanted:
-            return df
-        best, best_hits = None, 0
-        for _did, (_odf, _cols) in _src_frames.items():
-            have = {c.strip().lower() for c in _cols}
-            hits = sum(1 for w in wanted if w.strip().lower() in have)
-            if hits > best_hits:
-                best, best_hits = _odf, hits
-        return best if best is not None and best_hits > 0 else df
+        return route_frame(wanted, _src_frames, df)
 
     def _finalize(sfields: list) -> pd.DataFrame:
         # Req 8 — exactly this sheet's interface columns, in sequence, blanks

@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel
 
+from app.schemas.oid import ApiOut
 
-class DatasetColumnProfileOut(BaseModel):
+
+class DatasetColumnProfileOut(ApiOut):
     id: str
     column_name: str
     position: int
@@ -21,7 +23,7 @@ class DatasetColumnProfileOut(BaseModel):
         from_attributes = True
 
 
-class DatasetOut(BaseModel):
+class DatasetOut(ApiOut):
     id: str
     name: str
     description: Optional[str] = None

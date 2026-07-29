@@ -616,10 +616,26 @@ async def rule_authoring_objects(_: User = Depends(get_current_user)):
 
 @router.get("/conversions/{conversion_id}/rules", response_model=list[TransformationRuleOut])
 async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
+    """Rules saved against this conversion — what the authoring modal reloads.
+
+    ``target_field_id`` is now stringified. The spread used to pass it through as a
+    raw ObjectId, and ``TransformationRuleOut`` types it ``str``, so this endpoint
+    returned 500 for every conversion that actually HAD a rule: the analyst's rule
+    was intact in the database and unreachable in the UI, which presents as "my saved
+    rule disappeared" — CW #6, still live after the modal was fixed. ``ApiOut`` now
+    coerces this whole class of mistake; the explicit cast stays because it is the
+    one visible at the call site.
+    """
     rules = await TransformationRule.find(
         TransformationRule.conversion_id == PydanticObjectId(conversion_id)
     ).sort("sequence").to_list()
-    return [{"id": str(r.id), "conversion_id": str(r.conversion_id), **{k: v for k, v in r.model_dump().items() if k not in ("id", "conversion_id")}} for r in rules]
+    return [{**{k: v for k, v in r.model_dump().items()
+                if k not in ("id", "conversion_id", "target_field_id")},
+             "id": str(r.id),
+             "conversion_id": str(r.conversion_id),
+             "target_field_id": (str(r.target_field_id)
+                                 if r.target_field_id else None)}
+            for r in rules]
 
 
 @router.put("/rules/{rule_id}", response_model=TransformationRuleOut)

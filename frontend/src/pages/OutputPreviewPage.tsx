@@ -950,6 +950,16 @@ export const OutputPreviewPage: React.FC = () => {
             </div>
           )}
 
+          {/* Coverage of the SCAN itself, which is a different question from how many
+              groups were returned. A "0 suspected duplicates" result is only
+              actionable if the scan compared everything; when it did not, say so
+              here rather than let the clean result imply it did. */}
+          {!!dupes.coverage_note && (
+            <div className="mb-3 rounded-lg border border-line bg-canvas px-3 py-2 text-[11px] text-muted">
+              <strong className="text-ink">Scan coverage.</strong> {dupes.coverage_note}.
+            </div>
+          )}
+
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-canvas px-3 py-2">
             <Button
               variant="secondary"

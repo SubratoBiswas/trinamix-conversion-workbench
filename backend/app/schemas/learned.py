@@ -4,6 +4,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.oid import ApiOut
+
 
 class LearnedMappingBase(BaseModel):
     kind: str
@@ -40,11 +42,27 @@ class LearnedMappingUpdate(BaseModel):
     exclude_sheets: Optional[list[str]] = None
 
 
-class LearnedMappingOut(LearnedMappingBase):
+class LearnedMappingOut(ApiOut, LearnedMappingBase):
     model_config = ConfigDict(from_attributes=True)
     id: str
     captured_by: Optional[str] = None
     captured_at: datetime
+    # These three are STORED and ACTED ON but were never returned, so the Learning
+    # Center could not show them and the analyst had no way to confirm a setting had
+    # taken. Found by reading the live payload on 29-Jul.
+    #
+    # source_erp: which legacy system this learning came from. Item mappings from
+    # NetSuite and from SyteLine are different mappings for the same target field;
+    # the engine already scopes by it, but with the field absent from the payload
+    # the two are indistinguishable on screen.
+    #
+    # sheets / exclude_sheets: the per-interface-sheet scope. LearnedMappingUpdate
+    # accepts both, so they were write-only — set an exclusion and nothing anywhere
+    # reflected it back. Oracle repeats field names across sheets (Customer has 19),
+    # and these are what stop one approval reaching all of them.
+    source_erp: Optional[str] = None
+    sheets: list[str] = []
+    exclude_sheets: list[str] = []
 
 
 class LearningStats(BaseModel):

@@ -3,6 +3,8 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.oid import ApiOut
+
 
 class ProjectCreate(BaseModel):
     name: str
@@ -44,7 +46,7 @@ class ProjectUpdate(BaseModel):
     source_connection_id: Optional[str] = None
 
 
-class ProjectOut(BaseModel):
+class ProjectOut(ApiOut):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str

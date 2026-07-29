@@ -744,6 +744,18 @@ export interface DuplicateCandidates {
   hidden_count?: number;
   max_clusters?: number;
   note?: string;
+  /** How much of the data the scan actually examined, and by which method.
+   *  A name group too large to compare pairwise falls back to comparing each row
+   *  against its nearest neighbours by name — much cheaper, but a distant pair
+   *  inside that group can be missed. Rows with no value in the anchor column
+   *  cannot be name-matched at all. `coverage_note` states both in plain English and
+   *  is EMPTY when coverage was complete. Before this, "no duplicates found" and
+   *  "those rows were never fully compared" produced identical output. */
+  rows_compared?: number;
+  rows_windowed?: number;
+  windowed_blocks?: number;
+  rows_without_anchor?: number;
+  coverage_note?: string;
   ai_used?: boolean;
   sources?: string[];
   decided_count?: number;
@@ -962,7 +974,10 @@ export interface DashboardKpis {
 }
 
 export interface LearnedMapping {
-  id: number;
+  /** Mongo ObjectId hex string. Was typed `number`, a leftover from the SQL era;
+   *  every call site already passes it to string-typed APIs, which is why the two
+   *  `Argument of type 'number'` errors in LearningCenterPage existed. */
+  id: string;
   kind: string;
   category: string;
   original_value: string;
@@ -977,6 +992,17 @@ export interface LearnedMapping {
   captured_at: string;
   confidence_boost: number;
   records_auto_fixed: number;
+  /** Which legacy system this learning came from. Item mappings from NetSuite and
+   *  from SyteLine are different mappings for the same target field, and the engine
+   *  already scopes lookups by this — it was simply absent from the payload, so the
+   *  two were indistinguishable on screen. */
+  source_erp?: string | null;
+  /** Per-interface-sheet scope. Empty/empty means every sheet. `exclude_sheets`
+   *  wins over `sheets`. Oracle repeats field names across sheets (Customer has 19),
+   *  so these are what stop one approval reaching all of them. Both were write-only
+   *  until the response schema declared them. */
+  sheets?: string[];
+  exclude_sheets?: string[];
 }
 
 export interface LearningStats {

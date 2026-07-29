@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Any
 from pydantic import BaseModel
 
+from app.schemas.oid import ApiOut
 
-class ValidationIssueOut(BaseModel):
+
+class ValidationIssueOut(ApiOut):
     id: str
     conversion_id: str
     category: str
@@ -23,7 +25,7 @@ class ValidationIssueOut(BaseModel):
         from_attributes = True
 
 
-class ConvertedOutputOut(BaseModel):
+class ConvertedOutputOut(ApiOut):
     id: str
     conversion_id: str
     output_file_name: str
@@ -43,7 +45,7 @@ class OutputPreviewOut(BaseModel):
     lineage: dict[str, dict[str, Any]]  # target_col -> {source_column, transformations}
 
 
-class LoadErrorOut(BaseModel):
+class LoadErrorOut(ApiOut):
     id: str
     load_run_id: str
     row_number: int | None = None
@@ -59,7 +61,7 @@ class LoadErrorOut(BaseModel):
         from_attributes = True
 
 
-class LoadRunOut(BaseModel):
+class LoadRunOut(ApiOut):
     id: str
     conversion_id: str
     run_type: str

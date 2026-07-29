@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.oid import ApiOut
+
 
 class WorkflowCreate(BaseModel):
     name: str
@@ -22,7 +24,7 @@ class WorkflowUpdate(BaseModel):
     status: str | None = None
 
 
-class WorkflowOut(BaseModel):
+class WorkflowOut(ApiOut):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
@@ -37,7 +39,7 @@ class WorkflowOut(BaseModel):
     updated_at: datetime
 
 
-class DependencyOut(BaseModel):
+class DependencyOut(ApiOut):
     model_config = ConfigDict(from_attributes=True)
     id: str
     source_object: str

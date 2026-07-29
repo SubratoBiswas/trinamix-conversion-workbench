@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Any
 from pydantic import BaseModel
 
+from app.schemas.oid import ApiOut
 
-class FBDIFieldOut(BaseModel):
+
+class FBDIFieldOut(ApiOut):
     id: str
     template_id: str
     sheet_id: str
@@ -39,7 +41,7 @@ class FBDIFieldUpdate(BaseModel):
     validation_notes: str | None = None
 
 
-class FBDISheetOut(BaseModel):
+class FBDISheetOut(ApiOut):
     id: str
     template_id: str
     sheet_name: str
@@ -50,7 +52,7 @@ class FBDISheetOut(BaseModel):
         from_attributes = True
 
 
-class FBDITemplateOut(BaseModel):
+class FBDITemplateOut(ApiOut):
     id: str
     name: str
     module: str | None = None
