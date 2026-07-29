@@ -77,6 +77,16 @@ class MappingProposal(Document):
     layout_method: str = "deterministic"
     layout_note: Optional[str] = None
     detected_columns: dict = Field(default_factory=dict)
+    # Per sheet: which legacy system(s) it maps FROM, how that was worked out, and
+    # the evidence. A workbook can genuinely carry several — the real
+    # Oracle-NetSuite-SyteLine sheet has an Oracle field, a NetSuite column and an
+    # eBOS column on every row — which one dropdown on the upload form cannot say.
+    detected_source_systems: dict = Field(default_factory=dict)
+    source_systems: list[str] = Field(default_factory=list)
+    # Set when the uploader's choice contradicts what the file says. The choice
+    # still wins; the disagreement is shown rather than buried, because filing a
+    # workbook under the wrong system poisons the cross-system learning key.
+    source_system_conflict: Optional[str] = None
 
     rows: list[ProposedMapping] = Field(default_factory=list)
     count_new: int = 0

@@ -339,6 +339,113 @@ async def review_bundle(
             "duplicate_decisions": sum(1 for d in dec if d.scope == "duplicate")}
 
 
+@output_router.get("/{conversion_id}/required-check")
+async def required_check(
+    conversion_id: str,
+    max_rows: int = Query(20000, ge=100, le=200000),
+    _: User = Depends(get_current_user),
+):
+    """Do the object's required fields actually hold values in the built output?
+
+    Checked on the FINISHED frames rather than on the mappings, because a field
+    can be mapped to a column that exists but is empty, mapped to a column absent
+    from this extract, or satisfied by a control default with no mapping at all.
+    Only the output gets all three right (§10.1).
+    """
+    from app.services import required_fields_service as rf
+    from app.services.output_service import build_converted_dataframe
+    import asyncio as _aio
+
+    c = await _require_conversion(conversion_id)
+    obj = c.target_object or ""
+    required = rf.load_required(obj)
+    if not required:
+        return {"conversion_id": str(c.id), "target_object": obj,
+                "required_total": 0, "failed_count": 0, "partial_count": 0,
+                "blocked": False, "sheets": [], "failures": [], "partials": [],
+                "message": f"No curated required-field list for {obj or 'this object'}."}
+
+    frames: dict = {}
+    df, _lin = await build_converted_dataframe(c, max_rows=max_rows,
+                                               collect_frames=frames)
+    # Per-sheet frames when the conversion is multi-source; otherwise the merged
+    # frame stands in for every sheet, which is what single-source generation
+    # actually writes.
+    sheets = {k: v[0] if isinstance(v, tuple) else v for k, v in (frames or {}).items()}
+    if not sheets:
+        sheets = {name: df for name in required}
+    res = await _aio.to_thread(rf.check_sheets, sheets, required)
+    res.update({"conversion_id": str(c.id), "target_object": obj,
+                "message": rf.explain(res)})
+    return res
+
+
+@output_router.get("/{conversion_id}/mapping-report")
+async def mapping_report(
+    conversion_id: str,
+    include_required: bool = Query(True),
+    _: User = Depends(get_current_user),
+):
+    """The post-mapping summary: coverage by layer, validation and cleansing
+    pass/fail, and any required field with no value.
+
+    These numbers already existed but were scattered across the canvas, the DQ
+    report and the review tabs, so nobody read them together and a blocking gap
+    was easy to miss.
+    """
+    from app.models.fbdi import FBDIField, FBDITemplate
+    from app.models.mapping import MappingSuggestion
+    from app.models.output import ConvertedOutput
+    from app.models.transformation import TransformationRule
+    from app.services import mapping_report_service as mr
+
+    c = await _require_conversion(conversion_id)
+    template = await FBDITemplate.get(c.template_id) if c.template_id else None
+    fields = (await FBDIField.find(FBDIField.template_id == template.id).to_list()
+              if template else [])
+    maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == c.id).to_list()
+    rules = await TransformationRule.find(
+        TransformationRule.conversion_id == c.id).to_list()
+    latest = await ConvertedOutput.find(
+        ConvertedOutput.conversion_id == c.id).sort("-generated_at").first_or_none()
+
+    eff = {}
+    try:
+        from app.services.defaults_service import compute_effective_defaults
+        eff = await compute_effective_defaults(c, use_ai=False) or {}
+    except Exception:                                           # noqa: BLE001
+        pass
+
+    req = None
+    if include_required:
+        try:
+            req = await required_check(conversion_id, _=_)      # reuse the gate
+        except Exception:                                       # noqa: BLE001
+            req = None
+
+    rep = mr.build_report(
+        conversion={"id": str(c.id), "target_object": c.target_object,
+                    "generated_at": (latest.generated_at.isoformat()
+                                     if latest and latest.generated_at else None)},
+        fields=[{"id": f.id, "field_name": f.field_name,
+                 "required": bool(f.required)} for f in fields],
+        mappings=[{"target_field_id": m.target_field_id,
+                   "source_column": m.source_column, "reason": m.reason,
+                   "status": m.status, "confidence": m.confidence,
+                   "default_value": getattr(m, "default_value", None)}
+                  for m in maps],
+        dq_report=(latest.dq_report if latest else None),
+        required_result=req,
+        effective_defaults=eff,
+        rule_target_ids=[r.target_field_id for r in rules
+                         if getattr(r, "target_field_id", None) is not None],
+        custom_rules=[{"id": str(r.id)} for r in rules],
+    )
+    rep["output_stale"] = bool(latest and latest.status == "stale")
+    return rep
+
+
 @output_router.get("/{conversion_id}/cleansing-profile")
 async def get_cleansing_profile(
     conversion_id: str,

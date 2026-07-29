@@ -30,6 +30,13 @@ type Proposal = {
   supersedes?: string[];
   /** Modules this document covers; governance is per client + module. */
   objects?: string[];
+  /** Legacy system(s) the file maps FROM, detected per sheet. A workbook can
+   *  carry several side by side, which the upload dropdown cannot express. */
+  source_systems?: string[];
+  /** declared | deterministic | ai | mixed | none — how it was established. */
+  source_system_method?: string | null;
+  /** Set when the uploader's choice contradicts the file. The choice still wins. */
+  source_system_conflict?: string | null;
   /** What taking over cost: older mappings switched off, outputs invalidated. */
   retired_learnings?: number;
   outputs_marked_stale?: number;
@@ -214,7 +221,10 @@ export const MappingDocumentsPage: React.FC = () => {
             <option value="">Module — from the file</option>
             {objects.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
-          <input className="rounded-lg border px-3 py-2 text-sm" placeholder="Source system (optional)"
+          {/* Optional because detection reads it from the file. Overriding is
+              still allowed — a disagreement is reported, not silently accepted. */}
+          <input className="rounded-lg border px-3 py-2 text-sm"
+                 placeholder="Source system — leave blank to auto-detect"
                  value={sys} onChange={e => setSys(e.target.value)} />
         </div>
         <div className="flex items-center gap-3">
@@ -258,6 +268,10 @@ export const MappingDocumentsPage: React.FC = () => {
               </span>
               <span className="ml-2 text-xs font-normal text-muted">
                 {p.target_object || "module from file"} · layout: {p.layout_method}
+                {p.source_systems?.length
+                  ? ` · from ${p.source_systems.join(" + ")}`
+                  : ""}
+                {p.source_system_method === "ai" ? " (AI)" : ""}
               </span>
               {/* A superseded file still LOOKS applied unless the row says so —
                   which is exactly how a stale mapping keeps being trusted. */}
@@ -324,6 +338,29 @@ export const MappingDocumentsPage: React.FC = () => {
           </div>
           {open.layout_note && (
             <p className="border-b bg-slate-50 px-4 py-2 text-xs text-muted">{open.layout_note}</p>
+          )}
+          {/* Say WHERE the source system came from. "the header said NetSuite" and
+              "the model guessed NetSuite" deserve different levels of trust, and
+              a workbook filed under the wrong system poisons the learning key. */}
+          {!!open.source_systems?.length && (
+            <p className="border-b bg-slate-50 px-4 py-2 text-xs text-muted">
+              Maps from <strong className="text-ink">{open.source_systems.join(" + ")}</strong>
+              {open.source_system_method === "ai"
+                ? " — identified by AI because the headers were unfamiliar."
+                : open.source_system_method === "declared"
+                ? " — as chosen on upload."
+                : open.source_system_method === "mixed"
+                ? " — established differently per sheet."
+                : " — read from the file's own columns and headers."}
+              {open.source_systems.length > 1
+                && " This workbook carries more than one legacy system side by side."}
+            </p>
+          )}
+          {open.source_system_conflict && (
+            <p className="border-b bg-amber-50 px-4 py-2 text-xs text-amber-900">
+              <strong>Source system disagreement.</strong> {open.source_system_conflict}.
+              Your choice on upload was used — clear it to accept what the file says.
+            </p>
           )}
           {open.status === "applied" && (
             <p className="border-b bg-indigo-50 px-4 py-2 text-xs text-indigo-800">

@@ -4,6 +4,8 @@ import type {
   CleansingPreview,
   CleansingProfile,
   CleansingProfileInfo,
+  MappingReport,
+  RequiredCheck,
   Conversion,
   ConversionProject,            // alias kept for legacy callers
   ConvertedOutput,
@@ -733,6 +735,19 @@ export const OutputApi = {
         max_clusters: opts?.maxClusters ?? 100,
       },
       timeout: 120000,
+    }).then(r => r.data),
+  /** Do the object's required fields hold values in the built output?
+   *  Checked on the finished frames, not the mappings — a field can be mapped to
+   *  a column that exists but is empty. `blocked` refuses generation. */
+  requiredCheck: (conversionId: string) =>
+    api.get<RequiredCheck>(`/conversions/${conversionId}/required-check`, {
+      timeout: 180000,
+    }).then(r => r.data),
+  /** Post-mapping summary: coverage by layer, validation and cleansing pass/fail,
+   *  and any required field with no value. */
+  mappingReport: (conversionId: string) =>
+    api.get<MappingReport>(`/conversions/${conversionId}/mapping-report`, {
+      timeout: 180000,
     }).then(r => r.data),
   /** Which cleansing families run at generation, plus the family catalogue. */
   cleansingProfile: (conversionId: string) =>

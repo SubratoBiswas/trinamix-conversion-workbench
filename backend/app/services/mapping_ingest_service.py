@@ -203,6 +203,8 @@ async def analyze_mapping_file(
     seen: set[tuple[str, str, str]] = set()
     methods: set[str] = set()
     notes: list[str] = []
+    sys_seen: set[str] = set()
+    sys_conflicts: list[str] = []
     row_no = 0
 
     for sheet_name, df in book.items():
@@ -222,6 +224,31 @@ async def analyze_mapping_file(
             k: (headers[v] if isinstance(v, int) and v < len(headers) else None)
             for k, v in cols.items()
         }
+
+        # Which legacy system this sheet maps FROM. Detected rather than taken
+        # from the upload form, because mapping workbooks differ: some name it in
+        # a column, some only in the source column's header, some carry several
+        # systems side by side — and a single dropdown cannot describe that.
+        from app.services.mapping_source_detect import resolve_source_systems
+        sysinfo = await resolve_source_systems(
+            headers, grid[h_idx + 1:],
+            source_column=cols["source_field"],
+            system_column=cols["source_system"],
+            rows=grid[h_idx + 1:],
+            sheet_name=str(sheet_name), file_name=file_name,
+            declared=source_system,
+        )
+        proposal.detected_source_systems[str(sheet_name)] = sysinfo
+        sheet_system = sysinfo.get("primary")
+        if sysinfo.get("systems"):
+            sys_seen.update(sysinfo["systems"])
+        if sysinfo.get("declared_conflicts"):
+            sys_conflicts.append(
+                f"{sheet_name}: file says "
+                f"{', '.join(sysinfo['systems'])}, upload declared "
+                f"{sysinfo['declared']}")
+        if sysinfo.get("note"):
+            notes.append(f"{sheet_name}: {sysinfo['note']}")
 
         def cell(row: list[Any], i: Optional[int]) -> str:
             return "" if i is None or i >= len(row) else _txt(row[i])
@@ -250,12 +277,23 @@ async def analyze_mapping_file(
                 source_field=cands[0], source_alternatives=cands[1:],
                 source_raw=(src if src != cands[0] else None),
                 fbdi_sheet=cell(raw, cols["fbdi_sheet"]) or None,
-                source_system=cell(raw, cols["source_system"]) or source_system,
+                # Row value, then the sheet's detected system, then the form.
+                # Detection sits ahead of the form because a per-sheet answer is
+                # more specific than one dropdown applied to the whole workbook.
+                source_system=(cell(raw, cols["source_system"])
+                               or sheet_system or source_system),
                 notes=cell(raw, cols["notes"]) or None,
             ))
 
     proposal.layout_method = ("mixed" if len(methods) > 1 else (methods.pop() if methods else "failed"))
     proposal.layout_note = " · ".join(notes[:8])
+    proposal.source_systems = sorted(sys_seen)
+    # An uploader's choice is honoured, but a disagreement with the file is
+    # surfaced rather than silently accepted — filing a workbook under the wrong
+    # system poisons the cross-system learning key.
+    proposal.source_system_conflict = " · ".join(sys_conflicts[:4]) or None
+    if not proposal.source_system and sys_seen:
+        proposal.source_system = sorted(sys_seen)[0]
     await _classify(proposal)
     await proposal.insert()
     return proposal

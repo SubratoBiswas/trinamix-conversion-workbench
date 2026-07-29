@@ -21,7 +21,9 @@ import type {
   DuplicateCluster,
   DuplicateDecision,
   DuplicateVerdict,
+  MappingReport,
   OutputPreview,
+  RequiredCheck,
   ReviewBundle,
 } from "@/types";
 
@@ -70,6 +72,9 @@ interface ConfirmState {
   confirmLabel: string;
   tone: "primary" | "danger";
   onConfirm: () => void;
+  /** Blocking dialogs offer no way through, so Cancel would read as a second
+   *  route to generating. Used by the required-field gate. */
+  hideCancel?: boolean;
 }
 
 export const OutputPreviewPage: React.FC = () => {
@@ -212,7 +217,53 @@ export const OutputPreviewPage: React.FC = () => {
   const undecidedDupes = dupes?.undecided_count ?? 0;
   const openCleansing = review?.cleansing_open ?? 0;
 
-  const generate = () => {
+  /** Hard gate. A required field with no value rejects EVERY row in Fusion, so
+   *  unlike the undecided-review warning below there is no "generate anyway" —
+   *  the file could not be loaded, and producing it only moves the failure to
+   *  cutover where it costs far more to find. */
+  const generate = async () => {
+    setGenerating(true);
+    let req: RequiredCheck | null = null;
+    try {
+      req = await OutputApi.requiredCheck(pid!);
+    } catch {
+      req = null;          // the gate must never be the reason generation fails
+    } finally { setGenerating(false); }
+
+    if (req?.blocked) {
+      setConfirm({
+        title: "Required fields have no value — cannot generate",
+        confirmLabel: "Close",
+        tone: "danger",
+        hideCancel: true,
+        body: (
+          <div className="space-y-2 text-sm text-ink-muted">
+            <p className="text-ink">{req.message}</p>
+            <div className="max-h-56 overflow-y-auto rounded-lg border border-line">
+              <table className="table-shell">
+                <thead><tr><th>Sheet</th><th>Required field</th></tr></thead>
+                <tbody>
+                  {req.failures.map(f => (
+                    <tr key={`${f.sheet}-${f.field}`}>
+                      <td className="whitespace-nowrap">{f.sheet}</td>
+                      <td className="whitespace-nowrap font-medium text-danger">{f.field}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p>
+              Map these on <span className="font-medium">Mapping Review</span>, or set a
+              default, then generate again. Fields that are only partly filled are
+              reported but do not block.
+            </p>
+          </div>
+        ),
+        onConfirm: () => setConfirm(null),
+      });
+      return;
+    }
+
     if (undecidedDupes === 0 && openCleansing === 0) { void runGenerate(); return; }
     const parts: string[] = [];
     if (undecidedDupes > 0) parts.push(plural(undecidedDupes, "duplicate cluster"));
@@ -1346,7 +1397,9 @@ export const OutputPreviewPage: React.FC = () => {
         title={confirm?.title ?? ""}
         size="sm"
         footer={<>
-          <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
+          {!confirm?.hideCancel && (
+            <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
+          )}
           <Button variant={confirm?.tone ?? "primary"} onClick={() => confirm?.onConfirm()}>
             {confirm?.confirmLabel ?? "Confirm"}
           </Button>

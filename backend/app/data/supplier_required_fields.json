@@ -1,0 +1,47 @@
+{
+  "_source": "Analyst-supplied Supplier required-field list, 29-Jul-2026 (Subrato). One row per sheet + field marked * in the Oracle FBDI template.",
+  "_note": "The uploaded list repeats some rows because a single FBDI sheet covers several record blocks — Supplier Bank Import carries the payee, the bank account and the account assignment. Duplicates are collapsed here; the sheet still requires every field listed under it.",
+  "_authority": "Oracle FBDI template asterisks as transcribed by the analyst. Where this disagrees with a parsed template field, THIS list is what the pre-generation gate enforces, because it is the list the analyst signed off.",
+  "target_object": "Supplier",
+  "sheets": {
+    "Supplier Import": [
+      "Supplier Name"
+    ],
+    "Supplier Address Import": [
+      "Supplier Name",
+      "Address Name"
+    ],
+    "Supplier Site Import": [
+      "Supplier Name",
+      "Supplier Site",
+      "Remit-to Supplier",
+      "Address Name"
+    ],
+    "Supplier Site Assignment Import": [
+      "Supplier Name",
+      "Supplier Site"
+    ],
+    "Supplier Contact Import": [
+      "Supplier Name",
+      "Address Name",
+      "Category",
+      "Type",
+      "File/Text/URL"
+    ],
+    "Supplier Bank Import": [
+      "Import Batch Identifier",
+      "Payee Identifier",
+      "Supplier Number",
+      "Pay Each Document Alone",
+      "Payee Bank Account Identifier",
+      "Account Country Code",
+      "Account Number",
+      "Payee Bank Account Assignment Identifier",
+      "Primary Flag"
+    ]
+  },
+  "_open_items": [
+    "Supplier Number is required on Supplier Bank Import but section 10.6 removed auto-numbering on analyst instruction, so it is blank unless mapped. Either map it from the legacy id or accept that the bank sheet cannot load until the Supplier Number strategy is settled (Raja).",
+    "Remit-to Supplier on Supplier Site Import holds Y in the current extract where a supplier NAME belongs (section 10.10). Present-but-wrong passes a not-blank check, so this needs a value rule, not just a presence rule."
+  ]
+}

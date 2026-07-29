@@ -25,6 +25,12 @@ def _out(p: MappingProposal) -> dict:
                            for r in p.rows if r.target_object})
     # Only an APPLIED document that nothing later replaced is in force.
     d["is_authoritative"] = p.status == "applied" and not p.superseded_by
+    # How the source system was established, flattened for the list view: the UI
+    # shows "detected from the header" differently from "the model guessed".
+    methods = {v.get("method") for v in (p.detected_source_systems or {}).values()
+               if isinstance(v, dict) and v.get("method")}
+    d["source_system_method"] = (
+        "mixed" if len(methods) > 1 else (next(iter(methods)) if methods else None))
     for r in d.get("rows", []):
         if r.get("existing_learning_id"):
             r["existing_learning_id"] = str(r["existing_learning_id"])

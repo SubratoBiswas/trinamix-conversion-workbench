@@ -751,6 +751,58 @@ export interface DuplicateCandidates {
   clusters: DuplicateCluster[];
 }
 
+export interface RequiredCheck {
+  conversion_id?: string;
+  target_object?: string;
+  required_total: number;
+  failed_count: number;
+  partial_count: number;
+  /** True when a required field is absent or wholly empty — Oracle would reject
+   *  every row, so generation is refused rather than warned about. */
+  blocked: boolean;
+  message?: string;
+  failures: { sheet: string; field: string }[];
+  partials: { sheet: string; field: string }[];
+  sheets?: {
+    sheet: string; sheet_generated: boolean; rows: number;
+    failed: string[]; partial: string[];
+    checks: { field: string; status: string; column?: string | null;
+              rows: number; present: number; blank: number }[];
+  }[];
+}
+
+export interface MappingReport {
+  conversion_id?: string;
+  target_object?: string | null;
+  generated_at?: string | null;
+  headline: string;
+  blocked: boolean;
+  output_stale?: boolean;
+  mapping: {
+    total_fields: number;
+    mapped: number;
+    /** Fields resolved by the matcher or AI alone — nothing human or signed
+     *  stands behind them. A disclosure for sign-off, not a quality score. */
+    unattested: number;
+    by_layer: { layer: string; label: string; count: number }[];
+    required_unmapped: string[];
+  };
+  validation: {
+    checked: number; failed: number; warnings: number; passed: number;
+    hard_error_count?: number; by_type: Record<string, number>;
+  };
+  cleansing: {
+    rules_fired: number; values_changed: number; fields_touched: number;
+    by_rule: { rule: string; count: number }[];
+  };
+  rules: { configured: number; applied: number };
+  required_fields: {
+    checked: number; failed: number; partial: number; passed: number;
+    failures: { sheet: string; field: string }[];
+    partials: { sheet: string; field: string }[];
+  };
+}
+
 /** Cleansing rule families — mirrors services/cleansing_rules.FAMILIES. */
 export type CleansingFamily =
   | "whitespace_punct" | "special_chars" | "case" | "legal_suffix";
