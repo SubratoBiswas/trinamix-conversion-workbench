@@ -761,6 +761,10 @@ export interface CleansingProfile {
   /** Per-column override; a column listed here ignores `families`. */
   per_field?: Record<string, CleansingFamily[]>;
   exclude_fields?: string[];
+  /** Analyst corrections: {field: {original value: replacement}}. An override
+   *  beats every rule, so a reviewer can fix one bad result without disabling a
+   *  family that is right about the other thousands of values. */
+  value_overrides?: Record<string, Record<string, string>>;
 }
 
 export interface CleansingProfileInfo {
@@ -786,7 +790,8 @@ export interface CleansingPreview {
   rows_scanned?: number;
   findings: {
     field: string;
-    rule: CleansingFamily;
+    /** A family key, or "override" for a change the analyst pinned by hand. */
+    rule: CleansingFamily | "override";
     label?: string;
     count: number;
     examples: { before: string; after: string }[];

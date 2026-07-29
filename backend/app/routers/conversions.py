@@ -354,6 +354,10 @@ async def delete_conversion(conversion_id: str, _: User = Depends(get_current_us
     from app.models.transformation import TransformationRule, Crosswalk
     from app.models.output import ConvertedOutput
     from app.models.load import LoadRun, LoadError
+    # Duplicate/cleansing verdicts are conversion-scoped and were being left
+    # behind, so a deleted conversion's decisions sat in row_decisions forever.
+    from app.models.row_decision import RowDecision
+    await RowDecision.find(RowDecision.conversion_id == c.id).delete()
     await MappingSuggestion.find(MappingSuggestion.conversion_id == c.id).delete()
     await TransformationRule.find(TransformationRule.conversion_id == c.id).delete()
     await Crosswalk.find(Crosswalk.conversion_id == c.id).delete()

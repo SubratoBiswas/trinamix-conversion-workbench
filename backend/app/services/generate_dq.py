@@ -33,6 +33,58 @@ HARD_ERROR_TYPES = {
 }
 
 
+def protected_values() -> set:
+    """Values that a control default or the NextPower strategy deliberately SET.
+
+    Cleansing must not rewrite these: they are decisions, not dirty data. Without
+    this, legal-suffix standardisation rewrote the Oracle lookup code
+    ``CORPORATION`` to ``Corp`` on every supplier row of a required field, and
+    case normalisation turned the strategy's ``G-Treasury`` into ``G-TREASURY``.
+
+    Imported lazily — output_service imports THIS module, so a module-level
+    import would be circular. Best-effort: a failure here only loses protection,
+    it never blocks generation.
+    """
+    from app.services.cleansing_rules import _norm_protect
+    out: set = set()
+    try:
+        from app.services.output_service import _CONTROL_DEFAULTS
+        out |= {_norm_protect(v) for v in _CONTROL_DEFAULTS.values() if str(v).strip()}
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import json
+        from pathlib import Path
+        p = (Path(__file__).resolve().parent.parent
+             / "data" / "supplier_strategy_defaults.json")
+        if p.exists():
+            _harvest_strategy_constants(json.loads(p.read_text(encoding="utf-8")),
+                                        out, _norm_protect)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _harvest_strategy_constants(node, out: set, norm) -> None:
+    """Collect every literal the strategy pins, wherever it sits in the file.
+
+    The JSON mixes shapes — a plain ``constant``, and CASE_WHEN
+    ``rule_config.branches[].then`` / ``rule_config.default`` — and nests
+    ``analyst_rules.rules`` a level deeper. Walking it beats enumerating paths
+    that will drift the next time a rule is added.
+    """
+    if isinstance(node, dict):
+        for key in ("constant", "then", "default", "value"):
+            v = node.get(key)
+            if isinstance(v, (str, int, float)) and str(v).strip():
+                out.add(norm(v))
+        for v in node.values():
+            _harvest_strategy_constants(v, out, norm)
+    elif isinstance(node, list):
+        for v in node:
+            _harvest_strategy_constants(v, out, norm)
+
+
 def apply_cleansing(df: pd.DataFrame, rules: Optional[list] = None,
                     profile: Optional[dict] = None) -> tuple[pd.DataFrame, list]:
     """Cleanse the merged converted frame, then apply each custom cleansing rule
@@ -52,7 +104,7 @@ def apply_cleansing(df: pd.DataFrame, rules: Optional[list] = None,
     df = df.copy()
 
     from app.services.cleansing_rules import cleanse_frame
-    df, findings = cleanse_frame(df, profile)
+    df, findings = cleanse_frame(df, profile, protected=protected_values())
     fixes.extend({"field": f["field"], "rule": f["rule"], "count": f["count"],
                   "label": f.get("label"), "examples": f.get("examples", [])}
                  for f in findings)

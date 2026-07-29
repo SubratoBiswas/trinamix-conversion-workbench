@@ -414,6 +414,90 @@ def test_preview_can_show_a_family_that_is_not_enabled():
     check("and reports what CASE alone would do", rep["total_changes"] > 0)
 
 
+ALL_FAMILIES = [SPECIAL_CHARS, WHITESPACE_PUNCT, CASE, LEGAL_SUFFIX]
+
+
+def test_legal_suffix_never_touches_a_code_column():
+    """Tax Organization Type = CORPORATION is the Oracle lookup CODE, not a
+    company called "Corporation". Rewriting it to Corp broke 1,392 rows of a
+    required field until legal-suffix was restricted to name columns."""
+    out = clean_value("CORPORATION", column="Tax Organization Type",
+                      families=ALL_FAMILIES)
+    check("CORPORATION survives on a code column", out == "CORPORATION", f"got {out!r}")
+    check("but a real company suffix is still standardised",
+          clean_value("Acme LIMITED", column="Supplier Name",
+                      families=[LEGAL_SUFFIX]) == "Acme Ltd")
+    check("unknown-kind columns are left alone too",
+          clean_value("Acme LIMITED", column="Zzz", families=[LEGAL_SUFFIX])
+          == "Acme LIMITED")
+
+
+def test_protected_values_are_never_rewritten():
+    prot = {"g-treasury", "corporation"}
+    check("a strategy constant survives case normalisation",
+          clean_value("G-Treasury", column="Payment Method",
+                      families=ALL_FAMILIES, protected=prot) == "G-Treasury")
+    check("and survives every family",
+          clean_value("CORPORATION", column="Supplier Name",
+                      families=ALL_FAMILIES, protected=prot) == "CORPORATION")
+    check("an unprotected value still cleanses",
+          clean_value("acme  ltd.", column="Supplier Name",
+                      families=ALL_FAMILIES, protected=prot) == "Acme Ltd")
+
+
+def test_protected_values_are_harvested_from_the_strategy():
+    from app.services.generate_dq import protected_values
+    pv = protected_values()
+    for v in ("corporation", "g-treasury", "spend_authorized", "supplier"):
+        check(f"strategy constant {v!r} is protected", v in pv)
+
+
+def test_iberian_particles_lowercase():
+    out = clean_value("1 PLAN CONSULTORIA E ASSESSORIA LTDA",
+                      column="Supplier Name", families=[CASE])
+    check("Portuguese 'e' is lowered, LTDA kept as an acronym",
+          out == "1 PLAN Consultoria e Assessoria LTDA", f"got {out!r}")
+
+
+def test_value_override_beats_every_rule():
+    prof = {"families": ALL_FAMILIES, "per_field": {}, "exclude_fields": [],
+            "value_overrides": {"Supplier Name": {"acme  ltd.": "ACME Holdings"}}}
+    df = pd.DataFrame([{"Supplier Name": "acme  ltd."},
+                       {"Supplier Name": "beta limited"}])
+    out, findings = cleanse_frame(df, prof)
+    check("the pinned value wins", out["Supplier Name"].iloc[0] == "ACME Holdings",
+          f"got {out['Supplier Name'].iloc[0]!r}")
+    check("other rows still follow the rules",
+          out["Supplier Name"].iloc[1] == "Beta Ltd",
+          f"got {out['Supplier Name'].iloc[1]!r}")
+    check("the override is reported as its own finding",
+          any(f["rule"] == "override" for f in findings))
+
+
+def test_override_matching_is_case_and_space_insensitive():
+    prof = {"families": [], "per_field": {}, "exclude_fields": [],
+            "value_overrides": {"Supplier Name": {"ACME LTD": "Fixed"}}}
+    df = pd.DataFrame([{"Supplier Name": "  acme   ltd  "}])
+    out, _ = cleanse_frame(df, prof)
+    check("a differently-cased/spaced original still matches",
+          out["Supplier Name"].iloc[0] == "Fixed", f"got {out['Supplier Name'].iloc[0]!r}")
+
+
+def test_per_field_skip_stops_one_rule_on_one_column():
+    prof = {"families": ALL_FAMILIES,
+            "per_field": {"Alternate Name": [SPECIAL_CHARS, WHITESPACE_PUNCT]},
+            "exclude_fields": []}
+    df = pd.DataFrame([{"Supplier Name": "G&D Holdings INC",
+                        "Alternate Name": "G&D Holdings INC"}])
+    out, _ = cleanse_frame(df, prof)
+    check("the rule still runs where it is enabled",
+          out["Supplier Name"].iloc[0] == "G&D Holdings Inc",
+          f"got {out['Supplier Name'].iloc[0]!r}")
+    check("and is skipped on the excluded field",
+          out["Alternate Name"].iloc[0] == "G&D Holdings INC",
+          f"got {out['Alternate Name'].iloc[0]!r}")
+
+
 def test_cleansing_does_not_change_row_count():
     out, _ = cleanse_frame(CRRC, {
         "families": [SPECIAL_CHARS, WHITESPACE_PUNCT, CASE, LEGAL_SUFFIX],

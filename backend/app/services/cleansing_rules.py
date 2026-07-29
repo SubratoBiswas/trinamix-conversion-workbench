@@ -92,8 +92,15 @@ _KEEP_UPPER = {
     "SA", "SL", "AB", "AS", "OY", "KK", "SRL", "SPA", "II", "III", "IV", "VI",
     "VII", "VIII", "IX", "XI", "XII", "PO", "HQ", "IT", "HR", "RD", "ST",
 }
-_LOWER_PARTICLES = {"of", "and", "the", "for", "de", "da", "del", "der", "van",
-                    "von", "la", "le", "el", "di", "do", "dos", "das", "y"}
+_LOWER_PARTICLES = {
+    # English
+    "of", "and", "the", "for",
+    # Iberian / Italian / French / Dutch / German. "e" and "y" are the Portuguese
+    # and Spanish "and" — without them "1 PLAN CONSULTORIA E ASSESSORIA" title-cases
+    # to a stranded capital E.
+    "de", "da", "das", "do", "dos", "del", "della", "delle", "di", "du", "des",
+    "der", "den", "la", "le", "les", "el", "van", "von", "ter", "e", "y", "et",
+}
 
 # Column-name substrings that identify a value as a code (upper-cased) rather than
 # a human name (title-cased). Checked before the name heuristic.
@@ -106,6 +113,12 @@ _NAME_HINTS = ("name", "description", "address", "city", "town", "contact",
 
 def _s(v: Any) -> str:
     return "" if v is None else str(v)
+
+
+def _norm_protect(s: str) -> str:
+    """Match key for protected values — case/whitespace-insensitive, so a control
+    default of "G-Treasury" also shields "g-treasury  " in the data."""
+    return _WS.sub(" ", _s(s)).strip().casefold()
 
 
 def is_text_column(series: pd.Series) -> bool:
@@ -213,25 +226,37 @@ def _apply_legal_suffix(s: str) -> str:
 
 
 def clean_value(value: Any, *, column: str = "", families: Iterable[str] = SAFE_FAMILIES,
-                ascii_fold: bool = False, case_kind: Optional[str] = None) -> str:
+                ascii_fold: bool = False, case_kind: Optional[str] = None,
+                protected: Optional[set] = None) -> str:
     """Run the enabled families over one value, in dependency order.
 
     Order matters: unicode normalisation first (so smart quotes become plain ones
     before punctuation stripping looks at them), then whitespace/punctuation, then
     case, then legal suffixes LAST so their canonical capitalisation survives the
     case pass rather than being title-cased back.
+
+    ``protected`` holds values a rule, strategy or control default deliberately
+    SET — those are decisions, not dirty data, and cleansing must not rewrite
+    them. Without it, legal-suffix standardisation turned the Oracle lookup code
+    ``CORPORATION`` into ``Corp`` on 1,392 rows of a required field.
     """
     fam = set(families or ())
     s = _s(value)
     if not s.strip():
         return s
+    if protected and _norm_protect(s) in protected:
+        return s
+    kind = case_kind if case_kind is not None else _column_kind(column)
     if SPECIAL_CHARS in fam:
         s = _apply_special(s, ascii_fold=ascii_fold)
     if WHITESPACE_PUNCT in fam:
         s = _apply_whitespace_punct(s)
     if CASE in fam:
-        s = _apply_case(s, case_kind if case_kind is not None else _column_kind(column))
-    if LEGAL_SUFFIX in fam:
+        s = _apply_case(s, kind)
+    # Only ever on human names. A lookup column can legitimately contain a token
+    # that reads like a legal suffix — Tax Organization Type = CORPORATION is the
+    # Oracle CODE, not a company called "Corporation".
+    if LEGAL_SUFFIX in fam and kind == "name":
         s = _apply_legal_suffix(s)
     return s
 
@@ -240,7 +265,7 @@ def default_profile(columns: Iterable[str]) -> dict:
     """The profile applied when the conversion has none saved: safe families on
     everywhere, name-rewriting families off."""
     return {"families": list(SAFE_FAMILIES), "ascii_fold": False,
-            "per_field": {}, "exclude_fields": []}
+            "per_field": {}, "exclude_fields": [], "value_overrides": {}}
 
 
 def resolve_families(column: str, profile: dict) -> set[str]:
@@ -253,13 +278,26 @@ def resolve_families(column: str, profile: dict) -> set[str]:
     return set(per)
 
 
-def cleanse_frame(df: pd.DataFrame, profile: Optional[dict] = None
-                  ) -> tuple[pd.DataFrame, list]:
+def overrides_for(column: str, profile: dict) -> dict:
+    """Analyst corrections for one column: {normalised original -> replacement}.
+
+    An override wins over every rule. It is how a reviewer fixes a specific bad
+    result — "leave CORPORATION alone", "spell this one Ltda" — without having to
+    disable a family that is right about the other 5,000 values.
+    """
+    raw = (profile.get("value_overrides") or {}).get(column) or {}
+    return {_norm_protect(k): v for k, v in raw.items()}
+
+
+def cleanse_frame(df: pd.DataFrame, profile: Optional[dict] = None,
+                  protected: Optional[set] = None) -> tuple[pd.DataFrame, list]:
     """Apply the profile to every text column. Returns (frame, findings).
 
     findings = [{field, rule, count, examples:[{before, after}]}] — one entry per
     field+family that actually changed something, so the Cleansing tab can show
     exactly what a rule did before the reviewer trusts it.
+
+    ``protected`` shields values that a rule/strategy/default deliberately set.
     """
     findings: list = []
     if df is None or len(df) == 0:
@@ -269,16 +307,29 @@ def cleanse_frame(df: pd.DataFrame, profile: Optional[dict] = None
     out = df.copy()
 
     for col in out.columns:
-        fams = resolve_families(str(col), profile)
-        if not fams or not is_text_column(out[col]):
+        name = str(col)
+        fams = resolve_families(name, profile)
+        ovr = overrides_for(name, profile)
+        if (not fams and not ovr) or not is_text_column(out[col]):
             continue
         kinds = {f: 0 for f in fams}
         examples: dict[str, list] = {f: [] for f in fams}
+        ovr_count, ovr_examples = 0, []
         new_vals = []
         for raw in out[col]:
             cur = _s(raw)
             if not cur.strip():
                 new_vals.append(raw)
+                continue
+            # An analyst override replaces the value outright and skips the rules,
+            # so a correction cannot be undone by the family that caused it.
+            hit = ovr.get(_norm_protect(cur))
+            if hit is not None:
+                if hit != cur:
+                    ovr_count += 1
+                    if len(ovr_examples) < 5:
+                        ovr_examples.append({"before": cur, "after": hit})
+                new_vals.append(hit)
                 continue
             # Applied one family at a time so a change can be ATTRIBUTED to the
             # rule that made it — a combined before/after would tell the reviewer
@@ -286,8 +337,8 @@ def cleanse_frame(df: pd.DataFrame, profile: Optional[dict] = None
             for fam in (SPECIAL_CHARS, WHITESPACE_PUNCT, CASE, LEGAL_SUFFIX):
                 if fam not in fams:
                     continue
-                nxt = clean_value(cur, column=str(col), families=[fam],
-                                  ascii_fold=ascii_fold)
+                nxt = clean_value(cur, column=name, families=[fam],
+                                  ascii_fold=ascii_fold, protected=protected)
                 if nxt != cur:
                     kinds[fam] += 1
                     if len(examples[fam]) < 5:
@@ -297,14 +348,19 @@ def cleanse_frame(df: pd.DataFrame, profile: Optional[dict] = None
         out[col] = new_vals
         for fam, n in kinds.items():
             if n:
-                findings.append({"field": str(col), "rule": fam,
+                findings.append({"field": name, "rule": fam,
                                  "label": FAMILY_LABEL[fam], "count": int(n),
                                  "examples": examples[fam]})
+        if ovr_count:
+            findings.append({"field": name, "rule": "override",
+                             "label": "Your correction", "count": int(ovr_count),
+                             "examples": ovr_examples})
     return out, findings
 
 
 def preview_frame(df: pd.DataFrame, profile: Optional[dict] = None,
-                  *, families: Optional[Iterable[str]] = None) -> dict:
+                  *, families: Optional[Iterable[str]] = None,
+                  protected: Optional[set] = None) -> dict:
     """Dry run for the Cleansing tab: what WOULD change, without changing it.
 
     ``families`` overrides the profile so the UI can preview a family the user has
@@ -314,7 +370,7 @@ def preview_frame(df: pd.DataFrame, profile: Optional[dict] = None,
     if families is not None:
         prof["families"] = list(families)
         prof["per_field"] = {}
-    _, findings = cleanse_frame(df, prof)
+    _, findings = cleanse_frame(df, prof, protected=protected)
     return {
         "families": prof.get("families", []),
         "total_changes": int(sum(f["count"] for f in findings)),

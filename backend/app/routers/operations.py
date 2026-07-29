@@ -378,11 +378,17 @@ async def put_cleansing_profile(
     fams = [f for f in (payload.get("families") or []) if f in cr.FAMILIES]
     per_field = {str(k): [f for f in (v or []) if f in cr.FAMILIES]
                  for k, v in (payload.get("per_field") or {}).items()}
+    # Analyst corrections: {field: {original value: replacement}}. Stored verbatim
+    # — an override is the reviewer overruling a rule, so it is not sanitised
+    # against the family list the way per_field is.
+    overrides = {str(k): {str(a): str(b) for a, b in (v or {}).items()}
+                 for k, v in (payload.get("value_overrides") or {}).items()}
     profile = {
         "families": fams,
         "ascii_fold": bool(payload.get("ascii_fold")),
         "per_field": per_field,
         "exclude_fields": [str(x) for x in (payload.get("exclude_fields") or [])],
+        "value_overrides": {k: v for k, v in overrides.items() if v},
     }
     c.cleansing_profile = profile
     c.updated_at = datetime.utcnow()
@@ -411,8 +417,10 @@ async def cleansing_preview(
     df, _lineage = await build_converted_dataframe(c, max_rows=max_rows)
     fam = ([f.strip() for f in families.split(",") if f.strip() in cr.FAMILIES]
            if families else None)
+    from app.services.generate_dq import protected_values
     rep = await _aio.to_thread(
-        cr.preview_frame, df, getattr(c, "cleansing_profile", None), families=fam)
+        cr.preview_frame, df, getattr(c, "cleansing_profile", None),
+        families=fam, protected=protected_values())
     rep["rows_scanned"] = int(len(df)) if df is not None else 0
     rep["conversion_id"] = str(c.id)
     return rep

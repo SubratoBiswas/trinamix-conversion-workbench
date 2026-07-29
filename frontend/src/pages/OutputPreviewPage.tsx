@@ -12,6 +12,7 @@ import type {
   CleansingFamily,
   CleansingFinding,
   CleansingPreview,
+  CleansingProfile,
   CleansingProfileInfo,
   CleansingVerdict,
   Conversion,
@@ -110,6 +111,9 @@ export const OutputPreviewPage: React.FC = () => {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [cleansePreview, setCleansePreview] = useState<CleansingPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  // In-flight edits to a preview row's "After" value, keyed field|rule. Held
+  // separately from the profile so typing does not fire a save per keystroke.
+  const [edits, setEdits] = useState<Record<string, string>>({});
 
   const setBusyKey = (key: string, on: boolean) =>
     setBusy(prev => ({ ...prev, [key]: on }));
@@ -404,6 +408,57 @@ export const OutputPreviewPage: React.FC = () => {
       setCleansePreview(await OutputApi.cleansingPreview(pid, families));
     } catch (e) { setProfileError(errText(e)); }
     finally { setPreviewBusy(false); }
+  };
+
+  /** Persist a profile edit, then re-run the preview so the table reflects it. */
+  const saveProfile = async (next: CleansingProfile) => {
+    if (!pid || !profile) return;
+    const before = profile;
+    setProfile({ ...profile, profile: next, is_default: false });
+    setProfileBusy(true);
+    setProfileError(null);
+    try {
+      await OutputApi.saveCleansingProfile(pid, next);
+      setDecisionsDirty(true);
+      await runCleansePreview(next.families);
+    } catch (e) {
+      setProfile(before);
+      setProfileError(errText(e));
+    } finally { setProfileBusy(false); }
+  };
+
+  /** Stop one family touching one field, without disabling it everywhere else. */
+  const skipRuleForField = (field: string, rule: CleansingFamily) => {
+    if (!profile) return;
+    const p = profile.profile;
+    const current = p.per_field?.[field] ?? p.families;
+    void saveProfile({
+      ...p,
+      per_field: { ...(p.per_field ?? {}), [field]: current.filter(f => f !== rule) },
+    });
+  };
+
+  /** Pin a replacement for one specific value. Beats every rule. */
+  const overrideValue = (field: string, before: string, after: string) => {
+    if (!profile) return;
+    const p = profile.profile;
+    void saveProfile({
+      ...p,
+      value_overrides: {
+        ...(p.value_overrides ?? {}),
+        [field]: { ...((p.value_overrides ?? {})[field] ?? {}), [before]: after },
+      },
+    });
+  };
+
+  const clearOverride = (field: string, before: string) => {
+    if (!profile) return;
+    const p = profile.profile;
+    const forField = { ...((p.value_overrides ?? {})[field] ?? {}) };
+    delete forField[before];
+    const next = { ...(p.value_overrides ?? {}) };
+    if (Object.keys(forField).length) next[field] = forField; else delete next[field];
+    void saveProfile({ ...p, value_overrides: next });
   };
 
   // ─── Cleansing decisions ───
@@ -804,7 +859,16 @@ export const OutputPreviewPage: React.FC = () => {
             <Pill tone="neutral">{plural(dupes.duplicate_rows ?? 0, "record")}</Pill>
             <Pill tone="neutral">{dupes.rows_scanned} scanned</Pill>
             <Pill tone="success">{dupes.decided_count ?? 0} decided</Pill>
-            <Pill tone={undecidedDupes > 0 ? "danger" : "neutral"}>{undecidedDupes} undecided</Pill>
+            {/* Both counters cover the RETURNED groups only. Saying plain "0
+                undecided" next to "340 suspected groups" reads as fully reviewed
+                when 240 were never sent. */}
+            <Pill tone={undecidedDupes > 0 ? "danger" : "neutral"}>
+              {undecidedDupes} undecided
+              {(dupes.hidden_count ?? 0) > 0 && ` of ${dupes.returned_count ?? dupes.clusters.length} shown`}
+            </Pill>
+            {(dupes.hidden_count ?? 0) > 0 && (
+              <Pill tone="warning">{dupes.hidden_count} not reviewed</Pill>
+            )}
             {dupes.ai_used && <Pill tone="brand">AI-adjudicated</Pill>}
           </div>
 
@@ -954,37 +1018,121 @@ export const OutputPreviewPage: React.FC = () => {
               across {plural(cleansePreview.fields_affected, "field")} would change
               {typeof cleansePreview.rows_scanned === "number"
                 && ` (${cleansePreview.rows_scanned.toLocaleString()} rows scanned)`}.
-              Nothing has been written — this is a dry run.
+              Nothing has been written — this is a dry run. Edit any{" "}
+              <span className="font-medium text-ink">After</span> value and Save to pin
+              your own result for that value, or <span className="font-medium text-ink">Skip
+              field</span> to stop one rule touching one column.
             </p>
+
+            {/* Skipped fields are invisible once applied — the rule simply stops
+                firing — so they need a way back. */}
+            {Object.entries(profile.profile.per_field ?? {})
+              .filter(([, fams]) => fams.length < profile.profile.families.length)
+              .length > 0 && (
+              <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="text-ink-muted">Rules skipped on:</span>
+                {Object.entries(profile.profile.per_field ?? {})
+                  .filter(([, fams]) => fams.length < profile.profile.families.length)
+                  .map(([field]) => (
+                    <button
+                      key={field}
+                      disabled={profileBusy}
+                      className="rounded-full border border-line bg-white px-2 py-0.5 hover:border-danger hover:text-danger"
+                      title="Restore every enabled rule on this field"
+                      onClick={() => {
+                        const next = { ...(profile.profile.per_field ?? {}) };
+                        delete next[field];
+                        void saveProfile({ ...profile.profile, per_field: next });
+                      }}
+                    >
+                      {field} ✕
+                    </button>
+                  ))}
+              </div>
+            )}
             {cleansePreview.findings.length === 0 ? (
               <p className="text-[11px] text-ink-subtle">
                 No value would change under these rules.
               </p>
             ) : (
-              <div className="max-h-72 overflow-y-auto">
+              <div className="max-h-96 overflow-y-auto">
                 <table className="table-shell">
                   <thead>
                     <tr>
                       <th>Field</th><th>Rule</th><th>Rows</th>
-                      <th>Before</th><th>After</th>
+                      <th>Before</th><th>After (editable)</th><th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {cleansePreview.findings.slice(0, 40).map(f => (
-                      <tr key={`${f.field}-${f.rule}`}>
-                        <td className="whitespace-nowrap font-medium">{f.field}</td>
-                        <td className="whitespace-nowrap text-ink-muted">
-                          {f.label ?? f.rule}
-                        </td>
-                        <td className="text-ink-muted">{f.count.toLocaleString()}</td>
-                        <td className="max-w-xs truncate text-ink-subtle line-through">
-                          {f.examples[0]?.before ?? ""}
-                        </td>
-                        <td className="max-w-xs truncate text-ink">
-                          {f.examples[0]?.after ?? ""}
-                        </td>
-                      </tr>
-                    ))}
+                    {cleansePreview.findings.slice(0, 40).map(f => {
+                      const rowKey = `${f.field}|${f.rule}`;
+                      const before = f.examples[0]?.before ?? "";
+                      const suggested = f.examples[0]?.after ?? "";
+                      const pinned = profile?.profile.value_overrides?.[f.field]?.[before];
+                      const draft = edits[rowKey] ?? pinned ?? suggested;
+                      const dirty = draft !== (pinned ?? suggested);
+                      const isOverride = f.rule === "override";
+                      return (
+                        <tr key={rowKey}>
+                          <td className="whitespace-nowrap font-medium">{f.field}</td>
+                          <td className="whitespace-nowrap text-ink-muted">
+                            {f.label ?? f.rule}
+                          </td>
+                          <td className="text-ink-muted">{f.count.toLocaleString()}</td>
+                          <td className="max-w-xs truncate text-ink-subtle line-through">
+                            {before}
+                          </td>
+                          <td>
+                            {/* Editing the result is the fastest correction: it
+                                fixes THIS value without switching off a family
+                                that is right about the rest of the column. */}
+                            <input
+                              className="w-56 rounded border border-line px-1.5 py-0.5 text-[11px]"
+                              value={draft}
+                              disabled={profileBusy}
+                              onChange={e =>
+                                setEdits(prev => ({ ...prev, [rowKey]: e.target.value }))}
+                            />
+                          </td>
+                          <td className="whitespace-nowrap">
+                            {dirty && (
+                              <button
+                                className="mr-2 text-[11px] font-medium text-brand-dark hover:underline"
+                                disabled={profileBusy}
+                                onClick={() => {
+                                  overrideValue(f.field, before, draft);
+                                  setEdits(prev => {
+                                    const n = { ...prev }; delete n[rowKey]; return n;
+                                  });
+                                }}
+                              >
+                                Save
+                              </button>
+                            )}
+                            {pinned !== undefined && !dirty && (
+                              <button
+                                className="mr-2 text-[11px] text-ink-muted hover:underline"
+                                disabled={profileBusy}
+                                onClick={() => clearOverride(f.field, before)}
+                              >
+                                Unpin
+                              </button>
+                            )}
+                            {!isOverride && (
+                              <button
+                                className="text-[11px] text-ink-muted hover:underline"
+                                disabled={profileBusy}
+                                title={`Stop "${f.label ?? f.rule}" touching ${f.field}`}
+                                onClick={() =>
+                                  skipRuleForField(f.field, f.rule as CleansingFamily)}
+                              >
+                                Skip field
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
                 {cleansePreview.findings.length > 40 && (
