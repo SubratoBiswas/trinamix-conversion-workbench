@@ -1,5 +1,6 @@
 {
   "_source": "Analyst corrections, 30-Jul-2026 (Subrato), superseding the 28-Jul review on the points they touch.",
+  "_effective_date": "2026-07-30",
   "_scope": "Client NextPower, Supplier and its five child interfaces. Seeded as client-scoped learnings so they reach every current and future Supplier conversion.",
   "_precedence": "These are analyst instructions, so they sit above the control defaults and above AI. A mapping a person has since edited and approved in the UI still wins over all of it — that is the 30-Jul rule, and apply_learned_to_conversion now honours it by refusing to overwrite anything not approved by 'learning-engine'.",
   "_open_questions": [
@@ -116,12 +117,42 @@
             "if_column": "remittance_fax",
             "op": "notblank",
             "then": "FAX"
+          },
+          {
+            "if_column": "Email",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "Alt. Email",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "E-Mail",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "email",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "Fax",
+            "op": "notblank",
+            "then": "FAX"
+          },
+          {
+            "if_column": "fax",
+            "op": "notblank",
+            "then": "FAX"
           }
         ],
         "default": ""
       },
       "applies_to_all_sheets": true,
-      "note": "EMAIL is tested first, which is what 'preference to EMAIL' means — a row carrying both takes EMAIL. Default blank rather than a guess: it is a coded column."
+      "note": "EMAIL is tested first, which is what 'preference to EMAIL' means - a row carrying both takes EMAIL. The remittance-specific spellings are tried first and kept, but the NetSuite extract has NO 'Remittance *' column: its 258 headers carry Email, Alt. Email and Fax, so those are the fallbacks that actually fire. Confirm this is the intended source - if remittance advice goes somewhere else, name the column and it replaces these. Default blank rather than a guess: it is a coded column."
     },
     {
       "target_object": "Supplier Site",
@@ -144,11 +175,11 @@
       "rule_type": "SELF_LOOKUP",
       "rule_config": {
         "key_column": "Parent Vendor Id",
-        "match_column": "Internal Id",
+        "match_column": "Internal ID",
         "value_column": "Name",
         "default": ""
       },
-      "note": "Take this row's Parent Vendor Id, find the row whose Internal Id equals it, and use that row's Name. Blank when the parent is not in the extract — shipping the raw id would look populated and be wrong."
+      "note": "Take this row's Parent Vendor Id, find the row whose Internal Id equals it, and use that row's Name. Blank when the parent is not in the extract — shipping the raw id would look populated and be wrong. Column names confirmed against the NetSuite extract: 'Parent Vendor Id', 'Internal ID', 'Name' all exist."
     }
   ],
   "protected_values": [

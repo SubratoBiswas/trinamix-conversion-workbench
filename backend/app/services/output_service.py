@@ -86,12 +86,84 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
             for br in cfg.get("branches") or []:
                 if br.get("if_column"):
                     cols.add(br["if_column"])
+        elif rt == "SELF_LOOKUP":
+            # Parent Supplier reads THREE source columns and owns none of them, so
+            # every one has to survive pruning: the key it looks up by, the column
+            # it matches against, and the column whose value it returns.
+            cols.update(c for c in (cfg.get("key_column"), cfg.get("match_column"),
+                                    cfg.get("value_column")) if c)
     return cols
+
+
+def _self_lookup_configs(pipelines: dict, target_object: str | None) -> list[dict]:
+    """Every SELF_LOOKUP config in play for this conversion, from both sources."""
+    out: list[dict] = []
+    for _rules in (pipelines or {}).values():
+        for r in _rules or []:
+            if (r.get("rule_type") or "").upper() == "SELF_LOOKUP":
+                out.append(r.get("config") or {})
+    try:
+        from app.services.strategy_overlay import self_lookup_configs
+        out.extend(self_lookup_configs(target_object))
+    except Exception:                                           # noqa: BLE001
+        pass
+    return out
+
+
+def _build_self_index(src: pd.DataFrame, configs: list[dict]) -> dict:
+    """``{"Match->Value": {match_value: value_value}}`` over the WHOLE extract.
+
+    SELF_LOOKUP has never once returned a value in production, and this is why:
+    it reads its index from ``ctx["self_index"]``, and NOTHING in the codebase
+    built one. The rule shipped, passed its unit tests against a hand-made index,
+    and returned its default on every row of every real run — which is exactly why
+    Parent Supplier was empty on all 3,872 suppliers.
+
+    Built once on the full frame rather than per chunk, because the parent row a
+    child points at is very often in a different chunk; and built as a dict rather
+    than scanned per row because 7,495 vendors scanned pairwise is 56 million
+    comparisons. Columns are matched case- and space-insensitively: the analyst
+    wrote "Internal Id", the NetSuite extract says "Internal ID", and losing the
+    whole lookup to that is not a failure worth having.
+    """
+    if src is None or not configs or not len(src.columns):
+        return {}
+    by_norm = {}
+    for c in src.columns:
+        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
+
+    def _col(name):
+        return by_norm.get(re.sub(r"[^a-z0-9]", "", str(name or "").lower()))
+
+    index: dict[str, dict[str, str]] = {}
+    for cfg in configs:
+        mk, vk = cfg.get("match_column"), cfg.get("value_column")
+        key = f"{mk}->{vk}"
+        if key in index:
+            continue
+        mc, vc = _col(mk), _col(vk)
+        if mc is None or vc is None:
+            continue
+        pairs: dict[str, str] = {}
+        for a, b in zip(src[mc].tolist(), src[vc].tolist()):
+            ka = "" if a is None else str(a).strip()
+            if not ka or ka.lower() in ("nan", "none"):
+                continue
+            # First win: a duplicated key is a data problem, and quietly taking the
+            # last row's value would make the result depend on row order.
+            pairs.setdefault(ka, "" if b is None else str(b).strip())
+            # NetSuite writes ids as "123" in one column and "123.0" in another once
+            # pandas has seen a blank, so index the integral spelling too.
+            if ka.endswith(".0"):
+                pairs.setdefault(ka[:-2], pairs[ka])
+        index[key] = pairs
+    return index
 
 
 def _transform_frame(
     src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
     context_cols: set[str] | None = None, target_object: str | None = None,
+    self_index: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -106,6 +178,7 @@ def _transform_frame(
     """
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
+    _rule_ctx = {"self_index": self_index or {}}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -162,7 +235,8 @@ def _transform_frame(
                 records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
             src_vals = col_cache[m.source_column] if has_src else None
             col_values = [
-                apply_pipeline(rules, (src_vals[i] if src_vals is not None else ""), row=records[i])
+                apply_pipeline(rules, (src_vals[i] if src_vals is not None else ""),
+                               row=records[i], ctx=_rule_ctx)
                 for i in range(n_rows)
             ]
         elif has_src:
@@ -187,8 +261,43 @@ def _transform_frame(
         # "suggested" deliberately does NOT count: auto-map guessing is exactly
         # what the strategy constants exist to correct, so only a deliberate
         # approve/override wins.
+        #
+        # ...but "approved" is not proof a PERSON approved it. The learning engine
+        # approves the mappings it applies, under approved_by="learning-engine",
+        # and those rows were passing this guard — so a SEEDED mapping outranked
+        # the analyst's own later correction. That is why three fields the 30-Jul
+        # corrections declare BLANK still shipped values in the file the analyst
+        # sent back: Supplier Name New carried the supplier name on all 3,872 rows,
+        # Procurement BU carried "Nextracker Consolidated" on 5,315, and Liability
+        # Distribution carried an account string on 1,528. Each had a seeded source
+        # column, and each therefore skipped its own blank rule.
+        #
+        # The line is the one the analyst drew on 30-Jul: a person editing and
+        # approving in the UI outranks everything; an engine approval does not
+        # outrank the person who wrote the correction. Same test as
+        # learning_service._eligible, which already had to draw it.
+        _approver = str(getattr(m, "approved_by", "") or "").strip()
+        _by_a_person = bool(_approver) and _approver != "learning-engine"
+        # ...and WHICHEVER IS LATEST. Analyst, 30-Jul, stating the precedence in
+        # full: "1) analyst manually changed or present in mapping file (whichever
+        # is latest) 2) learnings and golden records from database 3) AI".
+        #
+        # So a person's approval does not win forever. It wins until the analyst
+        # issues a newer instruction in a rule file, at which point the file is the
+        # more recent statement of the same person's intent. Each rule file now
+        # carries _effective_date and each directive carries it as `as_of`; a
+        # directive with no date loses to any human approval, which is the previous
+        # behaviour and the safe default for older files.
+        _asof = (_ov or {}).get("as_of") if _ov else None
+        _appr_at = getattr(m, "approved_at", None)
+        _person_is_newer = True
+        if _asof is not None:
+            # No approval timestamp means we cannot show the person spoke later,
+            # and the dated file is the only thing that can be placed in time.
+            _person_is_newer = bool(_appr_at) and _appr_at >= _asof
         _explicit = bool(str(m.source_column or "").strip()
-                         and m.status in ("approved", "overridden"))
+                         and m.status in ("approved", "overridden")
+                         and _by_a_person and _person_is_newer)
         if _ov:
             if _ov.get("blank") and not _explicit:
                 col_values = [""] * n_rows
@@ -203,7 +312,8 @@ def _transform_frame(
             elif "rule" in _ov:
                 if records is None:
                     records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
-                col_values = [apply_pipeline([_ov["rule"]], col_values[i], row=records[i])
+                col_values = [apply_pipeline([_ov["rule"]], col_values[i],
+                                             row=records[i], ctx=_rule_ctx)
                               for i in range(n_rows)]
         out_cols[tgt.field_name] = col_values
         lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
@@ -343,6 +453,25 @@ async def build_converted_dataframe(
     _obj_name_for_overlay = ((_tpl_ov.business_object if _tpl_ov else None)
                              or getattr(conversion, "target_object", None) or "")
 
+    # The overlay's OWN rules read source columns, and nothing was telling the
+    # frame about them. Both halves of the pipeline drop a column nobody claims:
+    # `needed_src` prunes it out of the DataFrame, and `_ctx_cols` leaves it out of
+    # the per-row dict. So every strategy rule that derives from an unmapped column
+    # silently evaluated against blanks and produced its default.
+    #
+    # That is why Supplier Site came out empty on all 8,561 rows even though its
+    # rule is CONCAT("Country Code", "City") and BOTH columns exist in the NetSuite
+    # extract — the rule was reading a row that had neither. The transformation-rule
+    # pipelines had been given this treatment; the overlay was added later and never
+    # inherited it, which is the same way this codebase has lost a guarantee before.
+    try:
+        from app.services.strategy_overlay import referenced_columns as _ov_ref_cols
+        _overlay_cols = _ov_ref_cols(_obj_name_for_overlay)
+        _ctx_cols |= _overlay_cols
+        needed_src |= _overlay_cols
+    except Exception:  # noqa: BLE001 — never fail generation over the overlay
+        log.exception("could not collect strategy-overlay source columns")
+
     async def _convert_source(src: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         """Prune to the mapped/referenced columns, then chunk-transform ONE source
         frame into the target field-keyed output frame."""
@@ -353,18 +482,22 @@ async def build_converted_dataframe(
                     src = src[keep].copy()
         except Exception:  # noqa: BLE001 — pruning is an optimization, never fatal
             pass
+        # Built on the FULL frame before chunking — a child's parent is usually in
+        # another chunk, so a per-chunk index would resolve some rows and not others.
+        _self_idx = _build_self_index(
+            src, _self_lookup_configs(pipelines, _obj_name_for_overlay))
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
                 _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay)
+                _obj_name_for_overlay, _self_idx)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay)
+                _obj_name_for_overlay, _self_idx)
             parts.append(odf)
             if not lin0:
                 lin0 = lin

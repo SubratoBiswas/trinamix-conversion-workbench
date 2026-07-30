@@ -509,6 +509,124 @@ def _norm_field(s) -> str:
     return _re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+async def enforce_blank_correction(
+    target_object: str, target_field: str, *,
+    client_id=None, captured_from: str = "analyst correction",
+    captured_by: str = "analyst-correction",
+) -> dict:
+    """Make "this column ships blank" true in the LIBRARY and in the MAPPINGS.
+
+    Analyst, 30-Jul: "Procurement BU blank and Liability Distribution blank, modify
+    the learning, the code should change the learning and mapping as I am saying
+    now" — and then "Supplier Name New blank change this in learnings and mappings".
+
+    Recording a suppress_field learning was never enough, and the file they sent
+    back proves it. Alongside the new suppression, the library still held the OLD
+    column_mapping that bound each field to a source column, and every existing
+    conversion still had a mapping row pointing at it. Two rows in one library
+    saying opposite things about one field is not a rule, it is a coin toss — and
+    the older row kept winning: Supplier Name New shipped the supplier name on all
+    3,872 rows, Procurement BU "Nextracker Consolidated" on 5,315, Liability
+    Distribution an account string on 1,528.
+
+    So a blank correction now does three things:
+
+      1. RETIRES the contradicting learnings — every column_mapping and
+         example_default for this field is tombstoned, not left to compete. They
+         stay tombstoned: every seeder honours ``is_deleted``, so a reseed cannot
+         resurrect them.
+      2. REWRITES the mapping rows in every existing conversion of the object:
+         source cleared, default cleared, status not_applicable. This is what makes
+         the screen agree with the file.
+      3. Marks the affected outputs stale, because the file on disk still has the
+         value in it.
+
+    What it will NOT touch: a mapping a PERSON approved or overrode. That is the
+    precedence the analyst set on 30-Jul ("if user modifies anything from the tool
+    UI and then approves it, it should get highest precedence"), and a seeding pass
+    silently reversing a colleague's decision is the failure this rule exists to
+    prevent. Those are counted and returned as ``skipped_human`` rather than
+    swallowed, so "nothing happened" can never be mistaken for "nothing to do".
+    """
+    from app.models.fbdi import FBDIField
+    from app.models.output import ConvertedOutput
+    from app.services.client_service import client_id_for_conversion
+
+    obj, fld = (target_object or "").strip(), (target_field or "").strip()
+    out = {"field": fld, "object": obj, "learnings_retired": 0,
+           "mappings_blanked": 0, "skipped_human": 0, "conversions": 0,
+           "stale_outputs": 0}
+    if not (obj and fld):
+        return out
+    nf = _norm_field(fld)
+    now = datetime.utcnow()
+
+    # 1 — retire the contradicting library rows.
+    q = [LearnedMapping.kind != "suppress_field", LearnedMapping.target_object == obj]
+    if client_id is not None:
+        q.append(LearnedMapping.client_id == client_id)
+    # include_deleted is load-bearing: the default query hides tombstoned rows, so
+    # the is_deleted check below would never once fire and every reseed would
+    # re-stamp rows that are already retired. That exact dead guard has been found
+    # in this file before — the audit in test_tombstone_guards exists because of it.
+    for lm in await LearnedMapping.find(*q, include_deleted=True).to_list():
+        if getattr(lm, "is_deleted", False):
+            continue                       # already retired; leave the tombstone alone
+        if _norm_field(lm.target_field) != nf:
+            continue
+        if lm.kind not in ("column_mapping", "example_default"):
+            continue
+        await lm.set({"is_deleted": True, "deleted_at": now,
+                      "deleted_by": captured_by,
+                      "rule_config": {**(lm.rule_config or {}),
+                                      "retired_because": f"{fld} is blank per "
+                                                         f"{captured_from}"}})
+        out["learnings_retired"] += 1
+
+    # 2 + 3 — rewrite the mappings that already exist, and stale their outputs.
+    for conv in await Conversion.find_all().to_list():
+        if not conv.template_id:
+            continue
+        if await _business_object_for(conv) != obj:
+            continue
+        if client_id is not None and await client_id_for_conversion(conv) != client_id:
+            continue
+        fields = await FBDIField.find(FBDIField.template_id == conv.template_id).to_list()
+        ids = {f.id for f in fields if _norm_field(f.field_name) == nf}
+        if not ids:
+            continue
+        hit = False
+        for m in await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == conv.id).to_list():
+            if m.target_field_id not in ids:
+                continue
+            approver = (getattr(m, "approved_by", None) or "")
+            if m.status == "overridden" or (
+                    m.status == "approved" and approver != "learning-engine"):
+                out["skipped_human"] += 1
+                continue
+            if (m.status == "not_applicable" and not m.source_column
+                    and not m.default_value):
+                continue                       # already blank, nothing to write
+            await m.set({
+                "source_column": None, "default_value": None,
+                "suggested_transformation": None,
+                "status": "not_applicable", "review_required": 0,
+                "approved_by": "learning-engine", "approved_at": now,
+                "reason": f"Kept blank — {captured_from}",
+                "updated_at": now,
+            })
+            out["mappings_blanked"] += 1
+            hit = True
+        if hit:
+            out["conversions"] += 1
+            res = await ConvertedOutput.find(
+                ConvertedOutput.conversion_id == conv.id).update(
+                    {"$set": {"status": "stale"}})
+            out["stale_outputs"] += int(getattr(res, "modified_count", 0) or 0)
+    return out
+
+
 async def apply_learned_to_conversion(
     conversion: Conversion, mappings: Iterable[MappingSuggestion], force: bool = False,
 ) -> int:

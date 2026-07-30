@@ -450,9 +450,66 @@ async def seed_supplier_corrections_30jul() -> dict:
             client_id=nid, is_global=False, **payload,
         ).insert()
         seeded += 1
+
+    # A blank correction has to CHANGE the library and the mappings, not just be
+    # added alongside them. Seeding the suppression while leaving the old
+    # column_mapping alive left two rows saying opposite things about one field,
+    # and the older one kept winning — Supplier Name New shipped the supplier name
+    # on all 3,872 rows, Procurement BU "Nextracker Consolidated" on 5,315,
+    # Liability Distribution an account string on 1,528. Analyst, 30-Jul: "modify
+    # the learning, the code should change the learning and mapping as I am saying
+    # now".
+    from app.services.learning_service import enforce_blank_correction
+    enforced: list[dict] = []
+    for r in doc.get("rules", []):
+        if (r.get("action") or "").strip() != "blank":
+            continue
+        objs = [(r.get("target_object") or "").strip()]
+        if r.get("applies_to_all_sheets"):
+            objs = await _sheet_objects_for(objs[0])
+        for _o in objs:
+            try:
+                res = await enforce_blank_correction(
+                    _o, (r.get("target_field") or "").strip(), client_id=nid,
+                    captured_from=src, captured_by="analyst-correction-30jul")
+            except Exception:  # noqa: BLE001 — never block startup on the sweep
+                logger.exception("enforcing blank correction failed for %s.%s",
+                                 _o, r.get("target_field"))
+                continue
+            if (res["learnings_retired"] or res["mappings_blanked"]
+                    or res["skipped_human"]):
+                enforced.append(res)
+    if enforced:
+        logger.info("30-Jul blank corrections enforced: %s", enforced)
+
     return {"seeded": seeded, "updated": updated, "left_retired": retired,
+            "blank_enforcement": enforced,
             "protected_values": doc.get("protected_values", []),
             "open_questions": doc.get("_open_questions", [])}
+
+
+def _obj_norm(s) -> str:
+    import re as _re
+    return _re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+async def _sheet_objects_for(base_object: str) -> list[str]:
+    """Every seeded business object in this bundle — "Supplier" -> the six supplier
+    sheets. Read from the templates rather than hard-coded, so a sheet added later
+    inherits an analyst's "blank on ALL sheets" without anyone remembering to
+    extend a list in here. Prefix-matched for the same reason the overlay is:
+    Customer has a Batch ID column too, and the instruction was about suppliers.
+    """
+    from app.models.fbdi import FBDITemplate
+    base = _obj_norm(base_object)
+    if not base:
+        return []
+    objs = {base_object}
+    for t in await FBDITemplate.find_all().to_list():
+        bo = (getattr(t, "business_object", None) or "").strip()
+        if bo and _obj_norm(bo).startswith(base):
+            objs.add(bo)
+    return sorted(objs)
 
 
 _SUPPLIER_SOURCE_MAP = _DATA / "supplier_source_mapping_30jul.json"

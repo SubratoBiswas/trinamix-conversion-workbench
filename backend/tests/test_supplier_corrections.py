@@ -133,8 +133,15 @@ def test_supplier_site_never_ships_a_bare_separator():
 
 # ── Parent Supplier: the self-join ──────────────────────────────────────────
 def test_parent_supplier_resolves_a_name_from_another_row():
+    """The index key follows the rule's OWN column names, so the test reads them
+    from the correction rather than hard-coding a spelling. The extract says
+    "Internal ID"; the analyst wrote "Internal Id"; the config now carries the
+    extract's spelling and _build_self_index matches columns case-insensitively so
+    neither choice can silently cost the whole lookup."""
     r = rule_for("Parent Supplier")
-    ctx = {"self_index": {"Internal Id->Name": {"1001": "Acme Holdings"}}}
+    cfg = r["rule_config"] if "rule_config" in r else r["config"]
+    key = f'{cfg["match_column"]}->{cfg["value_column"]}'
+    ctx = {"self_index": {key: {"1001": "Acme Holdings"}}}
     check("name, not id",
           run(r, "", {"Parent Vendor Id": "1001"}, ctx) == "Acme Holdings")
 
@@ -143,7 +150,9 @@ def test_a_parent_missing_from_the_extract_ships_blank_not_the_id():
     """An id where a NAME belongs looks populated and is wrong — the same failure as
     Remit-to Supplier holding 'Y'."""
     r = rule_for("Parent Supplier")
-    ctx = {"self_index": {"Internal Id->Name": {"1001": "Acme"}}}
+    cfg = r["rule_config"] if "rule_config" in r else r["config"]
+    ctx = {"self_index": {f'{cfg["match_column"]}->{cfg["value_column"]}':
+                          {"1001": "Acme"}}}
     check("blank", run(r, "", {"Parent Vendor Id": "9999"}, ctx) == "")
     check("no parent at all -> blank", run(r, "", {"Parent Vendor Id": ""}, ctx) == "")
 
@@ -153,6 +162,68 @@ def test_no_index_yields_blank_rather_than_the_raw_id():
     in front of the analyst as though it were the answer."""
     r = rule_for("Parent Supplier")
     check("blank", run(r, "", {"Parent Vendor Id": "1001"}, {}) == "")
+
+
+
+def test_something_actually_builds_the_self_index():
+    """SELF_LOOKUP had NEVER returned a value in production, and the tests above
+    could not see it: they hand-build the index the rule reads. Nothing in the
+    codebase built one, so Parent Supplier returned its default on every row of
+    every real run — 0 of 3,872 suppliers. This drives the real builder."""
+    import pandas as pd
+    from app.services.output_service import _build_self_index, _self_lookup_configs
+
+    cfgs = _self_lookup_configs({}, "Supplier")
+    check("the overlay offers a SELF_LOOKUP config", len(cfgs) == 1, f"got {cfgs}")
+
+    src = pd.DataFrame({
+        # The extract's spelling, which differs from the analyst's by one letter.
+        "Internal ID": ["101", "102"],
+        "Name": ["Acme Corp", "Beta Ltd"],
+        "Parent Vendor Id": ["", "101"],
+    })
+    idx = _build_self_index(src, cfgs)
+    check("an index was built", bool(idx), f"got {idx}")
+    r = rule_for("Parent Supplier")
+    got = run(r, "", {"Parent Vendor Id": "101"}, {"self_index": idx})
+    check("the child resolves to its parent's NAME", got == "Acme Corp", f"got {got!r}")
+
+
+def test_the_index_matches_column_names_case_insensitively():
+    import pandas as pd
+    from app.services.output_service import _build_self_index
+    src = pd.DataFrame({"internal id": ["7"], "NAME": ["Gamma"]})
+    idx = _build_self_index(src, [{"match_column": "Internal ID", "value_column": "Name"}])
+    check("resolved despite the casing",
+          idx.get("Internal ID->Name", {}).get("7") == "Gamma", f"got {idx}")
+
+
+def test_the_overlay_declares_the_columns_its_rules_read():
+    """The generator prunes the frame to the columns something claims. Overlay
+    rules claimed nothing, so Supplier Site shipped empty on 8,561 rows even though
+    its CONCAT names two columns that exist in the extract."""
+    from app.services.strategy_overlay import referenced_columns
+    site = referenced_columns("Supplier Site")
+    for c in ("Country Code", "City"):
+        check(f"Supplier Site declares {c}", c in site, f"got {sorted(site)}")
+    sup = referenced_columns("Supplier")
+    for c in ("Parent Vendor Id", "Internal ID", "Name"):
+        check(f"Supplier declares {c}", c in sup, f"got {sorted(sup)}")
+
+
+def test_the_newer_all_sheets_rule_beats_an_older_sheet_specific_one():
+    """"Whichever is latest" (analyst, 30-Jul). The 13-Jul strategy carries a
+    Supplier Site Delivery Method rule reading "Remittance E-Mail"; the 30-Jul
+    correction says apply the EMAIL/FAX rule to ALL sheets. Preferring the more
+    precise rule alone let the older one shadow the newer instruction."""
+    from app.services.strategy_overlay import directive_for
+    d = directive_for("Supplier Site", "Delivery Method")
+    check("a rule resolves", d and "rule" in d, f"got {d}")
+    cols = {b.get("if_column") for b in d["rule"]["config"]["branches"]}
+    check("it is the 30-Jul rule", "Email" in cols and "Fax" in cols, f"got {sorted(cols)}")
+    check("and it is dated 30-Jul", str(d.get("as_of", ""))[:10] == "2026-07-30",
+          f"got {d.get('as_of')}")
+
 
 
 # ── The blanks ──────────────────────────────────────────────────────────────

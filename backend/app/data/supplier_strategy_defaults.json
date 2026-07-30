@@ -1,5 +1,6 @@
 {
   "_source": "Next_Power_Supplier_Conversion_Strategy.docx v1.0 (Sandeep Singhal, 13-Jul-2026), section 7 Defaulting Rules",
+  "_effective_date": "2026-07-13",
   "_authority": "This signed functional specification is the governing reference for the NextPower supplier conversion. Rules here are seeded as client-scoped learnings so they are applied BEFORE deterministic control constants and before AI, and they override any conflicting hardcoded default.",
   "rules": [
     {

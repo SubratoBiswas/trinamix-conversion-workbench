@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,8 +79,10 @@ def _load() -> dict:
         _cache, _blank_cache = {}, {}
         _wild_cache, _wild_blank_cache = {}, {}
         return _cache
-    rules = list(doc.get("rules") or [])
-    rules += list((doc.get("analyst_rules") or {}).get("rules") or [])
+    _base_asof = _parse_date(doc.get("_effective_date"))
+    rules = [dict(r, _asof=_base_asof) for r in (doc.get("rules") or [])]
+    rules += [dict(r, _asof=_base_asof)
+              for r in ((doc.get("analyst_rules") or {}).get("rules") or [])]
     # The analyst's later correction files are overlays too, and the BLANK ones have to
     # be, or nothing stops the control defaults refilling them. Batch ID is the proof:
     # the analyst said blank it on every sheet, and it kept shipping 900001 because
@@ -92,23 +95,25 @@ def _load() -> dict:
             more = json.loads((_DATA / extra).read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
+        _more_asof = _parse_date(more.get("_effective_date"))
         for r in (more.get("rules") or []):
             a = (r.get("action") or "").strip()
             _all = bool(r.get(_all_sheets_note()))
             if a == "blank":
                 rules.append({"target_object": r.get("target_object"),
                               "target_field": r.get("target_field"), "suppress": True,
-                              "all_sheets": _all})
+                              "all_sheets": _all, "_asof": _more_asof})
             elif a == "constant":
                 rules.append({"target_object": r.get("target_object"),
                               "target_field": r.get("target_field"),
-                              "constant": r.get("value"), "all_sheets": _all})
+                              "constant": r.get("value"), "all_sheets": _all,
+                              "_asof": _more_asof})
             elif a == "rule" and r.get("rule_type"):
                 rules.append({"target_object": r.get("target_object"),
                               "target_field": r.get("target_field"),
                               "rule_type": r["rule_type"],
                               "rule_config": r.get("rule_config") or {},
-                              "all_sheets": _all})
+                              "all_sheets": _all, "_asof": _more_asof})
     for r in rules:
         obj, fld = _n(r.get("target_object")), _n(r.get("target_field"))
         if not obj or not fld or "*" in str(r.get("target_field") or ""):
@@ -123,6 +128,11 @@ def _load() -> dict:
             d["fill_blank_only"] = bool(r.get("fill_blank_only"))
         else:
             continue                      # 'derive' rows are mappings, not overlays
+        # When this instruction was given. The analyst's precedence rule is
+        # "analyst manual change OR the mapping file, WHICHEVER IS LATEST", so the
+        # generator has to be able to compare the two — a directive with no date
+        # loses to any human approval, which is the old behaviour.
+        d["as_of"] = r.get("_asof")
         out.setdefault(obj, {})[fld] = d
         if d.get("blank"):
             blanks.setdefault(obj, set()).add(_label(r.get("target_field")))
@@ -143,21 +153,43 @@ def _prefix_hits(target_object: str | None) -> list[str]:
     return [k for k in (_wild_cache or {}) if o.startswith(k)]
 
 
+def _parse_date(v) -> "datetime | None":
+    """YYYY-MM-DD from a rule file, or None when the file does not say."""
+    s = str(v or "").strip()[:10]
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 def directive_for(target_object: str | None, field_name: str | None) -> dict | None:
     """The write-time directive for one target field, or None."""
     if not target_object or not field_name:
         return None
-    exact = _load().get(_n(target_object), {}).get(_n(field_name))
-    if exact is not None:
-        return exact
-    # A sheet-specific rule always beats the bundle-wide one, which is why the
-    # exact lookup runs first.
     fld = _n(field_name)
+    exact = _load().get(_n(target_object), {}).get(fld)
+    wide = None
     for k in _prefix_hits(target_object):
-        d = (_wild_cache or {}).get(k, {}).get(fld)
-        if d is not None:
-            return d
-    return None
+        wide = (_wild_cache or {}).get(k, {}).get(fld)
+        if wide is not None:
+            break
+    if exact is None:
+        return wide
+    if wide is None or wide is exact:
+        return exact
+    # Both apply. A sheet-specific rule is more precise, so it wins a tie — but
+    # NOT when the bundle-wide rule is NEWER. Analyst, 30-Jul: "whichever is
+    # latest". Delivery Method is exactly this case: the 13-Jul strategy carries a
+    # Supplier Site rule reading "Remittance E-Mail", and the 30-Jul correction
+    # says apply the EMAIL/FAX rule to all sheets. Preferring precision alone let
+    # the older, narrower rule shadow the newer instruction, and the column shipped
+    # empty on all 8,561 site rows.
+    ea, wa = exact.get("as_of"), wide.get("as_of")
+    if wa is not None and (ea is None or wa > ea):
+        return wide
+    return exact
 
 
 def blank_fields(target_object: str | None) -> set[str]:
@@ -180,6 +212,47 @@ def blank_fields(target_object: str | None) -> set[str]:
     # Plus anything the analyst marked "blank on ALL sheets" for this bundle.
     for k in _prefix_hits(target_object):
         out |= set((_wild_blank_cache or {}).get(k, set()))
+    return out
+
+
+def referenced_columns(target_object: str | None) -> set[str]:
+    """Every SOURCE column this object's overlay rules read.
+
+    The generator prunes the source frame to the columns something claims, and
+    builds the per-row dict from the same set. Overlay rules were claiming
+    nothing, so a rule deriving from an unmapped column evaluated against blanks
+    and returned its default — Supplier Site is CONCAT("Country Code", "City"),
+    both columns are in the extract, and the column shipped empty on all 8,561
+    rows because neither reached the row.
+    """
+    from app.services.output_service import _rule_referenced_columns
+    rules = _load().get(_n(target_object), {})
+    wild: dict = {}
+    for k in _prefix_hits(target_object):
+        wild.update((_wild_cache or {}).get(k, {}))
+    cols: set[str] = set()
+    for d in list(wild.values()) + list(rules.values()):
+        r = d.get("rule")
+        if r:
+            cols |= _rule_referenced_columns([r])
+        # A frame rule compares against another OUTPUT column, not a source one,
+        # so it deliberately contributes nothing here.
+    return {c for c in cols if str(c or "").strip()}
+
+
+def self_lookup_configs(target_object: str | None) -> list[dict]:
+    """SELF_LOOKUP configs this object's overlay contributes, so the generator can
+    build the row index they need. Parent Supplier is the only one today."""
+    rules = _load().get(_n(target_object), {})
+    merged: dict = {}
+    for k in _prefix_hits(target_object):
+        merged.update((_wild_cache or {}).get(k, {}))
+    merged.update(rules)
+    out = []
+    for d in merged.values():
+        r = d.get("rule") or {}
+        if (r.get("rule_type") or "").upper() == "SELF_LOOKUP":
+            out.append(r.get("config") or {})
     return out
 
 
