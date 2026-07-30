@@ -562,9 +562,20 @@ async def enforce_blank_correction(
     now = datetime.utcnow()
 
     # 1 — retire the contradicting library rows.
+    #
+    # EVERY kind except the suppression itself. The first version of this listed
+    # column_mapping and example_default, and the live library immediately showed
+    # why that is not enough: Tax Reporting Name is declared blank and still held a
+    # column_mapping from a gold example, a `rule` from a prior conversion AND an
+    # example_mapping, all binding it to Legal Name. A field that ships blank must
+    # have nothing in the library able to fill it — listing kinds means the next
+    # kind someone adds silently reopens the hole.
     q = [LearnedMapping.kind != "suppress_field", LearnedMapping.target_object == obj]
-    if client_id is not None:
-        q.append(LearnedMapping.client_id == client_id)
+    # Client scope is INCLUSIVE of global rows on purpose. Scoping the sweep to the
+    # correction's own client left the global gold-example row alive, and a global
+    # row is precisely what reaches this client — so the correction was recorded
+    # and then overruled by the thing it was meant to retire. `retired_because` is
+    # written onto each row so a global retirement is auditable rather than silent.
     # include_deleted is load-bearing: the default query hides tombstoned rows, so
     # the is_deleted check below would never once fire and every reseed would
     # re-stamp rows that are already retired. That exact dead guard has been found
@@ -574,8 +585,9 @@ async def enforce_blank_correction(
             continue                       # already retired; leave the tombstone alone
         if _norm_field(lm.target_field) != nf:
             continue
-        if lm.kind not in ("column_mapping", "example_default"):
-            continue
+        _lc = getattr(lm, "client_id", None)
+        if client_id is not None and _lc is not None and _lc != client_id:
+            continue                       # another tenant's row — never ours to retire
         await lm.set({"is_deleted": True, "deleted_at": now,
                       "deleted_by": captured_by,
                       "rule_config": {**(lm.rule_config or {}),
@@ -589,7 +601,14 @@ async def enforce_blank_correction(
             continue
         if await _business_object_for(conv) != obj:
             continue
-        if client_id is not None and await client_id_for_conversion(conv) != client_id:
+        # Same inclusive rule as the library sweep: skip only when BOTH sides name a
+        # client and they differ. An unscoped conversion is not another tenant's,
+        # and requiring an exact match is why nothing was rewritten on the live
+        # instance — Supplier Name New was still "suggested" against New Vendor
+        # Approval, and Tax Reporting Name still approved against Legal Name, on a
+        # conversion the correction was written for.
+        _cc = await client_id_for_conversion(conv)
+        if client_id is not None and _cc is not None and _cc != client_id:
             continue
         fields = await FBDIField.find(FBDIField.template_id == conv.template_id).to_list()
         ids = {f.id for f in fields if _norm_field(f.field_name) == nf}

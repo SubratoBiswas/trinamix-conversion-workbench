@@ -444,6 +444,21 @@ async def reseed_supplier(_: User = Depends(get_current_user)):
     return {"field_mappings": fields, "transforms": transforms}
 
 
+@router.post("/reseed-supplier-corrections")
+async def reseed_supplier_corrections(_: User = Depends(get_current_user)):
+    """Re-run the 30-Jul analyst corrections on demand.
+
+    These only ran at startup, which made every "did the correction actually land?"
+    question cost a redeploy and a cold boot to answer — and when it turned out the
+    blank enforcement was matching nothing on the live instance, there was no way
+    to see that without one. Idempotent, tombstone-respecting, and it returns the
+    per-field enforcement counts, so "it ran" and "it changed something" are
+    distinguishable rather than both looking like silence.
+    """
+    from app.services.catalog_seed_service import seed_supplier_corrections_30jul
+    return await seed_supplier_corrections_30jul()
+
+
 @router.post("/backfill-projects")
 async def backfill_project_ids(_: User = Depends(get_current_user)):
     """

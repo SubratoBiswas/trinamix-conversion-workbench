@@ -214,7 +214,23 @@ def _transform_frame(
         # FBDI — the UI and the mapping CSV said "rejected" while the output
         # carried the rejected column.
         _discarded = m.status in ("not_applicable", "rejected")
-        if _discarded and not (m.default_value and str(m.default_value).strip()):
+        # ...but a DERIVED field has no source column by nature, and its mapping
+        # row is routinely not_applicable for exactly that reason. Skipping here
+        # meant the strategy overlay never ran for it — the `continue` fires before
+        # the overlay block below — so a rule that computes a value from other
+        # columns could never write one.
+        #
+        # Found by reading the live instance rather than the code: Delivery Method's
+        # mapping is not_applicable with no source, so every fix made to that rule
+        # today would still have produced an empty column. The same trap was set for
+        # Supplier Site (CONCAT), Parent Supplier (SELF_LOOKUP) and Tax Organization
+        # Type (CASE_WHEN) the moment any of them was marked not_applicable.
+        #
+        # A BLANK directive still skips, because blank is what discarding means.
+        _ov_early = _strategy_directive(target_object, tgt.field_name)
+        _ov_writes = bool(_ov_early and ("rule" in _ov_early or "constant" in _ov_early))
+        if (_discarded and not _ov_writes
+                and not (m.default_value and str(m.default_value).strip())):
             continue
         rules = list(pipelines.get(tgt.id, []))
         if m.suggested_transformation and not rules and m.status != "rejected":
@@ -251,7 +267,7 @@ def _transform_frame(
         # Seeded learnings demonstrably did NOT reach the output — see
         # strategy_overlay for the evidence. Enforce the analyst rules here,
         # after mapping, where nothing downstream can undo them.
-        _ov = _strategy_directive(target_object, tgt.field_name)
+        _ov = _ov_early          # resolved above, before the discard check
         # An analyst who APPROVED a source column for this field has overruled the
         # strategy constant, and overwriting it produced the reported bug: Tax
         # Organization Type showed CORPORATION on every row despite being mapped

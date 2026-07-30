@@ -181,6 +181,61 @@ def test_the_service_actually_makes_this_distinction():
 
 
 
+# ── Derived fields have no source column, and that is not a reason to skip them ──
+def transform_gate(status, default_value, directive):
+    """Mirror of the discard check in _convert_source, which runs BEFORE the
+    overlay. Returns True when the column is skipped entirely."""
+    discarded = status in ("not_applicable", "rejected")
+    ov_writes = bool(directive and ("rule" in directive or "constant" in directive))
+    return bool(discarded and not ov_writes
+                and not (default_value and str(default_value).strip()))
+
+
+def test_a_not_applicable_mapping_no_longer_kills_its_derivation_rule():
+    """Found on the live instance, not in the code: Delivery Method's mapping is
+    not_applicable with no source column — which is normal for a field DERIVED from
+    other columns — and the generator skipped the column before the overlay ever
+    ran. Every fix made to that rule would still have produced an empty column."""
+    rule = {"rule": {"rule_type": "CASE_WHEN", "config": {}}}
+    check("a derived field is still written",
+          transform_gate("not_applicable", None, rule) is False)
+    check("so is a constant one",
+          transform_gate("not_applicable", None, {"constant": "SPEND_AUTHORIZED"}) is False)
+
+
+def test_a_blank_directive_still_skips():
+    """Blank is what discarding MEANS, so this must not change."""
+    check("skipped", transform_gate("not_applicable", None, {"blank": True}) is True)
+    check("no directive, still skipped",
+          transform_gate("not_applicable", None, None) is True)
+    check("rejected with no directive, skipped",
+          transform_gate("rejected", None, None) is True)
+
+
+def test_an_explicit_default_still_wins_over_discard():
+    check("emitted as a constant",
+          transform_gate("not_applicable", "Receipt", None) is False)
+
+
+def test_a_normal_mapping_is_never_skipped():
+    for st in ("suggested", "approved", "overridden"):
+        check(f"{st} kept", transform_gate(st, None, None) is False)
+
+
+def test_the_service_resolves_the_directive_before_the_discard_check():
+    """Seam: the whole fix is an ORDERING, so ordering is what has to be asserted."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "app" / "services" / "output_service.py").read_text(encoding="utf-8")
+    body = src.split("def _transform_frame(")[1].split("def _apply_control_defaults")[0]
+    i_resolve = body.index("_ov_early = _strategy_directive(")
+    i_discard = body.index("if (_discarded and not _ov_writes")
+    check("directive resolved before the skip", i_resolve < i_discard)
+    check("and the later block reuses it, not a second lookup",
+          body.count("_strategy_directive(") == 1, "two lookups can drift apart")
+
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
