@@ -408,6 +408,36 @@ async def required_check(
     return await run_required_check(conversion_id, max_rows=max_rows)
 
 
+@output_router.post("/{conversion_id}/apply-customer-rules")
+async def apply_customer_rules(
+    conversion_id: str,
+    replace: bool = Query(False, description="Re-apply the authored config over an "
+                                             "existing rule for the same field"),
+    _: User = Depends(get_current_user),
+):
+    """Author CW_Issues rows 15-24 onto this Customer conversion.
+
+    These were the "Authorable" rows: the engine could express each one and nobody had
+    typed it, because the source column spellings come from the analyst's extract.
+    Authored as data on the 30-Jul instruction — same destination and precedence as
+    typing them into the rule box, just pre-filled, with every source column expressed
+    as a list of candidate spellings so a prose spelling that does not match the extract
+    costs nothing instead of binding to nothing.
+
+    ``replace=False`` never clobbers a hand-edited rule. The response carries the open
+    questions (the two differing Party Number key widths, and the section 10.6 conflict
+    the analyst's instruction overrides) rather than leaving them in a code comment.
+    """
+    from app.services import customer_rules_service as crs
+    c = await _require_conversion(conversion_id)
+    res = await crs.apply_to_conversion(c, replace=replace)
+    if res.get("applied") or res.get("updated"):
+        # The output no longer matches the rules that would now run.
+        from app.models.output import ConvertedOutput as _CO
+        await _CO.find(_CO.conversion_id == c.id).update({"$set": {"status": "stale"}})
+    return {"conversion_id": str(c.id), "target_object": c.target_object, **res}
+
+
 @output_router.get("/{conversion_id}/column-rules")
 async def column_rules(
     conversion_id: str,

@@ -11,6 +11,12 @@ RULE_TYPES = (
     "DATE_FORMAT","NUMBER_FORMAT","ARITHMETIC","CONCAT","SPLIT",
     "COALESCE","CONDITIONAL","CASE_WHEN","MAP_BOOLEAN","CONDITIONAL_DATE",
     "COMPUTED","CROSSWALK_LOOKUP","PHONE_PART","PREFIX","SUFFIX",
+    # CW #23 — a unique running key with an optional per-row variant
+    # ("NXT000001", and a "_C1" form where the party is a PERSON).
+    "SEQUENCE",
+    # CW #19 — append one of several suffixes chosen by a condition ("_b" on a
+    # bill-to row, "_s" on a ship-to row). SUFFIX can only append a fixed string.
+    "SUFFIX_WHEN",
 )
 
 class TransformationRule(Document):

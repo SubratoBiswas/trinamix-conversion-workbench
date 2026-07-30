@@ -42,6 +42,33 @@ async def peek_sheets(
             tf.write(data)
             tmp = tf.name
         sheets = list_excel_sheets(tmp)
+        # CW #1 — a multi-sheet workbook has two opposite readings and the file cannot
+        # say which: several SOURCES of the same record (one conversion per sheet,
+        # converged at generation), or ONE input split across sheets (Customer +
+        # Address — a single conversion over the union of their columns, which needs a
+        # column-wise join). Guessing corrupts data quietly: a row-order merge attaches
+        # one customer's address to another and the result looks perfectly clean. So the
+        # analyst is asked, and asked WITH the evidence — which columns could join the
+        # sheets, how far their values actually overlap, and whether the row grains
+        # match. Computed here, inside the try, because `finally` deletes the temp file.
+        choice = None
+        if len(sheets) > 1:
+            try:
+                from app.parsers.tabular_parser import parse_tabular
+                from app.services.sheet_merge_service import (describe_choice,
+                                                              detect_join_keys)
+                frames = {}
+                for s in sheets:
+                    nm = s.get("name")
+                    try:                    # 500 rows is plenty to score a join key
+                        frames[nm] = parse_tabular(tmp, nrows=500, sheet=nm)
+                    except Exception:                           # noqa: BLE001
+                        continue
+                choice = describe_choice(sheets, detect_join_keys(frames))
+            except Exception as exc:                            # noqa: BLE001
+                # The prompt is an aid, not the upload: never fail a peek over it, but
+                # say why it is missing rather than silently offering no choice.
+                choice = {"error": f"Could not profile the sheets: {exc}"[:200]}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Could not read '{file.filename}': {exc}")
     finally:
@@ -49,7 +76,8 @@ async def peek_sheets(
             _P(tmp).unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
-    return {"file_name": file.filename, "multi": len(sheets) > 1, "sheets": sheets}
+    return {"file_name": file.filename, "multi": len(sheets) > 1, "sheets": sheets,
+            "choice": choice}
 
 
 @router.post("/upload", response_model=DatasetDetailOut)
@@ -58,10 +86,19 @@ async def upload_dataset(
     name: str | None = Form(None),
     description: str | None = Form(None),
     sheet: str | None = Form(None),
+    # CW #1. `sheet` takes ONE sheet as its own dataset — the "several sources" answer,
+    # called once per sheet. `merge_sheets` is the other answer: join every sheet into
+    # one dataset so a single conversion sees the union of their columns. `join_key`
+    # names the shared column; omitted, the best-scoring candidate is used, and if
+    # nothing scores the upload is refused rather than joined on row order.
+    merge_sheets: bool = Form(False),
+    join_key: str | None = Form(None),
     _: User = Depends(get_current_user),
 ):
     try:
-        ds, columns = await create_dataset_from_upload(file, name, description, sheet=sheet)
+        ds, columns = await create_dataset_from_upload(
+            file, name, description, sheet=sheet,
+            merge_sheets=merge_sheets, join_key=join_key)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001 — surface a clear parse reason, not a 500

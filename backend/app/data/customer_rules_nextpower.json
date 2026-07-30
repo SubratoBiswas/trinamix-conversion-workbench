@@ -1,0 +1,170 @@
+{
+  "_source": "CW_Issues 29-Jul-2026 rows 15-24, authored on the analyst's instruction of 30-Jul (Subrato: 'work on all these').",
+  "_scope": "Client NextPower, target object Customer. Seeded as client-scoped rules so every Customer conversion for this client inherits them, which is what the 'Describe a rule' box does when an analyst types one — this is the same thing, pre-typed.",
+  "_column_spellings": "Each source column is a LIST of candidate spellings, not one string. The rules were dictated in prose ('StartDate, falling back to datecreated') and the extract's real headers are whatever NetSuite exported; a single guessed spelling binds to nothing and fails silently. COALESCE skips a column that is missing or blank, and a CASE_WHEN branch on an absent column reads as blank and falls through — so listing every plausible spelling is safe and a wrong guess costs nothing. Confirm against your extract and delete the ones that do not apply.",
+  "_open_questions": [
+    "CW #23 as written gives 'NXT000001' (3 + 6 digits) for an organization but 'NXT00001_C1' (3 + 5 digits) for a PERSON. Two different key widths in one column is unusual and looks like a transcription slip. Implemented exactly as written — variant width 5 — so it matches your sheet; change variant.width to 6 if both should be the same length.",
+    "CW #23 also contradicts section 10.6, where auto-generated key numbers were REMOVED on your instruction because a manufactured unique value made genuine duplicates look distinct. Your 30-Jul instruction overrides that. Two safeguards are built in: the sequence is assigned at finalize, AFTER duplicate decisions, and preserve_source means a real source key always wins. Do NOT add Party Number to the duplicate-identity columns.",
+    "CW #17 was specified as depending on WHICH source column fed Phone Number. Implemented on the per-row evidence instead — mobile column populated means MOBILE, fax column populated means FAX — because that is decidable per row and provenance is not. Confirm the two source columns.",
+    "CW #19 and #24 were both marked 'awaiting data' on your sheet. The rules are authored and will apply the moment the file arrives; they cannot be verified against real values until then."
+  ],
+  "rules": [
+    {
+      "cw": 15,
+      "target_field": "Account Established Date",
+      "description": "Account Established Date takes StartDate, falling back to datecreated when StartDate is blank.",
+      "rule_type": "COALESCE",
+      "rule_config": {
+        "columns": ["StartDate", "Start Date", "startdate",
+                    "datecreated", "DateCreated", "Date Created"],
+        "default": ""
+      }
+    },
+    {
+      "cw": 16,
+      "target_field": "Contact Point Type",
+      "description": "EMAIL when an email address is present on the row, otherwise PHONE.",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Email Address", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "Email", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "email", "op": "notblank", "then": "EMAIL"}
+        ],
+        "default": "PHONE"
+      }
+    },
+    {
+      "cw": 17,
+      "target_field": "Phone Line Type",
+      "description": "MOBILE when the mobile source column carries the number, FAX when the fax column does.",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Mobile Phone", "op": "notblank", "then": "MOBILE"},
+          {"if_column": "MobilePhone", "op": "notblank", "then": "MOBILE"},
+          {"if_column": "mobilephone", "op": "notblank", "then": "MOBILE"},
+          {"if_column": "Fax", "op": "notblank", "then": "FAX"},
+          {"if_column": "fax", "op": "notblank", "then": "FAX"},
+          {"if_column": "Fax Number", "op": "notblank", "then": "FAX"}
+        ],
+        "default": ""
+      },
+      "_note": "Mobile is tested before fax deliberately: a row carrying both is a mobile number with a fax on file, not a fax line. Default is blank rather than a guess — Phone Line Type is a coded column and inventing a code fails the value-set check with no clue why."
+    },
+    {
+      "cw": 18,
+      "target_field": "Primary Indicator",
+      "description": "BILL_TO where Default Billing is set, SHIP_TO where DefaultShipping is set.",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Default Billing", "op": "notblank", "then": "BILL_TO"},
+          {"if_column": "DefaultBilling", "op": "notblank", "then": "BILL_TO"},
+          {"if_column": "defaultbilling", "op": "notblank", "then": "BILL_TO"},
+          {"if_column": "DefaultShipping", "op": "notblank", "then": "SHIP_TO"},
+          {"if_column": "Default Shipping", "op": "notblank", "then": "SHIP_TO"},
+          {"if_column": "defaultshipping", "op": "notblank", "then": "SHIP_TO"}
+        ],
+        "default": ""
+      },
+      "_note": "NetSuite exports these as T/F or checkbox columns, so notblank would also fire on a literal 'F'. If your extract carries F for false, change op to eq with value T — check one row before generating."
+    },
+    {
+      "cw": 20,
+      "target_field": "Party Site Name",
+      "description": "entityid + '_' + address_label.",
+      "rule_type": "CONCAT",
+      "rule_config": {
+        "separator": "_",
+        "columns": ["entityid", "address_label"]
+      },
+      "_note": "CONCAT falls back to the incoming value when EVERY input is missing, rather than emitting a bare '_'. That guard exists because Supplier Site once shipped 8,561 rows of the literal '-' into a required unique key when neither input column existed."
+    },
+    {
+      "cw": 22,
+      "target_field": "Party Type",
+      "description": "PERSON when a first or last name is present, otherwise ORGANIZATION.",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "First Name", "op": "notblank", "then": "PERSON"},
+          {"if_column": "firstname", "op": "notblank", "then": "PERSON"},
+          {"if_column": "Last Name", "op": "notblank", "then": "PERSON"},
+          {"if_column": "lastname", "op": "notblank", "then": "PERSON"}
+        ],
+        "default": "ORGANIZATION"
+      }
+    },
+    {
+      "cw": 19,
+      "target_field": "Account Site Purpose SSR",
+      "description": "Append _b on a bill-to row and _s on a ship-to row.",
+      "rule_type": "SUFFIX_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Default Billing", "op": "notblank", "suffix": "_b"},
+          {"if_column": "DefaultBilling", "op": "notblank", "suffix": "_b"},
+          {"if_column": "DefaultShipping", "op": "notblank", "suffix": "_s"},
+          {"if_column": "Default Shipping", "op": "notblank", "suffix": "_s"}
+        ],
+        "default_suffix": "",
+        "skip_blank": true,
+        "skip_if_present": true
+      }
+    },
+    {
+      "cw": 19,
+      "target_field": "Original System Party Site Use Reference",
+      "description": "Append _b on a bill-to row and _s on a ship-to row.",
+      "rule_type": "SUFFIX_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Default Billing", "op": "notblank", "suffix": "_b"},
+          {"if_column": "DefaultBilling", "op": "notblank", "suffix": "_b"},
+          {"if_column": "DefaultShipping", "op": "notblank", "suffix": "_s"},
+          {"if_column": "Default Shipping", "op": "notblank", "suffix": "_s"}
+        ],
+        "default_suffix": "",
+        "skip_blank": true,
+        "skip_if_present": true
+      }
+    },
+    {
+      "cw": 24,
+      "target_field": "Party Site Use Type",
+      "description": "BILL_TO on a bill-to row, SHIP_TO on a ship-to row.",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Default Billing", "op": "notblank", "then": "BILL_TO"},
+          {"if_column": "DefaultBilling", "op": "notblank", "then": "BILL_TO"},
+          {"if_column": "DefaultShipping", "op": "notblank", "then": "SHIP_TO"},
+          {"if_column": "Default Shipping", "op": "notblank", "then": "SHIP_TO"}
+        ],
+        "default": ""
+      }
+    },
+    {
+      "cw": 23,
+      "target_field": "Party Number",
+      "description": "Unique sequence NXT000001; a PERSON gets the NXT00001_C1 form.",
+      "rule_type": "SEQUENCE",
+      "rule_config": {
+        "prefix": "NXT",
+        "width": 6,
+        "start": 1,
+        "preserve_source": true,
+        "variant": {
+          "if_column": "Party Type",
+          "op": "eq",
+          "value": "PERSON",
+          "width": 5,
+          "suffix": "_C{n}",
+          "counter": 1
+        }
+      },
+      "_note": "Reads Party Type, which CW #22 above derives — so #22 must be applied before this. See _open_questions on the differing key widths and on section 10.6."
+    }
+  ]
+}

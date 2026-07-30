@@ -87,13 +87,47 @@ def save_upload(upload: UploadFile, subdir: str = "datasets") -> tuple[Path, str
 
 async def create_dataset_from_upload(
     upload: UploadFile, name: str | None, description: str | None,
-    sheet: str | None = None,
+    sheet: str | None = None, merge_sheets: bool = False,
+    join_key: str | None = None,
 ) -> tuple[Dataset, list[DatasetColumnProfile]]:
     ext = Path(upload.filename or "").suffix.lower()
     if ext not in ALLOWED_DATASET_EXTS:
         raise ValueError(f"Unsupported file extension: {ext}")
     file_path, stored_name = save_upload(upload)
     orig_stem = Path(upload.filename or stored_name).stem
+
+    # CW #1, settled by the analyst on 30-Jul: when a workbook's sheets are ONE input
+    # split up (Customer on one tab, Address on another) rather than several sources,
+    # join them into a single dataset so one conversion sees the union of their columns.
+    # The join is on a shared key, never on row order — stacking them side by side would
+    # attach one customer's address to another, and the result would look clean. If no
+    # column joins the sheets the upload is refused with the reason: a wrong join is
+    # invisible in the output, and a refusal costs only a conversation.
+    if merge_sheets and not sheet:
+        from app.parsers.tabular_parser import list_excel_sheets
+        from app.services.sheet_merge_service import merge_sheets as _join
+        frames = {}
+        for nm in [s["name"] for s in list_excel_sheets(file_path)]:
+            try:
+                frames[nm] = parse_tabular(file_path, file_type=ext.lstrip("."),
+                                           sheet=nm)
+            except Exception:                                   # noqa: BLE001
+                continue
+        merged, merge_report = _join(frames, join_key)
+        if merge_report.get("error"):
+            try:
+                Path(file_path).unlink(missing_ok=True)
+            except Exception:                                   # noqa: BLE001
+                pass
+            raise ValueError(merge_report["error"])
+        csv_name = f"{Path(stored_name).stem}__merged.csv"
+        csv_path = Path(file_path).with_name(csv_name)
+        merged.to_csv(csv_path, index=False)
+        try:
+            Path(file_path).unlink(missing_ok=True)   # keep only the merged frame
+        except Exception:                                       # noqa: BLE001
+            pass
+        file_path, stored_name, ext = str(csv_path), csv_name, ".csv"
 
     # Multi-sheet workbook, one sheet chosen (Issue #1): extract THAT sheet into its
     # own single-sheet CSV and treat it as the dataset's file. This way every

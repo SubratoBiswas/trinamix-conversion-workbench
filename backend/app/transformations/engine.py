@@ -460,6 +460,78 @@ def apply_rule(
             return s
         return s + suf
 
+    if rt == "SUFFIX_WHEN":
+        # CW #19: append "_b" on a bill-to row and "_s" on a ship-to row. SUFFIX can
+        # only append a FIXED string and CASE_WHEN can only REPLACE a value — neither
+        # appends a chosen one, so this otherwise needs two chained rules per field
+        # that the analyst then has to keep in step.
+        #   {"branches": [{"if_column": "Default Billing", "op": "notblank",
+        #                  "suffix": "_b"}],
+        #    "default_suffix": "", "skip_blank": true, "skip_if_present": true}
+        s = _to_str(value)
+        if cfg.get("skip_blank", True) and s.strip() == "":
+            return value
+        suf = _to_str(cfg.get("default_suffix", ""))
+        for br in (cfg.get("branches") or []):
+            cmp = _COMPARISON_OPS.get((br.get("op") or "eq").lower())
+            if not cmp:
+                continue
+            col = br.get("if_column")
+            left = row.get(col) if (col and row is not None) else value
+            try:
+                if cmp(left, br.get("value")):
+                    suf = _to_str(br.get("suffix", ""))
+                    break
+            except Exception:                                   # noqa: BLE001
+                continue
+        if not suf:
+            return s
+        # Idempotent: generation can run twice over the same frame, and a key that
+        # gains a second "_b" on every pass is a new and silent data defect.
+        if cfg.get("skip_if_present", True) and s.endswith(suf):
+            return s
+        return s + suf
+
+    if rt == "SEQUENCE":
+        # CW #23: a unique running key — NXT000001, and a "_C1" form for a PERSON.
+        #   {"prefix": "NXT", "width": 6, "start": 1, "preserve_source": true,
+        #    "variant": {"if_column": "Party Type", "op": "eq", "value": "PERSON",
+        #                "suffix": "_C{n}", "width": 5, "counter": 1}}
+        #
+        # Derived from the ROW INDEX, not a running counter: the value has to be
+        # stable for a given row across re-runs, or regenerating the file renumbers
+        # every party and breaks the references the other 18 Customer sheets carry.
+        #
+        # SECTION 10.6 APPLIES, and this is the rule that section was written about.
+        # Auto-generated key numbers were removed once before because a manufactured
+        # unique value makes genuine duplicates look distinct, and they then load
+        # twice. Two things keep that from recurring and both matter: this runs at
+        # finalize, AFTER duplicate decisions have dropped the rows that must not
+        # ship; and a field carrying a SEQUENCE must never be used as a
+        # duplicate-identity column — the natural key is.
+        if cfg.get("preserve_source", True) and not _is_blank(value):
+            # A real source key always beats a manufactured one.
+            return value
+        idx = int(ctx.get("row_index", 0) or 0)
+        n = int(cfg.get("start", 1) or 1) + idx
+        prefix = _to_str(cfg.get("prefix", ""))
+        width = int(cfg.get("width", 6) or 6)
+        suffix = ""
+        variant = cfg.get("variant") or {}
+        if variant:
+            cmp = _COMPARISON_OPS.get((variant.get("op") or "eq").lower())
+            col = variant.get("if_column")
+            left = row.get(col) if (col and row is not None) else value
+            try:
+                if cmp and cmp(left, variant.get("value")):
+                    if variant.get("width"):
+                        width = int(variant["width"])
+                    suffix = _to_str(variant.get("suffix", "")).replace(
+                        "{n}", str(variant.get("counter", 1)))
+            except Exception:                                   # noqa: BLE001
+                pass
+        return f"{prefix}{n:0{width}d}{suffix}"
+
     if rt == "PHONE_PART":
         # Split a single phone/fax string into its Oracle parts. Handles the common
         # legacy forms: "+91 22 1234567", "+1 (415) 555-0100 x23", "0044-20-7946-0000".
