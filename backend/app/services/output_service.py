@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import json
 import re
 import zipfile
@@ -22,6 +23,8 @@ from app.models.transformation import TransformationRule
 from app.parsers import parse_tabular
 from app.services.learning_service import REFERENCE_KEY_FIELDS
 from app.transformations import apply_pipeline
+log = logging.getLogger(__name__)
+
 from app.services.strategy_overlay import (
     directive_for as _strategy_directive,
     blank_fields as _strategy_blank_fields,
@@ -924,15 +927,27 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # not applied"). Skipped for heavy multi-sheet objects: their mappings already
     # carry the applied gold (it's applied at map time), and re-applying it here is
     # what made generation hang — the persisted mappings are the source of truth.
+    _learning_error: str | None = None
+    _applied_learnings = 0
     if not _heavy:
         try:
             from app.services.learning_service import apply_learned_to_conversion
             _pre_maps = await MappingSuggestion.find(
                 MappingSuggestion.conversion_id == conversion.id
             ).to_list()
-            await apply_learned_to_conversion(conversion, _pre_maps, force=True)
-        except Exception:
-            pass  # best-effort — never block output generation on the learning pass
+            _applied_learnings = await apply_learned_to_conversion(
+                conversion, _pre_maps, force=True)
+        except Exception as _al_exc:  # noqa: BLE001
+            # Never block generation on the learning pass — but never hide it either.
+            # A bare `pass` here meant that if applying the library threw, the file was
+            # generated with NO learnings applied and nothing anywhere said so: the
+            # analyst's approved mappings simply did not reach the output, which reads
+            # exactly like "approvals are not being saved". Same shape as the
+            # required-field section that silently reported zero for weeks.
+            _learning_error = f"{type(_al_exc).__name__}: {_al_exc}"[:300]
+            log.exception("apply_learned_to_conversion failed for conversion %s — the "
+                          "output was generated WITHOUT the learning library",
+                          conversion.id)
     # Per-source frames, kept UNMERGED so each Oracle interface sheet can be fed by
     # the source sheet that actually supplies it. Only populated when the conversion
     # is bound to more than one source (e.g. a Customer + Address workbook).
@@ -985,6 +1000,12 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 "db_column": getattr(f, "db_column", None)} for f in fields]
         _dq_issues = await asyncio.to_thread(validate_frame, df, _tf, _val_rules, 2000)
         dq_report = build_report(_dq_issues, _dq_fixes)
+        if _learning_error:
+            # The output does NOT carry the learning library. Recorded on the
+            # artifact so the reason travels with the file rather than living
+            # only in a server log nobody reads.
+            dq_report["learning_error"] = _learning_error
+        dq_report["learnings_applied"] = _applied_learnings
     except Exception as _dq_exc:  # noqa: BLE001 — DQ is advisory; never block generation
         import logging as _lg
         _lg.getLogger(__name__).exception("generate DQ step failed")
@@ -1415,8 +1436,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         try:
             from app.services.learning_service import capture_learnings_from_conversion
             await capture_learnings_from_conversion(conversion)
-        except Exception:
-            pass
+        except Exception as _cl_exc:  # noqa: BLE001
+            # Same reasoning as the apply pass above: silence here means nothing was
+            # learned from a completed conversion and the analyst is never told.
+            log.exception("capture_learnings_from_conversion failed for conversion %s "
+                          "— nothing was learned from this generate", conversion.id)
     return artefact
 
 

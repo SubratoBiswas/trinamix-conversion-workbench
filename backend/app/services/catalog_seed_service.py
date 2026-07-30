@@ -373,6 +373,64 @@ async def seed_bom_field_mappings() -> dict:
     return res
 
 
+_SUPPLIER_SOURCE_MAP = _DATA / "supplier_source_mapping_30jul.json"
+
+
+async def seed_supplier_source_mapping() -> dict:
+    """Seed the GREEN rows of NXT Supplier Mapping_30Jul26.xlsx as client-scoped,
+    source-system-scoped column mappings.
+
+    Green is the workbook's own legend for "Mapped". The other colours mean
+    Questions to NextPower, Duplicate, Oracle-required-but-missing and Not-to-bring —
+    none of which is an instruction to map something, so none is imported. Rows whose
+    Oracle field is "DFF" or "standard" are excluded too: a descriptive flexfield is a
+    decision about where a value belongs, not a mapping the engine can apply.
+
+    Keyed by source system, so NetSuite's mapping for a field and SyteLine's are two
+    rows. Idempotent, and it honours tombstones like every other seeder — a learning
+    the analyst retired is not resurrected by a reseed.
+    """
+    import json as _json
+    if not _SUPPLIER_SOURCE_MAP.exists():
+        return {"seeded": 0, "note": "supplier_source_mapping_30jul.json not found"}
+    try:
+        doc = _json.loads(_SUPPLIER_SOURCE_MAP.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    nid = await _nextpower_client_id()
+    src_label = "NXT Supplier Mapping 30Jul26 (green rows)"
+    seeded = kept = retired = 0
+    for m in doc.get("mappings", []):
+        tgt, col = (m.get("target_field") or "").strip(), (m.get("source_column") or "").strip()
+        if not (tgt and col):
+            continue
+        existing = await LearnedMapping.find_one(
+            LearnedMapping.kind == "column_mapping",
+            LearnedMapping.target_object == "Supplier",
+            LearnedMapping.target_field == tgt,
+            LearnedMapping.original_value == col,
+            LearnedMapping.source_erp == m.get("source_erp"),
+            include_deleted=True,
+        )
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            continue
+        if existing:
+            kept += 1
+            continue
+        await LearnedMapping(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=col, resolved_value=tgt,
+            target_object="Supplier", target_field=tgt,
+            client_id=nid, is_global=False, source_erp=m.get("source_erp"),
+            rule_config={"oracle_page": m.get("sheet") or "", "note": m.get("note") or ""},
+            captured_from=src_label,
+        ).insert()
+        seeded += 1
+    return {"seeded": seeded, "already_present": kept, "left_retired": retired,
+            "open_questions": doc.get("_open_questions", [])}
+
+
 _SUPPLIER_STRATEGY = _DATA / "supplier_strategy_defaults.json"
 
 

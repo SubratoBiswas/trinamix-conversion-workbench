@@ -277,7 +277,13 @@ async def _upsert(*, kind, category, original_value, resolved_value,
         "source_erp": source_erp,
     }
     norm_orig = _normalize(original_value)
-    existing = await LearnedMapping.find(query).to_list()
+    # include_deleted=True is LOAD-BEARING. LearnedMapping.find injects
+    # {'is_deleted': {'$ne': True}}, so without it a tombstoned row is invisible
+    # here, the is_deleted check below can never fire, the loop finds nothing and
+    # this falls through to INSERT a fresh duplicate — resurrecting the learning the
+    # analyst deleted, on the next approve / default / rule save that touches the
+    # field. Third instance of CW #5, this time on the interactive path.
+    existing = await LearnedMapping.find(query, include_deleted=True).to_list()
     for lm in existing:
         if _normalize(lm.original_value) == norm_orig:
             if getattr(lm, "is_deleted", False) and not revive:

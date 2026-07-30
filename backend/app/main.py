@@ -131,6 +131,16 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("supplier conversion strategy seed failed")
     try:
+        # The GREEN rows of NXT Supplier Mapping_30Jul26 — the workbook's own legend
+        # for "Mapped". Seeded after the strategy so the signed spec still wins a
+        # clash, and keyed by source system so NetSuite's and SyteLine's mappings for
+        # the same field stay two rows rather than one overwriting the other.
+        from app.services.catalog_seed_service import seed_supplier_source_mapping
+        r = await seed_supplier_source_mapping()
+        log.info("startup seed — supplier source mapping (30Jul green): %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier source mapping seed failed")
+    try:
         # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
         # Fusion Customer Import): account/party key references + name/tax/email/
         # phone/credit, propagated by field name across the interface sheets.
