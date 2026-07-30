@@ -608,18 +608,27 @@ async def author_rule_endpoint(
 
     conv = await _require_conversion(conversion_id)
     description = (payload.get("description") or "").strip()
-    target_field = (payload.get("target_field") or "").strip()
+    # One rule may write to SEVERAL fields. Splitting a phone into country, area,
+    # number and extension is one sentence, not four; a single-target signature forced
+    # the analyst to retype it once per destination, and the copies then drifted apart
+    # as each was edited. `target_field` (string) is still accepted so nothing that
+    # already calls this breaks.
+    target_fields = payload.get("target_fields")
+    if not target_fields:
+        one = (payload.get("target_field") or "").strip()
+        target_fields = [one] if one else []
+    target_fields = [str(f).strip() for f in target_fields if str(f or "").strip()]
     objects = payload.get("objects") or []
     if not description:
         raise HTTPException(400, "Describe the rule in a sentence first.")
-    if not target_field:
-        raise HTTPException(400, "Pick the target field the rule writes to.")
+    if not target_fields:
+        raise HTTPException(400, "Pick at least one target field the rule writes to.")
     if not objects:
         raise HTTPException(
             400, f"Pick at least one module. Known: {', '.join(KNOWN_OBJECTS[:6])}…")
 
     res = await author_rule_for_objects(
-        conv, description, target_field=target_field, objects=objects,
+        conv, description, target_field=target_fields, objects=objects,
         captured_by=getattr(user, "email", ""),
         target_field_id=payload.get("target_field_id"),
         source_column=payload.get("source_column"),

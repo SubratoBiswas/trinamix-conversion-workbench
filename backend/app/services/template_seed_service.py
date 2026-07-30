@@ -119,22 +119,33 @@ async def _needs_comment_enrichment(business_object: str, name: str) -> bool:
     Detected by the data rather than by a version flag: if not one field carries a
     ``db_column``, the rules Oracle publishes in its header comments were never read.
     """
-    tpl = await _template_for(business_object, name)
-    if tpl is None:
-        return False
-    hit = await FBDIField.find(
-        FBDIField.template_id == tpl.id,
-        {"db_column": {"$nin": [None, ""]}},
-    ).first_or_none()
-    return hit is None
+    for tpl in await _templates_for(business_object, name):
+        hit = await FBDIField.find(
+            FBDIField.template_id == tpl.id,
+            {"db_column": {"$nin": [None, ""]}},
+        ).first_or_none()
+        if hit is None:
+            return True          # at least one copy has never been read
+    return False
 
 
-async def _template_for(business_object: str, name: str):
+async def _templates_for(business_object: str, name: str) -> list:
+    """EVERY stored template for this interface, not the first one found.
+
+    There are three templates with business_object "Supplier" on the live instance —
+    ApSuppliersImport, Supplier Import and SupplierImport — because the analyst has
+    uploaded their own alongside the bundled copy. ``find_one`` returned an arbitrary
+    one, so the enrichment ran on a template no conversion uses and the conversion that
+    matters still reported 3 columns carrying a rule out of 156. The workbook's rules
+    describe the INTERFACE, so they belong on every stored copy of it.
+    """
+    seen, out = set(), []
     for q in ({"business_object": business_object}, {"name": name}):
-        tpl = await FBDITemplate.find_one(q)
-        if tpl:
-            return tpl
-    return None
+        for tpl in await FBDITemplate.find(q).to_list():
+            if tpl.id not in seen:
+                seen.add(tpl.id)
+                out.append(tpl)
+    return out
 
 
 async def _enrich_from_comments(path: Path, business_object: str, name: str) -> int:
@@ -147,8 +158,8 @@ async def _enrich_from_comments(path: Path, business_object: str, name: str) -> 
     import re as _re
     from app.services.template_comments import apply_to_field, constraints_by_sheet
 
-    tpl = await _template_for(business_object, name)
-    if tpl is None:
+    templates = await _templates_for(business_object, name)
+    if not templates:
         return 0
     try:
         cons = constraints_by_sheet(str(path))
@@ -164,27 +175,35 @@ async def _enrich_from_comments(path: Path, business_object: str, name: str) -> 
         return _re.sub(r"[^a-z0-9]", "", str(x or "").lower())
     fresh = {(_n(f.get("sheet_name")), _n(f.get("field_name"))): f
              for f in parsed.get("fields", [])}
-    sheets = {s.id: s.sheet_name
-              for s in await FBDISheet.find(FBDISheet.template_id == tpl.id).to_list()}
+    by_field_only: dict = {}
+    for f in parsed.get("fields", []):
+        by_field_only.setdefault(_n(f.get("field_name")), f)
     n = 0
-    for fld in await FBDIField.find(FBDIField.template_id == tpl.id).to_list():
-        src = fresh.get((_n(sheets.get(fld.sheet_id)), _n(fld.field_name)))
-        if not src:
-            continue
-        patch = {k: src.get(k) for k in
-                 ("db_column", "nullable", "precision", "scale", "do_not_populate",
-                  "import_actions", "comment_text", "data_type", "max_length",
-                  "format_mask", "allowed_values")
-                 if src.get(k) not in (None, "", [], False)}
-        # required is a union: the header '*' OR the comment's NOT NULL. Never
-        # un-require a field the template marked required.
-        if src.get("required"):
-            patch["required"] = True
-        if patch:
-            await fld.set(patch)
-            n += 1
-    logger.info("template_seed: enriched %d field(s) of %s from header comments",
-                n, name)
+    for tpl in templates:
+        sheets = {s.id: s.sheet_name for s in
+                  await FBDISheet.find(FBDISheet.template_id == tpl.id).to_list()}
+        for fld in await FBDIField.find(FBDIField.template_id == tpl.id).to_list():
+            # Fall back to the field NAME alone when the sheet names disagree: a
+            # template the analyst uploaded may name its sheet differently from the
+            # bundled workbook while carrying the same interface columns.
+            src = (fresh.get((_n(sheets.get(fld.sheet_id)), _n(fld.field_name)))
+                   or by_field_only.get(_n(fld.field_name)))
+            if not src:
+                continue
+            patch = {k: src.get(k) for k in
+                     ("db_column", "nullable", "precision", "scale", "do_not_populate",
+                      "import_actions", "comment_text", "data_type", "max_length",
+                      "format_mask", "allowed_values")
+                     if src.get(k) not in (None, "", [], False)}
+            # required is a union: the header '*' OR the comment's NOT NULL. Never
+            # un-require a field the template marked required.
+            if src.get("required"):
+                patch["required"] = True
+            if patch:
+                await fld.set(patch)
+                n += 1
+    logger.info("template_seed: enriched %d field(s) across %d copy(ies) of %s",
+                n, len(templates), name)
     return n
 
 

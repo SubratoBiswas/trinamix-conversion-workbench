@@ -77,16 +77,26 @@ def normalize_objects(objects: Iterable[str]) -> tuple[list[str], list[str]]:
     return ok, bad
 
 
-def plan_learnings(*, translated: dict, target_field: str, objects: list[str],
+def plan_learnings(*, translated: dict, target_field, objects: list[str],
                    description: str) -> list[dict]:
-    """One learning payload per module, from a single translated rule.
+    """One learning payload per module PER TARGET FIELD, from one translated rule.
+
+    ``target_field`` accepts a string or a list. A rule routinely writes to several
+    fields — splitting a phone into country, area, number and extension is one
+    sentence, not four — and a single-target signature forced the analyst to retype
+    the same sentence once per destination, which then drifted apart as each was
+    edited. The many-sources direction needs no change here: the columns live in the
+    rule's own config.
 
     Pure: takes the translator's output and returns what would be written, so the
     fan-out can be tested without a model or a database.
     """
     rule_type = (translated or {}).get("rule_type")
     config = (translated or {}).get("config") or {}
-    if not rule_type or not target_field or not objects:
+    fields = ([target_field] if isinstance(target_field, str)
+              else list(target_field or []))
+    fields = [str(f).strip() for f in fields if str(f or "").strip()]
+    if not rule_type or not fields or not objects:
         return []
     src = config.get("source_column") or (translated or {}).get("source_column")
     return [{
@@ -101,11 +111,11 @@ def plan_learnings(*, translated: dict, target_field: str, objects: list[str],
         "original_value": src or "(rule)",
         "resolved_value": target_field,
         "captured_from": f"plain-English rule: {description.strip()[:180]}",
-    } for obj in objects]
+    } for obj in objects for target_field in fields]
 
 
 async def author_rule_for_objects(
-    conversion, description: str, *, target_field: str,
+    conversion, description: str, *, target_field,
     objects: Iterable[str], captured_by: str = "",
     target_field_id: Optional[str] = None,
     source_column: Optional[str] = None,

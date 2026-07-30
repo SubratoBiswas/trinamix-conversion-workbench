@@ -1484,7 +1484,9 @@ const CompositeMappingModal: React.FC<{
   // describe — one sentence, learned for every module the analyst names, so a
   // convention stated once for Item also governs BOM instead of being retyped.
   const [ruleText, setRuleText] = useState("");
-  const [ruleTarget, setRuleTarget] = useState("");
+  // Several destinations from one sentence — see the picker below.
+  const [ruleTargets, setRuleTargets] = useState<string[]>([]);
+  const [ruleTargetFilter, setRuleTargetFilter] = useState("");
   const [ruleObjects, setRuleObjects] = useState<string[]>([]);
   const [ruleResult, setRuleResult] = useState<AuthoredRule | null>(null);
 
@@ -1506,8 +1508,9 @@ const CompositeMappingModal: React.FC<{
   React.useEffect(() => {
     if (open) {
       setMode("split"); setErr(null); setSrcCol(""); setPreset("phone");
-      setRuleText(""); setRuleTarget(""); setRuleObjects([]); setRuleResult(null);
-      setPhoneParts({}); setSep("-"); setSplitRows([{ fieldId: "", index: 0 }]);
+      setRuleText(""); setRuleTargets([]); setRuleTargetFilter("");
+      setRuleObjects([]); setRuleResult(null);
+      setPhoneParts({}); setSep("-"); setSplitRows([]); setSplitFilter("");
       setCombineTarget(""); setCombineCols([]); setCombineSep(" ");
     }
   }, [open]);
@@ -1534,17 +1537,17 @@ const CompositeMappingModal: React.FC<{
     try {
       if (mode === "describe") {
         if (!ruleText.trim()) throw new Error("Describe the rule in a sentence first.");
-        if (!ruleTarget) throw new Error("Pick the target field the rule writes to.");
+        if (!ruleTargets.length) throw new Error("Pick at least one target field the rule writes to.");
         if (!ruleObjects.length) throw new Error("Pick at least one module.");
         const res = await MappingApi.authorRule(String(conversionId), {
           description: ruleText.trim(),
-          target_field: ruleTarget,
+          target_fields: ruleTargets,
           objects: ruleObjects,
         });
         setRuleResult(res);
         // Deliberately does NOT close: the translation is only visible now, and
         // closing would hide what was actually saved.
-        await onDone(`Learned "${ruleTarget}" for ${res.objects.join(", ")}.`);
+        await onDone(`Learned ${ruleTargets.length} field(s) — ${ruleTargets.join(", ")} — for ${res.objects.join(", ")}.`);
         return;
       }
       if (mode === "split") {
@@ -1753,14 +1756,49 @@ const CompositeMappingModal: React.FC<{
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold text-ink">Target field it writes to</div>
-              <select value={ruleTarget} onChange={(e) => setRuleTarget(e.target.value)}
-                className="w-full rounded-md border border-line px-2 py-1.5 text-xs">
-                <option value="">Choose a target field…</option>
-                {targetFields.map((f) => (
-                  <option key={String(f.id)} value={f.field_name}>{f.field_name}</option>
-                ))}
-              </select>
+              {/* A rule routinely writes to SEVERAL fields — splitting a phone into
+                  country, area, number and extension is one sentence, not four. The
+                  single dropdown forced the analyst to retype the same sentence once
+                  per destination, and the copies then drifted apart as each was
+                  edited. Ticking several here writes one learning per field from one
+                  sentence, so they cannot diverge. The many-sources direction needs
+                  nothing extra: name the columns in the sentence and the translator
+                  puts them in the rule's own config. */}
+              <div className="mb-1 text-xs font-semibold text-ink">
+                Target field(s) it writes to
+              </div>
+              <input
+                value={ruleTargetFilter}
+                onChange={(e) => setRuleTargetFilter(e.target.value)}
+                placeholder="Filter fields…"
+                className="mb-1 w-full rounded-md border border-line px-2 py-1.5 text-xs"
+              />
+              <div className="max-h-40 space-y-1 overflow-auto rounded-md border border-line p-2">
+                {targetFieldOptions
+                  .filter((f) => !ruleTargetFilter
+                    || f.label.toLowerCase().includes(ruleTargetFilter.toLowerCase()))
+                  .map((f) => {
+                    const on = ruleTargets.includes(f.label);
+                    return (
+                      <label key={f.id} className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={(e) => setRuleTargets((t) => e.target.checked
+                            ? [...t, f.label]
+                            : t.filter((x) => x !== f.label))}
+                        />
+                        <span className="text-ink">{f.label}</span>
+                      </label>
+                    );
+                  })}
+              </div>
+              {ruleTargets.length > 0 && (
+                <p className="mt-1 text-[11px] text-ink-muted">
+                  One sentence, {ruleTargets.length} field(s):{" "}
+                  <span className="font-mono">{ruleTargets.join(", ")}</span>
+                </p>
+              )}
             </div>
 
             <div>

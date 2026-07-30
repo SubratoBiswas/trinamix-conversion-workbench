@@ -542,7 +542,11 @@ export const MappingApi = {
     conversionId: string,
     body: {
       description: string;
-      target_field: string;
+      /** One rule may write to several fields — splitting a phone into country,
+       *  area, number and extension is one sentence, not four. `target_field`
+       *  (singular) is still accepted by the endpoint for older callers. */
+      target_fields?: string[];
+      target_field?: string;
       objects: string[];
       target_field_id?: string;
       source_column?: string;
