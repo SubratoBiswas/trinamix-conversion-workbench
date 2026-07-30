@@ -1,763 +1,764 @@
 {
- "_source": "NXT Supplier Mapping_30Jul26.xlsx, 'Source Mapping' tab — the GREEN rows only, which the workbook's own legend defines as Mapped. Yellow (Questions to NextPower), Orange (Duplicate), Blue (Oracle required but missing) and Red (Not to bring) are deliberately NOT imported.",
- "_extraction": "128 green rows read by cell fill (FF92D050), not by eye. 34 of them target 'DFF' or 'standard' rather than a named Oracle field and are excluded — a descriptive flexfield is a decision about where to put a value, not a mapping the engine can apply.",
- "_scope": "Client NextPower. Each row is keyed by SOURCE SYSTEM, so NetSuite's mapping for a field and SyteLine's are two separate learnings rather than one overwriting the other.",
- "_open_questions": [
-  "Eight target fields are fed by more than one green source column for the same system: Phone (Address Phone / Phone), E-Mail (Alt. Email / Email), Tax Registration Number (CNPJ-CPF / Tax Number), Tax Organization Type (Entity Type / Is Individual), Taxpayer ID (PAN / Tax ID / Tax Id Canada), and on SyteLine Supplier Site and E-Mail. Both are seeded and the strongest-transform rule wins at apply time, but which column should govern is a business decision — confirm and I will retire the loser.",
-  "29 green rows carry no Oracle page, so they are seeded against the object rather than a named interface sheet. If any belongs on one sheet only, the per-sheet scope from CW #12-14 narrows it."
- ],
- "mappings": [
-  {
-   "source_erp": "netsuite",
-   "source_column": "1099 Eligible",
-   "target_field": "Federal reportable",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 10
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Account",
-   "target_field": "bank account number",
-   "sheet": "",
-   "note": "Required - Payable account number - bank accont number",
-   "row": 12
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Address 1",
-   "target_field": "Address Line 1",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 15
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Address 2",
-   "target_field": "Address Line 2",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 16
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Address 3",
-   "target_field": "Address Line 3",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 17
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Address Phone",
-   "target_field": "Phone",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 20
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Addressee",
-   "target_field": "Addressee",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 21
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Alt. Email",
-   "target_field": "E-Mail",
-   "sheet": "Supplier Address",
-   "note": "Suggest which column to consider for mapping",
-   "row": 23
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "CNPJ/CPF",
-   "target_field": "Tax Registration Number",
-   "sheet": "Supplier Header",
-   "note": "Brazil Avalara tax bundle",
-   "row": 65
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Category",
-   "target_field": "Supplier Type",
-   "sheet": "Supplier Header",
-   "note": "Business transformation required",
-   "row": 67
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "City",
-   "target_field": "City",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 70
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Country",
-   "target_field": "Country",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 76
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Credit Limit",
-   "target_field": "Invoice Amount Limit",
-   "sheet": "Supplier Site",
-   "note": "Required and requested by Alexandria,",
-   "row": 81
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Currency",
-   "target_field": "Invoice Currency / Payment Currency",
-   "sheet": "Supplier Site",
-   "note": "Business transformation required",
-   "row": 82
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Default Billing Address",
-   "target_field": "standard field",
-   "sheet": "",
-   "note": "Billign address ID",
-   "row": 92
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Default Expense Account",
-   "target_field": "Prepayment Distribution",
-   "sheet": "Supplier Site Assignment",
-   "note": "In Oracle purcurement BU will have these defaults",
-   "row": 93
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Default Payables Account",
-   "target_field": "Liability Distribution",
-   "sheet": "Supplier Site Assignment",
-   "note": "In Oracle purcurement BU will have these defaults",
-   "row": 94
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Default Shipping Address",
-   "target_field": "standard field",
-   "sheet": "",
-   "note": "shipping address interna ID",
-   "row": 95
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Email",
-   "target_field": "E-Mail",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 103
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Email Transactions",
-   "target_field": "Communication Method",
-   "sheet": "Supplier Header / Supplier Address / Supplier Site",
-   "note": "",
-   "row": 105
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Enable For EDI",
-   "target_field": "Enable B2B Messaging",
-   "sheet": "Supplier Site",
-   "note": "Business transformation required",
-   "row": 106
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Entity Type",
-   "target_field": "Tax Organization Type",
-   "sheet": "Supplier Header",
-   "note": "Business transformation required",
-   "row": 107
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "External ID",
-   "target_field": "D-U-N-S Number",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 109
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Fax",
-   "target_field": "Fax",
-   "sheet": "Supplier Address / Supplier Site / Supplier Contacts",
-   "note": "",
-   "row": 110
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Fax Transactions",
-   "target_field": "Delivery Method",
-   "sheet": "Supplier Header / Supplier Address / Supplier Site",
-   "note": "standard field",
-   "row": 111
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "First Name",
-   "target_field": "First Name",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 112
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Inactive",
-   "target_field": "Inactive Date",
-   "sheet": "Supplier Header / Supplier Address / Supplier Site",
-   "note": "Business transformation required",
-   "row": 139
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Incoterm",
-   "target_field": "Carrier / Mode of Transport",
-   "sheet": "Supplier Site",
-   "note": "Business transformation required",
-   "row": 140
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Is Individual",
-   "target_field": "Tax Organization Type",
-   "sheet": "Supplier Header",
-   "note": "Business transformation required",
-   "row": 146
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Last Name",
-   "target_field": "Last Name",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 156
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Legal Name",
-   "target_field": "Alternate Name",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 157
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Login Access",
-   "target_field": "User Account Action",
-   "sheet": "Supplier Contacts",
-   "note": "Business transformation required",
-   "row": 159
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "MSME Vendor",
-   "target_field": "classification - standard field ?",
-   "sheet": "",
-   "note": "Flag used to track MSME vendor",
-   "row": 160
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Middle Name",
-   "target_field": "Middle Name",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 162
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Mobile",
-   "target_field": "Mobile",
-   "sheet": "Supplier Contacts",
-   "note": "contact",
-   "row": 163
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Mr./Mrs...",
-   "target_field": "Prefix",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 165
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Name",
-   "target_field": "Supplier Name*",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 167
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Parent Vendor Id",
-   "target_field": "Parent Supplier",
-   "sheet": "Supplier Header",
-   "note": "Business transformation required",
-   "row": 175
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Permanent Account Number ( PAN)",
-   "target_field": "Taxpayer ID",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 176
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Phone",
-   "target_field": "Phone",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 178
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Primary Contact",
-   "target_field": "Administrative Contact",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 183
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Primary Subsidiary",
-   "target_field": "Procurement BU*",
-   "sheet": "Supplier Site / Supplier Site Assignment",
-   "note": "Business transformation required",
-   "row": 184
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Print As",
-   "target_field": "Alias",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 186
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Represents Subsidiary",
-   "target_field": "site BU derived based on this field",
-   "sheet": "",
-   "note": "standard field",
-   "row": 195
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "State/Province",
-   "target_field": "State",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 213
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Tax ID",
-   "target_field": "Taxpayer ID",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 222
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Tax Id Canada",
-   "target_field": "Taxpayer ID",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 223
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Tax Number",
-   "target_field": "Tax Registration Number",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 224
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Terms",
-   "target_field": "Payment Terms",
-   "sheet": "Supplier Site",
-   "note": "Business transformation required",
-   "row": 227
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Terms And Conditions",
-   "target_field": "DFF ( This text shold show up in the PO )",
-   "sheet": "",
-   "note": "Vendor specific T's and C's",
-   "row": 228
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Vendor Approval Status",
-   "target_field": "Business Relationship*",
-   "sheet": "Supplier Header",
-   "note": "Business transformation required",
-   "row": 234
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Vendor Credentials For EDI",
-   "target_field": "B2B Supplier Site Code",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 241
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Web Address",
-   "target_field": "Corporate Web Site",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 248
-  },
-  {
-   "source_erp": "netsuite",
-   "source_column": "Zip Code",
-   "target_field": "Postal code",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 250
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "vend_num",
-   "target_field": "*Supplier Number",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 268
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "name",
-   "target_field": "Supplier Name*",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 269
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Alternate Name",
-   "target_field": "Alternate Name",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 270
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Tax Organization Type",
-   "target_field": "Tax Organization Type",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 271
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Supplier Type",
-   "target_field": "Supplier Type",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 272
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Business Relationship*",
-   "target_field": "Business Relationship*",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 273
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Corporate Web Site",
-   "target_field": "Corporate Web Site",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 274
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "country",
-   "target_field": "Taxpayer Country",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 275
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Taxpayer ID",
-   "target_field": "Taxpayer ID",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 276
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Tax Registration Number",
-   "target_field": "Tax Registration Number",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 277
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "pay_type",
-   "target_field": "Payment Method",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 278
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "fax_num",
-   "target_field": "Remittance Fax",
-   "sheet": "Supplier Header",
-   "note": "",
-   "row": 279
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Procurement BU*",
-   "target_field": "Procurement BU*",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 280
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "city",
-   "target_field": "Address Name",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 281
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Supplier Site* Name",
-   "target_field": "Supplier Site*",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 282
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Communication Method",
-   "target_field": "Communication Method",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 283
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "external_email_addr",
-   "target_field": "E-Mail",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 284
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Invoice Currency",
-   "target_field": "Invoice Currency",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 285
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Payment Currency",
-   "target_field": "Payment Currency",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 286
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "terms_code",
-   "target_field": "Payment Terms",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 287
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Supplier Site*",
-   "target_field": "Supplier Site*",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 288
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Client BU*",
-   "target_field": "Client BU*",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 289
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Bill-to BU",
-   "target_field": "Bill-to BU",
-   "sheet": "Supplier Site",
-   "note": "",
-   "row": 290
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "addr##1",
-   "target_field": "Address Line 1",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 293
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "addr##2",
-   "target_field": "Address Line 2",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 294
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "addr##3",
-   "target_field": "Address Line 3",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 295
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "city",
-   "target_field": "City",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 296
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "state",
-   "target_field": "State",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 297
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "zip",
-   "target_field": "Postal code",
-   "sheet": "Supplier Address",
-   "note": "",
-   "row": 298
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Phone",
-   "target_field": "Phone",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 299
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Phone Extension",
-   "target_field": "Phone Extension",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 300
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "First Name",
-   "target_field": "First Name",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 301
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Last Name",
-   "target_field": "Last Name",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 302
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "external_email_addr",
-   "target_field": "E-Mail",
-   "sheet": "Supplier Contacts",
-   "note": "",
-   "row": 303
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Remit Advice Email",
-   "target_field": "Remittance Email",
-   "sheet": "Supplier Site",
-   "note": "This column is mapped to an Oracle field; however, no data is available in the source extract. Business input is required to provide the necessary data before migration.",
-   "row": 304
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "**Bank Name",
-   "target_field": "**Bank Name",
-   "sheet": "Supplier Bank Accounts",
-   "note": "",
-   "row": 305
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "**Branch Name",
-   "target_field": "**Branch Name",
-   "sheet": "Supplier Bank Accounts",
-   "note": "This column is mapped to an Oracle field; however, no data is available in the source extract. Business input is required to provide the necessary data before migration.",
-   "row": 306
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "Account Name",
-   "target_field": "Account Name",
-   "sheet": "Supplier Bank Accounts",
-   "note": "",
-   "row": 307
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "*Account Number",
-   "target_field": "*Account Number",
-   "sheet": "Supplier Bank Accounts",
-   "note": "",
-   "row": 308
-  },
-  {
-   "source_erp": "syteline",
-   "source_column": "IBAN**",
-   "target_field": "IBAN**",
-   "sheet": "Supplier Bank Accounts",
-   "note": "This column is mapped to an Oracle field; however, no data is available in the source extract. Business input is required to provide the necessary data before migration.",
-   "row": 309
-  }
- ]
+  "_source": "NXT Supplier Mapping_30Jul26.xlsx, 'Source Mapping' tab — the GREEN rows only, which the workbook's own legend defines as Mapped. Yellow (Questions to NextPower), Orange (Duplicate), Blue (Oracle required but missing) and Red (Not to bring) are deliberately NOT imported.",
+  "_effective_date": "2026-07-30",
+  "_extraction": "128 green rows read by cell fill (FF92D050), not by eye. 34 of them target 'DFF' or 'standard' rather than a named Oracle field and are excluded — a descriptive flexfield is a decision about where to put a value, not a mapping the engine can apply.",
+  "_scope": "Client NextPower. Each row is keyed by SOURCE SYSTEM, so NetSuite's mapping for a field and SyteLine's are two separate learnings rather than one overwriting the other.",
+  "_open_questions": [
+    "Eight target fields are fed by more than one green source column for the same system: Phone (Address Phone / Phone), E-Mail (Alt. Email / Email), Tax Registration Number (CNPJ-CPF / Tax Number), Tax Organization Type (Entity Type / Is Individual), Taxpayer ID (PAN / Tax ID / Tax Id Canada), and on SyteLine Supplier Site and E-Mail. Both are seeded and the strongest-transform rule wins at apply time, but which column should govern is a business decision — confirm and I will retire the loser.",
+    "29 green rows carry no Oracle page, so they are seeded against the object rather than a named interface sheet. If any belongs on one sheet only, the per-sheet scope from CW #12-14 narrows it."
+  ],
+  "mappings": [
+    {
+      "source_erp": "netsuite",
+      "source_column": "1099 Eligible",
+      "target_field": "Federal reportable",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 10
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Account",
+      "target_field": "bank account number",
+      "sheet": "",
+      "note": "Required - Payable account number - bank accont number",
+      "row": 12
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Address 1",
+      "target_field": "Address Line 1",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 15
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Address 2",
+      "target_field": "Address Line 2",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 16
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Address 3",
+      "target_field": "Address Line 3",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 17
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Address Phone",
+      "target_field": "Phone",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 20
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Addressee",
+      "target_field": "Addressee",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 21
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Alt. Email",
+      "target_field": "E-Mail",
+      "sheet": "Supplier Address",
+      "note": "Suggest which column to consider for mapping",
+      "row": 23
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "CNPJ/CPF",
+      "target_field": "Tax Registration Number",
+      "sheet": "Supplier Header",
+      "note": "Brazil Avalara tax bundle",
+      "row": 65
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Category",
+      "target_field": "Supplier Type",
+      "sheet": "Supplier Header",
+      "note": "Business transformation required",
+      "row": 67
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "City",
+      "target_field": "City",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 70
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Country",
+      "target_field": "Country",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 76
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Credit Limit",
+      "target_field": "Invoice Amount Limit",
+      "sheet": "Supplier Site",
+      "note": "Required and requested by Alexandria,",
+      "row": 81
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Currency",
+      "target_field": "Invoice Currency / Payment Currency",
+      "sheet": "Supplier Site",
+      "note": "Business transformation required",
+      "row": 82
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Default Billing Address",
+      "target_field": "standard field",
+      "sheet": "",
+      "note": "Billign address ID",
+      "row": 92
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Default Expense Account",
+      "target_field": "Prepayment Distribution",
+      "sheet": "Supplier Site Assignment",
+      "note": "In Oracle purcurement BU will have these defaults",
+      "row": 93
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Default Payables Account",
+      "target_field": "Liability Distribution",
+      "sheet": "Supplier Site Assignment",
+      "note": "In Oracle purcurement BU will have these defaults",
+      "row": 94
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Default Shipping Address",
+      "target_field": "standard field",
+      "sheet": "",
+      "note": "shipping address interna ID",
+      "row": 95
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Email",
+      "target_field": "E-Mail",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 103
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Email Transactions",
+      "target_field": "Communication Method",
+      "sheet": "Supplier Header / Supplier Address / Supplier Site",
+      "note": "",
+      "row": 105
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Enable For EDI",
+      "target_field": "Enable B2B Messaging",
+      "sheet": "Supplier Site",
+      "note": "Business transformation required",
+      "row": 106
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Entity Type",
+      "target_field": "Tax Organization Type",
+      "sheet": "Supplier Header",
+      "note": "Business transformation required",
+      "row": 107
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "External ID",
+      "target_field": "D-U-N-S Number",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 109
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Fax",
+      "target_field": "Fax",
+      "sheet": "Supplier Address / Supplier Site / Supplier Contacts",
+      "note": "",
+      "row": 110
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Fax Transactions",
+      "target_field": "Delivery Method",
+      "sheet": "Supplier Header / Supplier Address / Supplier Site",
+      "note": "standard field",
+      "row": 111
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "First Name",
+      "target_field": "First Name",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 112
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Inactive",
+      "target_field": "Inactive Date",
+      "sheet": "Supplier Header / Supplier Address / Supplier Site",
+      "note": "Business transformation required",
+      "row": 139
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Incoterm",
+      "target_field": "Carrier / Mode of Transport",
+      "sheet": "Supplier Site",
+      "note": "Business transformation required",
+      "row": 140
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Is Individual",
+      "target_field": "Tax Organization Type",
+      "sheet": "Supplier Header",
+      "note": "Business transformation required",
+      "row": 146
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Last Name",
+      "target_field": "Last Name",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 156
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Legal Name",
+      "target_field": "Alternate Name",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 157
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Login Access",
+      "target_field": "User Account Action",
+      "sheet": "Supplier Contacts",
+      "note": "Business transformation required",
+      "row": 159
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "MSME Vendor",
+      "target_field": "classification - standard field ?",
+      "sheet": "",
+      "note": "Flag used to track MSME vendor",
+      "row": 160
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Middle Name",
+      "target_field": "Middle Name",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 162
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Mobile",
+      "target_field": "Mobile",
+      "sheet": "Supplier Contacts",
+      "note": "contact",
+      "row": 163
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Mr./Mrs...",
+      "target_field": "Prefix",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 165
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Name",
+      "target_field": "Supplier Name*",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 167
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Parent Vendor Id",
+      "target_field": "Parent Supplier",
+      "sheet": "Supplier Header",
+      "note": "Business transformation required",
+      "row": 175
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Permanent Account Number ( PAN)",
+      "target_field": "Taxpayer ID",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 176
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Phone",
+      "target_field": "Phone",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 178
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Primary Contact",
+      "target_field": "Administrative Contact",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 183
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Primary Subsidiary",
+      "target_field": "Procurement BU*",
+      "sheet": "Supplier Site / Supplier Site Assignment",
+      "note": "Business transformation required",
+      "row": 184
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Print As",
+      "target_field": "Alias",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 186
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Represents Subsidiary",
+      "target_field": "site BU derived based on this field",
+      "sheet": "",
+      "note": "standard field",
+      "row": 195
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "State/Province",
+      "target_field": "State",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 213
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Tax ID",
+      "target_field": "Taxpayer ID",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 222
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Tax Id Canada",
+      "target_field": "Taxpayer ID",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 223
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Tax Number",
+      "target_field": "Tax Registration Number",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 224
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Terms",
+      "target_field": "Payment Terms",
+      "sheet": "Supplier Site",
+      "note": "Business transformation required",
+      "row": 227
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Terms And Conditions",
+      "target_field": "DFF ( This text shold show up in the PO )",
+      "sheet": "",
+      "note": "Vendor specific T's and C's",
+      "row": 228
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Vendor Approval Status",
+      "target_field": "Business Relationship*",
+      "sheet": "Supplier Header",
+      "note": "Business transformation required",
+      "row": 234
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Vendor Credentials For EDI",
+      "target_field": "B2B Supplier Site Code",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 241
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Web Address",
+      "target_field": "Corporate Web Site",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 248
+    },
+    {
+      "source_erp": "netsuite",
+      "source_column": "Zip Code",
+      "target_field": "Postal code",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 250
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "vend_num",
+      "target_field": "*Supplier Number",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 268
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "name",
+      "target_field": "Supplier Name*",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 269
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Alternate Name",
+      "target_field": "Alternate Name",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 270
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Tax Organization Type",
+      "target_field": "Tax Organization Type",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 271
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Supplier Type",
+      "target_field": "Supplier Type",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 272
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Business Relationship*",
+      "target_field": "Business Relationship*",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 273
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Corporate Web Site",
+      "target_field": "Corporate Web Site",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 274
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "country",
+      "target_field": "Taxpayer Country",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 275
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Taxpayer ID",
+      "target_field": "Taxpayer ID",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 276
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Tax Registration Number",
+      "target_field": "Tax Registration Number",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 277
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "pay_type",
+      "target_field": "Payment Method",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 278
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "fax_num",
+      "target_field": "Remittance Fax",
+      "sheet": "Supplier Header",
+      "note": "",
+      "row": 279
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Procurement BU*",
+      "target_field": "Procurement BU*",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 280
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "city",
+      "target_field": "Address Name",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 281
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Supplier Site* Name",
+      "target_field": "Supplier Site*",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 282
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Communication Method",
+      "target_field": "Communication Method",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 283
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "external_email_addr",
+      "target_field": "E-Mail",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 284
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Invoice Currency",
+      "target_field": "Invoice Currency",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 285
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Payment Currency",
+      "target_field": "Payment Currency",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 286
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "terms_code",
+      "target_field": "Payment Terms",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 287
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Supplier Site*",
+      "target_field": "Supplier Site*",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 288
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Client BU*",
+      "target_field": "Client BU*",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 289
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Bill-to BU",
+      "target_field": "Bill-to BU",
+      "sheet": "Supplier Site",
+      "note": "",
+      "row": 290
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "addr##1",
+      "target_field": "Address Line 1",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 293
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "addr##2",
+      "target_field": "Address Line 2",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 294
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "addr##3",
+      "target_field": "Address Line 3",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 295
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "city",
+      "target_field": "City",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 296
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "state",
+      "target_field": "State",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 297
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "zip",
+      "target_field": "Postal code",
+      "sheet": "Supplier Address",
+      "note": "",
+      "row": 298
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Phone",
+      "target_field": "Phone",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 299
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Phone Extension",
+      "target_field": "Phone Extension",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 300
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "First Name",
+      "target_field": "First Name",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 301
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Last Name",
+      "target_field": "Last Name",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 302
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "external_email_addr",
+      "target_field": "E-Mail",
+      "sheet": "Supplier Contacts",
+      "note": "",
+      "row": 303
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Remit Advice Email",
+      "target_field": "Remittance Email",
+      "sheet": "Supplier Site",
+      "note": "This column is mapped to an Oracle field; however, no data is available in the source extract. Business input is required to provide the necessary data before migration.",
+      "row": 304
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "**Bank Name",
+      "target_field": "**Bank Name",
+      "sheet": "Supplier Bank Accounts",
+      "note": "",
+      "row": 305
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "**Branch Name",
+      "target_field": "**Branch Name",
+      "sheet": "Supplier Bank Accounts",
+      "note": "This column is mapped to an Oracle field; however, no data is available in the source extract. Business input is required to provide the necessary data before migration.",
+      "row": 306
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "Account Name",
+      "target_field": "Account Name",
+      "sheet": "Supplier Bank Accounts",
+      "note": "",
+      "row": 307
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "*Account Number",
+      "target_field": "*Account Number",
+      "sheet": "Supplier Bank Accounts",
+      "note": "",
+      "row": 308
+    },
+    {
+      "source_erp": "syteline",
+      "source_column": "IBAN**",
+      "target_field": "IBAN**",
+      "sheet": "Supplier Bank Accounts",
+      "note": "This column is mapped to an Oracle field; however, no data is available in the source extract. Business input is required to provide the necessary data before migration.",
+      "row": 309
+    }
+  ]
 }

@@ -375,6 +375,24 @@ async def seed_bom_field_mappings() -> dict:
 
 from datetime import datetime as _dt
 
+
+def _effective_date_of(doc: dict) -> "_dt | None":
+    """The date the instruction in this file was GIVEN.
+
+    Stamped onto every learning the file seeds, because captured_at is the moment
+    the row was written and every startup seed stamps utcnow — so on a redeploy the
+    13-Jul strategy would look newer than the 30-Jul corrections and "latest wins"
+    would invert itself on a restart.
+    """
+    v = str((doc or {}).get("_effective_date") or "").strip()[:10]
+    if not v:
+        return None
+    try:
+        return _dt.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 _SUPPLIER_CORRECTIONS = _DATA / "supplier_corrections_30jul.json"
 
 
@@ -431,6 +449,7 @@ async def seed_supplier_corrections_30jul() -> dict:
             retired += 1
             continue
         payload = {
+            "effective_date": _effective_date_of(doc),
             "resolved_value": resolved,
             "rule_type": r.get("rule_type") or ("suppress" if action == "blank" else None),
             "rule_config": r.get("rule_config") or {"note": r.get("note", "")},
@@ -537,6 +556,7 @@ async def seed_supplier_source_mapping() -> dict:
     except Exception as exc:  # noqa: BLE001
         return {"seeded": 0, "error": str(exc)}
     nid = await _nextpower_client_id()
+    _eff = _effective_date_of(doc)
     src_label = "NXT Supplier Mapping 30Jul26 (green rows)"
     seeded = kept = retired = 0
     for m in doc.get("mappings", []):
@@ -563,7 +583,7 @@ async def seed_supplier_source_mapping() -> dict:
             target_object="Supplier", target_field=tgt,
             client_id=nid, is_global=False, source_erp=m.get("source_erp"),
             rule_config={"oracle_page": m.get("sheet") or "", "note": m.get("note") or ""},
-            captured_from=src_label,
+            captured_from=src_label, effective_date=_eff,
         ).insert()
         seeded += 1
     return {"seeded": seeded, "already_present": kept, "left_retired": retired,

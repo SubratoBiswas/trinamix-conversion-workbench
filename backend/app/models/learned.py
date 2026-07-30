@@ -25,6 +25,16 @@ class LearnedMapping(Document):
     captured_from: Optional[str] = None
     captured_by: Optional[str] = None
     captured_at: datetime = Field(default_factory=datetime.utcnow)
+    # WHEN THE INSTRUCTION WAS GIVEN, which is not when the row was written.
+    #
+    # Analyst, 30-Jul: "for conflicts always the latest one should be taken for
+    # mapping". captured_at cannot answer that: every startup seed stamps itself
+    # with utcnow, so a redeploy would make the 13-Jul strategy look newer than the
+    # 30-Jul corrections and the ordering would flip on a restart. Seeded rows
+    # therefore carry the _effective_date of the FILE they came from; rows captured
+    # from an analyst's own action in the UI leave this null and fall back to
+    # captured_at, which for them IS the moment the instruction was given.
+    effective_date: Optional[datetime] = None
     confidence_boost: float = 0.26
     records_auto_fixed: int = 0
     times_reused: int = 0

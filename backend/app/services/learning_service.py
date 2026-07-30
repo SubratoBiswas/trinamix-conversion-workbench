@@ -502,6 +502,32 @@ async def propagate_learning_to_open_conversions(
             "captured_by": captured_by}
 
 
+def _effective_of(lm) -> datetime:
+    """When this learning's INSTRUCTION was given.
+
+    Analyst, 30-Jul: "for conflicts always the latest one should be taken". Falls
+    back to captured_at, which for a UI capture is the moment the analyst acted;
+    seeded rows carry the effective date of the file they came from, so a redeploy
+    cannot make the 13-Jul strategy look newer than the 30-Jul corrections.
+    """
+    return (getattr(lm, "effective_date", None)
+            or getattr(lm, "captured_at", None)
+            or datetime.min)
+
+
+def _candidate_order(lm, strong: set) -> tuple:
+    """Sort key for competing learnings: LATEST FIRST, then strength.
+
+    Date leads because the analyst said so, and because a gold example captured
+    weeks ago was beating the mapping workbook they had just handed over — which
+    is exactly the "why is the tool still following gold learnings" report. A
+    transform still beats a plain alias, but only among instructions given on the
+    same day: strength is a tie-break, not the primary rule.
+    """
+    return (-_effective_of(lm).timestamp(),
+            0 if (getattr(lm, "rule_type", "") or "").upper() in strong else 1)
+
+
 def _norm_field(s) -> str:
     """Oracle decorates headers with '*' and stray spaces; the library stores the
     plain name. Matching on the raw string silently misses every required field."""
@@ -732,7 +758,7 @@ async def apply_learned_to_conversion(
         "REPLACE", "REMOVE_SPECIAL_CHARS", "MAP_BOOLEAN", "CONDITIONAL_DATE",
     }
     for _lst in by_target.values():
-        _lst.sort(key=lambda lm: 0 if (lm.rule_type or "").upper() in _STRONG_TRANSFORMS else 1)
+        _lst.sort(key=lambda lm: _candidate_order(lm, _STRONG_TRANSFORMS))
     # Oracle decorates required/conditional headers with asterisks and stray spaces
     # ("Supplier Name*", "Address Name *", "*Supplier Number", "**Bank Name"), and the
     # analyst mapping docs write the plain name ("Supplier Name"). Matching the learned
@@ -762,7 +788,7 @@ async def apply_learned_to_conversion(
         if k:
             by_target_norm.setdefault(k, []).extend(_lst)
     for _lst in by_target_norm.values():
-        _lst.sort(key=lambda lm: 0 if (lm.rule_type or "").upper() in _STRONG_TRANSFORMS else 1)
+        _lst.sort(key=lambda lm: _candidate_order(lm, _STRONG_TRANSFORMS))
     _suppressed_norm = {_normalize(t) for t in suppressed_targets if _normalize(t)}
     # Precedence: an explicit source→target mapping (analyst doc / transform /
     # steering) OUTRANKS an old gold "leave this blank" suppression for the same
@@ -908,8 +934,10 @@ async def apply_learned_to_conversion(
         "kind": "example_default", "target_object": business_object, **_scope
     }).to_list()
     if defaults:
+        # Latest instruction wins here too — first-come was letting an older gold
+        # default hold a field the analyst had since re-specified.
         by_default: dict[str, LearnedMapping] = {}
-        for lm in defaults:
+        for lm in sorted(defaults, key=_effective_of, reverse=True):
             if lm.target_field:
                 by_default.setdefault(lm.target_field, lm)
         # Same asterisk problem as the column pass: a default authored as
