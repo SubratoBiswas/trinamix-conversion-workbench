@@ -240,6 +240,22 @@ def referenced_columns(target_object: str | None) -> set[str]:
     return {c for c in cols if str(c or "").strip()}
 
 
+def rule_configs_of_type(target_object: str | None, rule_type: str) -> list[dict]:
+    """Overlay rule configs of one type for this object — the generator needs them
+    to build whatever index that rule reads."""
+    rules = _load().get(_n(target_object), {})
+    merged: dict = {}
+    for k in _prefix_hits(target_object):
+        merged.update((_wild_cache or {}).get(k, {}))
+    merged.update(rules)
+    out = []
+    for d in merged.values():
+        r = d.get("rule") or {}
+        if (r.get("rule_type") or "").upper() == rule_type.upper():
+            out.append(r.get("config") or {})
+    return out
+
+
 def self_lookup_configs(target_object: str | None) -> list[dict]:
     """SELF_LOOKUP configs this object's overlay contributes, so the generator can
     build the row index they need. Parent Supplier is the only one today."""

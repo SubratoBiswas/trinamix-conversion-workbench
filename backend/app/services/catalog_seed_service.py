@@ -512,8 +512,37 @@ async def seed_supplier_corrections_30jul() -> dict:
         logger.info("30-Jul blank corrections enforced over %d conversions: %s",
                     scanned, enforced)
 
+    # Rule corrections reach the conversions that already exist too. Seeding the
+    # learning covers NEW conversions and the write-time overlay covers the file,
+    # but the mapping rows of existing conversions kept whatever the matcher had
+    # guessed — so the analyst opened one, saw the old derivation on screen, and had
+    # no reason to believe the file said anything different.
+    from app.services.learning_service import apply_rule_corrections
+    rule_rows = []
+    for r in doc.get("rules", []):
+        if (r.get("action") or "").strip() != "rule" or not r.get("rule_type"):
+            continue
+        fld = (r.get("target_field") or "").strip()
+        objs = [(r.get("target_object") or "").strip()]
+        if r.get("applies_to_all_sheets"):
+            objs = await _sheet_objects_for(objs[0])
+        rule_rows += [(o, fld, r["rule_type"], r.get("rule_config") or {})
+                      for o in objs if o]
+    rules_applied: list[dict] = []
+    try:
+        _rr = await apply_rule_corrections(
+            rule_rows, client_id=nid, captured_from=src,
+            as_of=_effective_date_of(doc))
+        rules_applied = [f for f in _rr["fields"]
+                         if f["mappings_updated"] or f["skipped_human"]]
+    except Exception:  # noqa: BLE001 — never block startup on the sweep
+        logger.exception("applying the 30-Jul rule corrections failed")
+    if rules_applied:
+        logger.info("30-Jul rule corrections applied: %s", rules_applied)
+
     return {"seeded": seeded, "updated": updated, "left_retired": retired,
             "blank_enforcement": enforced,
+            "rule_corrections": rules_applied,
             "protected_values": doc.get("protected_values", []),
             "open_questions": doc.get("_open_questions", [])}
 

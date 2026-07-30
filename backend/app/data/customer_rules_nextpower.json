@@ -15,8 +15,14 @@
       "description": "Account Established Date takes StartDate, falling back to datecreated when StartDate is blank.",
       "rule_type": "COALESCE",
       "rule_config": {
-        "columns": ["StartDate", "Start Date", "startdate",
-                    "datecreated", "DateCreated", "Date Created"],
+        "columns": [
+          "StartDate",
+          "Start Date",
+          "startdate",
+          "datecreated",
+          "DateCreated",
+          "Date Created"
+        ],
         "default": ""
       }
     },
@@ -27,9 +33,21 @@
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Email Address", "op": "notblank", "then": "EMAIL"},
-          {"if_column": "Email", "op": "notblank", "then": "EMAIL"},
-          {"if_column": "email", "op": "notblank", "then": "EMAIL"}
+          {
+            "if_column": "Email Address",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "Email",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "email",
+            "op": "notblank",
+            "then": "EMAIL"
+          }
         ],
         "default": "PHONE"
       }
@@ -41,12 +59,36 @@
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Mobile Phone", "op": "notblank", "then": "MOBILE"},
-          {"if_column": "MobilePhone", "op": "notblank", "then": "MOBILE"},
-          {"if_column": "mobilephone", "op": "notblank", "then": "MOBILE"},
-          {"if_column": "Fax", "op": "notblank", "then": "FAX"},
-          {"if_column": "fax", "op": "notblank", "then": "FAX"},
-          {"if_column": "Fax Number", "op": "notblank", "then": "FAX"}
+          {
+            "if_column": "Mobile Phone",
+            "op": "notblank",
+            "then": "MOBILE"
+          },
+          {
+            "if_column": "MobilePhone",
+            "op": "notblank",
+            "then": "MOBILE"
+          },
+          {
+            "if_column": "mobilephone",
+            "op": "notblank",
+            "then": "MOBILE"
+          },
+          {
+            "if_column": "Fax",
+            "op": "notblank",
+            "then": "FAX"
+          },
+          {
+            "if_column": "fax",
+            "op": "notblank",
+            "then": "FAX"
+          },
+          {
+            "if_column": "Fax Number",
+            "op": "notblank",
+            "then": "FAX"
+          }
         ],
         "default": ""
       },
@@ -59,12 +101,36 @@
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Default Billing", "op": "notblank", "then": "BILL_TO"},
-          {"if_column": "DefaultBilling", "op": "notblank", "then": "BILL_TO"},
-          {"if_column": "defaultbilling", "op": "notblank", "then": "BILL_TO"},
-          {"if_column": "DefaultShipping", "op": "notblank", "then": "SHIP_TO"},
-          {"if_column": "Default Shipping", "op": "notblank", "then": "SHIP_TO"},
-          {"if_column": "defaultshipping", "op": "notblank", "then": "SHIP_TO"}
+          {
+            "if_column": "Default Billing",
+            "op": "istrue",
+            "then": "BILL_TO"
+          },
+          {
+            "if_column": "DefaultBilling",
+            "op": "istrue",
+            "then": "BILL_TO"
+          },
+          {
+            "if_column": "defaultbilling",
+            "op": "istrue",
+            "then": "BILL_TO"
+          },
+          {
+            "if_column": "DefaultShipping",
+            "op": "istrue",
+            "then": "SHIP_TO"
+          },
+          {
+            "if_column": "Default Shipping",
+            "op": "istrue",
+            "then": "SHIP_TO"
+          },
+          {
+            "if_column": "defaultshipping",
+            "op": "istrue",
+            "then": "SHIP_TO"
+          }
         ],
         "default": ""
       },
@@ -77,7 +143,10 @@
       "rule_type": "CONCAT",
       "rule_config": {
         "separator": "_",
-        "columns": ["entityid", "address_label"]
+        "columns": [
+          "entityid",
+          "address_label"
+        ]
       },
       "_note": "CONCAT falls back to the incoming value when EVERY input is missing, rather than emitting a bare '_'. That guard exists because Supplier Site once shipped 8,561 rows of the literal '-' into a required unique key when neither input column existed."
     },
@@ -88,10 +157,26 @@
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "First Name", "op": "notblank", "then": "PERSON"},
-          {"if_column": "firstname", "op": "notblank", "then": "PERSON"},
-          {"if_column": "Last Name", "op": "notblank", "then": "PERSON"},
-          {"if_column": "lastname", "op": "notblank", "then": "PERSON"}
+          {
+            "if_column": "First Name",
+            "op": "notblank",
+            "then": "PERSON"
+          },
+          {
+            "if_column": "firstname",
+            "op": "notblank",
+            "then": "PERSON"
+          },
+          {
+            "if_column": "Last Name",
+            "op": "notblank",
+            "then": "PERSON"
+          },
+          {
+            "if_column": "lastname",
+            "op": "notblank",
+            "then": "PERSON"
+          }
         ],
         "default": "ORGANIZATION"
       }
@@ -103,10 +188,26 @@
       "rule_type": "SUFFIX_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Default Billing", "op": "notblank", "suffix": "_b"},
-          {"if_column": "DefaultBilling", "op": "notblank", "suffix": "_b"},
-          {"if_column": "DefaultShipping", "op": "notblank", "suffix": "_s"},
-          {"if_column": "Default Shipping", "op": "notblank", "suffix": "_s"}
+          {
+            "if_column": "Default Billing",
+            "op": "istrue",
+            "suffix": "_b"
+          },
+          {
+            "if_column": "DefaultBilling",
+            "op": "istrue",
+            "suffix": "_b"
+          },
+          {
+            "if_column": "DefaultShipping",
+            "op": "istrue",
+            "suffix": "_s"
+          },
+          {
+            "if_column": "Default Shipping",
+            "op": "istrue",
+            "suffix": "_s"
+          }
         ],
         "default_suffix": "",
         "skip_blank": true,
@@ -120,10 +221,26 @@
       "rule_type": "SUFFIX_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Default Billing", "op": "notblank", "suffix": "_b"},
-          {"if_column": "DefaultBilling", "op": "notblank", "suffix": "_b"},
-          {"if_column": "DefaultShipping", "op": "notblank", "suffix": "_s"},
-          {"if_column": "Default Shipping", "op": "notblank", "suffix": "_s"}
+          {
+            "if_column": "Default Billing",
+            "op": "istrue",
+            "suffix": "_b"
+          },
+          {
+            "if_column": "DefaultBilling",
+            "op": "istrue",
+            "suffix": "_b"
+          },
+          {
+            "if_column": "DefaultShipping",
+            "op": "istrue",
+            "suffix": "_s"
+          },
+          {
+            "if_column": "Default Shipping",
+            "op": "istrue",
+            "suffix": "_s"
+          }
         ],
         "default_suffix": "",
         "skip_blank": true,
@@ -137,10 +254,26 @@
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Default Billing", "op": "notblank", "then": "BILL_TO"},
-          {"if_column": "DefaultBilling", "op": "notblank", "then": "BILL_TO"},
-          {"if_column": "DefaultShipping", "op": "notblank", "then": "SHIP_TO"},
-          {"if_column": "Default Shipping", "op": "notblank", "then": "SHIP_TO"}
+          {
+            "if_column": "Default Billing",
+            "op": "istrue",
+            "then": "BILL_TO"
+          },
+          {
+            "if_column": "DefaultBilling",
+            "op": "istrue",
+            "then": "BILL_TO"
+          },
+          {
+            "if_column": "DefaultShipping",
+            "op": "istrue",
+            "then": "SHIP_TO"
+          },
+          {
+            "if_column": "Default Shipping",
+            "op": "istrue",
+            "then": "SHIP_TO"
+          }
         ],
         "default": ""
       }
@@ -166,5 +299,8 @@
       },
       "_note": "Reads Party Type, which CW #22 above derives — so #22 must be applied before this. See _open_questions on the differing key widths and on section 10.6."
     }
-  ]
+  ],
+  "_notes": {
+    "boolean_flags": "Default Billing / Default Shipping are NetSuite T/F flags, so they are read with istrue, not notblank. The analyst's own wording is 'If default billing has value as T' - a value test, not a presence test. Read with notblank, an 'F' counts as set and every address becomes BILL_TO. This is the same defect that made Tax Organization Type INDIVIDUAL on 7,422 of 7,495 suppliers, found by the sweep in test_boolean_conditions rather than by another wrong file. Email / Phone / Fax / First Name / Last Name stay on notblank: those ARE presence checks."
+  }
 }

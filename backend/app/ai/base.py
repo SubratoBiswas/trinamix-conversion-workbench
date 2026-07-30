@@ -30,6 +30,11 @@ class TargetField:
     allowed_values: list[dict] = field(default_factory=list)
     lookup_type: str | None = None
     default_if_blank: str | None = None
+    # Which interface sheet this field lives on. Oracle repeats a field across
+    # sheets — Customer has 19, Item 17 — and the greedy matcher consumed a source
+    # column template-wide, so Item Number could be mapped on ONE sheet and was
+    # then unavailable for the other sixteen. See RuleBasedMapper.suggest_mappings.
+    sheet_id: str | None = None
 
 
 @dataclass

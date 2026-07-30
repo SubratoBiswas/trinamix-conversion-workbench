@@ -58,6 +58,7 @@ async def _target_fields_for(template: FBDITemplate) -> list[TargetField]:
             allowed_values=getattr(f, "allowed_values", None) or [],
             lookup_type=getattr(f, "lookup_type", None),
             default_if_blank=getattr(f, "default_if_blank", None),
+            sheet_id=str(getattr(f, "sheet_id", "") or ""),
         )
         for f in fields
     ]

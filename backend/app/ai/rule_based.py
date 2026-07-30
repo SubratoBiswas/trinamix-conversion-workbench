@@ -597,13 +597,34 @@ class RuleBasedMapper:
         target_fields: list[TargetField],
     ) -> list[MappingSuggestion]:
         suggestions: list[MappingSuggestion] = []
-        used_sources: set[str] = set()
+        # One source column may be used once PER INTERFACE SHEET, not once per
+        # template.
+        #
+        # This was the single biggest cause of "no confident match found", and it
+        # was structural rather than a scoring weakness. `used_sources` was one set
+        # for the whole call, and the whole call is every field of every sheet:
+        # 1,365 for Item across 17 sheets, 1,250 for Customer across 19. With a few
+        # hundred source columns, the number of targets that could EVER be mapped
+        # was capped at the number of source columns — the analyst measured 1,256 of
+        # 1,365 unmatched, which is close to exactly that arithmetic.
+        #
+        # Worse than the count: Oracle REQUIRES the same key on every sheet. Item
+        # Number is on all 17; the matcher spent the source on the first and left
+        # the other sixteen empty. That is also what the analyst filed separately as
+        # "id should be mapped ... in all sheets, except ..." — the same defect seen
+        # from the other end.
+        #
+        # Scoping per sheet keeps the property the rule exists for (within one
+        # sheet, one column should not be smeared across several unrelated fields)
+        # and drops the one it never intended.
+        used_by_sheet: dict[str, set[str]] = {}
 
         # Score every (target, source) pair, pick the best per target greedily —
         # required fields first so they get first dibs on good candidates.
         sorted_targets = sorted(target_fields, key=lambda t: (not t.required, t.field_name))
 
         for tgt in sorted_targets:
+            used_sources = used_by_sheet.setdefault(getattr(tgt, "sheet_id", "") or "", set())
             tgt_tokens = _tokenize(tgt.field_name)
             tgt_desc_tokens = _tokenize(tgt.description or "")
             best: tuple[float, SourceColumn | None, list[str]] = (0.0, None, [])

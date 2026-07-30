@@ -86,6 +86,8 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
             for br in cfg.get("branches") or []:
                 if br.get("if_column"):
                     cols.add(br["if_column"])
+        elif rt == "CITY_COUNTRY_KEY":
+            cols.update(c for c in (cfg.get("country_column"), cfg.get("city_column")) if c)
         elif rt == "SELF_LOOKUP":
             # Parent Supplier reads THREE source columns and owns none of them, so
             # every one has to survive pruning: the key it looks up by, the column
@@ -105,6 +107,59 @@ def _self_lookup_configs(pipelines: dict, target_object: str | None) -> list[dic
     try:
         from app.services.strategy_overlay import self_lookup_configs
         out.extend(self_lookup_configs(target_object))
+    except Exception:                                           # noqa: BLE001
+        pass
+    return out
+
+
+def _build_city_country_index(src: pd.DataFrame, configs: list[dict]) -> dict:
+    """``{normalised city: ISO2}`` learned from the extract's OWN rows.
+
+    Where a row has no country code, the rest of the file usually knows: 6,196 of
+    the 7,495 NetSuite rows carry both a code and a city. Building the index from
+    the data beats any bundled table, needs no model, and cannot be stale.
+
+    Majority wins on ambiguity, and ambiguity is real — "New York" appears against
+    US 48 times and CN once, "San Jose" against US 109 times and CR once. Taking
+    the majority is right far more often than taking the first row encountered,
+    which is what any incidental ordering would have given.
+    """
+    if src is None or not configs or not len(src.columns):
+        return {}
+    by_norm = {}
+    for c in src.columns:
+        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
+
+    def _col(name):
+        return by_norm.get(re.sub(r"[^a-z0-9]", "", str(name or "").lower()))
+
+    tally: dict[str, dict[str, int]] = {}
+    for cfg in configs:
+        cc_col, city_col = _col(cfg.get("country_column")), _col(cfg.get("city_column"))
+        if cc_col is None or city_col is None:
+            continue
+        for cc, city in zip(src[cc_col].tolist(), src[city_col].tolist()):
+            cc = "" if cc is None else str(cc).strip()
+            city = "" if city is None else str(city).strip()
+            if not cc or not city:
+                continue
+            key = re.sub(r"[^a-z]", "", city.lower())
+            if not key:
+                continue
+            tally.setdefault(key, {})
+            tally[key][cc] = tally[key].get(cc, 0) + 1
+    return {k: max(v.items(), key=lambda kv: kv[1])[0] for k, v in tally.items()}
+
+
+def _city_country_configs(pipelines: dict, target_object: str | None) -> list[dict]:
+    out: list[dict] = []
+    for _rules in (pipelines or {}).values():
+        for r in _rules or []:
+            if (r.get("rule_type") or "").upper() == "CITY_COUNTRY_KEY":
+                out.append(r.get("config") or {})
+    try:
+        from app.services.strategy_overlay import rule_configs_of_type
+        out.extend(rule_configs_of_type(target_object, "CITY_COUNTRY_KEY"))
     except Exception:                                           # noqa: BLE001
         pass
     return out
@@ -163,7 +218,7 @@ def _build_self_index(src: pd.DataFrame, configs: list[dict]) -> dict:
 def _transform_frame(
     src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
     context_cols: set[str] | None = None, target_object: str | None = None,
-    self_index: dict | None = None,
+    self_index: dict | None = None, city_country: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -178,7 +233,7 @@ def _transform_frame(
     """
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
-    _rule_ctx = {"self_index": self_index or {}}
+    _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {}}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -502,18 +557,20 @@ async def build_converted_dataframe(
         # another chunk, so a per-chunk index would resolve some rows and not others.
         _self_idx = _build_self_index(
             src, _self_lookup_configs(pipelines, _obj_name_for_overlay))
+        _city_idx = _build_city_country_index(
+            src, _city_country_configs(pipelines, _obj_name_for_overlay))
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
                 _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx)
+                _obj_name_for_overlay, _self_idx, _city_idx)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx)
+                _obj_name_for_overlay, _self_idx, _city_idx)
             parts.append(odf)
             if not lin0:
                 lin0 = lin

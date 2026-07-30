@@ -733,6 +733,106 @@ async def enforce_blank_corrections(
     return {"fields": [v for v in results.values()], "conversions_scanned": scanned}
 
 
+async def apply_rule_corrections(
+    rules, *, client_id=None, captured_from: str = "analyst correction",
+    as_of: "datetime | None" = None,
+) -> dict:
+    """Push a DERIVATION rule onto the conversions that already exist.
+
+    Analyst, 30-Jul: "the rule for supplier site column is Country Code (2 character
+    ISO code)-(City value) can you implement this in learnings so that it comes in
+    output of existing and future".
+
+    A rule correction was only ever half-applied. It was seeded as a learning, so a
+    NEW conversion picked it up, and it was enforced by the write-time overlay, so
+    the generated file was right — but the mapping rows of conversions that already
+    existed still carried whatever the matcher had guessed. The analyst opens one of
+    those, sees the old derivation on screen, and has no reason to believe the file
+    says anything different. Blanks already got this treatment; rules did not.
+
+    ``rules`` is an iterable of ``(object, field, rule_type, rule_config)``.
+
+    Same precedence as everywhere else: a mapping a PERSON approved or overrode
+    after the correction's date is left alone and counted, not overwritten.
+    """
+    from app.models.fbdi import FBDIField
+    from app.models.output import ConvertedOutput
+    from app.services.client_service import client_id_for_conversion
+
+    wanted: dict[str, dict[str, tuple]] = {}
+    results: dict[tuple, dict] = {}
+    for obj, fld, rtype, rcfg in rules:
+        obj, fld = (obj or "").strip(), (fld or "").strip()
+        if not (obj and fld and rtype):
+            continue
+        nf = _norm_field(fld)
+        wanted.setdefault(obj, {})[nf] = (fld, rtype, rcfg or {})
+        results[(obj, nf)] = {"field": fld, "object": obj, "mappings_updated": 0,
+                              "skipped_human": 0, "stale_outputs": 0}
+    if not wanted:
+        return {"fields": [], "conversions_scanned": 0}
+
+    now = datetime.utcnow()
+    _fields_by_tpl: dict = {}
+    scanned = 0
+    for conv in await Conversion.find_all().to_list():
+        if not conv.template_id:
+            continue
+        obj = await _business_object_for(conv)
+        fields = wanted.get(obj or "")
+        if not fields:
+            continue
+        _cc = await client_id_for_conversion(conv)
+        if client_id is not None and _cc is not None and _cc != client_id:
+            continue
+        scanned += 1
+        if conv.template_id not in _fields_by_tpl:
+            _fields_by_tpl[conv.template_id] = await FBDIField.find(
+                FBDIField.template_id == conv.template_id).to_list()
+        ids = {f.id: _norm_field(f.field_name)
+               for f in _fields_by_tpl[conv.template_id]
+               if _norm_field(f.field_name) in fields}
+        if not ids:
+            continue
+        hit = False
+        for m in await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == conv.id).to_list():
+            nf = ids.get(m.target_field_id)
+            if nf is None:
+                continue
+            approver = (getattr(m, "approved_by", None) or "")
+            _human = m.status == "overridden" or (
+                m.status == "approved" and approver != "learning-engine")
+            if _human and as_of is not None:
+                _at = getattr(m, "approved_at", None)
+                _human = bool(_at) and _at >= as_of
+            if _human:
+                results[(obj, nf)]["skipped_human"] += 1
+                continue
+            label, rtype, rcfg = fields[nf]
+            _cur = getattr(m, "suggested_transformation", None) or {}
+            if (_cur.get("rule_type") == rtype
+                    and (_cur.get("config") or {}) == rcfg):
+                continue                   # already carries this rule
+            await m.set({
+                "suggested_transformation": {"rule_type": rtype, "config": rcfg},
+                "status": "approved", "review_required": 0,
+                "approved_by": "learning-engine", "approved_at": now,
+                "reason": f"Derived — {captured_from}",
+                "updated_at": now,
+            })
+            results[(obj, nf)]["mappings_updated"] += 1
+            hit = True
+        if hit:
+            res = await ConvertedOutput.find(
+                ConvertedOutput.conversion_id == conv.id).update(
+                    {"$set": {"status": "stale"}})
+            _n = int(getattr(res, "modified_count", 0) or 0)
+            for nf in set(ids.values()):
+                results[(obj, nf)]["stale_outputs"] += _n
+    return {"fields": list(results.values()), "conversions_scanned": scanned}
+
+
 async def apply_learned_to_conversion(
     conversion: Conversion, mappings: Iterable[MappingSuggestion], force: bool = False,
 ) -> int:

@@ -12,13 +12,20 @@
         "branches": [
           {
             "if_column": "Is Individual",
-            "op": "notblank",
+            "op": "istrue",
+            "then": "INDIVIDUAL"
+          },
+          {
+            "if_column": "Entity Type",
+            "op": "eq",
+            "value": "Individual",
             "then": "INDIVIDUAL"
           }
         ],
         "default": "CORPORATION"
       },
-      "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm."
+      "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm.",
+      "note": "MEASURED: read with notblank this produced INDIVIDUAL on 7,422 of the 7,495 NetSuite rows, because 'Is Individual' says 'No' on 6,985 of them and 'No' is not blank. The words 'if there is a value in that' meant 'if it says yes'. Corrected here as well as in the 30-Jul file so the two cannot disagree - the 30-Jul rule already wins by date, but leaving a known-wrong rule in place is how a coin toss gets built."
     },
     {
       "target_object": "Supplier",
@@ -147,14 +154,20 @@
       {
         "target_object": "Supplier",
         "target_field": "Tax Organization Type",
-        "note": "Sandeep 28-Jul: 'It should be corporation... there is one column in the extract, IS INDIVIDUAL. If there is a value in that, only in that case this value will change' -> Individual. Only these two values are ever valid: 'the business will not be value, only corporation or individual will be the values.' A flat CORPORATION constant loaded every individual supplier as a corporation.",
+        "note": "Sandeep 28-Jul: 'It should be corporation... there is one column in the extract, IS INDIVIDUAL. If there is a value in that, only in that case this value will change' -> Individual. Only these two values are ever valid: 'the business will not be value, only corporation or individual will be the values.' A flat CORPORATION constant loaded every individual supplier as a corporation. MEASURED: read with notblank this produced INDIVIDUAL on 7,422 of the 7,495 NetSuite rows, because 'Is Individual' says 'No' on 6,985 of them and 'No' is not blank. The words 'if there is a value in that' meant 'if it says yes'. Corrected here as well as in the 30-Jul file so the two cannot disagree - the 30-Jul rule already wins by date, but leaving a known-wrong rule in place is how a coin toss gets built.",
         "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm.",
         "rule_type": "CASE_WHEN",
         "rule_config": {
           "branches": [
             {
               "if_column": "Is Individual",
-              "op": "notblank",
+              "op": "istrue",
+              "then": "INDIVIDUAL"
+            },
+            {
+              "if_column": "Entity Type",
+              "op": "eq",
+              "value": "Individual",
               "then": "INDIVIDUAL"
             }
           ],

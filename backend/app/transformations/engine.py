@@ -29,6 +29,12 @@ def _to_str(v: Any) -> str:
     return str(v)
 
 
+# The spellings these extracts actually carry. Shared with MAP_BOOLEAN so a rule
+# written one way cannot disagree with a rule written the other.
+_TRUEISH = {"yes", "y", "1", "true", "t"}
+_FALSEISH = {"no", "n", "0", "false", "f"}
+
+
 def _is_blank(v: Any) -> bool:
     return v is None or _to_str(v).strip() == ""
 
@@ -60,6 +66,18 @@ _COMPARISON_OPS = {
     "regex": lambda a, b: re.search(_to_str(b), _to_str(a)) is not None,
     "isblank": lambda a, _b: _is_blank(a),
     "notblank": lambda a, _b: not _is_blank(a),
+    # A boolean-ish column is TRUE/FALSE, not present/absent, and reading one with
+    # `notblank` inverts the rule on almost every row. Tax Organization Type is the
+    # proof: its branch was {"if_column": "Is Individual", "op": "notblank"}, and in
+    # the NetSuite extract that column reads "No" on 6,985 of 7,495 rows and "Yes" on
+    # 437. "No" is not blank, so 7,422 suppliers — 99% of them, including "3D Hubs
+    # Manufacturing LLC" and "A.B Boyd Co" — were loaded as INDIVIDUAL, and only the
+    # 73 rows where the column was EMPTY came out CORPORATION. Exactly backwards.
+    #
+    # Comparison is trimmed and case-insensitive, and the vocabulary is the one
+    # MAP_BOOLEAN already uses, so the two cannot disagree about what "Y" means.
+    "istrue": lambda a, _b: _to_str(a).strip().lower() in _TRUEISH,
+    "isfalse": lambda a, _b: _to_str(a).strip().lower() in _FALSEISH,
 }
 
 
@@ -236,6 +254,18 @@ def apply_rule(
         # misconfiguration visible instead of manufacturing a bad key.
         if not any(p.strip() for p in parts):
             return value
+        # A HALF key is a wrong key, not a partial one. Supplier Site is
+        # "Country Code-City", and City is empty on 1,299 of the 7,495 NetSuite
+        # rows — joining regardless emits "US-", a required unique key that is both
+        # invalid and duplicated 1,299 times. `require_all` blanks it instead, so
+        # the gap shows up in the required-field report as the data problem it is
+        # rather than as a value that looks filled in.
+        # `omit_blank` is the softer option: join only the parts that have content.
+        if cfg.get("require_all") and not all(p.strip() for p in parts):
+            return ""
+        if cfg.get("omit_blank"):
+            kept = [p for p in parts if p.strip()]
+            return sep.join(kept)
         return sep.join(parts)
 
     if rt == "SPLIT":
@@ -355,8 +385,8 @@ def apply_rule(
         if s == "":
             return cfg.get("default", "")
         low = s.lower()
-        trues = [str(x).strip().lower() for x in (cfg.get("true_values") or ["yes", "y", "1", "true"])]
-        falses = [str(x).strip().lower() for x in (cfg.get("false_values") or ["no", "n", "0", "false"])]
+        trues = [str(x).strip().lower() for x in (cfg.get("true_values") or sorted(_TRUEISH))]
+        falses = [str(x).strip().lower() for x in (cfg.get("false_values") or sorted(_FALSEISH))]
         if low in trues:
             return cfg.get("true_output", "Y")
         if low in falses:
@@ -491,6 +521,46 @@ def apply_rule(
         if cfg.get("skip_if_present", True) and s.endswith(suf):
             return s
         return s + suf
+
+    if rt == "CITY_COUNTRY_KEY":
+        # Supplier Site: a 2-character ISO country code, a hyphen, and the city.
+        #   {"country_column": "Country Code", "city_column": "City",
+        #    "separator": "-", "resolve_country_from_city": true}
+        #
+        # Analyst, 30-Jul: "if no city, keep just the country code, if no country
+        # code but there is city, just mention city" and then "if no country code,
+        # fill in country code based on the city".
+        #
+        # So this is a join with two asymmetric fallbacks, which is why it is a rule
+        # type rather than a CONCAT flag: CONCAT can drop a blank part, but it
+        # cannot go and FIND the missing one.
+        #
+        # The country is resolved, in order:
+        #   1. the row's own country column;
+        #   2. the city -> code index built from the rest of THIS extract, which is
+        #      free, needs no model, and is the best possible evidence — the file
+        #      already says which country its own cities are in. Ambiguous cities
+        #      (New York appears as US 48 times and CN once) take the majority;
+        #   3. whatever the index was seeded with from a prior AI resolution.
+        # If none of them answers, the city alone is the key, which is the analyst's
+        # stated fallback and is never worse than a dangling separator.
+        sep = cfg.get("separator", "-")
+        row = row or {}
+        cc = _to_str(row.get(cfg.get("country_column") or "", "")).strip()
+        city = _to_str(row.get(cfg.get("city_column") or "", "")).strip()
+        if not cc and city and cfg.get("resolve_country_from_city"):
+            idx = (ctx or {}).get("city_country") or {}
+            cc = idx.get(re.sub(r"[^a-z]", "", city.lower()), "")
+        parts = [p for p in (cc, city) if p]
+        if not parts:
+            # Neither column had anything — which is ALSO what it looks like when
+            # the rule is pointed at columns this extract does not have. Falling
+            # back to the incoming value keeps that misconfiguration visible
+            # instead of silently blanking a column something else had populated.
+            # 8,561 rows once shipped a literal "-" into this required unique key
+            # for exactly that reason; the guard is kept, not lost in the rewrite.
+            return value
+        return sep.join(parts)
 
     if rt == "SELF_LOOKUP":
         # Supplier correction 30-Jul: "for Parent Supplier — get the Parent Vendor Id
