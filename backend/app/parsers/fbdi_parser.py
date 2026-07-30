@@ -4,13 +4,21 @@
    fields span columns B onwards.
 2. Standard tabular format: row 1 has field names as column headers from col A onwards,
    prefix "* " marks required fields.
+
+Both are then enriched from the template's HEADER-CELL COMMENTS, where Oracle states
+the database rule for each column ("BATCH_ID / NOT NULL / NUMBER (18)"). That matters
+most for format 2: it has no Data Type row at all, so before this the type was guessed
+from whether one sample row held a number and max_length / format_mask / allowed_values
+stayed empty — leaving the validation engine with almost nothing to check. See
+services/template_comments.py.
 """
 from __future__ import annotations
 import re
 from pathlib import Path
-from openpyxl import load_workbook
+from app.parsers.xlsx_repair import load_workbook_tolerant
 
 from app.services.lov_service import enrich_field
+from app.services.template_comments import apply_to_field, constraints_by_sheet
 
 _DATA_TYPE_RE = re.compile(r"^\s*([A-Za-z]+)\s*(?:\(\s*(\d+)(?:\s*,\s*\d+)?\s*\))?", re.IGNORECASE)
 
@@ -52,9 +60,54 @@ def _nonempty_count(row) -> int:
     return sum(1 for v in row if v is not None and str(v).strip() != "")
 
 
+def _norm_sheet(name) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def _interface_sheets(sheet_names: list[str]) -> list[str]:
+    """Drop the macro's CamelCase shadow copies of an interface sheet.
+
+    Oracle's Supplier Bank workbook ships six sheets: ``IBY_TEMP_EXT_PAYEES`` and
+    also ``IbyTempExtPayees``, and so on. The second set is what the workbook's own
+    macro writes into when it builds the CSV — the same table under a different
+    spelling, not an extra interface. Importing both created 59 phantom target fields
+    that duplicate real ones under names no source column will ever match, which
+    makes every coverage number look worse and gives the analyst two rows to map for
+    one column.
+
+    Keep the Oracle interface-table spelling (UPPER_SNAKE); if neither looks like
+    one, keep whichever came first so behaviour is stable.
+    """
+    by_key: dict[str, str] = {}
+    for name in sheet_names:
+        key = _norm_sheet(name)
+        if not key:
+            continue
+        kept = by_key.get(key)
+        if kept is None:
+            by_key[key] = name
+            continue
+        def _is_table(s: str) -> bool:
+            s = str(s).strip()
+            return "_" in s and s.upper() == s
+        if _is_table(name) and not _is_table(kept):
+            by_key[key] = name
+    return [n for n in sheet_names if by_key.get(_norm_sheet(n)) == n]
+
+
 def parse_fbdi_template(file_path):
     file_path = Path(file_path)
-    wb = load_workbook(filename=file_path, data_only=True, read_only=True)
+    # Tolerant open: Oracle's own SupplierSiteImportTemplate.xlsm carries one
+    # out-of-spec <family val="34"/>, and plain openpyxl refuses the whole workbook
+    # over it — so uploading a template the analyst actually has failed outright.
+    wb = load_workbook_tolerant(file_path, data_only=True, read_only=True)
+
+    # Oracle's per-column rules, read straight from the OOXML comment parts.
+    # ``read_only=True`` above discards comments, and dropping it to reach a few
+    # hundred strings in a 20-sheet workbook is slow enough to matter on a small
+    # instance — so this is a separate, cheap pass. {} when the template has no
+    # comments (the bundled Item workbook has none), which changes nothing.
+    comments = constraints_by_sheet(str(file_path))
 
     business_object = None
     description = None
@@ -76,10 +129,12 @@ def parse_fbdi_template(file_path):
     fields_out = []
     seq = 0
 
-    for sname in wb.sheetnames:
+    for sname in _interface_sheets(list(wb.sheetnames)):
         if "instruction" in sname.lower():
             continue
         ws = wb[sname]
+        # This sheet's mined constraints, keyed by 1-based column index.
+        sheet_cons = comments.get(sname) or {}
 
         # Use iter_rows to avoid max_row/max_col returning None on some openpyxl versions
         all_rows = _read_sheet_rows(ws)
@@ -138,7 +193,7 @@ def parse_fbdi_template(file_path):
                 # means "no") right in the description — mine it rather than
                 # letting an AI guess what belongs in a NUMBER column later.
                 lov = enrich_field(field_name, desc_text)
-                fields_out.append({
+                fields_out.append(apply_to_field({
                     "field_name": field_name,
                     # keep the raw header (with Oracle's '*' required marker) so
                     # generated output can reproduce the exact template header.
@@ -156,7 +211,7 @@ def parse_fbdi_template(file_path):
                     "sequence": seq,
                     "sheet_name": sname,
                     "required_modules": req_modules,
-                })
+                }, sheet_cons.get(col)))
 
         else:
             # Standard tabular, but the header row isn't always row 1. Real Oracle
@@ -191,13 +246,18 @@ def parse_fbdi_template(file_path):
                     continue
                 sample_val = sample_row[col_idx] if col_idx < len(sample_row) else None
                 sample_text = str(sample_val).strip() if sample_val is not None else None
+                # A LAST-RESORT type guess only. One sample row holding a number is
+                # weak evidence and was actively harmful: a VARCHAR2(30) column of
+                # numeric-looking ids became "Number" and every value then failed a
+                # numeric check it should never have faced. The header comment
+                # overrides this whenever Oracle stated the type (97% of columns).
                 if isinstance(sample_val, (int, float)):
                     data_type, max_length = "Number", None
                 else:
                     data_type, max_length = "Character", None
                 seq += 1
                 sheet_field_count += 1
-                fields_out.append({
+                fields_out.append(apply_to_field({
                     "field_name": field_name,
                     # keep the raw header (with Oracle's '*' required marker) so
                     # generated output can reproduce the exact template header.
@@ -213,7 +273,7 @@ def parse_fbdi_template(file_path):
                     "sequence": seq,
                     "sheet_name": sname,
                     "required_modules": [],
-                })
+                }, sheet_cons.get(col_idx + 1)))
 
         sheets_out.append({"sheet_name": sname, "sequence": len(sheets_out), "field_count": sheet_field_count})
 

@@ -15,6 +15,8 @@ import type {
   CleansingProfile,
   CleansingProfileInfo,
   CleansingVerdict,
+  ColumnRuleFinding,
+  ColumnRulesReport,
   Conversion,
   DecisionInput,
   DuplicateCandidates,
@@ -119,6 +121,11 @@ export const OutputPreviewPage: React.FC = () => {
   // In-flight edits to a preview row's "After" value, keyed field|rule. Held
   // separately from the profile so typing does not fire a save per keystroke.
   const [edits, setEdits] = useState<Record<string, string>>({});
+  // Column rules Oracle publishes in its own template's header comments, checked
+  // against the built output. Lazy: it builds the frames, so it is not free.
+  const [colRules, setColRules] = useState<ColumnRulesReport | null>(null);
+  const [colRulesBusy, setColRulesBusy] = useState(false);
+  const [colRulesError, setColRulesError] = useState<string | null>(null);
 
   const setBusyKey = (key: string, on: boolean) =>
     setBusy(prev => ({ ...prev, [key]: on }));
@@ -1020,6 +1027,134 @@ export const OutputPreviewPage: React.FC = () => {
     </CardBody>
   );
 
+  /** Oracle's own column rules, checked against the built output. Lazy because it
+   *  builds the sheet frames; the tab triggers it on first open. */
+  const loadColumnRules = async () => {
+    if (!id) return;
+    setColRulesBusy(true); setColRulesError(null);
+    try {
+      setColRules(await OutputApi.columnRules(id));
+    } catch (e: any) {
+      setColRulesError(e?.response?.data?.detail || e?.message || "Could not check the template's column rules.");
+    } finally {
+      setColRulesBusy(false);
+    }
+  };
+
+  const RULE_LABEL: Record<string, string> = {
+    mandatory: "Mandatory (blank)",
+    max_length: "Too long",
+    numeric: "Not numeric",
+    precision: "Too many digits",
+    scale: "Too many decimals",
+    date_format: "Wrong date format",
+    value_set: "Not an accepted value",
+    do_not_populate: "Oracle says leave blank",
+  };
+
+  /** What the template says about this column, in Oracle's own vocabulary, so the
+   *  analyst can check the finding against the tooltip in the workbook. */
+  const ruleSpec = (f: ColumnRuleFinding): string => {
+    if (f.rule === "max_length") return `VARCHAR2(${f.limit})`;
+    if (f.rule === "precision" || f.rule === "scale")
+      return `NUMBER(${f.precision ?? "?"}${f.scale != null ? "," + f.scale : ""})`;
+    if (f.rule === "date_format") return f.format_mask || "YYYY/MM/DD";
+    if (f.rule === "value_set") return (f.allowed_values || []).slice(0, 6).join(" / ");
+    if (f.rule === "mandatory") return "NOT NULL";
+    if (f.rule === "do_not_populate") return "not used";
+    return "";
+  };
+
+  const renderColumnRules = () => (
+    <div className="mb-4 rounded-lg border border-line bg-canvas p-3">
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-xs font-medium text-ink">Column rules from the Oracle template</p>
+          <p className="mt-0.5 max-w-2xl text-[11px] text-ink-muted">
+            Oracle states the rule for every column in the comment on its header cell —
+            {" "}<span className="font-mono">BATCH_ID / NOT NULL / NUMBER (18)</span>. These are
+            read from the template itself, not inferred, and checked against the data that
+            will actually ship. A mandatory column with no value stops generation; the rest
+            are reported here.
+          </p>
+        </div>
+        <Button variant="secondary" loading={colRulesBusy} onClick={() => void loadColumnRules()}>
+          <Sparkles className="h-4 w-4" /> {colRules ? "Re-check" : "Check column rules"}
+        </Button>
+      </div>
+
+      {colRulesError && (
+        <p className="text-[11px] text-danger">{colRulesError}</p>
+      )}
+
+      {colRules && (
+        <>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Pill tone={colRules.blocked ? "danger" : colRules.error_count ? "warning" : "success"}>
+              {colRules.message}
+            </Pill>
+            {colRules.by_rule.map(r => (
+              <Pill key={r.rule} tone="neutral">{RULE_LABEL[r.rule] ?? r.rule}: {r.count}</Pill>
+            ))}
+          </div>
+
+          {colRules.findings.length === 0 ? (
+            <p className="text-[11px] text-ink-muted">
+              Nothing in the output violates a published column rule.
+            </p>
+          ) : (
+            <div className="max-h-80 overflow-auto rounded-md border border-line bg-white">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-canvas text-left text-[10px] uppercase tracking-wider text-ink-muted">
+                  <tr>
+                    <th className="px-2 py-1.5">Column</th>
+                    <th className="px-2 py-1.5">Oracle column</th>
+                    <th className="px-2 py-1.5">Rule</th>
+                    <th className="px-2 py-1.5">Template says</th>
+                    <th className="px-2 py-1.5 text-right">Rows</th>
+                    <th className="px-2 py-1.5">Example</th>
+                    <th className="px-2 py-1.5">What to do</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {colRules.findings.map((f, i) => (
+                    <tr key={`${f.sheet}-${f.field}-${f.rule}-${i}`} className="border-t border-line/60">
+                      <td className="px-2 py-1.5 font-medium text-ink">
+                        {f.field}
+                        {f.sheet && <span className="ml-1 text-ink-subtle">· {f.sheet}</span>}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-ink-muted">{f.db_column || "—"}</td>
+                      <td className="px-2 py-1.5">
+                        <Pill tone={f.blocking ? "danger" : f.severity === "error" ? "warning" : "neutral"}>
+                          {RULE_LABEL[f.rule] ?? f.rule}
+                        </Pill>
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-ink-muted">{ruleSpec(f)}</td>
+                      <td className="px-2 py-1.5 text-right font-medium text-ink">
+                        {f.count}<span className="text-ink-subtle"> / {f.rows}</span>
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-ink-muted">
+                        {f.examples.length ? f.examples[0] : "(blank)"}
+                      </td>
+                      <td className="px-2 py-1.5 text-ink-muted">{f.suggested_fix}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {colRules.columns_with_rules === 0 && (
+            <p className="mt-2 text-[11px] text-warning">
+              This template carries no header comments, so Oracle publishes nothing to check
+              against. Upload the Oracle workbook for this object to get its column rules.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   const renderCleansingRules = () => {
     if (!profile) return null;
     const active = profile.profile.families;
@@ -1226,6 +1361,7 @@ export const OutputPreviewPage: React.FC = () => {
 
   const renderCleansing = () => (
     <CardBody>
+      {renderColumnRules()}
       {renderCleansingRules()}
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <p className="max-w-2xl text-xs text-ink-muted">
@@ -1390,7 +1526,9 @@ export const OutputPreviewPage: React.FC = () => {
       <Card>
         <Tabs
           value={tab}
-          onChange={(v) => { setTab(v); if (v === "dupes" && dupes === null && !dupError) void loadDupes(false); }}
+          onChange={(v) => { setTab(v);
+            if (v === "dupes" && dupes === null && !dupError) void loadDupes(false);
+            if (v === "cleansing" && colRules === null && !colRulesError && !colRulesBusy) void loadColumnRules(); }}
           items={[
             { value: "data", label: "Converted Data", count: data?.total_rows },
             { value: "lineage", label: "Lineage", count: data ? Object.keys(data.lineage).length : 0 },

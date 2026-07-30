@@ -71,6 +71,25 @@ class FBDIField(Document):
     default_if_blank: Optional[str] = None
     sequence: int = 0
     required_modules: list[str] = Field(default_factory=list)
+    # ── Mined from the template's own header-cell comment (template_comments.py) ──
+    # Oracle publishes the database truth for every column in a comment tooltip:
+    # "BATCH_ID / NOT NULL / NUMBER (18)". The parser never read them, so on the
+    # tabular templates — which the real Oracle generation workbooks are — data_type
+    # came from whether one sample row happened to hold a number, and max_length,
+    # format_mask and allowed_values were empty. The validation engine already knew
+    # how to check length, numeric, date and value-set; it had nothing to check WITH.
+    # None of these is inferred: each is a transcription of what Oracle wrote, which
+    # is why it is safe to enforce and why comment_text is kept for audit.
+    db_column: Optional[str] = None          # e.g. BATCH_ID
+    nullable: Optional[bool] = None          # False when the comment says NOT NULL
+    precision: Optional[int] = None          # NUMBER(18) -> 18
+    scale: Optional[int] = None              # NUMBER(18,2) -> 2
+    # "This column is not used. Do not provide a value for this column." — Oracle
+    # says this on 855 of the Customer template's 1,253 columns. Populating one is
+    # worth telling the analyst about, and it is the authority for shipping it blank.
+    do_not_populate: bool = False
+    import_actions: Optional[str] = None     # "CREATE, UPDATE"
+    comment_text: Optional[str] = None       # verbatim, so a reviewer can check me
 
     class Settings:
         name = "fbdi_fields"

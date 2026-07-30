@@ -88,7 +88,13 @@ def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame
     Returns the populated workbook bytes (.xlsm preserved with macros)."""
     src_path = Path(src_path)
     keep_vba = src_path.suffix.lower() == ".xlsm"
-    wb = load_workbook(src_path, keep_vba=keep_vba)
+    # Tolerant open — Oracle ships at least one template (Supplier Site) whose
+    # stylesheet carries an out-of-spec font family, and plain openpyxl refuses the
+    # whole file over it. The repair clamps only that attribute, so the template's own
+    # formatting survives — which is the entire point of filling the real template
+    # rather than generating a fresh sheet. See parsers/xlsx_repair.py.
+    from app.parsers.xlsx_repair import load_workbook_tolerant
+    wb = load_workbook_tolerant(src_path, keep_vba=keep_vba)
     try:
         by_norm_sheet = { _norm(name): name for name in frames_by_sheet }
         for ws_name in wb.sheetnames:

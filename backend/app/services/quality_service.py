@@ -71,7 +71,12 @@ async def run_validation(conversion: Conversion) -> list[ValidationIssue]:
     target_meta = [
         {"field_name": f.field_name, "required": bool(f.required), "data_type": f.data_type,
          "max_length": f.max_length, "format_mask": f.format_mask,
-         "allowed_values": getattr(f, "allowed_values", None) or []}
+         "allowed_values": getattr(f, "allowed_values", None) or [],
+         # Mined from the template's own header comments — template_comments.py.
+         "precision": getattr(f, "precision", None),
+         "scale": getattr(f, "scale", None),
+         "do_not_populate": bool(getattr(f, "do_not_populate", False)),
+         "db_column": getattr(f, "db_column", None)}
         for f in fields if f.field_name in df.columns
     ]
     raw_issues = run_validation_checks(converted_rows, target_meta)

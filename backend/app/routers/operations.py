@@ -408,6 +408,71 @@ async def required_check(
     return await run_required_check(conversion_id, max_rows=max_rows)
 
 
+@output_router.get("/{conversion_id}/column-rules")
+async def column_rules(
+    conversion_id: str,
+    max_rows: int = Query(20000, ge=100, le=200000),
+    _: User = Depends(get_current_user),
+):
+    """The built output checked against the rules Oracle states in its own template.
+
+    Oracle puts a comment on every header cell giving the database truth for that
+    column — "BATCH_ID / NOT NULL / NUMBER (18)". The parser never read them, so the
+    validation engine had a length check, a numeric check, a date check and a
+    value-set check and almost no metadata to run them on. These are transcriptions,
+    not inferences, which is why they are shown as definite findings.
+
+    Aggregated per COLUMN, not per row: 8,000 rows of "row N: too long" is a wall,
+    one row saying "412 values exceed 240 characters, longest 380, examples …" is a
+    finding somebody can act on.
+    """
+    from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate
+    from app.services import column_rules_service as cr
+    from app.services.output_service import build_sheet_frames
+    import asyncio as _aio
+
+    c = await _require_conversion(conversion_id)
+    template = await FBDITemplate.get(c.template_id) if c.template_id else None
+    if template is None:
+        return {"conversion_id": str(c.id), "target_object": c.target_object,
+                "findings": [], "sheets": [], "columns_checked": 0,
+                "columns_with_rules": 0, "error_count": 0, "warning_count": 0,
+                "blocked": False,
+                "message": "This conversion has no FBDI template bound, so there are "
+                           "no published column rules to check against."}
+    fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
+    sheets = await FBDISheet.find(FBDISheet.template_id == template.id).to_list()
+    sheet_name = {s.id: s.sheet_name for s in sheets}
+    by_sheet: dict[str, list[dict]] = {}
+    for f in fields:
+        by_sheet.setdefault(sheet_name.get(f.sheet_id) or "", []).append({
+            "field_name": f.field_name, "db_column": getattr(f, "db_column", None),
+            "required": bool(f.required), "data_type": f.data_type,
+            "max_length": f.max_length, "format_mask": f.format_mask,
+            "precision": getattr(f, "precision", None),
+            "scale": getattr(f, "scale", None),
+            "do_not_populate": bool(getattr(f, "do_not_populate", False)),
+            "allowed_values": getattr(f, "allowed_values", None) or [],
+        })
+
+    frames, merged = await build_sheet_frames(c, max_rows=max_rows)
+    if not frames:
+        frames = {name: merged for name in by_sheet} or {"": merged}
+
+    per_sheet: dict[str, dict] = {}
+    for sheet, df in frames.items():
+        flds = by_sheet.get(sheet)
+        if flds is None:
+            # Sheet-name vocabularies differ (interface table vs workbook tab), so
+            # fall back to every field rather than silently checking nothing.
+            flds = [x for v in by_sheet.values() for x in v]
+        per_sheet[sheet] = await _aio.to_thread(cr.check_frame, df, flds)
+    out = cr.summarize(per_sheet)
+    out.update({"conversion_id": str(c.id), "target_object": c.target_object,
+                "template": template.name})
+    return out
+
+
 @output_router.get("/{conversion_id}/mapping-report")
 async def mapping_report(
     conversion_id: str,

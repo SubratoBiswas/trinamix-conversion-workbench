@@ -250,7 +250,12 @@ def run_validation_checks(
                     "category": "validation",
                     "row_number": idx,
                     "field_name": fname,
-                    "issue_type": "Max Length Exceeded",
+                    # Spelled to match generate_dq's own check and its HARD_ERROR_TYPES
+                    # set. It used to read "Max Length Exceeded" while both of those
+                    # said "Exceeds Max Length", so a value too long for its column
+                    # was never counted as a hard error and never got its
+                    # plain-English explanation — two names for one thing.
+                    "issue_type": "Exceeds Max Length",
                     "severity": "error",
                     "message": f"Row {idx}: '{fname}' length {len(sval)} > max {ml}.",
                     "suggested_fix": "Truncate or shorten value.",
@@ -259,6 +264,51 @@ def run_validation_checks(
                 })
 
             nname = _norm_name(fname)
+
+            # ── Rules transcribed from the template's own header comment ──────
+            # Oracle states these in the tooltip on each header cell
+            # ("BATCH_ID / NOT NULL / NUMBER (18)"); template_comments.py mines them.
+            # NOT NULL is folded into `required` at parse time, so what remains here
+            # is precision, scale, and the explicit do-not-populate instruction.
+            if meta.get("do_not_populate"):
+                issues.append({
+                    "category": "validation", "row_number": idx, "field_name": fname,
+                    "issue_type": "Column Oracle Says Not To Populate",
+                    "severity": "warning",
+                    "message": f"Row {idx}: '{fname}' has a value, but the template says "
+                               f"this column is not used and no value should be provided.",
+                    "suggested_fix": "Mark the field Not applicable so it ships blank, or "
+                                     "confirm with the functional team that this interface "
+                                     "column really is in use.",
+                    "auto_fixable": True, "impacted_count": 1,
+                })
+
+            prec, scale = meta.get("precision"), meta.get("scale")
+            if prec and _is_numeric(sval):
+                digits = stripped.lstrip("+-").replace(",", "")
+                int_part, _, dec_part = digits.partition(".")
+                int_digits = len(int_part.lstrip("0"))
+                if int_digits > prec - (scale or 0):
+                    issues.append({
+                        "category": "validation", "row_number": idx, "field_name": fname,
+                        "issue_type": "Numeric Precision Exceeded", "severity": "error",
+                        "message": f"Row {idx}: '{fname}' = '{sval}' needs {int_digits} digits "
+                                   f"before the decimal point but the column is "
+                                   f"NUMBER({prec}{',' + str(scale) if scale else ''}).",
+                        "suggested_fix": "Oracle rejects the row. Check the source column — a "
+                                         "number this long here is usually a mis-map.",
+                        "auto_fixable": False, "impacted_count": 1,
+                    })
+                elif scale is not None and dec_part and len(dec_part.rstrip("0")) > scale:
+                    issues.append({
+                        "category": "validation", "row_number": idx, "field_name": fname,
+                        "issue_type": "Too Many Decimal Places", "severity": "warning",
+                        "message": f"Row {idx}: '{fname}' = '{sval}' has "
+                                   f"{len(dec_part.rstrip('0'))} decimal place(s); the column is "
+                                   f"NUMBER({prec},{scale}), so Oracle rounds it.",
+                        "suggested_fix": "Round at source if the rounding matters.",
+                        "auto_fixable": True, "impacted_count": 1,
+                    })
 
             if "number" in dt or "decimal" in dt or "integer" in dt:
                 if not _is_numeric(sval):

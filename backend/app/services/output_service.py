@@ -971,9 +971,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         df, _dq_fixes = await asyncio.to_thread(
             apply_cleansing, df, _cleanse_rules,
             getattr(conversion, "cleansing_profile", None))
+        # Everything the validator can check with. allowed_values, precision, scale
+        # and do_not_populate were all absent here, so the value-set check never
+        # fired at generation even for columns where Oracle publishes the codes —
+        # the engine had the check and this call site starved it of the metadata.
         _tf = [{"field_name": f.field_name, "required": bool(f.required),
                 "data_type": f.data_type, "max_length": f.max_length,
-                "format_mask": f.format_mask} for f in fields]
+                "format_mask": f.format_mask,
+                "allowed_values": getattr(f, "allowed_values", None) or [],
+                "precision": getattr(f, "precision", None),
+                "scale": getattr(f, "scale", None),
+                "do_not_populate": bool(getattr(f, "do_not_populate", False)),
+                "db_column": getattr(f, "db_column", None)} for f in fields]
         _dq_issues = await asyncio.to_thread(validate_frame, df, _tf, _val_rules, 2000)
         dq_report = build_report(_dq_issues, _dq_fixes)
     except Exception as _dq_exc:  # noqa: BLE001 — DQ is advisory; never block generation

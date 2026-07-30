@@ -4,6 +4,7 @@ import type {
   CleansingPreview,
   CleansingProfile,
   CleansingProfileInfo,
+  ColumnRulesReport,
   MappingReport,
   RequiredCheck,
   Conversion,
@@ -769,6 +770,14 @@ export const OutputApi = {
    *  and any required field with no value. */
   mappingReport: (conversionId: string) =>
     api.get<MappingReport>(`/conversions/${conversionId}/mapping-report`, {
+      timeout: 180000,
+    }).then(r => r.data),
+  /** The built output checked against the rules Oracle states in its own template's
+   *  header comments — mandatory, VARCHAR2(n), NUMBER(p[,s]), date mask, value set,
+   *  and columns Oracle says not to populate. Aggregated per COLUMN with counts and
+   *  examples so it is readable; the row-level form lives in the DQ report. */
+  columnRules: (conversionId: string) =>
+    api.get<ColumnRulesReport>(`/conversions/${conversionId}/column-rules`, {
       timeout: 180000,
     }).then(r => r.data),
   /** Which cleansing families run at generation, plus the family catalogue. */

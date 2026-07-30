@@ -58,7 +58,7 @@ _BUNDLED_BY_TABLE: dict[str, str] = {
     "pozsuppliersitesint": "3_SupplierSite_POZ_SUPPLIER_SITES_INT.xlsm",
     "pozsiteassignmentsint": "4_SupplierSiteAssignment_POZ_SITE_ASSIGNMENTS_INT.xlsm",
     "pozsupcontacts": "5_SupplierContacts_POZ_SUP_CONTACTS.xlsm",
-    "ibytempextpayees": "6_SupplierBank_IBY_TEMP_EXT_PAYEES__modifiedAS400.xlsm",
+    "ibytempextpayees": "6_SupplierBank_IBY_TEMP_EXT_PAYEES.xlsm",
     "hzimp": "CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm",
     "egpsystemitemsinterface": "ItemImport_EGP_SYSTEM_ITEMS_INTERFACE.xlsm",
     "egpstructuresint": "BOMItemStructure_EGP_STRUCTURES_INT.xlsm",

@@ -30,6 +30,9 @@ HARD_ERROR_TYPES = {
     "Negative Value Not Allowed",
     "Invalid Date Format",
     "Min Greater Than Max",
+    # Transcribed from the template's header comment: NUMBER(18) holding 19 digits is
+    # rejected by Oracle on every affected row, exactly like the checks above.
+    "Numeric Precision Exceeded",
 }
 
 
@@ -225,6 +228,23 @@ _EXPLAIN: dict[str, dict] = {
     "Pattern Mismatch": {
         "meaning": "The value doesn't match the expected format (e.g. email/phone).",
         "fix": "Correct the format or relax the pattern rule."},
+    # ── From the template's own header comments ──
+    "Numeric Precision Exceeded": {
+        "meaning": "The number needs more digits than the Oracle column holds "
+                   "(e.g. 19 digits in a NUMBER(18)); the row is rejected.",
+        "fix": "Check the source column — a number this long is usually a mis-map."},
+    "Too Many Decimal Places": {
+        "meaning": "The column's scale is smaller than the value's, so Oracle rounds it.",
+        "fix": "Round at source if the rounding is material."},
+    "Column Oracle Says Not To Populate": {
+        "meaning": "The template's own comment says this column is not used and no "
+                   "value should be provided, but the output has one.",
+        "fix": "Mark the field Not applicable so it ships blank, or confirm with the "
+               "functional team that the column really is in use."},
+    "Numeric Value In Text Field": {
+        "meaning": "A purely numeric value sits in a text field — usually a mis-mapped "
+                   "source column rather than a bad value.",
+        "fix": "Re-check which source column feeds this field."},
 }
 
 

@@ -39,7 +39,7 @@ _BUNDLED: dict[str, tuple[str, str, str]] = {
         ("Supplier Site Assignment Import", "Procurement", "Supplier Site Assignment"),
     "5_SupplierContacts_POZ_SUP_CONTACTS.xlsm":
         ("Supplier Contacts Import", "Procurement", "Supplier Contacts"),
-    "6_SupplierBank_IBY_TEMP_EXT_PAYEES__modifiedAS400.xlsm":
+    "6_SupplierBank_IBY_TEMP_EXT_PAYEES.xlsm":
         ("Supplier Bank Account Import", "Procurement", "Supplier Banks"),
     "CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm":
         ("Customer Import", "Financials / Receivables", "Customer"),

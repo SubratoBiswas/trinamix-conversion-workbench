@@ -35,7 +35,7 @@ INTERFACES = {
     "Supplier Contacts": ("5_SupplierContacts_POZ_SUP_CONTACTS.xlsm",
                           [("POZ_SUP_CONTACTS", "PozSupContactsInt"),
                            ("POZ_SUPP_CONTACT_ADDRESSES_INT", "PozSupContactAddressesInt")]),
-    "Supplier Banks": ("6_SupplierBank_IBY_TEMP_EXT_PAYEES__modifiedAS400.xlsm",
+    "Supplier Banks": ("6_SupplierBank_IBY_TEMP_EXT_PAYEES.xlsm",
                        [("IBY_TEMP_EXT_PAYEES", "IbyTempExtPayees"),
                         ("IBY_TEMP_EXT_BANK_ACCTS ", "IbyTempExtBankAccts"),
                         ("IBY_TEMP_PMT_INSTR_USES", "IbyTempPmtInstrUses")]),

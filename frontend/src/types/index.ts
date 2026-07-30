@@ -829,6 +829,57 @@ export interface MappingReport {
   };
 }
 
+/** One violated column rule, aggregated over the whole sheet.
+ *  Every rule is a transcription of the comment Oracle puts on the header cell of
+ *  its own template (e.g. "BATCH_ID / NOT NULL / NUMBER (18)"), never an inference —
+ *  which is why these are shown as definite findings rather than suggestions. */
+export interface ColumnRuleFinding {
+  sheet?: string;
+  field: string;
+  /** The Oracle interface column the rule came from, e.g. BATCH_ID. */
+  db_column?: string | null;
+  rule: "mandatory" | "max_length" | "numeric" | "precision" | "scale"
+      | "date_format" | "value_set" | "do_not_populate";
+  severity: "error" | "warning";
+  /** Rows violating this one rule, and the sheet's total row count. */
+  count: number;
+  rows: number;
+  message: string;
+  suggested_fix: string;
+  examples: string[];
+  /** Generation is refused for this one: a mandatory column with no value rejects
+   *  every affected row, so shipping the file only moves the failure to cutover. */
+  blocking: boolean;
+  limit?: number;
+  precision?: number;
+  scale?: number;
+  format_mask?: string;
+  allowed_values?: string[];
+}
+
+export interface ColumnRulesReport {
+  conversion_id?: string;
+  target_object?: string | null;
+  template?: string | null;
+  findings: ColumnRuleFinding[];
+  sheets: {
+    sheet: string; rows: number; columns_checked: number;
+    columns_with_rules: number; findings: number; blocked: boolean;
+  }[];
+  rows_checked: number;
+  columns_checked: number;
+  /** How many columns Oracle actually published a rule for. The honest denominator:
+   *  a column the template says nothing about was not "checked and clean", it was
+   *  not checkable — otherwise a template with no comments at all (the bundled Item
+   *  workbook has none) would read as fully verified. */
+  columns_with_rules: number;
+  error_count: number;
+  warning_count: number;
+  by_rule: { rule: string; count: number }[];
+  blocked: boolean;
+  message: string;
+}
+
 /** Cleansing rule families — mirrors services/cleansing_rules.FAMILIES. */
 export type CleansingFamily =
   | "whitespace_punct" | "special_chars" | "case" | "legal_suffix";
