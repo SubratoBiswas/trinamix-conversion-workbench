@@ -540,119 +540,139 @@ async def enforce_blank_correction(
     client_id=None, captured_from: str = "analyst correction",
     captured_by: str = "analyst-correction",
 ) -> dict:
-    """Make "this column ships blank" true in the LIBRARY and in the MAPPINGS.
+    """One field. Thin wrapper over the batch form — see it for the reasoning."""
+    res = await enforce_blank_corrections(
+        [(target_object, target_field)], client_id=client_id,
+        captured_from=captured_from, captured_by=captured_by)
+    return res["fields"][0] if res["fields"] else {
+        "field": target_field, "object": target_object, "learnings_retired": 0,
+        "mappings_blanked": 0, "skipped_human": 0, "conversions": 0,
+        "stale_outputs": 0}
+
+
+async def enforce_blank_corrections(
+    pairs, *, client_id=None, captured_from: str = "analyst correction",
+    captured_by: str = "analyst-correction", as_of: "datetime | None" = None,
+) -> dict:
+    """Make "these columns ship blank" true in the LIBRARY and in the MAPPINGS.
 
     Analyst, 30-Jul: "Procurement BU blank and Liability Distribution blank, modify
     the learning, the code should change the learning and mapping as I am saying
-    now" — and then "Supplier Name New blank change this in learnings and mappings".
+    now", then "Supplier Name New blank change this in learnings and mappings".
 
     Recording a suppress_field learning was never enough, and the file they sent
-    back proves it. Alongside the new suppression, the library still held the OLD
-    column_mapping that bound each field to a source column, and every existing
-    conversion still had a mapping row pointing at it. Two rows in one library
-    saying opposite things about one field is not a rule, it is a coin toss — and
-    the older row kept winning: Supplier Name New shipped the supplier name on all
-    3,872 rows, Procurement BU "Nextracker Consolidated" on 5,315, Liability
-    Distribution an account string on 1,528.
+    back proves it. Alongside the new suppression the library still held the OLD
+    bindings — Tax Reporting Name, declared blank, carried a column_mapping from a
+    gold example, a `rule` from a prior conversion AND an example_mapping, every one
+    of them pointing at Legal Name — and every existing conversion still had a
+    mapping row using them. Two rows in one library saying opposite things about one
+    field is not a rule, it is a coin toss, and the older row kept winning.
 
-    So a blank correction now does three things:
+    So a blank correction does three things:
 
-      1. RETIRES the contradicting learnings — every column_mapping and
-         example_default for this field is tombstoned, not left to compete. They
-         stay tombstoned: every seeder honours ``is_deleted``, so a reseed cannot
-         resurrect them.
+      1. RETIRES every contradicting learning — all kinds except the suppression
+         itself. Listing kinds is what let this through the first time: the sweep
+         covered column_mapping and example_default while `rule` and
+         example_mapping sailed past it.
       2. REWRITES the mapping rows in every existing conversion of the object:
          source cleared, default cleared, status not_applicable. This is what makes
          the screen agree with the file.
       3. Marks the affected outputs stale, because the file on disk still has the
          value in it.
 
-    What it will NOT touch: a mapping a PERSON approved or overrode. That is the
-    precedence the analyst set on 30-Jul ("if user modifies anything from the tool
-    UI and then approves it, it should get highest precedence"), and a seeding pass
-    silently reversing a colleague's decision is the failure this rule exists to
-    prevent. Those are counted and returned as ``skipped_human`` rather than
-    swallowed, so "nothing happened" can never be mistaken for "nothing to do".
+    It will NOT touch a mapping a PERSON approved — that is the precedence the
+    analyst set, and a seeding pass silently reversing a colleague's decision is
+    the failure this rule exists to prevent. Those are counted as ``skipped_human``
+    rather than swallowed, so "nothing happened" can never be read as "nothing to
+    do".
+
+    BATCHED over all the fields at once, and that is not a micro-optimisation. The
+    per-field version re-walked all 232 conversions for each of six blanks across
+    six sheet objects — 36 sweeps, two database round-trips per conversion each
+    time — and the on-demand reseed simply never returned. One pass over the
+    conversions, resolving each one's object and client once and caching template
+    fields, does the same work in a fraction of the calls.
     """
     from app.models.fbdi import FBDIField
     from app.models.output import ConvertedOutput
     from app.services.client_service import client_id_for_conversion
 
-    obj, fld = (target_object or "").strip(), (target_field or "").strip()
-    out = {"field": fld, "object": obj, "learnings_retired": 0,
-           "mappings_blanked": 0, "skipped_human": 0, "conversions": 0,
-           "stale_outputs": 0}
-    if not (obj and fld):
-        return out
-    nf = _norm_field(fld)
+    wanted: dict[str, dict[str, str]] = {}          # object -> {norm field: label}
+    results: dict[tuple, dict] = {}
+    for obj, fld in pairs:
+        obj, fld = (obj or "").strip(), (fld or "").strip()
+        if not (obj and fld):
+            continue
+        wanted.setdefault(obj, {})[_norm_field(fld)] = fld
+        results[(obj, _norm_field(fld))] = {
+            "field": fld, "object": obj, "learnings_retired": 0,
+            "mappings_blanked": 0, "skipped_human": 0, "conversions": 0,
+            "stale_outputs": 0}
+    if not wanted:
+        return {"fields": [], "conversions_scanned": 0}
+
     now = datetime.utcnow()
 
-    # 1 — retire the contradicting library rows.
+    # 1 — one pass over the conversions, rewriting the mapping rows.
     #
-    # EVERY kind except the suppression itself. The first version of this listed
-    # column_mapping and example_default, and the live library immediately showed
-    # why that is not enough: Tax Reporting Name is declared blank and still held a
-    # column_mapping from a gold example, a `rule` from a prior conversion AND an
-    # example_mapping, all binding it to Legal Name. A field that ships blank must
-    # have nothing in the library able to fill it — listing kinds means the next
-    # kind someone adds silently reopens the hole.
-    q = [LearnedMapping.kind != "suppress_field", LearnedMapping.target_object == obj]
-    # Client scope is INCLUSIVE of global rows on purpose. Scoping the sweep to the
-    # correction's own client left the global gold-example row alive, and a global
-    # row is precisely what reaches this client — so the correction was recorded
-    # and then overruled by the thing it was meant to retire. `retired_because` is
-    # written onto each row so a global retirement is auditable rather than silent.
-    # include_deleted is load-bearing: the default query hides tombstoned rows, so
-    # the is_deleted check below would never once fire and every reseed would
-    # re-stamp rows that are already retired. That exact dead guard has been found
-    # in this file before — the audit in test_tombstone_guards exists because of it.
-    for lm in await LearnedMapping.find(*q, include_deleted=True).to_list():
-        if getattr(lm, "is_deleted", False):
-            continue                       # already retired; leave the tombstone alone
-        if _norm_field(lm.target_field) != nf:
-            continue
-        _lc = getattr(lm, "client_id", None)
-        if client_id is not None and _lc is not None and _lc != client_id:
-            continue                       # another tenant's row — never ours to retire
-        await lm.set({"is_deleted": True, "deleted_at": now,
-                      "deleted_by": captured_by,
-                      "rule_config": {**(lm.rule_config or {}),
-                                      "retired_because": f"{fld} is blank per "
-                                                         f"{captured_from}"}})
-        out["learnings_retired"] += 1
-
-    # 2 + 3 — rewrite the mappings that already exist, and stale their outputs.
+    # Deliberately BEFORE the library sweep, because the set of clients whose
+    # conversions this correction actually reaches is what makes the sweep safe to
+    # scope. Retiring by the correction's own client id alone retired NOTHING on
+    # the live instance: the analyst docs seed under the bootstrap client while the
+    # gold-example rows carry the client of the project they were captured in, so
+    # every contradicting row fell outside the filter and survived.
+    _fields_by_tpl: dict = {}
+    seen_clients: set = {client_id} if client_id is not None else set()
+    scanned = 0
     for conv in await Conversion.find_all().to_list():
         if not conv.template_id:
             continue
-        if await _business_object_for(conv) != obj:
+        obj = await _business_object_for(conv)
+        fields = wanted.get(obj or "")
+        if not fields:
             continue
         # Same inclusive rule as the library sweep: skip only when BOTH sides name a
-        # client and they differ. An unscoped conversion is not another tenant's,
-        # and requiring an exact match is why nothing was rewritten on the live
-        # instance — Supplier Name New was still "suggested" against New Vendor
-        # Approval, and Tax Reporting Name still approved against Legal Name, on a
-        # conversion the correction was written for.
+        # client and they differ. An unscoped conversion is not another tenant's, and
+        # requiring an exact match is why nothing was rewritten on the live instance.
         _cc = await client_id_for_conversion(conv)
         if client_id is not None and _cc is not None and _cc != client_id:
             continue
-        fields = await FBDIField.find(FBDIField.template_id == conv.template_id).to_list()
-        ids = {f.id for f in fields if _norm_field(f.field_name) == nf}
+        if _cc is not None:
+            seen_clients.add(_cc)
+        scanned += 1
+        if conv.template_id not in _fields_by_tpl:
+            _fields_by_tpl[conv.template_id] = await FBDIField.find(
+                FBDIField.template_id == conv.template_id).to_list()
+        ids: dict = {}
+        for f in _fields_by_tpl[conv.template_id]:
+            nf = _norm_field(f.field_name)
+            if nf in fields:
+                ids[f.id] = nf
         if not ids:
             continue
         hit = False
         for m in await MappingSuggestion.find(
                 MappingSuggestion.conversion_id == conv.id).to_list():
-            if m.target_field_id not in ids:
+            nf = ids.get(m.target_field_id)
+            if nf is None:
                 continue
             approver = (getattr(m, "approved_by", None) or "")
-            if m.status == "overridden" or (
-                    m.status == "approved" and approver != "learning-engine"):
-                out["skipped_human"] += 1
+            _human = m.status == "overridden" or (
+                m.status == "approved" and approver != "learning-engine")
+            # ...and only when the person spoke LAST. Analyst, 30-Jul: "for
+            # conflicts always the latest one should be taken for mapping". A
+            # correction dated after someone's approval is that same analyst
+            # changing their mind, and treating the older approval as untouchable
+            # is why the live reseed reported nothing but skipped_human.
+            if _human and as_of is not None:
+                _at = getattr(m, "approved_at", None)
+                _human = bool(_at) and _at >= as_of
+            if _human:
+                results[(obj, nf)]["skipped_human"] += 1
                 continue
             if (m.status == "not_applicable" and not m.source_column
                     and not m.default_value):
-                continue                       # already blank, nothing to write
+                continue                   # already blank, nothing to write
             await m.set({
                 "source_column": None, "default_value": None,
                 "suggested_transformation": None,
@@ -661,15 +681,56 @@ async def enforce_blank_correction(
                 "reason": f"Kept blank — {captured_from}",
                 "updated_at": now,
             })
-            out["mappings_blanked"] += 1
+            results[(obj, nf)]["mappings_blanked"] += 1
+            results[(obj, nf)]["conversions"] += 1
             hit = True
         if hit:
-            out["conversions"] += 1
             res = await ConvertedOutput.find(
                 ConvertedOutput.conversion_id == conv.id).update(
                     {"$set": {"status": "stale"}})
-            out["stale_outputs"] += int(getattr(res, "modified_count", 0) or 0)
-    return out
+            _n = int(getattr(res, "modified_count", 0) or 0)
+            for nf in set(ids.values()):
+                results[(obj, nf)]["stale_outputs"] += _n
+    # 2 — retire the contradicting library rows, one query per object.
+    #
+    # Client scope is INCLUSIVE of global rows on purpose. Scoping the sweep to the
+    # correction's own client left the global gold-example row alive, and a global
+    # row is precisely what reaches this client — so the correction was recorded and
+    # then overruled by the thing it was meant to retire. `retired_because` is
+    # written onto each row so a global retirement is auditable rather than silent.
+    #
+    # include_deleted is load-bearing: the default query hides tombstoned rows, so
+    # the is_deleted check below would never once fire and every reseed would
+    # re-stamp rows that are already retired. That exact dead guard has been found
+    # in this file before — the audit in test_tombstone_guards exists because of it.
+    for obj, fields in wanted.items():
+        for lm in await LearnedMapping.find(
+            LearnedMapping.kind != "suppress_field",
+            LearnedMapping.target_object == obj,
+            include_deleted=True,
+        ).to_list():
+            if getattr(lm, "is_deleted", False):
+                continue                   # already retired; leave the tombstone alone
+            nf = _norm_field(lm.target_field)
+            if nf not in fields:
+                continue
+            _lc = getattr(lm, "client_id", None)
+            # Global rows (no client) always go: a global row is precisely what
+            # reaches this client. A scoped row goes when its client is one whose
+            # conversions this correction just rewrote — that is the proof it is in
+            # scope, and it is the only thing that distinguishes "our data under a
+            # different client id" from "another tenant's row", which is never ours
+            # to retire.
+            if _lc is not None and seen_clients and _lc not in seen_clients:
+                continue
+            await lm.set({"is_deleted": True, "deleted_at": now,
+                          "deleted_by": captured_by,
+                          "rule_config": {**(lm.rule_config or {}),
+                                          "retired_because": f"{fields[nf]} is blank "
+                                                             f"per {captured_from}"}})
+            results[(obj, nf)]["learnings_retired"] += 1
+
+    return {"fields": [v for v in results.values()], "conversions_scanned": scanned}
 
 
 async def apply_learned_to_conversion(

@@ -478,28 +478,39 @@ async def seed_supplier_corrections_30jul() -> dict:
     # Liability Distribution an account string on 1,528. Analyst, 30-Jul: "modify
     # the learning, the code should change the learning and mapping as I am saying
     # now".
-    from app.services.learning_service import enforce_blank_correction
-    enforced: list[dict] = []
+    from app.services.learning_service import enforce_blank_corrections
+    pairs: list[tuple] = []
     for r in doc.get("rules", []):
         if (r.get("action") or "").strip() != "blank":
             continue
+        fld = (r.get("target_field") or "").strip()
         objs = [(r.get("target_object") or "").strip()]
         if r.get("applies_to_all_sheets"):
             objs = await _sheet_objects_for(objs[0])
-        for _o in objs:
-            try:
-                res = await enforce_blank_correction(
-                    _o, (r.get("target_field") or "").strip(), client_id=nid,
-                    captured_from=src, captured_by="analyst-correction-30jul")
-            except Exception:  # noqa: BLE001 — never block startup on the sweep
-                logger.exception("enforcing blank correction failed for %s.%s",
-                                 _o, r.get("target_field"))
-                continue
-            if (res["learnings_retired"] or res["mappings_blanked"]
-                    or res["skipped_human"]):
-                enforced.append(res)
+        pairs += [(o, fld) for o in objs if o]
+    enforced: list[dict] = []
+    scanned = 0
+    try:
+        # ONE pass for all of them. Per-field, this re-walked every conversion for
+        # each of six blanks across six sheet objects — 36 sweeps of 232
+        # conversions, two database round-trips each — and the on-demand reseed
+        # never returned at all.
+        _res = await enforce_blank_corrections(
+            pairs, client_id=nid, captured_from=src,
+            captured_by="analyst-correction-30jul",
+            # The date of the instruction, so an approval a person made BEFORE it
+            # does not outrank it. "For conflicts always the latest one should be
+            # taken" (analyst, 30-Jul).
+            as_of=_effective_date_of(doc))
+        scanned = _res["conversions_scanned"]
+        enforced = [f for f in _res["fields"]
+                    if f["learnings_retired"] or f["mappings_blanked"]
+                    or f["skipped_human"]]
+    except Exception:  # noqa: BLE001 — never block startup on the sweep
+        logger.exception("enforcing the 30-Jul blank corrections failed")
     if enforced:
-        logger.info("30-Jul blank corrections enforced: %s", enforced)
+        logger.info("30-Jul blank corrections enforced over %d conversions: %s",
+                    scanned, enforced)
 
     return {"seeded": seeded, "updated": updated, "left_retired": retired,
             "blank_enforcement": enforced,
