@@ -459,6 +459,13 @@ async def reseed_supplier_corrections(_: User = Depends(get_current_user)):
     return await seed_supplier_corrections_30jul()
 
 
+@router.post("/reseed-customer-sheet-scope")
+async def reseed_customer_sheet_scope(_: User = Depends(get_current_user)):
+    """Re-run the Customer per-sheet scope on demand (CW_Issues 2 rows 13-15, 26)."""
+    from app.services.catalog_seed_service import seed_customer_sheet_scope
+    return await seed_customer_sheet_scope()
+
+
 @router.post("/backfill-projects")
 async def backfill_project_ids(_: User = Depends(get_current_user)):
     """

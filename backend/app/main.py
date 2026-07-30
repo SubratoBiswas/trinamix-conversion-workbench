@@ -150,6 +150,17 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("supplier source mapping seed failed")
     try:
+        # Per-SHEET Customer scope (CW_Issues 2 rows 13-15, 26). The mechanism for
+        # this shipped a while ago and not one seeded learning used it, so
+        # "map id in all sheets EXCEPT HZ_IMP_CLASSIFICS_T" was applied to all
+        # sheets including that one. Seeded AFTER the customer field mappings so the
+        # scope lands on the rows they create.
+        from app.services.catalog_seed_service import seed_customer_sheet_scope
+        r = await seed_customer_sheet_scope()
+        log.info("startup seed — customer per-sheet scope: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer sheet scope seed failed")
+    try:
         # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
         # Fusion Customer Import): account/party key references + name/tax/email/
         # phone/credit, propagated by field name across the interface sheets.

@@ -571,6 +571,109 @@ async def _sheet_objects_for(base_object: str) -> list[str]:
     return sorted(objs)
 
 
+_CUSTOMER_SHEET_SCOPE = _DATA / "customer_sheet_scope.json"
+
+
+async def seed_customer_sheet_scope() -> dict:
+    """Seed the Customer per-sheet mapping scope (CW_Issues 2, rows 13-15 and 26).
+
+    The mechanism for this shipped a while ago — LearnedMapping.sheets /
+    exclude_sheets, honoured by learning_service.sheet_allowed — and NOT ONE seeded
+    learning in the whole catalog used it. Shipped and inert: an instruction reading
+    "map id to Party Original System Reference in all sheets EXCEPT
+    HZ_IMP_CLASSIFICS_T" was applied to all sheets, the named one included, because
+    nothing ever wrote the exclusion down.
+
+    Idempotent, client-scoped, tombstone-respecting, and it UPDATES the scope on an
+    existing row rather than inserting a duplicate — two learnings for one
+    source/target pair differing only in scope is a coin toss, which is the shape of
+    bug this file exists to close.
+    """
+    import json as _json
+    if not _CUSTOMER_SHEET_SCOPE.exists():
+        return {"seeded": 0, "note": "customer_sheet_scope.json not found"}
+    try:
+        doc = _json.loads(_CUSTOMER_SHEET_SCOPE.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    nid = await _nextpower_client_id()
+    eff = _effective_date_of(doc)
+    src = doc.get("_source") or "customer sheet scope"
+    seeded = updated = retired = 0
+
+    for m in doc.get("mappings", []):
+        col, tgt = (m.get("source_column") or "").strip(), (m.get("target_field") or "").strip()
+        if not (col and tgt):
+            continue
+        scope = {"sheets": list(m.get("sheets") or []),
+                 "exclude_sheets": list(m.get("exclude_sheets") or [])}
+        existing = await LearnedMapping.find_one(
+            LearnedMapping.kind == "column_mapping",
+            LearnedMapping.target_object == "Customer",
+            LearnedMapping.target_field == tgt,
+            LearnedMapping.original_value == col,
+            LearnedMapping.client_id == nid,
+            include_deleted=True,
+        )
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            continue
+        if existing:
+            await existing.set({**scope, "effective_date": eff, "captured_from": src,
+                                "rule_config": {**(existing.rule_config or {}),
+                                                "issue": m.get("issue"),
+                                                "note": m.get("note") or ""}})
+            updated += 1
+            continue
+        await LearnedMapping(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=col, resolved_value=tgt,
+            target_object="Customer", target_field=tgt,
+            client_id=nid, is_global=False, effective_date=eff,
+            rule_config={"issue": m.get("issue"), "note": m.get("note") or ""},
+            captured_from=src, **scope,
+        ).insert()
+        seeded += 1
+
+    sup_seeded = sup_updated = 0
+    for sp in doc.get("suppressions", []):
+        tgt = (sp.get("target_field") or "").strip()
+        if not tgt:
+            continue
+        scope = {"sheets": list(sp.get("sheets") or []),
+                 "exclude_sheets": list(sp.get("exclude_sheets") or [])}
+        existing = await LearnedMapping.find_one(
+            LearnedMapping.kind == "suppress_field",
+            LearnedMapping.target_object == "Customer",
+            LearnedMapping.target_field == tgt,
+            LearnedMapping.client_id == nid,
+            include_deleted=True,
+        )
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            continue
+        if existing:
+            await existing.set({**scope, "effective_date": eff, "captured_from": src})
+            sup_updated += 1
+            continue
+        await LearnedMapping(
+            kind="suppress_field", category="Left blank on purpose",
+            original_value="(blank)", resolved_value="",
+            target_object="Customer", target_field=tgt,
+            rule_type="suppress",
+            rule_config={"issue": sp.get("issue"), "note": sp.get("note") or ""},
+            client_id=nid, is_global=False, effective_date=eff,
+            captured_from=src, **scope,
+        ).insert()
+        sup_seeded += 1
+
+    logger.info("customer sheet scope: %d mappings seeded, %d updated; "
+                "%d suppressions seeded, %d updated; %d left retired",
+                seeded, updated, sup_seeded, sup_updated, retired)
+    return {"seeded": seeded, "updated": updated, "suppressions_seeded": sup_seeded,
+            "suppressions_updated": sup_updated, "left_retired": retired}
+
+
 _SUPPLIER_SOURCE_MAP = _DATA / "supplier_source_mapping_30jul.json"
 
 

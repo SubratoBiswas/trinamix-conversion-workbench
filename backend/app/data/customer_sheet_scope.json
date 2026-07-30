@@ -1,0 +1,74 @@
+{
+  "_source": "CW_Issues 2.xlsx, rows 13-15 and 26 (Tejaswini, 29-Jul-2026)",
+  "_effective_date": "2026-07-29",
+  "_scope": "Client NextPower, Customer (19-sheet HZ_IMP / RA import).",
+  "_why": [
+    "The per-sheet scope MECHANISM already existed — LearnedMapping.sheets /",
+    "exclude_sheets, honoured by learning_service.sheet_allowed — and not one seeded",
+    "learning in the entire catalog used it. So the feature was shipped and inert, and",
+    "these four instructions had nowhere to live. A key mapped 'in all sheets except",
+    "HZ_IMP_CLASSIFICS_T' was therefore mapped in ALL sheets, including the one the",
+    "analyst named.",
+    "",
+    "Oracle repeats a field name across sheets — Customer has 19 — and a learning is",
+    "keyed by NAME, so one approval reaches every one of them. That is right for a",
+    "party key and wrong for the sheets that must stay empty."
+  ],
+  "mappings": [
+    {
+      "issue": "CW_Issues 2 row 13",
+      "source_column": "id",
+      "target_field": "Party Original System Reference",
+      "exclude_sheets": ["HZ_IMP_CLASSIFICS_T"],
+      "note": "Every sheet except the classifications sheet."
+    },
+    {
+      "issue": "CW_Issues 2 row 14",
+      "source_column": "entityid",
+      "target_field": "Account Number",
+      "exclude_sheets": [
+        "RA_CUST_PAY_METHOD_INT_ALL",
+        "RA_CUSTOMER_BANKS_INT_ALL",
+        "HZ_IMP_ACCOUNTRELS"
+      ],
+      "note": "entityid feeds TWO targets; this is the first."
+    },
+    {
+      "issue": "CW_Issues 2 row 14",
+      "source_column": "entityid",
+      "target_field": "Customer Account Source System Reference",
+      "exclude_sheets": [
+        "RA_CUST_PAY_METHOD_INT_ALL",
+        "RA_CUSTOMER_BANKS_INT_ALL",
+        "HZ_IMP_ACCOUNTRELS"
+      ],
+      "note": "The second target for entityid. Row 11 of the same sheet reports the mappings to OTHER targets being deleted and coming back; the tombstone fix covers that, this row covers what entityid SHOULD feed."
+    },
+    {
+      "issue": "CW_Issues 2 row 15",
+      "source_column": "internalid",
+      "target_field": "Account Site Source System Reference",
+      "exclude_sheets": [
+        "RA_CUSTOMER_BANKS_INT_ALL",
+        "RA_CUST_PAY_METHOD_INT_ALL",
+        "RA_CUSTOMER_PROFILES_INT_ALL",
+        "HZ_IMP_ACCTCONTACTS_T"
+      ],
+      "note": "Four exclusions, all named by the analyst."
+    }
+  ],
+  "suppressions": [
+    {
+      "issue": "CW_Issues 2 row 26",
+      "target_field": "Receipt Method",
+      "sheets": ["RA_CUSTOMER_BANKS_INT_ALL"],
+      "note": "'not applicable as these are not filled for now'. Scoped to the banks sheet ONLY — Receipt Method is a real field elsewhere, and a name-keyed suppression would otherwise blank it everywhere."
+    },
+    {
+      "issue": "CW_Issues 2 row 26",
+      "target_field": "Start Date",
+      "sheets": ["RA_CUSTOMER_BANKS_INT_ALL"],
+      "note": "Same. Start Date appears on several sheets and must only be suppressed on this one."
+    }
+  ]
+}
