@@ -97,6 +97,126 @@ def test_a_real_gap_still_blocks():
                                "field": "Address Name"}], f"got {res['failures']}")
 
 
+# ── The SECOND half of the same bug, found by re-checking after deploy ───────
+# Keying the frames by sheet name was necessary and not sufficient. The gate still
+# fired on every Supplier conversion, for two further reasons:
+#
+#   * VOCABULARY. The template names its sheet after the Oracle interface table
+#     (POZ_SUPPLIERS_INT); the analyst's curated list names it after the workbook tab
+#     ("Supplier Import"). Neither side is wrong and they never matched.
+#   * SCOPE. The Supplier bundle spans six interface tables and one template declares
+#     ONE of them. Five of the six curated sheets are a sibling conversion's file, so
+#     demanding them here blocks a conversion for data it was never going to write.
+#
+# Both were invisible offline because the fixtures used the curated names and
+# supplied every sheet — the two things production does not do.
+_LIVE_REQUIRED = {
+    "Supplier Import": ["Supplier Name"],
+    "Supplier Address Import": ["Supplier Name", "Address Name"],
+    "Supplier Bank Import": ["Account Number"],
+}
+_LIVE_ALIASES = {
+    "Supplier Import": ["POZ_SUPPLIERS_INT"],
+    "Supplier Address Import": ["POZ_SUPPLIER_ADDRESSES_INT", "POZ_SUP_ADDRESSES_INT"],
+    "Supplier Bank Import": ["IBY_TEMP_EXT_PAYEES"],
+}
+
+
+def test_the_interface_table_name_resolves_to_the_curated_tab_name():
+    """The live shape: one sheet, named POZ_SUPPLIERS_INT, holding good data."""
+    frames = {"POZ_SUPPLIERS_INT": pd.DataFrame({"Supplier Name": ["ACME"]})}
+    res = rf.check_sheets(frames, _LIVE_REQUIRED, owned_sheets=list(frames),
+                          aliases=_LIVE_ALIASES)
+    check("not blocked", res["blocked"] is False, f"failures={res['failures']}")
+    first = res["sheets"][0]
+    check("recognised the sheet", first["sheet_generated"] is True)
+    check("and says which name it matched", first["matched_as"] == "POZ_SUPPLIERS_INT",
+          f"got {first.get('matched_as')!r}")
+
+
+def test_sheets_this_conversion_does_not_own_do_not_block_it():
+    res = rf.check_sheets({"POZ_SUPPLIERS_INT": pd.DataFrame({"Supplier Name": ["A"]})},
+                          _LIVE_REQUIRED, owned_sheets=["POZ_SUPPLIERS_INT"],
+                          aliases=_LIVE_ALIASES)
+    check("not blocked", res["blocked"] is False)
+    check("the other two sheets are reported, not silently dropped",
+          res["not_owned_count"] == 3, f"got {res['not_owned_count']}")
+    check("and counted", res["sheets_checked"] == 1 and res["sheets_curated"] == 3,
+          f"got {res['sheets_checked']}/{res['sheets_curated']}")
+
+
+def test_the_message_never_implies_a_wider_check_than_it_made():
+    """"All required fields are populated" over one of six sheets would read as a
+    clean bill of health for the whole bundle."""
+    res = rf.check_sheets({"POZ_SUPPLIERS_INT": pd.DataFrame({"Supplier Name": ["A"]})},
+                          _LIVE_REQUIRED, owned_sheets=["POZ_SUPPLIERS_INT"],
+                          aliases=_LIVE_ALIASES)
+    msg = rf.explain(res)
+    check("states the scope", "1 of 3" in msg, f"got {msg!r}")
+    check("and where the rest went", "other conversions" in msg, f"got {msg!r}")
+
+
+def test_an_owned_sheet_that_produced_nothing_still_fails_hard():
+    """The carve-out must not become a way to pass by producing no file. A sheet the
+    template DECLARES maps to None when it emitted nothing — that is a real failure."""
+    res = rf.check_sheets({"POZ_SUPPLIERS_INT": None}, _LIVE_REQUIRED,
+                          owned_sheets=["POZ_SUPPLIERS_INT"], aliases=_LIVE_ALIASES)
+    check("blocked", res["blocked"] is True, f"got {res}")
+    check("names the owned sheet",
+          res["failures"] == [{"sheet": "Supplier Import", "field": "Supplier Name"}],
+          f"got {res['failures']}")
+
+
+def test_an_owned_sheet_with_an_empty_required_column_still_blocks():
+    res = rf.check_sheets(
+        {"POZ_SUPPLIERS_INT": pd.DataFrame({"Supplier Name": ["", ""]})},
+        _LIVE_REQUIRED, owned_sheets=["POZ_SUPPLIERS_INT"], aliases=_LIVE_ALIASES)
+    check("blocked", res["blocked"] is True)
+    check("one failure", res["failed_count"] == 1, f"got {res['failed_count']}")
+
+
+def test_omitting_owned_sheets_keeps_the_strict_all_or_nothing_behaviour():
+    """Callers that genuinely check a whole bundle must still get a hard failure for
+    a sheet the bundle never wrote."""
+    res = rf.check_sheets({"Supplier Import": pd.DataFrame({"Supplier Name": ["A"]})},
+                          _LIVE_REQUIRED, aliases=_LIVE_ALIASES)
+    check("blocked", res["blocked"] is True)
+    check("the two absent sheets fail", res["failed_count"] == 3,
+          f"got {res['failed_count']}")
+
+
+def test_alias_matching_folds_case_and_punctuation():
+    for spelling in ("poz_suppliers_int", "POZ SUPPLIERS INT", " Poz_Suppliers_Int "):
+        frames = {spelling: pd.DataFrame({"Supplier Name": ["A"]})}
+        res = rf.check_sheets(frames, {"Supplier Import": ["Supplier Name"]},
+                              owned_sheets=list(frames), aliases=_LIVE_ALIASES)
+        check(f"{spelling!r} resolves", res["blocked"] is False, f"got {res['failures']}")
+
+
+def test_names_for_resolves_in_both_directions():
+    """The caller may hold either vocabulary, so the lookup has to work either way."""
+    fwd = {n.lower() for n in rf.names_for("Supplier Import", _LIVE_ALIASES)}
+    check("tab name -> table name", "poz_suppliers_int" in fwd, f"got {fwd}")
+    rev = {n.lower() for n in rf.names_for("POZ_SUPPLIERS_INT", _LIVE_ALIASES)}
+    check("table name -> tab name", "supplier import" in rev, f"got {rev}")
+    check("no aliases configured is just the name itself",
+          rf.names_for("Anything", {}) == ["Anything"])
+
+
+def test_the_shipped_supplier_list_carries_aliases_for_every_sheet():
+    """A curated sheet with no alias silently reverts to the old failure, so this is
+    checked against the real data file rather than a fixture."""
+    req = rf.load_required("Supplier")
+    al = rf.load_sheet_aliases("Supplier")
+    check("required list found", len(req) == 6, f"got {len(req)}")
+    missing = [s for s in req if not al.get(s)]
+    check("every sheet has at least one interface-table alias", not missing,
+          f"missing: {missing}")
+    for sheet, alts in al.items():
+        check(f"{sheet} alias looks like an interface table",
+              all("_" in a and a.isupper() for a in alts), f"got {alts}")
+
+
 # ── The routing helper generation and the gate now share ─────────────────────
 def _frames():
     party = pd.DataFrame({"Party Name": ["ACME"]})

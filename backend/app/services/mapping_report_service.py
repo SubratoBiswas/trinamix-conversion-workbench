@@ -178,10 +178,20 @@ def build_report(*, conversion: dict, fields: list[dict], mappings: list[dict],
             "applied": cleansing["rules_fired"],
         },
         "required_fields": {
-            "checked": req.get("required_total", 0),
+            # "checked" has to mean checked. The curated list covers a whole Oracle
+            # bundle, while one conversion normally owns ONE of its interface sheets,
+            # so counting the sibling sheets' fields here reported 23 checked where
+            # the honest number was 1.
+            "checked": max(0, req.get("required_total", 0)
+                           - req.get("not_owned_count", 0)),
+            "curated": req.get("required_total", 0),
+            "not_owned": req.get("not_owned_count", 0),
+            "sheets_checked": req.get("sheets_checked"),
+            "sheets_curated": req.get("sheets_curated"),
             "failed": req.get("failed_count", 0),
             "partial": req.get("partial_count", 0),
             "passed": max(0, req.get("required_total", 0)
+                          - req.get("not_owned_count", 0)
                           - req.get("failed_count", 0)
                           - req.get("partial_count", 0)),
             "failures": req.get("failures", []),

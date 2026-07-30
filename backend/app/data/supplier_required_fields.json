@@ -43,5 +43,29 @@
   "_open_items": [
     "Supplier Number is required on Supplier Bank Import but section 10.6 removed auto-numbering on analyst instruction, so it is blank unless mapped. Either map it from the legacy id or accept that the bank sheet cannot load until the Supplier Number strategy is settled (Raja).",
     "Remit-to Supplier on Supplier Site Import holds Y in the current extract where a supplier NAME belongs (section 10.10). Present-but-wrong passes a not-blank check, so this needs a value rule, not just a presence rule."
-  ]
+  ],
+  "_sheet_alias_note": "A conversion's template names its sheets after the Oracle INTERFACE TABLE (POZ_SUPPLIERS_INT); this list names them after the analyst TAB (Supplier Import). The gate matched on the tab name alone and so recognised no sheet at all, reporting every required field absent and blocking healthy conversions. Both vocabularies are in use in the repo — fbdi_service writes POZ_SUPPLIER_ADDRESSES_INT, fusion_service writes POZ_SUP_ADDRESSES_INT — so both spellings are listed. Matching folds case and punctuation, so POZ_SUPPLIERS_INT, poz suppliers int and pozsuppliersint all resolve.",
+  "sheet_aliases": {
+    "Supplier Import": [
+      "POZ_SUPPLIERS_INT"
+    ],
+    "Supplier Address Import": [
+      "POZ_SUPPLIER_ADDRESSES_INT",
+      "POZ_SUP_ADDRESSES_INT"
+    ],
+    "Supplier Site Import": [
+      "POZ_SUPPLIER_SITES_INT",
+      "POZ_SUP_SITES_INT"
+    ],
+    "Supplier Site Assignment Import": [
+      "POZ_SITE_ASSIGNMENTS_INT"
+    ],
+    "Supplier Contact Import": [
+      "POZ_SUP_CONTACTS",
+      "POZ_SUP_CONTACTS_INT"
+    ],
+    "Supplier Bank Import": [
+      "IBY_TEMP_EXT_PAYEES"
+    ]
+  }
 }

@@ -752,6 +752,11 @@ export interface DuplicateCandidates {
    *  is EMPTY when coverage was complete. Before this, "no duplicates found" and
    *  "those rows were never fully compared" produced identical output. */
   rows_compared?: number;
+  /** No other row shares this row's leading name characters, so there is no
+   *  candidate partner to compare it with. Counted apart from `rows_compared` so
+   *  "183 scanned, 29 compared" cannot be misread as 154 rows skipped.
+   *  rows_compared + rows_unique_name + rows_without_anchor === rows_scanned. */
+  rows_unique_name?: number;
   rows_windowed?: number;
   windowed_blocks?: number;
   rows_without_anchor?: number;
@@ -809,7 +814,16 @@ export interface MappingReport {
   };
   rules: { configured: number; applied: number };
   required_fields: {
+    /** `checked` counts only the sheets THIS conversion owns. The curated list
+     *  covers a whole Oracle bundle (Supplier spans six interface tables) and one
+     *  conversion normally writes one of them, so `curated` is the bundle total and
+     *  `not_owned` is what belongs to sibling conversions. Reporting the bundle
+     *  total as "checked" claimed 23 checks where 1 had run. */
     checked: number; failed: number; partial: number; passed: number;
+    curated?: number;
+    not_owned?: number;
+    sheets_checked?: number | null;
+    sheets_curated?: number | null;
     failures: { sheet: string; field: string }[];
     partials: { sheet: string; field: string }[];
   };

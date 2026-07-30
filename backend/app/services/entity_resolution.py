@@ -203,9 +203,15 @@ def find_duplicate_clusters(
     # character 13 and would land in different blocks, never compared at all.
     pairs_to_score: list[tuple[int, int]] = []
     rows_compared = 0
+    rows_unique_name = 0
     windowed_blocks, rows_windowed = 0, 0
     for idxs in blocks.values():
         if len(idxs) < 2:
+            # Nothing shares this row's leading name characters, so there is no
+            # candidate partner to compare it WITH. Counted separately from
+            # rows_compared: otherwise "183 scanned, 29 compared" reads as though
+            # 154 rows were skipped, when in fact they have no possible match.
+            rows_unique_name += len(idxs)
             continue
         rows_compared += len(idxs)
         if len(idxs) <= max_block:
@@ -274,7 +280,13 @@ def find_duplicate_clusters(
         "cluster_count": len(clusters),
         "duplicate_rows": sum(c["size"] for c in clusters),
         "truncated": truncated,
+        # These three account for every scanned row, so the numbers can be checked
+        # rather than taken on trust:
+        #   rows_compared      — had at least one candidate partner and was compared
+        #   rows_unique_name   — no other row shares its leading name characters
+        #   rows_without_anchor— no name value at all, so unmatchable by name
         "rows_compared": rows_compared,
+        "rows_unique_name": rows_unique_name,
         "rows_windowed": rows_windowed,
         "windowed_blocks": windowed_blocks,
         "rows_without_anchor": rows_without_anchor,

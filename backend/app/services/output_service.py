@@ -476,6 +476,9 @@ async def build_sheet_frames(
 
     Returns ``({}, merged)`` when the conversion has no template or no sheeted
     fields; callers then fall back to the merged frame, the previous behaviour.
+    A sheet the template DECLARES but which carries no fields maps to ``None``, so a
+    caller can distinguish "owned but produced nothing" from "not this conversion's
+    sheet at all".
     """
     from app.models.fbdi import FBDISheet
 
@@ -541,6 +544,12 @@ async def build_sheet_frames(
     for s in sheets:
         sfields = by_sheet.get(s.id) or []
         if not sfields:
+            # DECLARED by the template but carrying no fields, so no frame. Recorded
+            # as None rather than omitted: the caller needs to tell "this conversion
+            # owns the sheet and produced nothing" (a real failure) from "this sheet
+            # belongs to another conversion in the bundle" (not this gate's business).
+            # Omitting it made those two indistinguishable.
+            out[str(s.sheet_name or "")] = None
             continue
         wanted = {src_by_field.get(f.id) for f in sfields}
         wanted.discard(None)

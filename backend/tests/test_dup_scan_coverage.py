@@ -122,6 +122,25 @@ def test_the_ordinary_duplicate_pair_still_clusters():
     check("of two rows", res["clusters"][0]["size"] == 2)
 
 
+def test_the_row_counts_account_for_every_scanned_row():
+    """Live, the fixed scan reported "183 scanned, 29 compared" — true, and easy to
+    misread as 154 rows skipped. They were rows whose name shares its opening
+    characters with nothing else, so they have no candidate partner at all. The three
+    buckets must add up, so the number can be checked instead of trusted.
+    """
+    names = ["Alpha Corp", "Alpha Corporation",      # compared against each other
+             "Zebra Ltd", "Mango Plc",               # nothing shares their prefix
+             "", ""]                                 # no name at all
+    res = find_duplicate_clusters(_frame(names), "Supplier")
+    got = (res["rows_compared"], res["rows_unique_name"], res["rows_without_anchor"])
+    check("2 compared, 2 unique, 2 anchorless", got == (2, 2, 2), f"got {got}")
+    check("and they sum to rows_scanned", sum(got) == res["rows_scanned"],
+          f"{got} vs {res['rows_scanned']}")
+    check("unique names are NOT flagged as a coverage gap",
+          not res["coverage_note"].count("nearest neighbours"),
+          f"note={res['coverage_note']!r}")
+
+
 def test_counts_are_present_even_on_an_empty_frame():
     """Callers read these keys unconditionally; a missing key is a 500 in the UI."""
     res = find_duplicate_clusters(pd.DataFrame(), "Supplier")

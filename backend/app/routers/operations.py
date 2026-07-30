@@ -377,7 +377,16 @@ async def run_required_check(conversion_id: str, max_rows: int = 20000) -> dict:
     # Objects with no sheeted template: the merged frame IS what generation writes.
     if not sheets:
         sheets = {name: df for name in required}
-    res = await _aio.to_thread(rf.check_sheets, sheets, required)
+    # Which interface sheets does THIS conversion actually own? The first fix keyed
+    # the frames correctly and the gate still fired, because the vocabularies differ:
+    # the template calls its sheet POZ_SUPPLIERS_INT and the curated list calls it
+    # "Supplier Import". And the Supplier bundle spans six interface tables while one
+    # template declares one of them — so five curated sheets belong to sibling
+    # conversions and must not block this one. Aliases resolve the naming; owned_sheets
+    # resolves the scope.
+    res = await _aio.to_thread(rf.check_sheets, sheets, required,
+                               owned_sheets=list(sheets.keys()),
+                               aliases=rf.load_sheet_aliases(obj))
     res.update({"conversion_id": str(c.id), "target_object": obj,
                 "message": rf.explain(res)})
     return res
