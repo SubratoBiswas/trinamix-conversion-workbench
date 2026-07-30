@@ -82,13 +82,37 @@ def test_an_individual_is_still_an_individual():
           tax({"Is Individual": "Yes", "Entity Type": ""}) == "INDIVIDUAL")
 
 
-def test_entity_type_is_a_second_witness():
-    """Is Individual is empty on 73 rows; Entity Type names 19 individuals and
-    1,419 businesses, so it answers where the first column is silent."""
-    check("Entity Type Individual -> INDIVIDUAL",
+def test_entity_type_only_speaks_when_is_individual_is_silent():
+    """It is a FALLBACK, not a second opinion.
+
+    Ranking it alongside 'Is Individual' looked reasonable and was wrong on the
+    data: every one of the 19 rows where the two disagree has Is Individual=No and
+    Entity Type=Individual, and 17 of those are plainly companies — Air Liquide
+    Brasil LTDA, RYNDACK COMERCIO E IMPORTACAO LTDA, EDIFFICA ENGENHARIA E PROJETOS
+    LTDA. Letting Entity Type win flipped 17 companies to INDIVIDUAL and could
+    never once fill a genuine gap, because this extract has ZERO rows with a blank
+    Is Individual and a populated Entity Type.
+    """
+    check("an explicit No beats Entity Type",
+          tax({"Is Individual": "No", "Entity Type": "Individual"}) == "CORPORATION")
+    check("an explicit Yes still wins outright",
+          tax({"Is Individual": "Yes", "Entity Type": "Business"}) == "INDIVIDUAL")
+    # ...and it still answers where the authority is silent, which is why it is
+    # kept rather than deleted: eBOS and SyteLine extracts are not this one.
+    check("silent -> Entity Type decides",
           tax({"Is Individual": "", "Entity Type": "Individual"}) == "INDIVIDUAL")
-    check("Entity Type Business -> CORPORATION",
+    check("silent, business -> CORPORATION",
           tax({"Is Individual": "", "Entity Type": "Business"}) == "CORPORATION")
+
+
+def test_the_branch_order_is_what_makes_that_true():
+    """Seam: the fix IS the ordering, so assert the ordering."""
+    d = directive_for("Supplier", "Tax Organization Type")
+    ops = [(b.get("if_column"), b.get("op")) for b in d["rule"]["config"]["branches"]]
+    check("Is Individual is asked first and second",
+          ops[0] == ("Is Individual", "istrue") and ops[1] == ("Is Individual", "isfalse"),
+          f"got {ops}")
+    check("Entity Type comes after both", ops[2][0] == "Entity Type", f"got {ops}")
 
 
 def test_no_signal_at_all_is_a_corporation():

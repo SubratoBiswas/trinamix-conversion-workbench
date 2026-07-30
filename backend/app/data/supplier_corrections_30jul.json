@@ -64,6 +64,11 @@
             "then": "INDIVIDUAL"
           },
           {
+            "if_column": "Is Individual",
+            "op": "isfalse",
+            "then": "CORPORATION"
+          },
+          {
             "if_column": "Entity Type",
             "op": "eq",
             "value": "Individual",
@@ -72,7 +77,7 @@
         ],
         "default": "CORPORATION"
       },
-      "note": "INDIVIDUAL only when the source SAYS individual. The branch used to test 'Is Individual' with notblank, and that column reads 'No' on 6,985 of the 7,495 NetSuite rows and 'Yes' on 437 - so 99% of suppliers, companies included, loaded as INDIVIDUAL and only the 73 rows with an EMPTY cell came out CORPORATION. Entity Type is a second witness: it says 'Individual' on 19 rows and 'Business' on 1,419. Default CORPORATION, which is what a supplier with no signal is."
+      "note": "INDIVIDUAL only when the source SAYS so. 'Is Individual' is the authority: Yes on 437 of 7,495 rows, No on 6,985, blank on 73. Entity Type is a FALLBACK for rows where Is Individual is silent, and it is explicitly ranked below an outright 'No' -- checked against the data, all 19 rows where the two disagree have Is Individual=No and Entity Type=Individual, and 17 of them are plainly companies (Air Liquide Brasil LTDA, RYNDACK COMERCIO E IMPORTACAO LTDA, EDIFFICA ENGENHARIA E PROJETOS LTDA). Letting Entity Type win flipped those 17 to INDIVIDUAL and could never fill a genuine gap, because this extract has ZERO rows with a blank Is Individual and a populated Entity Type. Earlier the branch read notblank, which made 7,422 of 7,495 suppliers INDIVIDUAL because 'No' is not blank."
     },
     {
       "target_object": "Supplier",

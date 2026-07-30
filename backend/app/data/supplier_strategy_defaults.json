@@ -16,6 +16,11 @@
             "then": "INDIVIDUAL"
           },
           {
+            "if_column": "Is Individual",
+            "op": "isfalse",
+            "then": "CORPORATION"
+          },
+          {
             "if_column": "Entity Type",
             "op": "eq",
             "value": "Individual",
@@ -25,7 +30,7 @@
         "default": "CORPORATION"
       },
       "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm.",
-      "note": "MEASURED: read with notblank this produced INDIVIDUAL on 7,422 of the 7,495 NetSuite rows, because 'Is Individual' says 'No' on 6,985 of them and 'No' is not blank. The words 'if there is a value in that' meant 'if it says yes'. Corrected here as well as in the 30-Jul file so the two cannot disagree - the 30-Jul rule already wins by date, but leaving a known-wrong rule in place is how a coin toss gets built."
+      "note": "INDIVIDUAL only when the source SAYS so. 'Is Individual' is the authority: Yes on 437 of 7,495 rows, No on 6,985, blank on 73. Entity Type is a FALLBACK for rows where Is Individual is silent, and it is explicitly ranked below an outright 'No' -- checked against the data, all 19 rows where the two disagree have Is Individual=No and Entity Type=Individual, and 17 of them are plainly companies (Air Liquide Brasil LTDA, RYNDACK COMERCIO E IMPORTACAO LTDA, EDIFFICA ENGENHARIA E PROJETOS LTDA). Letting Entity Type win flipped those 17 to INDIVIDUAL and could never fill a genuine gap, because this extract has ZERO rows with a blank Is Individual and a populated Entity Type. Earlier the branch read notblank, which made 7,422 of 7,495 suppliers INDIVIDUAL because 'No' is not blank."
     },
     {
       "target_object": "Supplier",
@@ -154,7 +159,7 @@
       {
         "target_object": "Supplier",
         "target_field": "Tax Organization Type",
-        "note": "Sandeep 28-Jul: 'It should be corporation... there is one column in the extract, IS INDIVIDUAL. If there is a value in that, only in that case this value will change' -> Individual. Only these two values are ever valid: 'the business will not be value, only corporation or individual will be the values.' A flat CORPORATION constant loaded every individual supplier as a corporation. MEASURED: read with notblank this produced INDIVIDUAL on 7,422 of the 7,495 NetSuite rows, because 'Is Individual' says 'No' on 6,985 of them and 'No' is not blank. The words 'if there is a value in that' meant 'if it says yes'. Corrected here as well as in the 30-Jul file so the two cannot disagree - the 30-Jul rule already wins by date, but leaving a known-wrong rule in place is how a coin toss gets built.",
+        "note": "INDIVIDUAL only when the source SAYS so. 'Is Individual' is the authority: Yes on 437 of 7,495 rows, No on 6,985, blank on 73. Entity Type is a FALLBACK for rows where Is Individual is silent, and it is explicitly ranked below an outright 'No' -- checked against the data, all 19 rows where the two disagree have Is Individual=No and Entity Type=Individual, and 17 of them are plainly companies (Air Liquide Brasil LTDA, RYNDACK COMERCIO E IMPORTACAO LTDA, EDIFFICA ENGENHARIA E PROJETOS LTDA). Letting Entity Type win flipped those 17 to INDIVIDUAL and could never fill a genuine gap, because this extract has ZERO rows with a blank Is Individual and a populated Entity Type. Earlier the branch read notblank, which made 7,422 of 7,495 suppliers INDIVIDUAL because 'No' is not blank.",
         "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm.",
         "rule_type": "CASE_WHEN",
         "rule_config": {
@@ -163,6 +168,11 @@
               "if_column": "Is Individual",
               "op": "istrue",
               "then": "INDIVIDUAL"
+            },
+            {
+              "if_column": "Is Individual",
+              "op": "isfalse",
+              "then": "CORPORATION"
             },
             {
               "if_column": "Entity Type",
