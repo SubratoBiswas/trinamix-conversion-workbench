@@ -4,6 +4,7 @@ import type {
   CleansingPreview,
   CleansingProfile,
   CleansingProfileInfo,
+  ColumnRuleFinding,
   ColumnRulesReport,
   MappingReport,
   RequiredCheck,
@@ -784,6 +785,14 @@ export const OutputApi = {
     api.get<ColumnRulesReport>(`/conversions/${conversionId}/column-rules`, {
       timeout: 180000,
     }).then(r => r.data),
+  /** Build and save the rule that fixes one column-rule finding, and learn it.
+   *  Refused with a reason for the findings whose remedy needs a person — a wrong
+   *  code, an over-long number, a missing mandatory value. */
+  fixColumnRule: (conversionId: string, finding: ColumnRuleFinding) =>
+    api.post<{
+      field: string; rule_type: string; description: string;
+      bindings: number; learned: boolean; output_marked_stale: boolean;
+    }>(`/conversions/${conversionId}/column-rules/fix`, finding).then(r => r.data),
   /** Which cleansing families run at generation, plus the family catalogue. */
   cleansingProfile: (conversionId: string) =>
     api.get<CleansingProfileInfo>(`/conversions/${conversionId}/cleansing-profile`)

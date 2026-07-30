@@ -1065,6 +1065,34 @@ export const OutputPreviewPage: React.FC = () => {
     return "";
   };
 
+  /** Findings whose remedy is stated by the template itself, so no judgement is
+   *  involved. Mirrors AUTO_FIXABLE in services/column_rule_fix_service. */
+  const AUTO_FIXABLE = new Set([
+    "date_format", "max_length", "numeric", "scale", "do_not_populate",
+  ]);
+
+  const [fixBusy, setFixBusy] = useState<string | null>(null);
+  const [fixNote, setFixNote] = useState<string | null>(null);
+
+  const fixFinding = async (f: ColumnRuleFinding) => {
+    if (!id) return;
+    const key = `${f.sheet}|${f.field}|${f.rule}`;
+    setFixBusy(key); setColRulesError(null);
+    try {
+      const res = await OutputApi.fixColumnRule(id, f);
+      // Re-check rather than removing the row locally: the only trustworthy proof
+      // that the fix worked is the checker no longer reporting it.
+      await loadColumnRules();
+      setFixNote(`${res.description}${res.learned
+        ? " Learned, so it applies to future conversions too."
+        : ""} The output is marked stale — regenerate to pick it up.`);
+    } catch (e: any) {
+      setColRulesError(e?.response?.data?.detail || e?.message || "Could not apply the fix.");
+    } finally {
+      setFixBusy(null);
+    }
+  };
+
   const renderColumnRules = () => (
     <div className="mb-4 rounded-lg border border-line bg-canvas p-3">
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
@@ -1085,6 +1113,11 @@ export const OutputPreviewPage: React.FC = () => {
 
       {colRulesError && (
         <p className="text-[11px] text-danger">{colRulesError}</p>
+      )}
+      {fixNote && (
+        <p className="mb-2 rounded-md border border-line bg-success-subtle px-2 py-1.5 text-[11px] text-ink">
+          {fixNote}
+        </p>
       )}
 
       {colRules && (
@@ -1136,7 +1169,28 @@ export const OutputPreviewPage: React.FC = () => {
                       <td className="px-2 py-1.5 font-mono text-ink-muted">
                         {f.examples.length ? f.examples[0] : "(blank)"}
                       </td>
-                      <td className="px-2 py-1.5 text-ink-muted">{f.suggested_fix}</td>
+                      <td className="px-2 py-1.5 text-ink-muted">
+                        <div className="flex items-start justify-between gap-2">
+                          <span>{f.suggested_fix}</span>
+                          {/* Reading the finding is only half the job — every one of
+                              these has a single obvious remedy, and making the analyst
+                              hand-build the same rule in another screen is asking them
+                              to retype what the tool already knows. The findings whose
+                              remedy needs a judgement (a wrong code, an over-long
+                              number, a missing mandatory value) get no button, because
+                              a click that quietly truncates a mis-mapped number turns a
+                              visible problem into an invisible one. */}
+                          {AUTO_FIXABLE.has(f.rule) && (
+                            <Button
+                              variant="secondary"
+                              loading={fixBusy === `${f.sheet}|${f.field}|${f.rule}`}
+                              onClick={() => void fixFinding(f)}
+                            >
+                              Fix
+                            </Button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

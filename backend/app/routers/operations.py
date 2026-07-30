@@ -438,6 +438,88 @@ async def apply_customer_rules(
     return {"conversion_id": str(c.id), "target_object": c.target_object, **res}
 
 
+@output_router.post("/{conversion_id}/column-rules/fix")
+async def fix_column_rule(
+    conversion_id: str,
+    payload: dict,
+    _: User = Depends(get_current_user),
+):
+    """Build the rule that fixes one column-rule finding, and learn it.
+
+    The Cleansing tab names exactly what Oracle will reject and what to do about it.
+    Every one of those has a single obvious remedy, so making the analyst retype it in
+    another screen is asking them to re-derive something the tool already knows.
+
+    Body: the finding, as returned by GET column-rules. Only the ones whose remedy
+    involves no judgement are built — a value outside the accepted codes, a number too
+    big for its column and a missing mandatory value are all refused WITH the reason,
+    because a button that quietly truncates a mis-mapped number or picks a code on the
+    analyst's behalf turns a visible problem into an invisible one.
+
+    The rule is also captured as a learning, per the standing instruction that a
+    correction made once should reach every current and future conversion.
+    """
+    from app.models.fbdi import FBDIField, FBDITemplate
+    from app.models.output import ConvertedOutput
+    from app.models.transformation import TransformationRule
+    from app.services.column_rule_fix_service import plan_fix
+
+    c = await _require_conversion(conversion_id)
+    plan = plan_fix(payload or {})
+    if not plan.get("ok"):
+        raise HTTPException(422, plan.get("reason") or "No automatic fix for this.")
+
+    field_name = str((payload or {}).get("field") or "")
+    template = await FBDITemplate.get(c.template_id) if c.template_id else None
+    if template is None:
+        raise HTTPException(400, "This conversion has no template bound.")
+    import re as _re
+    def _n(x):
+        return _re.sub(r"[^a-z0-9]", "", str(x or "").lower())
+    fields = [f for f in await FBDIField.find(
+        FBDIField.template_id == template.id).to_list()
+        if _n(f.field_name) == _n(field_name)]
+    if not fields:
+        raise HTTPException(404, f"No field named {field_name!r} in this template.")
+
+    made = 0
+    for f in fields:
+        existing = await TransformationRule.find_one({
+            "conversion_id": c.id, "target_field_id": f.id,
+            "rule_type": plan["rule_type"]})
+        if existing:
+            await existing.set({"rule_config": plan["rule_config"],
+                                "description": plan["description"]})
+        else:
+            await TransformationRule(
+                conversion_id=c.id, target_field_id=f.id,
+                rule_type=plan["rule_type"], rule_config=plan["rule_config"],
+                description=plan["description"], sequence=50,
+            ).insert()
+        made += 1
+
+    # The file on disk no longer matches the rules that would now run.
+    await ConvertedOutput.find(
+        ConvertedOutput.conversion_id == c.id).update({"$set": {"status": "stale"}})
+
+    learned = None
+    try:
+        from app.services.learning_service import record_learning_from_rule
+        rule = await TransformationRule.find_one({
+            "conversion_id": c.id, "target_field_id": fields[0].id,
+            "rule_type": plan["rule_type"]})
+        if rule is not None:
+            learned = await record_learning_from_rule(
+                rule, c, captured_by=getattr(_, "email", ""))
+    except Exception:                                           # noqa: BLE001
+        log.exception("column-rule fix: learning capture failed for %s", field_name)
+
+    return {"conversion_id": str(c.id), "field": field_name,
+            "rule_type": plan["rule_type"], "rule_config": plan["rule_config"],
+            "description": plan["description"], "bindings": made,
+            "learned": bool(learned), "output_marked_stale": True}
+
+
 @output_router.get("/{conversion_id}/column-rules")
 async def column_rules(
     conversion_id: str,
