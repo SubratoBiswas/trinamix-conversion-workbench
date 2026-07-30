@@ -506,6 +506,14 @@ export const MappingApi = {
     api.put<MappingSuggestion>(`/mappings/${mappingId}`, body).then(r => r.data),
   approve: (mappingId: string) =>
     api.put<MappingSuggestion>(`/mappings/${mappingId}/approve`).then(r => r.data),
+  /** Ship this column empty and hold the decision: clears the source and the default,
+   *  marks the mapping not_applicable so the generator suppresses it, records a
+   *  suppress_field learning so every current and future conversion inherits it, and
+   *  marks the outputs stale. Doing only the first of those is why a field marked
+   *  blank could still ship a control default — Batch ID kept shipping 900001. */
+  keepBlank: (mappingId: string) =>
+    api.put<MappingSuggestion & { learned_suppression?: boolean }>(
+      `/mappings/${mappingId}/keep-blank`).then(r => r.data),
   rules: (conversionId: string) =>
     api.get<TransformationRule[]>(`/conversions/${conversionId}/rules`).then(r => r.data),
   addRule: (conversionId: string, body: {

@@ -64,36 +64,43 @@ def run(r, value="", row=None, ctx=None):
 
 
 # ── Tax Organization Type: the 28-Jul question, answered ────────────────────
-def test_tax_organization_type_uses_the_display_value():
+def test_tax_organization_type_uses_the_oracle_code():
+    """Reversed within the day: first "C caps, rest small", then "please make it
+    caps". The instance takes the CODE. Pinned here because it changed once — if a
+    load ever rejects on this value, this test is the record of which way it went."""
     r = rule_for("Tax Organization Type")
-    check("default is Corporation, not CORPORATION",
-          r["rule_config"]["default"] == "Corporation",
+    check("default is CORPORATION",
+          r["rule_config"]["default"] == "CORPORATION",
           f"got {r['rule_config']['default']!r}")
     check("and the individual branch matches",
-          r["rule_config"]["branches"][0]["then"] == "Individual")
+          r["rule_config"]["branches"][0]["then"] == "INDIVIDUAL")
 
 
 def test_an_individual_supplier_is_not_loaded_as_a_corporation():
     """The defect the CASE_WHEN exists to prevent: a flat constant made every
     individual a corporation."""
     r = rule_for("Tax Organization Type")
-    check("individual", run(r, "", {"Is Individual": "T"}) == "Individual")
-    check("everything else", run(r, "", {"Is Individual": ""}) == "Corporation")
+    check("individual", run(r, "", {"Is Individual": "T"}) == "INDIVIDUAL")
+    check("everything else", run(r, "", {"Is Individual": ""}) == "CORPORATION")
 
 
 def test_the_new_case_is_protected_from_cleansing():
     """A mixed-case decision is exactly what a case-normalising family rewrites."""
     pv = protected_values()
-    for v in ("Corporation", "Individual", "SPEND_AUTHORIZED"):
+    for v in ("CORPORATION", "INDIVIDUAL", "SPEND_AUTHORIZED"):
         check(f"{v} protected", _norm_protect(v) in pv)
 
 
-def test_the_strategy_file_no_longer_ships_the_coded_values():
-    src = (_BACKEND / "app" / "data"
-           / "supplier_strategy_defaults.json").read_text(encoding="utf-8")
-    check("no CORPORATION literal", '"CORPORATION"' not in src)
-    check("no INDIVIDUAL literal", '"INDIVIDUAL"' not in src)
-    check("and the 28-Jul CONFIRM is marked answered", "ANSWERED by the analyst" in src)
+def test_the_strategy_and_the_corrections_agree_on_the_value():
+    """Two files carry this rule. They disagreeing is how one gets fixed and the other
+    quietly keeps shipping the old value."""
+    a = (_BACKEND / "app" / "data"
+         / "supplier_strategy_defaults.json").read_text(encoding="utf-8")
+    b = (_BACKEND / "app" / "data"
+         / "supplier_corrections_30jul.json").read_text(encoding="utf-8")
+    for src, nm in ((a, "strategy"), (b, "corrections")):
+        check(f"{nm} uses the code", '"CORPORATION"' in src)
+        check(f"{nm} has no display-case leftover", '"Corporation"' not in src)
 
 
 # ── Delivery Method ─────────────────────────────────────────────────────────

@@ -12,10 +12,10 @@
           {
             "if_column": "Is Individual",
             "op": "notblank",
-            "then": "Individual"
+            "then": "INDIVIDUAL"
           }
         ],
-        "default": "Corporation"
+        "default": "CORPORATION"
       },
       "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm."
     },
@@ -154,10 +154,10 @@
             {
               "if_column": "Is Individual",
               "op": "notblank",
-              "then": "Individual"
+              "then": "INDIVIDUAL"
             }
           ],
-          "default": "Corporation"
+          "default": "CORPORATION"
         }
       },
       {

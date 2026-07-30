@@ -1039,6 +1039,13 @@ async def download_output(
     ).sort("-generated_at").first_or_none()
     if not out or not Path(out.output_file_path).exists():
         raise HTTPException(404, "No output artifact found — generate output first")
+    if getattr(out, "status", "") == "stale":
+        # Same reasoning as download-all: handing back a file the rules have moved on
+        # from is worse than refusing, because it looks like the change did not work.
+        raise HTTPException(
+            409,
+            "This output was generated before the current rules and no longer matches "
+            "them — regenerate it before downloading.")
     return FileResponse(out.output_file_path, filename=out.output_file_name)
 
 
@@ -1115,6 +1122,17 @@ async def download_all_outputs(
                         ConvertedOutput.conversion_id == cc.id
                     ).sort("-generated_at").first_or_none()
                     if not e or not Path(e.output_file_path).exists():
+                        continue
+                    # STALE MEANS THE RULES CHANGED SINCE THIS FILE WAS WRITTEN.
+                    # Reusing it hands back the pre-fix output and every symptom
+                    # follows: a rule edited in the UI never appears in the download,
+                    # a Fix button reports success and changes nothing, and a change
+                    # one analyst makes is invisible to a colleague — because BOTH are
+                    # served the same cached artifact from disk. Staleness was recorded
+                    # everywhere and consulted nowhere. Treat it exactly like a missing
+                    # file: fall through and rebuild.
+                    if getattr(e, "status", "") == "stale":
+                        stale.append(f"{obj} ({cc.name})")
                         continue
                     ext_e = Path(e.output_file_name).suffix.lstrip(".").lower()
                     if ext_e not in _want_ext:

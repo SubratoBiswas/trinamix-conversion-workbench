@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Sparkles, Check, X, RefreshCw, Search, Filter as FilterIcon,
   GraduationCap, Edit2, ArrowLeft, ArrowLeftRight, AlertTriangle, ChevronDown, Lock, Download,
-  GitBranch, Table2, ArrowRight, Layers, ChevronRight,
+  GitBranch, Table2, ArrowRight, Layers, ChevronRight, CheckCircle2,
 } from "lucide-react";
 
 // P3 — tiny lock glyph for source-column PII badges in the canvas list.
@@ -678,6 +678,25 @@ export const MappingReviewPage: React.FC = () => {
     });
     flash(v ? `Fixed value set: “${v}”` : "Fixed value cleared");
     loadAll();
+  };
+
+  // "Keep blank" — the decision that this column ships empty. Distinct from
+  // clearing a fixed value: clearing leaves the field open, so a control default
+  // or the AI can refill it (this is exactly why Batch ID kept shipping 900001
+  // after an analyst had "blanked" it). The endpoint suppresses the field, writes
+  // a suppress_field learning so every current and future conversion inherits the
+  // decision, and marks the built outputs stale.
+  const keepBlank = async (m: MappingSuggestion) => {
+    try {
+      const r = await MappingApi.keepBlank(m.id);
+      flash(
+        `${m.target_field_name || "Field"} will ship blank` +
+        (r?.learned_suppression ? " — saved to learning for all conversions" : ""),
+      );
+      loadAll();
+    } catch (e: any) {
+      flash(`Could not keep blank: ${e?.response?.data?.detail || e?.message || "failed"}`);
+    }
   };
 
   // Drag-to-map: dropping a source column onto a target field binds it. We
@@ -1393,6 +1412,7 @@ export const MappingReviewPage: React.FC = () => {
             onAddCustomRule={(m) => { setRuleAuthorMapping(m); setRuleAuthorOpen(true); }}
             onResetDefault={(fn) => resetGoldDefaults([fn], false)}
             onSetFixedValue={(m, v) => setFixedValue(m, v)}
+            onKeepBlank={(m) => keepBlank(m)}
             aiVerdicts={aiVerdicts}
             onAiVerdicts={mergeAiVerdicts}
           />
@@ -3675,10 +3695,11 @@ const MappingInspector: React.FC<{
   onAddCustomRule: (m: MappingSuggestion) => void;
   onResetDefault?: (fieldName: string) => void;
   onSetFixedValue?: (m: MappingSuggestion, value: string) => void;
+  onKeepBlank?: (m: MappingSuggestion) => void;
   targetObject?: string | null;
   aiVerdicts?: Record<string, Record<string, { verdict: string; reason: string }>>;
   onAiVerdicts?: (m: Record<string, Record<string, { verdict: string; reason: string }>>) => void;
-}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, onSetFixedValue, targetObject, aiVerdicts, onAiVerdicts }) => {
+}> = ({ mapping, sourceColumns, conversionId, onClose, onApprove, onReject, onOverride, onAddCustomRule, onResetDefault, onSetFixedValue, onKeepBlank, targetObject, aiVerdicts, onAiVerdicts }) => {
   const [fixedVal, setFixedVal] = useState("");
   useEffect(() => { setFixedVal(mapping.source_column ? "" : (mapping.default_value ?? "")); }, [mapping.id]);
   const [editingOverride, setEditingOverride] = useState(false);
@@ -3803,6 +3824,37 @@ const MappingInspector: React.FC<{
                 </button>
               )}
             </div>
+
+            {/* Keep blank — the third state, and the one that was missing. Clearing
+                a fixed value only leaves the field open, so a control default or the
+                AI refills it on the next generate; that is exactly how Batch ID kept
+                shipping 900001 after it had been "blanked". This states the decision:
+                suppress the column, and remember it everywhere. */}
+            {onKeepBlank && (
+              <div className="mt-2.5 border-t border-brand/20 pt-2.5">
+                {mapping.status === "not_applicable" &&
+                 !mapping.source_column && !mapping.default_value ? (
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-success-dark">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    Kept blank — this column ships empty in every output.
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-[11px] leading-snug text-ink-muted">
+                      Or ship this column <span className="font-medium text-ink">empty</span> —
+                      no source, no default, and no control default refilling it later.
+                      Saved to learning so every current and future conversion inherits it.
+                    </div>
+                    <button
+                      onClick={() => onKeepBlank(mapping)}
+                      className="shrink-0 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-medium text-ink hover:bg-canvas"
+                    >
+                      Keep blank
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

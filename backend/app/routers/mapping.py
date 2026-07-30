@@ -24,6 +24,28 @@ from app.transformations.engine import apply_pipeline
 router = APIRouter(prefix="/api", tags=["mapping"])
 
 
+async def _mark_outputs_stale(conversion_id) -> int:
+    """The file on disk no longer matches the rules that would now run.
+
+    Every write that changes what generation would produce has to do this, and until
+    now the RULE endpoints did not: a rule added or edited in the UI left the artifact
+    marked fresh, the download reused it, and the change never appeared in the file.
+    Combined with the download path serving stale artifacts anyway, that is why "the
+    rules updated in the tool are not reflected in the output", why a Fix reported
+    success and changed nothing, and why one analyst's change was invisible to another
+    — both were handed the same cached file.
+    """
+    from app.models.output import ConvertedOutput
+    try:
+        res = await ConvertedOutput.find(
+            ConvertedOutput.conversion_id == conversion_id
+        ).update({"$set": {"status": "stale"}})
+        return int(getattr(res, "modified_count", 0) or 0)
+    except Exception:  # noqa: BLE001 — never fail the save on the bookkeeping
+        log.exception("could not mark outputs stale for %s", conversion_id)
+        return 0
+
+
 async def _require_conversion(conversion_id: str) -> Conversion:
     c = await Conversion.get(PydanticObjectId(conversion_id))
     if not c:
@@ -334,6 +356,7 @@ async def update_mapping(
         data["approved_by"] = user.email
         data["approved_at"] = datetime.utcnow()
     await m.set(data)
+    await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
     # Learn on save when the analyst has made a decision: a source column OR an
     # explicit default. The default-only case used to be dropped here, so
@@ -408,12 +431,87 @@ async def value_map_accept(
     return result
 
 
+@router.put("/mappings/{mapping_id}/keep-blank", response_model=MappingOut)
+async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
+    """Ship this column empty, and hold that decision everywhere.
+
+    "Leave it blank" is a real decision and it was surprisingly hard to express: an
+    analyst had to clear the source column, clear the default, and set the status by
+    hand — and even then a control default would refill the column at generate, because
+    that pass skips a field only if something told it to. Batch ID was the live proof:
+    marked blank, still shipping 900001.
+
+    So this does all three things at once. The mapping becomes not_applicable with no
+    source and no default, which is what puts it into the generator's suppression set;
+    a suppress_field learning records the intent so every current and future conversion
+    of the object inherits it; and the outputs are marked stale, because the file on
+    disk still has the value in it.
+    """
+    m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
+    if not m:
+        raise HTTPException(404, "Mapping not found")
+    conv = await Conversion.get(m.conversion_id)
+    _blank = {"status": "not_applicable", "source_column": None,
+              "default_value": None, "review_required": 0,
+              "approved_by": user.email, "approved_at": datetime.utcnow()}
+    await m.set(_blank)
+
+    # Any SIBLING row for the same target field goes blank too. The generator keeps
+    # one mapping per target field and picks it by status priority, where
+    # not_applicable (2) ranks BELOW approved (3) and overridden (4) — so a stale
+    # duplicate row left over from an earlier auto-map would win the dedup and the
+    # column would keep shipping its value while the UI showed it blank. That is the
+    # same shape of bug as Batch ID, one layer down, so it is closed here rather than
+    # left for the next output to expose.
+    if m.target_field_id:
+        for sib in await MappingSuggestion.find(
+            MappingSuggestion.conversion_id == m.conversion_id,
+            MappingSuggestion.target_field_id == m.target_field_id,
+        ).to_list():
+            if sib.id != m.id:
+                await sib.set(_blank)
+
+    await _mark_outputs_stale(m.conversion_id)
+
+    learned = False
+    try:
+        from app.models.fbdi import FBDIField
+        from app.services.client_service import client_id_for_conversion
+        from app.services.learning_service import (_upsert, source_erp_for_conversion,
+                                                   _business_object_for)
+        f = await FBDIField.get(m.target_field_id) if m.target_field_id else None
+        obj = await _business_object_for(conv)
+        if f is not None and obj:
+            lm = await _upsert(
+                kind="suppress_field", category="Left blank on purpose",
+                original_value="(blank)", resolved_value="",
+                target_object=obj, target_field=f.field_name, rule_type="suppress",
+                rule_config={"note": f"Kept blank by {user.email}"},
+                project_id=getattr(conv, "project_id", None),
+                client_id=await client_id_for_conversion(conv),
+                source_erp=await source_erp_for_conversion(conv),
+                captured_from="kept blank in Mapping Review",
+                captured_by=user.email,
+                # An analyst pressing this IS an explicit action, so it may revive a
+                # suppression they previously retired.
+                revive=True,
+            )
+            learned = lm is not None
+    except Exception:  # noqa: BLE001 — the decision is saved either way
+        log.exception("keep-blank: could not record the suppression learning")
+
+    out = (await enrich_mapping_with_samples(conv, [m]))[0]
+    out["learned_suppression"] = learned
+    return out
+
+
 @router.put("/mappings/{mapping_id}/approve", response_model=MappingOut)
 async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user)):
     m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
     await m.set({"status": "approved", "approved_by": user.email, "approved_at": datetime.utcnow()})
+    await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
     if m.source_column or (m.default_value and str(m.default_value).strip()):
         _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
@@ -457,6 +555,7 @@ async def add_rule(
             data["target_field_id"] = None
     r = TransformationRule(conversion_id=conv.id, sequence=seq, **data)
     await r.insert()
+    await _mark_outputs_stale(conv.id)
     # Learning capture is best-effort — a failure here must not fail the save
     # (and previously surfaced as an opaque "Failed to save rule" with no CORS).
     try:
@@ -695,6 +794,7 @@ async def update_rule(
     for k, v in data.items():
         setattr(r, k, v)
     await r.save()
+    await _mark_outputs_stale(r.conversion_id)
     # Re-learn so the edited definition (not the superseded one) is what future
     # conversions inherit. Best-effort, exactly as in add_rule.
     try:
@@ -719,7 +819,10 @@ async def delete_rule(rule_id: str, _: User = Depends(get_current_user)):
     r = await TransformationRule.get(PydanticObjectId(rule_id))
     if not r:
         raise HTTPException(404, "Rule not found")
+    conv_id = r.conversion_id
     await r.delete()
+    # Removing a rule changes the output just as much as adding one.
+    await _mark_outputs_stale(conv_id)
     return {"deleted": rule_id}
 
 

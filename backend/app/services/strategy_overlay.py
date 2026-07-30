@@ -52,6 +52,32 @@ def _load() -> dict:
         return _cache
     rules = list(doc.get("rules") or [])
     rules += list((doc.get("analyst_rules") or {}).get("rules") or [])
+    # The analyst's later correction files are overlays too, and the BLANK ones have to
+    # be, or nothing stops the control defaults refilling them. Batch ID is the proof:
+    # the analyst said blank it on every sheet, and it kept shipping 900001 because
+    # _CONTROL_DEFAULTS carries "batch id": "900001" and only skips a column named in
+    # THIS blank set. A suppress_field learning reaches the mappings; it does not reach
+    # the control-default pass, so a field with no mapping row at all — which is exactly
+    # what an unmapped Batch ID is — was refilled every time.
+    for extra in ("supplier_corrections_30jul.json",):
+        try:
+            more = json.loads((_DATA / extra).read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        for r in (more.get("rules") or []):
+            a = (r.get("action") or "").strip()
+            if a == "blank":
+                rules.append({"target_object": r.get("target_object"),
+                              "target_field": r.get("target_field"), "suppress": True})
+            elif a == "constant":
+                rules.append({"target_object": r.get("target_object"),
+                              "target_field": r.get("target_field"),
+                              "constant": r.get("value")})
+            elif a == "rule" and r.get("rule_type"):
+                rules.append({"target_object": r.get("target_object"),
+                              "target_field": r.get("target_field"),
+                              "rule_type": r["rule_type"],
+                              "rule_config": r.get("rule_config") or {}})
     for r in rules:
         obj, fld = _n(r.get("target_object")), _n(r.get("target_field"))
         if not obj or not fld or "*" in str(r.get("target_field") or ""):
