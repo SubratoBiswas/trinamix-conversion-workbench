@@ -113,17 +113,102 @@ async def _seed_one(path: Path, name: str, module: str, business_object: str) ->
     return True
 
 
+async def _needs_comment_enrichment(business_object: str, name: str) -> bool:
+    """Does this template's stored field set predate the comment miner?
+
+    Detected by the data rather than by a version flag: if not one field carries a
+    ``db_column``, the rules Oracle publishes in its header comments were never read.
+    """
+    tpl = await _template_for(business_object, name)
+    if tpl is None:
+        return False
+    hit = await FBDIField.find(
+        FBDIField.template_id == tpl.id,
+        {"db_column": {"$nin": [None, ""]}},
+    ).first_or_none()
+    return hit is None
+
+
+async def _template_for(business_object: str, name: str):
+    for q in ({"business_object": business_object}, {"name": name}):
+        tpl = await FBDITemplate.find_one(q)
+        if tpl:
+            return tpl
+    return None
+
+
+async def _enrich_from_comments(path: Path, business_object: str, name: str) -> int:
+    """Re-read the workbook and fold its header-comment rules onto the STORED fields.
+
+    Updates in place rather than re-seeding the template: the existing field ids are
+    referenced by every mapping, rule and gold row on file, so replacing them would
+    orphan the lot. Matching is by sheet + normalised field name.
+    """
+    import re as _re
+    from app.services.template_comments import apply_to_field, constraints_by_sheet
+
+    tpl = await _template_for(business_object, name)
+    if tpl is None:
+        return 0
+    try:
+        cons = constraints_by_sheet(str(path))
+    except Exception:                                           # noqa: BLE001
+        return 0
+    if not cons:
+        return 0
+    try:
+        parsed = parse_fbdi_template(path)
+    except Exception:                                           # noqa: BLE001
+        return 0
+    def _n(x):
+        return _re.sub(r"[^a-z0-9]", "", str(x or "").lower())
+    fresh = {(_n(f.get("sheet_name")), _n(f.get("field_name"))): f
+             for f in parsed.get("fields", [])}
+    sheets = {s.id: s.sheet_name
+              for s in await FBDISheet.find(FBDISheet.template_id == tpl.id).to_list()}
+    n = 0
+    for fld in await FBDIField.find(FBDIField.template_id == tpl.id).to_list():
+        src = fresh.get((_n(sheets.get(fld.sheet_id)), _n(fld.field_name)))
+        if not src:
+            continue
+        patch = {k: src.get(k) for k in
+                 ("db_column", "nullable", "precision", "scale", "do_not_populate",
+                  "import_actions", "comment_text", "data_type", "max_length",
+                  "format_mask", "allowed_values")
+                 if src.get(k) not in (None, "", [], False)}
+        # required is a union: the header '*' OR the comment's NOT NULL. Never
+        # un-require a field the template marked required.
+        if src.get("required"):
+            patch["required"] = True
+        if patch:
+            await fld.set(patch)
+            n += 1
+    logger.info("template_seed: enriched %d field(s) of %s from header comments",
+                n, name)
+    return n
+
+
 async def seed_fbdi_templates() -> dict:
     if not _DIR.exists():
         return {"seeded": 0, "skipped": 0, "note": "no bundled templates"}
     existing_objs, existing_names = await _existing_keys()
-    seeded = skipped = failed = 0
+    seeded = skipped = failed = enriched = 0
     for fname, (name, module, bo) in _BUNDLED.items():
         path = _DIR / fname
         if not path.exists():
             continue
         try:
             if bo.strip().lower() in existing_objs or name.strip().lower() in existing_names:
+                # Present already — but is it present with the COLUMN RULES Oracle
+                # publishes in the template's header comments? A template seeded before
+                # the comment miner existed has fields with no db_column, no precision,
+                # no NOT NULL and no value set, so the whole column-rules feature is
+                # inert on it: live, a Supplier conversion reported 3 columns carrying a
+                # rule where the parser mines 136. Shipping a feature that only works on
+                # templates nobody has yet is not shipping it, so re-enrich in place.
+                if await _needs_comment_enrichment(bo, name):
+                    got = await _enrich_from_comments(path, bo, name)
+                    enriched += got
                 skipped += 1
                 continue
             ok = await _seed_one(path, name, module, bo)
@@ -139,7 +224,8 @@ async def seed_fbdi_templates() -> dict:
     if seeded or failed:
         logger.info("template_seed: seeded %d, skipped %d existing, failed %d",
                     seeded, skipped, failed)
-    return {"seeded": seeded, "skipped": skipped, "failed": failed}
+    return {"seeded": seeded, "skipped": skipped, "failed": failed,
+            "fields_enriched": enriched}
 
 
 async def ensure_customer_multisheet() -> dict:

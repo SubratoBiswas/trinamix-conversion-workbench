@@ -1493,7 +1493,10 @@ const CompositeMappingModal: React.FC<{
   const [preset, setPreset] = useState<"phone" | "delimiter">("phone");
   const [phoneParts, setPhoneParts] = useState<Record<string, string>>({}); // part -> target field id
   const [sep, setSep] = useState("-");
-  const [splitRows, setSplitRows] = useState<{ fieldId: string; index: number }[]>([{ fieldId: "", index: 0 }]);
+  const [splitRows, setSplitRows] = useState<{ fieldId: string; index: number }[]>([]);
+  // A Customer template carries 1,365 fields, so the tick-list needs a filter to
+  // be usable at all — without one the analyst scrolls for the four they want.
+  const [splitFilter, setSplitFilter] = useState("");
 
   // combine
   const [combineTarget, setCombineTarget] = useState("");
@@ -1576,6 +1579,12 @@ const CompositeMappingModal: React.FC<{
     }
   };
 
+  // {id,label} for the tick-list. Built once rather than inside the map so a
+  // 1,365-row list is not rebuilt on every keystroke in the filter box.
+  const targetFieldOptions = useMemo(
+    () => targetFields.map((f) => ({ id: String(f.id), label: f.field_name })),
+    [targetFields]);
+
   const fieldSelect = (value: string, onChange: (v: string) => void, placeholder: string) => (
     <select value={value} onChange={(e) => onChange(e.target.value)}
       className="w-full rounded-md border border-line px-2 py-1.5 text-xs">
@@ -1639,20 +1648,62 @@ const CompositeMappingModal: React.FC<{
                   <input value={sep} onChange={(e) => setSep(e.target.value)}
                     className="w-24 rounded-md border border-line px-2 py-1.5 text-xs" />
                 </div>
-                {splitRows.map((row, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <span className="w-24 text-xs text-ink-muted">Part #{row.index}</span>
-                    {fieldSelect(row.fieldId, (v) => setSplitRows((rows) => rows.map((r, j) => j === i ? { ...r, fieldId: v } : r)), "— target field —")}
-                    <input type="number" value={row.index}
-                      onChange={(e) => setSplitRows((rows) => rows.map((r, j) => j === i ? { ...r, index: Number(e.target.value) } : r))}
-                      className="w-16 rounded-md border border-line px-2 py-1.5 text-xs" />
-                  </div>
-                ))}
-                <Button variant="ghost" onClick={() => setSplitRows((r) => [...r, { fieldId: "", index: r.length }])}>+ Add part</Button>
+                {/* Tick the fields the parts go to, in order — the mirror image of the
+                    combine tab's source-column list. It replaced a stack of dropdowns
+                    with an "+ Add part" button: choosing four fields meant four clicks
+                    to add rows and four dropdowns to hunt through, on a template with
+                    1,365 fields. Ticking also makes the part NUMBERS automatic, which
+                    is where the dropdown version went wrong most often — two rows
+                    silently sharing an index. */}
+                <div className="mb-1 text-xs font-semibold text-ink">Target fields (in order)</div>
+                <input
+                  value={splitFilter}
+                  onChange={(e) => setSplitFilter(e.target.value)}
+                  placeholder="Filter fields…"
+                  className="w-full rounded-md border border-line px-2 py-1.5 text-xs"
+                />
+                <div className="max-h-40 space-y-1 overflow-auto rounded-md border border-line p-2">
+                  {targetFieldOptions
+                    .filter((f) => !splitFilter
+                      || f.label.toLowerCase().includes(splitFilter.toLowerCase()))
+                    .map((f) => {
+                      const at = splitRows.findIndex((r) => r.fieldId === f.id);
+                      return (
+                        <label key={f.id} className="flex items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={at >= 0}
+                            onChange={(e) => setSplitRows((rows) => {
+                              const kept = rows.filter((r) => r.fieldId && r.fieldId !== f.id);
+                              const next = e.target.checked
+                                ? [...kept, { fieldId: f.id, index: kept.length }]
+                                : kept;
+                              // Re-number so the part indexes always match tick order
+                              // and can never collide.
+                              return next.map((r, i) => ({ ...r, index: i }));
+                            })}
+                          />
+                          <span className="text-ink">{f.label}</span>
+                          {at >= 0 && (
+                            <span className="text-[10px] text-ink-subtle">
+                              part #{splitRows[at].index + 1}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                </div>
+                {splitRows.filter((r) => r.fieldId).length > 0 && (
+                  <p className="text-[11px] text-ink-muted">
+                    {splitRows.filter((r) => r.fieldId).length} field(s) selected — the
+                    value is split on <span className="font-mono">{sep || "the delimiter"}</span>{" "}
+                    and the parts land in the order ticked.
+                  </p>
+                )}
               </div>
             )}
           </>
-        ) : (
+        ) : mode === "combine" ? (
           <>
             <div>
               <div className="mb-1 text-xs font-semibold text-ink">Combine into target field</div>
@@ -1681,7 +1732,7 @@ const CompositeMappingModal: React.FC<{
                 className="w-24 rounded-md border border-line px-2 py-1.5 text-xs" />
             </div>
           </>
-        )}
+        ) : null}
 
         {mode === "describe" && (
           <>

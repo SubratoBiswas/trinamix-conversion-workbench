@@ -415,13 +415,18 @@ async def seed_supplier_corrections_30jul() -> dict:
             continue
         resolved = ("" if action == "blank"
                     else str(r.get("value", "")) if action == "constant" else fld)
-        existing = await LearnedMapping.find_one(
-            LearnedMapping.kind == kind,
-            LearnedMapping.target_object == obj,
-            LearnedMapping.target_field == fld,
-            LearnedMapping.client_id == nid,
-            include_deleted=True,
-        )
+        # Identity includes captured_from for a RULE correction. A field like
+        # Alternate Name legitimately carries several column_mapping rows — one per
+        # source column — so keying only on (kind, object, field, client) matched an
+        # arbitrary alias and updated THAT instead of creating the correction. Live,
+        # two of the twelve corrections went missing exactly this way.
+        _q = [LearnedMapping.kind == kind,
+              LearnedMapping.target_object == obj,
+              LearnedMapping.target_field == fld,
+              LearnedMapping.client_id == nid]
+        if kind == "column_mapping":
+            _q.append(LearnedMapping.captured_from == src)
+        existing = await LearnedMapping.find_one(*_q, include_deleted=True)
         if existing and getattr(existing, "is_deleted", False):
             retired += 1
             continue
