@@ -367,12 +367,23 @@ export const ConversionsApi = {
     ).then(r => r.data),
   /** Values Generate Output writes for unmapped target fields (control
    *  constants, sequence keys, learned + AI-inferred defaults). Used by the
-   *  mapping-review UI to show "defaulted -> value" instead of a required gap. */
+   *  mapping-review UI to show "defaulted -> value" instead of a required gap.
+   *
+   *  `suppressed` lists the fields the analyst has said must ship BLANK — from a
+   *  strategy correction, a suppress_field learning, or a Keep blank press. They
+   *  are already absent from `defaults`; the list is returned so the UI can show
+   *  "kept blank" (an absent default and a deliberate blank look identical
+   *  otherwise) and so a stale default_value still sitting on the mapping row
+   *  cannot put the value back on screen. This is the ONLY source of default
+   *  values in the UI: the page used to carry its own copy of the backend's
+   *  control-defaults table, which is why "Defaulted -> 900001" survived every
+   *  server-side fix. */
   effectiveDefaults: (id: string, useAi = true) =>
     api.get<{
       defaults: Record<string, string>;
       detail: { field: string; label: string; value: string; source: string }[];
       ai_used: boolean;
+      suppressed?: string[];
     }>(`/conversions/${id}/effective-defaults`, { params: { use_ai: useAi } }).then(r => r.data),
   /** Remove learned/gold-derived constant defaults (e.g. a wrong Country → AE that a
    *  gold file baked in). Forgets the object-level rule so it can't reapply, and can

@@ -25,6 +25,12 @@ _DATA = Path(__file__).resolve().parent.parent / "data"
 _FILE = _DATA / "supplier_strategy_defaults.json"
 _cache: dict | None = None
 _blank_cache: dict | None = None
+# Directives an analyst marked ``applies_to_all_sheets``. Keyed by the normalised
+# object they were written against, and matched by PREFIX, so a rule filed under
+# "Supplier" reaches Supplier Site / Address / Site Assignment / Contact / Bank —
+# and stops there. See _all_sheets_note below for why this exists.
+_wild_cache: dict | None = None
+_wild_blank_cache: dict | None = None
 
 
 def _n(s: Any) -> str:
@@ -38,17 +44,39 @@ def _label(s: Any) -> str:
     return str(s or "").strip().lower().rstrip("*").strip()
 
 
+# ``applies_to_all_sheets`` was already being written into the corrections file by
+# the analyst — and NOTHING read it. It was dead data, so two rules that say "all
+# sheets" were silently applied to one sheet only:
+#
+#   * Batch ID — "Blank on ALL sheets. A batch identifier the loader assigns is not
+#     ours to invent." Registered under Supplier alone, so Supplier Site, Address,
+#     Site Assignment, Contact and Bank all kept shipping 900001, and kept SAYING
+#     900001 on screen.
+#   * Delivery Method — the CASE_WHEN never reached Supplier Site, which is where
+#     the column actually lives.
+#
+# Matching is by PREFIX of the object name rather than a bare wildcard: a rule
+# filed under "Supplier" covers every Supplier* sheet and nothing else. A true
+# wildcard would have quietly blanked Customer's Batch ID too, which no one asked
+# for — the analyst was talking about the supplier bundle.
+def _all_sheets_note() -> str:
+    return "applies_to_all_sheets"
+
+
 def _load() -> dict:
     """{normalised target_object: {normalised field: directive}}"""
-    global _cache, _blank_cache
+    global _cache, _blank_cache, _wild_cache, _wild_blank_cache
     if _cache is not None:
         return _cache
     out: dict[str, dict[str, dict]] = {}
     blanks: dict[str, set[str]] = {}
+    wild: dict[str, dict[str, dict]] = {}
+    wild_blanks: dict[str, set[str]] = {}
     try:
         doc = json.loads(_FILE.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 — missing file just disables the overlay
         _cache, _blank_cache = {}, {}
+        _wild_cache, _wild_blank_cache = {}, {}
         return _cache
     rules = list(doc.get("rules") or [])
     rules += list((doc.get("analyst_rules") or {}).get("rules") or [])
@@ -66,18 +94,21 @@ def _load() -> dict:
             continue
         for r in (more.get("rules") or []):
             a = (r.get("action") or "").strip()
+            _all = bool(r.get(_all_sheets_note()))
             if a == "blank":
                 rules.append({"target_object": r.get("target_object"),
-                              "target_field": r.get("target_field"), "suppress": True})
+                              "target_field": r.get("target_field"), "suppress": True,
+                              "all_sheets": _all})
             elif a == "constant":
                 rules.append({"target_object": r.get("target_object"),
                               "target_field": r.get("target_field"),
-                              "constant": r.get("value")})
+                              "constant": r.get("value"), "all_sheets": _all})
             elif a == "rule" and r.get("rule_type"):
                 rules.append({"target_object": r.get("target_object"),
                               "target_field": r.get("target_field"),
                               "rule_type": r["rule_type"],
-                              "rule_config": r.get("rule_config") or {}})
+                              "rule_config": r.get("rule_config") or {},
+                              "all_sheets": _all})
     for r in rules:
         obj, fld = _n(r.get("target_object")), _n(r.get("target_field"))
         if not obj or not fld or "*" in str(r.get("target_field") or ""):
@@ -95,15 +126,38 @@ def _load() -> dict:
         out.setdefault(obj, {})[fld] = d
         if d.get("blank"):
             blanks.setdefault(obj, set()).add(_label(r.get("target_field")))
+        if r.get("all_sheets"):
+            wild.setdefault(obj, {})[fld] = d
+            if d.get("blank"):
+                wild_blanks.setdefault(obj, set()).add(_label(r.get("target_field")))
     _cache, _blank_cache = out, blanks
+    _wild_cache, _wild_blank_cache = wild, wild_blanks
     return _cache
+
+
+def _prefix_hits(target_object: str | None) -> list[str]:
+    """Normalised keys of the all-sheets rule sets this object inherits."""
+    o = _n(target_object)
+    if not o:
+        return []
+    return [k for k in (_wild_cache or {}) if o.startswith(k)]
 
 
 def directive_for(target_object: str | None, field_name: str | None) -> dict | None:
     """The write-time directive for one target field, or None."""
     if not target_object or not field_name:
         return None
-    return _load().get(_n(target_object), {}).get(_n(field_name))
+    exact = _load().get(_n(target_object), {}).get(_n(field_name))
+    if exact is not None:
+        return exact
+    # A sheet-specific rule always beats the bundle-wide one, which is why the
+    # exact lookup runs first.
+    fld = _n(field_name)
+    for k in _prefix_hits(target_object):
+        d = (_wild_cache or {}).get(k, {}).get(fld)
+        if d is not None:
+            return d
+    return None
 
 
 def blank_fields(target_object: str | None) -> set[str]:
@@ -122,7 +176,11 @@ def blank_fields(target_object: str | None) -> set[str]:
     skipped there entirely, so nothing downstream can refill it.
     """
     _load()
-    return set((_blank_cache or {}).get(_n(target_object), set()))
+    out = set((_blank_cache or {}).get(_n(target_object), set()))
+    # Plus anything the analyst marked "blank on ALL sheets" for this bundle.
+    for k in _prefix_hits(target_object):
+        out |= set((_wild_blank_cache or {}).get(k, set()))
+    return out
 
 
 def apply_frame_rules(df, target_object: str | None):

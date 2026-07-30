@@ -234,6 +234,63 @@ def test_approve_calls_the_propagation():
               f"got {sorted(calls)}")
 
 
+def test_applies_to_all_sheets_is_actually_read():
+    """It was dead data. The analyst had been writing the flag; nothing read it.
+
+    Two rules said "all sheets" and reached exactly one:
+      * Batch ID  — "Blank on ALL sheets. A batch identifier the loader assigns is
+        not ours to invent." Filed under Supplier, so Supplier Site / Address /
+        Site Assignment / Contact / Bank all kept shipping 900001 — and kept
+        SAYING 900001 on screen, which is how the analyst found it.
+      * Delivery Method — the CASE_WHEN never reached Supplier Site, which is
+        where the column actually lives.
+    """
+    from app.services.strategy_overlay import blank_fields, directive_for
+
+    doc = json.loads((_BACKEND / "app" / "data"
+                      / "supplier_corrections_30jul.json").read_text(encoding="utf-8"))
+    batch = [r for r in doc["rules"]
+             if str(r.get("target_field", "")).strip().lower() == "batch id"]
+    check("the Batch ID correction exists", len(batch) == 1, f"got {len(batch)}")
+    check("and it is marked all-sheets", batch[0].get("applies_to_all_sheets") is True,
+          "the note says 'Blank on ALL sheets' — the flag has to say so too")
+
+    sheets = ["Supplier", "Supplier Site", "Supplier Address",
+              "Supplier Site Assignment", "Supplier Contact", "Supplier Bank"]
+    for obj in sheets:
+        check(f"Batch ID is blank on {obj}",
+              "batch id" in {str(x).lower() for x in blank_fields(obj)})
+    check("Delivery Method reaches Supplier Site",
+          bool(directive_for("Supplier Site", "Delivery Method")))
+
+
+def test_all_sheets_matches_by_prefix_not_by_wildcard():
+    """A rule filed under Supplier must not blank Customer's Batch ID.
+
+    Customer FBDI has a Batch ID column too, and the same argument would apply to
+    it — but the analyst was talking about the supplier bundle, and silently
+    extending an instruction past what was said is its own kind of bug.
+    """
+    from app.services.strategy_overlay import blank_fields, directive_for
+    for obj in ("Customer", "Customer Site", "Item", "Employee"):
+        check(f"{obj} is untouched by the supplier all-sheets rule",
+              "batch id" not in {str(x).lower() for x in blank_fields(obj)})
+        check(f"{obj} gets no Delivery Method rule",
+              directive_for(obj, "Delivery Method") is None)
+
+
+def test_a_sheet_specific_rule_still_beats_the_bundle_wide_one():
+    """Exact match is looked up first, so a per-sheet override remains possible."""
+    from app.services import strategy_overlay as so
+    so._load()
+    for obj, fields in (so._cache or {}).items():
+        for fld in fields:
+            check(f"exact rule wins for {obj}.{fld}",
+                  so.directive_for(obj, fld) is fields[fld])
+        break  # one object's worth is enough to prove the ordering
+
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

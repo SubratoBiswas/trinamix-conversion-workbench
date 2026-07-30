@@ -129,10 +129,21 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
 
     Shape: {"defaults": {norm_field: value},
             "detail":   [{"field","label","value","source"}],
-            "ai_used":  bool}
+            "ai_used":  bool,
+            "suppressed": [norm_field, …]}
+
+    SUPPRESSION. Every field the analyst has said must ship blank is excluded here,
+    at the top, before any source is consulted. This function is what the Mapping
+    Review screen reads, so without that check the UI reported "Defaulted -> 900001"
+    for a Batch ID that the corrections file, a suppress_field learning and a
+    not_applicable mapping all agreed was blank — and the analyst had no way to make
+    the number go away, because none of the three things they could press were read
+    by the layer drawing the chip. The generated file was already blank; only the
+    screen still said 900001, which is the worse of the two failures: it makes a
+    correct fix look broken and invites re-fixing something that is not wrong.
     """
     if not conversion.template_id:
-        return {"defaults": {}, "detail": [], "ai_used": False}
+        return {"defaults": {}, "detail": [], "ai_used": False, "suppressed": []}
 
     fields = await FBDIField.find(FBDIField.template_id == conversion.template_id).to_list()
     maps = await MappingSuggestion.find(
@@ -140,6 +151,52 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     ).to_list()
     by_fid = {m.target_field_id: m for m in maps}
     target_object = conversion.target_object or ""
+
+    # The same three sources output_service consults, resolved the same way, so the
+    # screen and the file can no longer disagree about what is blank.
+    suppressed: set[str] = set()
+    try:
+        from app.services.strategy_overlay import blank_fields as _strategy_blanks
+        # Match the generator's object resolution (output_service.obj_name): the
+        # template's business object first, since a conversion's target_object can
+        # be the bundle's name rather than this sheet's.
+        _obj = target_object
+        try:
+            from app.models.fbdi import FBDITemplate
+            _tpl = await FBDITemplate.get(conversion.template_id)
+            _obj = (getattr(_tpl, "business_object", None) or target_object)
+        except Exception:  # noqa: BLE001
+            pass
+        suppressed |= {_norm(x) for x in _strategy_blanks(_obj)}
+        suppressed |= {_norm(x) for x in _strategy_blanks(target_object)}
+    except Exception:  # noqa: BLE001 — a missing overlay must not break defaults
+        log.exception("strategy blank set unavailable while computing defaults")
+
+    if target_object:
+        try:
+            from app.services.client_service import client_id_for_conversion, scope_query
+            _sc = await scope_query(await client_id_for_conversion(conversion))
+            async for lm in LearnedMapping.find(
+                LearnedMapping.kind == "suppress_field",
+                LearnedMapping.target_object == target_object,
+                _sc,
+            ):
+                if lm.target_field:
+                    suppressed.add(_norm(lm.target_field))
+        except Exception:  # noqa: BLE001
+            log.exception("suppress_field learnings unavailable while computing defaults")
+
+    # A not_applicable mapping is the analyst pressing Keep blank. It only counts as
+    # a suppression when it carries no explicit default — not_applicable WITH a
+    # default means "populate with this constant" (e.g. Invoice Match Option =
+    # Receipt), which is the same rule output_service.suppressed_keys applies.
+    _f_by_id = {f.id: f for f in fields}
+    for _m in maps:
+        if (_m.status == "not_applicable"
+                and not (_m.default_value and str(_m.default_value).strip())):
+            _f = _f_by_id.get(_m.target_field_id)
+            if _f and _f.field_name:
+                suppressed.add(_norm(_f.field_name))
 
     # Reusable constants captured from gold examples for this object — scoped to
     # this conversion's client (+ global) so another client's defaults don't show.
@@ -164,6 +221,12 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
         if m and m.source_column:
             continue  # mapped to a real source column -> not a default
         norm = _norm(f.field_name)
+        # Blank means blank, whatever any lower layer still remembers. Checked
+        # before m.default_value on purpose: a stale stored default left on the row
+        # by an earlier seed is exactly what kept re-appearing after the analyst
+        # blanked the field.
+        if norm in suppressed:
+            continue
         normc = norm.replace(" ", "")
         value: Optional[str] = None
         source = ""
@@ -216,4 +279,8 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
                     captured_from="ai-inference",
                 ).insert()
 
-    return {"defaults": defaults, "detail": detail, "ai_used": ai_used}
+    # Returned so the UI can say "kept blank" rather than silently showing nothing —
+    # an absent default and a deliberately blanked field look identical otherwise,
+    # and the analyst needs to see that their decision took.
+    return {"defaults": defaults, "detail": detail, "ai_used": ai_used,
+            "suppressed": sorted(suppressed)}

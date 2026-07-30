@@ -44,31 +44,37 @@ const KB_SOURCE_DISPLAY: Record<string, string> = {
 
 // Map a target object to its fan-out catalog key so we can show the FBDI
 // load-sequence at the top of the mapping screen.
-// Output-time control defaults (mirror of backend output_service._CONTROL_DEFAULTS
-// / _SEQ_FIELDS). These fields are filled with a fixed value (or a running key)
-// at Generate Output even when no source column maps to them — they're
-// standardization constants, not data pulled from the extract. Used to show a
-// "defaulted → value" state instead of a misleading "required gap".
-const CONTROL_DEFAULTS: Record<string, string> = {
-  "import action": "CREATE", "batch id": "900001",
-  "tax organization type": "Corporation", "organization type": "Corporation",
-  "supplier type": "Supplier", "business relationship": "PROSPECTIVE",
-  "federal reportable": "N", "delivery channel": "EMAIL",
-  "address name": "PRIMARY", "pay": "Y", "ordering": "Y", "rfq or bidding": "Y",
-  "supplier site": "PRIMARY", "administrative contact": "Y", "user account action": "NONE",
-};
-const SEQ_FIELDS = new Set([
-  "suppliernumber", "supplierpartynumber", "partynumber",
-  "customeraccountnumber", "customernumber",
-]);
+// The values Generate Output writes for target fields with no source column —
+// control constants, sequence keys, learned and AI-inferred defaults.
+//
+// This used to be a hard-coded table right here, copied from the backend's
+// _CONTROL_DEFAULTS. That copy is why "Defaulted → 900001" would not go away:
+// Batch ID was blanked in the corrections file, a suppress_field learning was
+// recorded, and the generated file shipped empty — but the chip read its value
+// from a constant compiled into the browser bundle, which no rule, learning or
+// Keep blank press could ever reach. The table had also drifted: it still said
+// Tax Organization Type = "Corporation" and Business Relationship =
+// "PROSPECTIVE" after both had been corrected on the server.
+//
+// There is now one source of truth, /effective-defaults, which applies the same
+// suppression the generator does. A mirror that cannot be corrected is worse
+// than no mirror — it makes a correct fix look broken.
 function normFieldKey(fieldName?: string | null): string {
   return (fieldName || "").toLowerCase().replace(/\*/g, "").trim();
 }
-function controlDefaultFor(fieldName?: string | null): string | null {
-  if (!fieldName) return null;
+
+/** What this field will actually carry, "" when it is deliberately blank.
+ *  `suppressed` wins over a stored default_value on purpose: a stale default
+ *  left on the row by an earlier seed is exactly what kept re-appearing. */
+function defaultFor(
+  m: { default_value?: string | null } | undefined,
+  fieldName: string | null | undefined,
+  effectiveDefaults: Record<string, string>,
+  suppressed?: Set<string>,
+): string {
   const k = normFieldKey(fieldName);
-  if (SEQ_FIELDS.has(k.replace(/\s+/g, ""))) return "auto-number (100000+)";
-  return CONTROL_DEFAULTS[k] ?? null;
+  if (suppressed?.has(k)) return "";
+  return m?.default_value || effectiveDefaults[k] || "";
 }
 
 function seqKeyForTarget(target?: string | null): string | null {
@@ -136,6 +142,10 @@ export const MappingReviewPage: React.FC = () => {
   // sequence keys, learned + AI-inferred defaults), keyed by normalized field
   // name. Lets the canvas show "defaulted → value" instead of a red required gap.
   const [effectiveDefaults, setEffectiveDefaults] = useState<Record<string, string>>({});
+  // Fields the analyst has said must ship blank (strategy corrections,
+  // suppress_field learnings, Keep blank). The backend already omits them from
+  // `defaults`; this set also overrides a stale default_value still on the row.
+  const [suppressedFields, setSuppressedFields] = useState<Set<string>>(new Set());
   // Cascade visibility — when an upstream master has taught a rule
   // (e.g. REMOVE_HYPHEN on Item.InventoryItemNumber), the matching FK
   // columns on this conversion inherit that rule at output time. We
@@ -385,6 +395,7 @@ export const MappingReviewPage: React.FC = () => {
       setRuleTargetIds(new Set());
       setTargetFields([]);
       setEffectiveDefaults({});
+      setSuppressedFields(new Set());
       setLoadingConversion(false);
       return;
     }
@@ -436,8 +447,11 @@ export const MappingReviewPage: React.FC = () => {
     // target fields → drives the "defaulted → value" badges. Fetched separately
     // so the optional AI inference pass never blocks the canvas render.
     ConversionsApi.effectiveDefaults(pid)
-      .then((r) => setEffectiveDefaults(r.defaults || {}))
-      .catch(() => setEffectiveDefaults({}));
+      .then((r) => {
+        setEffectiveDefaults(r.defaults || {});
+        setSuppressedFields(new Set(r.suppressed || []));
+      })
+      .catch(() => { setEffectiveDefaults({}); setSuppressedFields(new Set()); });
   };
   useEffect(() => { loadAll(); }, [pid]);
 
@@ -587,7 +601,8 @@ export const MappingReviewPage: React.FC = () => {
         const f = fieldById.get(String(m.target_field_id));
         if (!f) return false;
         const key = classifyLayer(m, f, effectiveDefaults,
-          ruleTargetIds.has(m.target_field_id) || ruleTargetIds.has(String(m.target_field_id) as any));
+          ruleTargetIds.has(m.target_field_id) || ruleTargetIds.has(String(m.target_field_id) as any),
+          suppressedFields);
         if (key !== layerFilter) return false;
       }
       switch (filter) {
@@ -602,7 +617,7 @@ export const MappingReviewPage: React.FC = () => {
         default: return true;
       }
     });
-  }, [mappings, search, filter, layerFilter, fieldById, effectiveDefaults, ruleTargetIds]);
+  }, [mappings, search, filter, layerFilter, fieldById, effectiveDefaults, ruleTargetIds, suppressedFields]);
 
   const visibleTargetIds = useMemo(() => new Set(visibleMappings.map((m) => m.target_field_id)), [visibleMappings]);
 
@@ -622,7 +637,7 @@ export const MappingReviewPage: React.FC = () => {
       if (!m.target_required || m.source_column || m.status === "approved") return false;
       if (m.default_value) return false;
       const fname = nameById.get(m.target_field_id);
-      if (controlDefaultFor(fname)) return false;
+      if (suppressedFields.has(normFieldKey(fname))) return false;
       if (effectiveDefaults[normFieldKey(fname)]) return false;
       return true;
     }).length;
@@ -632,7 +647,7 @@ export const MappingReviewPage: React.FC = () => {
     ).length;
     const kb = scoped.filter((m) => !!m.kb_source).length;
     return { total, mapped, approved, reqMissing, learned, kb };
-  }, [mappings, targetFields, effectiveDefaults]);
+  }, [mappings, targetFields, effectiveDefaults, suppressedFields]);
 
   // ── Recommendations (column-level cleansing tied to this project) ──
   const recommendations = useMemo<Recommendation[]>(() => {
@@ -1352,6 +1367,7 @@ export const MappingReviewPage: React.FC = () => {
         visibleTargetIds={visibleTargetIds}
         ruleTargetIds={ruleTargetIds}
         effectiveDefaults={effectiveDefaults}
+        suppressedFields={suppressedFields}
         activeLayer={layerFilter}
         onSelectLayer={(k) => { setLayerFilter(k); if (k) setFilter("all"); }}
       />
@@ -1366,6 +1382,7 @@ export const MappingReviewPage: React.FC = () => {
             mappings={mappings}
             visibleTargetIds={visibleTargetIds}
             effectiveDefaults={effectiveDefaults}
+            suppressedFields={suppressedFields}
             ruleTargetIds={ruleTargetIds}
             selectedMappingId={selectedMappingId}
             setSelectedMappingId={setSelectedMappingId}
@@ -1392,6 +1409,7 @@ export const MappingReviewPage: React.FC = () => {
           setHoveredTarget={setHoveredTarget}
           ruleTargetIds={ruleTargetIds}
           effectiveDefaults={effectiveDefaults}
+          suppressedFields={suppressedFields}
           onMapDrop={mapDrop}
           onUnmap={unmap}
           loading={running}
@@ -1947,9 +1965,13 @@ function classifyLayer(
   f: FBDIField,
   effectiveDefaults: Record<string, string>,
   hasRule: boolean,
+  suppressedFields?: Set<string>,
 ): LayerKey {
-  const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
-  if (m?.status === "not_applicable") return "suppressed";
+  const dv = defaultFor(m, f.field_name, effectiveDefaults, suppressedFields);
+  // A strategy correction or a suppress_field learning is the same decision as a
+  // not_applicable mapping, so it must read as "Left blank" and not as "Default".
+  if (m?.status === "not_applicable"
+      || suppressedFields?.has(normFieldKey(f.field_name))) return "suppressed";
   if (!m?.source_column) return dv ? "default" : "unmapped";
 
   const reason = (m.reason || "").toLowerCase();
@@ -1970,8 +1992,9 @@ function mappingMethod(
   f: FBDIField,
   effectiveDefaults: Record<string, string>,
   hasRule: boolean,
+  suppressedFields?: Set<string>,
 ): { label: string; tone: "brand" | "info" | "success" | "warning" | "neutral"; detail?: string } {
-  const key = classifyLayer(m, f, effectiveDefaults, hasRule);
+  const key = classifyLayer(m, f, effectiveDefaults, hasRule, suppressedFields);
   const meta = LAYER_META[key];
   return { label: meta.label, tone: meta.tone, detail: m?.reason || meta.blurb };
 }
@@ -1998,9 +2021,10 @@ const PrecedenceBar: React.FC<{
   visibleTargetIds: Set<string> | null;
   ruleTargetIds: Set<string>;
   effectiveDefaults: Record<string, string>;
+  suppressedFields: Set<string>;
   activeLayer?: LayerKey | null;
   onSelectLayer?: (k: LayerKey | null) => void;
-}> = ({ mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults, activeLayer, onSelectLayer }) => {
+}> = ({ mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults, suppressedFields, activeLayer, onSelectLayer }) => {
   const { counts, total } = useMemo(() => {
     const _PRIO: Record<string, number> = { overridden: 4, approved: 3, not_applicable: 2, rejected: 1, suggested: 0 };
     const mapByTarget = new Map<string, MappingSuggestion>();
@@ -2021,12 +2045,12 @@ const PrecedenceBar: React.FC<{
     for (const f of targetFields) {
       if (visibleTargetIds && !seen(visibleTargetIds as Set<any>, f.id)) continue;
       const m = mapByTarget.get(String(f.id));
-      const key = classifyLayer(m, f, effectiveDefaults, seen(ruleTargetIds as Set<any>, f.id));
+      const key = classifyLayer(m, f, effectiveDefaults, seen(ruleTargetIds as Set<any>, f.id), suppressedFields);
       c[key] += 1;
       n += 1;
     }
     return { counts: c, total: n };
-  }, [mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults]);
+  }, [mappings, targetFields, visibleTargetIds, ruleTargetIds, effectiveDefaults, suppressedFields]);
 
   const [open, setOpen] = useState(false);
   const resolvedByAi = counts.ai;
@@ -2197,6 +2221,7 @@ const MappingTableView: React.FC<{
   mappings: MappingSuggestion[];
   visibleTargetIds: Set<number>;
   effectiveDefaults: Record<string, string>;
+  suppressedFields: Set<string>;
   ruleTargetIds: Set<number>;
   selectedMappingId: number | null;
   setSelectedMappingId: (id: number | null) => void;
@@ -2209,7 +2234,7 @@ const MappingTableView: React.FC<{
   sourceName?: string;
 }> = ({
   conversionId, sourceColumns, targetFields, mappings, visibleTargetIds,
-  effectiveDefaults, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
+  effectiveDefaults, suppressedFields, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
   aiVerdicts, onAiVerdicts, onReload, objectName, sourceName,
 }) => {
   // Ranked alternatives for every target field (one round-trip), so each row can
@@ -2389,7 +2414,7 @@ const MappingTableView: React.FC<{
         const m = mapByTarget[String(f.id)];
         const hasRule = ruleTargetIds.has(f.id);
         const method = mappingMethod(m, f, effectiveDefaults, hasRule);
-        const dv = m?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+        const dv = defaultFor(m, f.field_name, effectiveDefaults, suppressedFields);
         const prof = m?.source_column ? srcProfile[m.source_column] : undefined;
         const transform = m?.suggested_transformation?.rule_type as string | undefined;
         // Alternatives = ranked candidates minus the one actually chosen.
@@ -2863,6 +2888,7 @@ interface CanvasProps {
   setHoveredTarget: (t: number | null) => void;
   ruleTargetIds?: Set<number>;
   effectiveDefaults?: Record<string, string>;
+  suppressedFields: Set<string>;
   onMapDrop?: (targetFieldId: number, sourceColumn: string) => void;
   onUnmap?: (m: MappingSuggestion) => void;
   loading?: boolean;
@@ -2872,7 +2898,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
   sourceColumns, targetFields, mappings, visibleTargetIds,
   selectedMappingId, setSelectedMappingId,
   hoveredSource, setHoveredSource, hoveredTarget, setHoveredTarget,
-  ruleTargetIds, effectiveDefaults = {}, onMapDrop, onUnmap, loading,
+  ruleTargetIds, effectiveDefaults = {}, suppressedFields, onMapDrop, onUnmap, loading,
 }) => {
   // Which source column is being dragged, and which target is hovered during a
   // drag — drives the drop-zone highlight for the drag-to-map gesture.
@@ -3202,7 +3228,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                       {(() => {
                         // Which decision layer produced this field — the same
                         // classification the table view and the precedence bar use.
-                        const key = classifyLayer(mapping, f, effectiveDefaults, !!ruleTargetIds?.has(f.id));
+                        const key = classifyLayer(mapping, f, effectiveDefaults, !!ruleTargetIds?.has(f.id), suppressedFields);
                         if (key === "unmapped") return null;
                         const meta = LAYER_META[key];
                         return (
@@ -3234,7 +3260,7 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                   )}
                 </div>
                 {!mapping?.source_column && (() => {
-                  const dv = mapping?.default_value || controlDefaultFor(f.field_name) || effectiveDefaults[normFieldKey(f.field_name)];
+                  const dv = defaultFor(mapping, f.field_name, effectiveDefaults, suppressedFields);
                   if (dv) {
                     return (
                       <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-emerald-600">
