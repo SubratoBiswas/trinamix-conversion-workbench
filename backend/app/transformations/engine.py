@@ -492,6 +492,28 @@ def apply_rule(
             return s
         return s + suf
 
+    if rt == "SELF_LOOKUP":
+        # Supplier correction 30-Jul: "for Parent Supplier — get the Parent Vendor Id
+        # and then get the value for that ID from Internal Id, and then populate the
+        # name." A self-join: the value in THIS row's key column identifies ANOTHER row
+        # in the same extract, and a column of that row is what belongs here.
+        #   {"key_column": "Parent Vendor Id", "match_column": "Internal Id",
+        #    "value_column": "Name"}
+        # The index is built once per generation and handed in via ctx, because doing
+        # it per row is O(n squared) — 7,495 vendors would be 56 million comparisons.
+        cfg_key = cfg.get("key_column")
+        want = _to_str(row.get(cfg_key, "") if row else value).strip()
+        if not want:
+            return cfg.get("default", "")
+        index = (ctx.get("self_index") or {}).get(
+            f"{cfg.get('match_column')}->{cfg.get('value_column')}")
+        if index is None:
+            # No index available (preview, or a caller that did not build one).
+            # Returning the raw id would ship an id where a NAME belongs and look
+            # populated — blank is the honest answer.
+            return cfg.get("default", "")
+        return index.get(want, cfg.get("default", ""))
+
     if rt == "SEQUENCE":
         # CW #23: a unique running key — NXT000001, and a "_C1" form for a PERSON.
         #   {"prefix": "NXT", "width": 6, "start": 1, "preserve_source": true,

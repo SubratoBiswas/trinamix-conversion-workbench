@@ -415,19 +415,130 @@ async def record_learning_from_rule(
     return lm
 
 
+ANALYST_APPROVED = "analyst-approved"
+
+
+async def propagate_learning_to_open_conversions(
+    lm: "LearnedMapping", origin: Conversion, *, captured_by: str | None = None,
+) -> dict:
+    """Push one analyst correction onto the conversions that already exist.
+
+    Analyst, 30-Jul: "any rule or correction I make apply in learning so that it will be
+    available for all current and future conversions". Capturing the learning already
+    covered FUTURE conversions — they read the library when they are created. The ones
+    that already exist did not, so a correction made today reached everything except the
+    work in front of you, which is the case that matters most.
+
+    What it will and will not touch, deliberately:
+      * still-suggested mappings, and mappings the ENGINE auto-approved -> updated.
+      * anything a PERSON approved or overrode -> left exactly as it is. Two analysts
+        can disagree; a library entry must not silently overwrite a colleague's
+        decision. They see it as a suggestion on the next review instead.
+      * the origin conversion itself -> skipped, it is already correct.
+
+    Affected outputs are marked stale rather than regenerated: the file on disk no
+    longer matches the rules that would now run, and saying so is honest where
+    regenerating dozens of files behind the analyst's back is not.
+    """
+    from app.models.fbdi import FBDIField
+    from app.services.client_service import client_id_for_conversion
+
+    if lm is None or not lm.target_field:
+        return {"conversions": 0, "mappings": 0, "stale_outputs": 0}
+    business_object = await _business_object_for(origin)
+    if not business_object:
+        return {"conversions": 0, "mappings": 0, "stale_outputs": 0}
+    cid = await client_id_for_conversion(origin)
+    src = await source_erp_for_conversion(origin)
+
+    touched_convs = touched_maps = staled = 0
+    now = datetime.utcnow()
+    for conv in await Conversion.find_all().to_list():
+        if conv.id == origin.id or not conv.template_id:
+            continue
+        if await _business_object_for(conv) != business_object:
+            continue
+        if await client_id_for_conversion(conv) != cid:
+            continue
+        # Source-system scope, same rule the apply pass uses: a SyteLine conversion
+        # must not inherit a NetSuite correction.
+        csrc = await source_erp_for_conversion(conv)
+        if src and csrc and csrc != src:
+            continue
+        fields = await FBDIField.find(FBDIField.template_id == conv.template_id).to_list()
+        ids = {f.id for f in fields if _norm_field(f.field_name) == _norm_field(lm.target_field)}
+        if not ids:
+            continue
+        hit = False
+        for m in await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == conv.id).to_list():
+            if m.target_field_id not in ids:
+                continue
+            approver = (getattr(m, "approved_by", None) or "")
+            if m.status in ("overridden",) or (
+                    m.status == "approved" and approver != "learning-engine"):
+                continue        # a person decided this — leave it alone
+            patch = {"status": "approved", "review_required": 0,
+                     "approved_by": "learning-engine", "approved_at": now}
+            if lm.kind == "column_mapping" and lm.original_value:
+                patch["source_column"] = lm.original_value
+            elif lm.kind == "example_default":
+                patch["default_value"] = lm.resolved_value
+            if lm.rule_type:
+                patch["suggested_transformation"] = {
+                    "rule_type": lm.rule_type, "config": lm.rule_config or {}}
+            await m.set(patch)
+            touched_maps += 1
+            hit = True
+        if hit:
+            touched_convs += 1
+            from app.models.output import ConvertedOutput
+            res = await ConvertedOutput.find(
+                ConvertedOutput.conversion_id == conv.id).update(
+                    {"$set": {"status": "stale"}})
+            staled += int(getattr(res, "modified_count", 0) or 0)
+    return {"conversions": touched_convs, "mappings": touched_maps,
+            "stale_outputs": staled, "target_field": lm.target_field,
+            "captured_by": captured_by}
+
+
+def _norm_field(s) -> str:
+    """Oracle decorates headers with '*' and stray spaces; the library stores the
+    plain name. Matching on the raw string silently misses every required field."""
+    import re as _re
+    return _re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
 async def apply_learned_to_conversion(
     conversion: Conversion, mappings: Iterable[MappingSuggestion], force: bool = False,
 ) -> int:
     """Apply the object's stored reference standard (column mappings, constant
     defaults, suppressions) to a conversion's mappings.
 
-    Normally only touches still-"suggested" mappings. With ``force=True`` (used
-    at generate time and by the explicit "apply gold" action) the gold-derived
-    rules also OVERRIDE mappings the AI already approved — so a stored standard
-    is guaranteed to reach the output. Human "overridden" mappings are always
-    preserved."""
+    Normally only touches still-"suggested" mappings. With ``force=True`` (used at
+    generate time and by the explicit "apply gold" action) stored rules also override
+    mappings that were approved AUTOMATICALLY — so a stored standard is guaranteed to
+    reach the output.
+
+    A HUMAN DECISION IS NEVER OVERRIDDEN (analyst, 30-Jul: "if user modifies anything
+    from the tool UI and then approves it, it should get highest precedence"). Before
+    this, ``force`` overrode every "approved" mapping regardless of who approved it, so
+    an analyst could correct a field in Mapping Review, approve it, generate, and find
+    the library had quietly put its own value back — with nothing on screen to say so.
+    That is the single most expensive kind of bug in this tool, because the screen and
+    the file disagree and the screen looks right.
+
+    The distinction is the approver. The engine stamps its own auto-approvals with
+    ``approved_by == "learning-engine"`` (the same marker the delete/revert path keys
+    on), so anything else in that field is a person, and a person wins.
+    """
     def _eligible(m: MappingSuggestion) -> bool:
-        return m.status == "suggested" or (force and m.status == "approved")
+        if m.status == "suggested":
+            return True
+        if not force or m.status != "approved":
+            return False
+        # Approved by a person → highest precedence, never overwritten.
+        return (getattr(m, "approved_by", None) or "") == "learning-engine"
 
     business_object = await _business_object_for(conversion)
     if not business_object:

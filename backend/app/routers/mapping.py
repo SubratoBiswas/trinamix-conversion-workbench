@@ -342,7 +342,15 @@ async def update_mapping(
     if m.status in ("approved", "overridden") and (
         m.source_column or (m.default_value and str(m.default_value).strip())
     ):
-        await record_learning_from_mapping(m, conv, captured_by=user.email)
+        _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
+        if _lm is not None:
+            try:
+                from app.services.learning_service import (
+                    propagate_learning_to_open_conversions)
+                await propagate_learning_to_open_conversions(
+                    _lm, conv, captured_by=user.email)
+            except Exception:  # noqa: BLE001
+                log.exception("propagating the saved learning failed for %s", mapping_id)
     return (await enrich_mapping_with_samples(conv, [m]))[0]
 
 
@@ -408,7 +416,21 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
     await m.set({"status": "approved", "approved_by": user.email, "approved_at": datetime.utcnow()})
     conv = await Conversion.get(m.conversion_id)
     if m.source_column or (m.default_value and str(m.default_value).strip()):
-        await record_learning_from_mapping(m, conv, captured_by=user.email)
+        _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
+        # "Any rule or correction I make apply in learning so that it will be available
+        # for all CURRENT and future conversions" (analyst, 30-Jul). Capturing the
+        # learning already covered future conversions; this reaches the ones that
+        # already exist. It never touches a mapping another person approved.
+        if _lm is not None:
+            try:
+                from app.services.learning_service import (
+                    propagate_learning_to_open_conversions)
+                _p = await propagate_learning_to_open_conversions(
+                    _lm, conv, captured_by=user.email)
+                log.info("approve %s propagated: %s", mapping_id, _p)
+            except Exception:  # noqa: BLE001 — never fail the approve on the fan-out
+                log.exception("propagating the approved learning failed for %s",
+                              mapping_id)
     if m.source_column:
         from app.services.learning_service import propagate_rules_to_downstream
         await propagate_rules_to_downstream(conv, m)

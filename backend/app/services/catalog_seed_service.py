@@ -373,6 +373,83 @@ async def seed_bom_field_mappings() -> dict:
     return res
 
 
+from datetime import datetime as _dt
+
+_SUPPLIER_CORRECTIONS = _DATA / "supplier_corrections_30jul.json"
+
+
+async def seed_supplier_corrections_30jul() -> dict:
+    """Seed the analyst's 30-Jul Supplier corrections as client-scoped learnings.
+
+    Three shapes, each mapped to the learning kind that already carries it:
+      blank    -> suppress_field   (nothing may fill it, including control defaults)
+      constant -> example_default
+      rule     -> column_mapping carrying the rule_type + config
+
+    Seeded LAST of the supplier seeds so these values win a clash — they are the most
+    recent analyst instruction. A mapping a person has since edited and approved in the
+    UI still outranks all of it; apply_learned_to_conversion refuses to overwrite
+    anything not approved by the engine itself.
+
+    Idempotent, and it honours tombstones: a correction the analyst later retires is
+    not resurrected on the next restart.
+    """
+    import json as _json
+    if not _SUPPLIER_CORRECTIONS.exists():
+        return {"seeded": 0, "note": "supplier_corrections_30jul.json not found"}
+    try:
+        doc = _json.loads(_SUPPLIER_CORRECTIONS.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    nid = await _nextpower_client_id()
+    src = "analyst corrections 30-Jul-2026"
+    seeded = updated = retired = 0
+    for r in doc.get("rules", []):
+        obj, fld = (r.get("target_object") or "").strip(), (r.get("target_field") or "").strip()
+        action = (r.get("action") or "").strip()
+        if not (obj and fld and action):
+            continue
+        kind = {"blank": "suppress_field", "constant": "example_default",
+                "rule": "column_mapping"}.get(action)
+        if not kind:
+            continue
+        resolved = ("" if action == "blank"
+                    else str(r.get("value", "")) if action == "constant" else fld)
+        existing = await LearnedMapping.find_one(
+            LearnedMapping.kind == kind,
+            LearnedMapping.target_object == obj,
+            LearnedMapping.target_field == fld,
+            LearnedMapping.client_id == nid,
+            include_deleted=True,
+        )
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            continue
+        payload = {
+            "resolved_value": resolved,
+            "rule_type": r.get("rule_type") or ("suppress" if action == "blank" else None),
+            "rule_config": r.get("rule_config") or {"note": r.get("note", "")},
+            "captured_from": src, "captured_at": _dt.utcnow(),
+        }
+        if existing:
+            await existing.set(payload)
+            updated += 1
+            continue
+        await LearnedMapping(
+            kind=kind, category=("Left blank on purpose" if action == "blank"
+                                 else "Default Value" if action == "constant"
+                                 else "Column Mapping Alias"),
+            original_value=("(blank)" if action == "blank"
+                            else "(constant)" if action == "constant" else fld),
+            target_object=obj, target_field=fld,
+            client_id=nid, is_global=False, **payload,
+        ).insert()
+        seeded += 1
+    return {"seeded": seeded, "updated": updated, "left_retired": retired,
+            "protected_values": doc.get("protected_values", []),
+            "open_questions": doc.get("_open_questions", [])}
+
+
 _SUPPLIER_SOURCE_MAP = _DATA / "supplier_source_mapping_30jul.json"
 
 

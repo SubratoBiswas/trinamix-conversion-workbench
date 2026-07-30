@@ -58,11 +58,22 @@ def protected_values() -> set:
     try:
         import json
         from pathlib import Path
-        p = (Path(__file__).resolve().parent.parent
-             / "data" / "supplier_strategy_defaults.json")
-        if p.exists():
-            _harvest_strategy_constants(json.loads(p.read_text(encoding="utf-8")),
-                                        out, _norm_protect)
+        _dir = Path(__file__).resolve().parent.parent / "data"
+        # Every analyst-pinned constant file, not just the strategy. The 30-Jul
+        # corrections introduced "Corporation" / "Individual" as DISPLAY values —
+        # exactly the shape a case-normalising cleansing family would rewrite, which
+        # is how CORPORATION once became Corp on 1,392 rows of a required field.
+        for name in ("supplier_strategy_defaults.json",
+                     "supplier_corrections_30jul.json"):
+            p = _dir / name
+            if p.exists():
+                blob = json.loads(p.read_text(encoding="utf-8"))
+                _harvest_strategy_constants(blob, out, _norm_protect)
+                # An explicit list is the analyst saying "these exact strings are
+                # decisions" — stronger than anything inferred from rule shapes.
+                for v in (blob.get("protected_values") or []):
+                    if str(v).strip():
+                        out.add(_norm_protect(v))
     except Exception:  # noqa: BLE001
         pass
     return out

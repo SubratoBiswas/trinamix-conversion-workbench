@@ -1,0 +1,63 @@
+{
+  "_source": "Analyst corrections, 30-Jul-2026 (Subrato), superseding the 28-Jul review on the points they touch.",
+  "_scope": "Client NextPower, Supplier and its five child interfaces. Seeded as client-scoped learnings so they reach every current and future Supplier conversion.",
+  "_precedence": "These are analyst instructions, so they sit above the control defaults and above AI. A mapping a person has since edited and approved in the UI still wins over all of it — that is the 30-Jul rule, and apply_learned_to_conversion now honours it by refusing to overwrite anything not approved by 'learning-engine'.",
+  "_open_questions": [
+    "Supplier Name is reported as not populating. That is a defect report rather than a rule, and it needs the extract to diagnose: with the 30-Jul green mappings now seeded, check whether the Supplier Header row for the name is among them for the source system in play. If it still ships blank, send the conversion id.",
+    "Parent Supplier resolves a name by looking this row's Parent Vendor Id up against another row's Internal Id in the SAME extract. Confirm the three column names — the rule is written against 'Parent Vendor Id', 'Internal Id' and 'Name'.",
+    "Delivery Method says apply to ALL sheets. Seeded against the object so it reaches each interface that carries the field; if any sheet must differ, the per-sheet scope narrows it.",
+    "Procurement BU and Liability Distribution are deliberately left blank for now, on instruction. They are recorded as suppressions so nothing else fills them, and so the decision is visible rather than looking like an oversight."
+  ],
+  "rules": [
+    {"target_object": "Supplier", "target_field": "Batch ID", "action": "blank",
+     "note": "Blank on ALL sheets. A batch identifier the loader assigns is not ours to invent."},
+    {"target_object": "Supplier", "target_field": "Supplier Name New", "action": "blank",
+     "note": "Populated only when RENAMING an existing supplier; on a create load it must be empty."},
+    {"target_object": "Supplier", "target_field": "Inactive Date", "action": "blank"},
+    {"target_object": "Supplier", "target_field": "Tax Reporting Name", "action": "blank"},
+    {"target_object": "Supplier Site", "target_field": "Procurement BU", "action": "blank",
+     "note": "Translated value, left blank for now on instruction — not an oversight."},
+    {"target_object": "Supplier Site", "target_field": "Liability Distribution", "action": "blank",
+     "note": "Left blank for now on instruction."},
+
+    {"target_object": "Supplier", "target_field": "Business Relationship",
+     "action": "constant", "value": "SPEND_AUTHORIZED"},
+
+    {"target_object": "Supplier", "target_field": "Tax Organization Type",
+     "action": "rule", "rule_type": "CASE_WHEN",
+     "rule_config": {"branches": [{"if_column": "Is Individual", "op": "notblank", "then": "Individual"}],
+                     "default": "Corporation"},
+     "note": "30-Jul: 'Corporation should not be all caps as well, C caps, rest small.' This answers the CONFIRM left on 28-Jul — the instance takes the DISPLAY value, not the code. Both values are protected from cleansing so no case family re-cases them."},
+
+    {"target_object": "Supplier", "target_field": "Alternate Name",
+     "action": "rule", "rule_type": "CASE_WHEN",
+     "rule_config": {"branches": [{"if_column": "Supplier Name", "op": "notblank", "then": ""}],
+                     "default": ""},
+     "frame_rule": "blank_when_equals:Supplier Name",
+     "note": "Blank when it merely repeats Supplier Name. Needs the finished frame to compare the two columns, so it runs as a frame rule in the strategy overlay, not per cell."},
+
+    {"target_object": "Supplier", "target_field": "Delivery Method",
+     "action": "rule", "rule_type": "CASE_WHEN",
+     "rule_config": {"branches": [
+        {"if_column": "Remittance Email", "op": "notblank", "then": "EMAIL"},
+        {"if_column": "Remittance E-mail", "op": "notblank", "then": "EMAIL"},
+        {"if_column": "remittance_email", "op": "notblank", "then": "EMAIL"},
+        {"if_column": "Remittance Fax", "op": "notblank", "then": "FAX"},
+        {"if_column": "remittance_fax", "op": "notblank", "then": "FAX"}],
+        "default": ""},
+     "applies_to_all_sheets": true,
+     "note": "EMAIL is tested first, which is what 'preference to EMAIL' means — a row carrying both takes EMAIL. Default blank rather than a guess: it is a coded column."},
+
+    {"target_object": "Supplier Site", "target_field": "Supplier Site",
+     "action": "rule", "rule_type": "CONCAT",
+     "rule_config": {"separator": "-", "columns": ["Country Code", "City"]},
+     "note": "COUNTRY CODE + '-' + City, e.g. US-Chicago. CONCAT falls back to the incoming value when BOTH inputs are missing rather than shipping a bare '-' — the guard added after 8,561 rows once shipped that literal into a required unique key."},
+
+    {"target_object": "Supplier", "target_field": "Parent Supplier",
+     "action": "rule", "rule_type": "SELF_LOOKUP",
+     "rule_config": {"key_column": "Parent Vendor Id", "match_column": "Internal Id",
+                     "value_column": "Name", "default": ""},
+     "note": "Take this row's Parent Vendor Id, find the row whose Internal Id equals it, and use that row's Name. Blank when the parent is not in the extract — shipping the raw id would look populated and be wrong."}
+  ],
+  "protected_values": ["Corporation", "Individual", "SPEND_AUTHORIZED", "EMAIL", "FAX"]
+}

@@ -131,6 +131,15 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("supplier conversion strategy seed failed")
     try:
+        # Analyst corrections of 30-Jul. Seeded LAST of the supplier seeds so the most
+        # recent instruction wins a clash. A mapping a person has since edited and
+        # approved in the UI still outranks all of it.
+        from app.services.catalog_seed_service import seed_supplier_corrections_30jul
+        r = await seed_supplier_corrections_30jul()
+        log.info("startup seed — supplier corrections 30-Jul: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier corrections seed failed")
+    try:
         # The GREEN rows of NXT Supplier Mapping_30Jul26 — the workbook's own legend
         # for "Mapped". Seeded after the strategy so the signed spec still wins a
         # clash, and keyed by source system so NetSuite's and SyteLine's mappings for

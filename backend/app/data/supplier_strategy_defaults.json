@@ -12,12 +12,12 @@
           {
             "if_column": "Is Individual",
             "op": "notblank",
-            "then": "INDIVIDUAL"
+            "then": "Individual"
           }
         ],
-        "default": "CORPORATION"
+        "default": "Corporation"
       },
-      "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). CONFIRM: the source column name 'Is Individual' and whether the instance expects the CODE (CORPORATION/INDIVIDUAL) or the display value (Corporation/Individual)."
+      "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm."
     },
     {
       "target_object": "Supplier",
@@ -147,17 +147,17 @@
         "target_object": "Supplier",
         "target_field": "Tax Organization Type",
         "note": "Sandeep 28-Jul: 'It should be corporation... there is one column in the extract, IS INDIVIDUAL. If there is a value in that, only in that case this value will change' -> Individual. Only these two values are ever valid: 'the business will not be value, only corporation or individual will be the values.' A flat CORPORATION constant loaded every individual supplier as a corporation.",
-        "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). CONFIRM: the source column name 'Is Individual' and whether the instance expects the CODE (CORPORATION/INDIVIDUAL) or the display value (Corporation/Individual).",
+        "status": "IMPLEMENTED as CASE_WHEN (engine already supports notblank). ANSWERED by the analyst 30-Jul: the instance expects the DISPLAY value — 'Corporation should not be all caps as well, C caps, rest small'. Values are now Corporation / Individual. Both are registered as protected values so no cleansing family re-cases them. Source column 'Is Individual' still to confirm.",
         "rule_type": "CASE_WHEN",
         "rule_config": {
           "branches": [
             {
               "if_column": "Is Individual",
               "op": "notblank",
-              "then": "INDIVIDUAL"
+              "then": "Individual"
             }
           ],
-          "default": "CORPORATION"
+          "default": "Corporation"
         }
       },
       {
