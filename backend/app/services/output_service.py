@@ -161,6 +161,65 @@ def _build_city_country_index(src: pd.DataFrame, configs: list[dict]) -> dict:
     return {k: max(v.items(), key=lambda kv: kv[1])[0] for k, v in tally.items()}
 
 
+def _build_city_case_index(src: pd.DataFrame, configs: list[dict]) -> dict:
+    """``{normalised city: the spelling this extract uses most}``.
+
+    The site key is a REQUIRED UNIQUE key, and the extract spells its cities
+    inconsistently: "Hyderabad" 461 times and "HYDERABAD" 103, "Dubai" 25 and
+    "DUBAI" 3. Loaded as-is, Fusion creates two sites where there is one — 427 keys
+    collided with another key on capitalisation alone.
+
+    Analyst, 30-Jul: "Keep it IN-Hyderabad for now."
+
+    Majority spelling wins rather than a blanket title-case, because title-casing
+    is wrong for real place names — "Rio de Janeiro" would become "Rio De Janeiro"
+    and "McAllen" would become "Mcallen". The file already knows how it normally
+    writes each city; this just makes every row agree with the majority. A city
+    that appears only once has no collision to fix and is left exactly as it is.
+    """
+    if src is None or not configs or not len(src.columns):
+        return {}
+    by_norm = {}
+    for c in src.columns:
+        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
+
+    def _pick(spec):
+        for n in (spec if isinstance(spec, (list, tuple)) else [spec]):
+            c = by_norm.get(re.sub(r"[^a-z0-9]", "", str(n or "").lower()))
+            if c is not None:
+                return c
+        return None
+
+    tally: dict[str, dict[str, int]] = {}
+    for cfg in configs:
+        col = _pick(cfg.get("city_column"))
+        if col is None:
+            continue
+        for v in src[col].tolist():
+            v = "" if v is None else str(v).strip()
+            if not v:
+                continue
+            key = re.sub(r"[^a-z0-9]", "", v.lower())
+            if not key:
+                continue
+            tally.setdefault(key, {})
+            tally[key][v] = tally[key].get(v, 0) + 1
+    # A NON-ALL-CAPS spelling wins outright, ahead of frequency, and only then does
+    # the more common form win. "Keep it IN-Hyderabad" is a statement about style as
+    # well as about duplicates: an all-caps city is an entry accident, not a place
+    # name, and it stays wrong even when it is the majority — ABU DHABI appears 4
+    # times against Abu Dhabi once, RIO DE JANEIRO likewise. Frequency alone would
+    # have kept the shouting.
+    #
+    # Only ever picks a spelling the file actually contains, so no place name is
+    # invented; and str.title() is deliberately NOT used, because it would produce
+    # "Rio De Janeiro", "Ciudad De Mexico" and "Mcallen" — it breaks 8 of the
+    # Spanish and Portuguese names in this extract alone.
+    def _best(counts):
+        return max(counts.items(), key=lambda kv: (not kv[0].isupper(), kv[1]))[0]
+    return {k: _best(v) for k, v in tally.items()}
+
+
 def _city_country_configs(pipelines: dict, target_object: str | None) -> list[dict]:
     out: list[dict] = []
     for _rules in (pipelines or {}).values():
@@ -229,6 +288,7 @@ def _transform_frame(
     src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
     context_cols: set[str] | None = None, target_object: str | None = None,
     self_index: dict | None = None, city_country: dict | None = None,
+    city_case: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -243,7 +303,8 @@ def _transform_frame(
     """
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
-    _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {}}
+    _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {},
+                 "city_case": city_case or {}}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -567,20 +628,21 @@ async def build_converted_dataframe(
         # another chunk, so a per-chunk index would resolve some rows and not others.
         _self_idx = _build_self_index(
             src, _self_lookup_configs(pipelines, _obj_name_for_overlay))
-        _city_idx = _build_city_country_index(
-            src, _city_country_configs(pipelines, _obj_name_for_overlay))
+        _ccfg = _city_country_configs(pipelines, _obj_name_for_overlay)
+        _city_idx = _build_city_country_index(src, _ccfg)
+        _city_case = _build_city_case_index(src, _ccfg)
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
                 _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx, _city_idx)
+                _obj_name_for_overlay, _self_idx, _city_idx, _city_case)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx, _city_idx)
+                _obj_name_for_overlay, _self_idx, _city_idx, _city_case)
             parts.append(odf)
             if not lin0:
                 lin0 = lin

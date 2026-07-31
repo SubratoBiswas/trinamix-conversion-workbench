@@ -573,6 +573,14 @@ def apply_rule(
 
         cc = _first(cfg.get("country_column") or "")
         city = _first(cfg.get("city_column") or "")
+        # Collapse capitalisation variants onto the spelling this extract uses most,
+        # because the site key is REQUIRED and UNIQUE: "IN-Hyderabad" appeared 461
+        # times and "IN-HYDERABAD" 103, and Fusion would have created two sites for
+        # one. 427 keys collided this way. Analyst, 30-Jul: "Keep it IN-Hyderabad
+        # for now."
+        if city:
+            city = ((ctx or {}).get("city_case") or {}).get(
+                re.sub(r"[^a-z0-9]", "", city.lower()), city)
         if not cc and city and cfg.get("resolve_country_from_city"):
             idx = (ctx or {}).get("city_country") or {}
             cc = idx.get(re.sub(r"[^a-z]", "", city.lower()), "")

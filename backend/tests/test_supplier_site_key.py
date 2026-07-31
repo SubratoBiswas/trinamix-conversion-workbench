@@ -204,6 +204,70 @@ def test_every_candidate_column_is_declared_to_the_generator():
         check(f"{c} is declared", c in cols, f"got {sorted(cols)}")
 
 
+# ── Capitalisation: "Keep it IN-Hyderabad for now" ───────────────────────────
+def test_capitalisation_variants_collapse_onto_one_key():
+    """The site key is REQUIRED and UNIQUE, and the extract shouts at random:
+    "Hyderabad" 461 times, "HYDERABAD" 103. Loaded as-is Fusion creates two sites
+    for one — 429 keys collided on capitalisation alone."""
+    from app.services.output_service import _build_city_case_index
+    import pandas as pd
+    src = pd.DataFrame({"City": ["Hyderabad"] * 4 + ["HYDERABAD"] * 2})
+    idx = _build_city_case_index(src, [{"city_column": "City"}])
+    check("one canonical spelling", idx.get("hyderabad") == "Hyderabad", f"got {idx}")
+    got = site({"Country Code": "IN", "City": "HYDERABAD"},
+               index=CITY_INDEX) if False else apply_pipeline(
+        [directive_for("Supplier Site", "Supplier Site")["rule"]], "",
+        row={"Country Code": "IN", "City": "HYDERABAD"},
+        ctx={"city_country": CITY_INDEX, "city_case": idx})
+    check("the shouting row is folded in", got == "IN-Hyderabad", f"got {got!r}")
+
+
+def test_a_proper_case_spelling_wins_even_when_it_is_the_minority():
+    """ABU DHABI appears 4 times against Abu Dhabi once. Frequency alone would have
+    kept the shouting; an all-caps city is an entry accident, not a place name."""
+    from app.services.output_service import _build_city_case_index
+    import pandas as pd
+    src = pd.DataFrame({"City": ["ABU DHABI"] * 4 + ["Abu Dhabi"]})
+    idx = _build_city_case_index(src, [{"city_column": "City"}])
+    check("proper case wins", idx.get("abudhabi") == "Abu Dhabi", f"got {idx}")
+
+
+def test_place_names_are_never_title_cased():
+    """str.title() would produce "Rio De Janeiro", "Ciudad De Mexico" and
+    "Mcallen". It breaks 8 of the Spanish and Portuguese names in this extract
+    alone, which is why the canonical spelling is chosen FROM the data."""
+    from app.services.output_service import _build_city_case_index
+    import pandas as pd
+    src = pd.DataFrame({"City": ["Rio de Janeiro", "RIO DE JANEIRO",
+                                 "Ciudad de Mexico", "McAllen"]})
+    idx = _build_city_case_index(src, [{"city_column": "City"}])
+    check("particle stays lower-case", idx.get("riodejaneiro") == "Rio de Janeiro",
+          f"got {idx.get('riodejaneiro')!r}")
+    check("Spanish name intact", idx.get("ciudaddemexico") == "Ciudad de Mexico")
+    check("intercapped name intact", idx.get("mcallen") == "McAllen")
+
+
+def test_a_city_seen_only_in_capitals_is_left_alone():
+    """Nothing to correct from, and inventing a casing would be guessing. It has no
+    collision either, since it is the only spelling present."""
+    from app.services.output_service import _build_city_case_index
+    import pandas as pd
+    src = pd.DataFrame({"City": ["JEDDAH", "JEDDAH"]})
+    idx = _build_city_case_index(src, [{"city_column": "City"}])
+    check("unchanged", idx.get("jeddah") == "JEDDAH", f"got {idx}")
+
+
+def test_the_index_is_built_and_threaded_to_the_rule():
+    from pathlib import Path
+    out = (Path(__file__).resolve().parent.parent / "app" / "services"
+           / "output_service.py").read_text(encoding="utf-8")
+    check("built once per source frame", "_build_city_case_index(" in out)
+    check("handed to every chunk", "_city_case" in out)
+    eng = (Path(__file__).resolve().parent.parent / "app" / "transformations"
+           / "engine.py").read_text(encoding="utf-8")
+    check("the rule reads it", '"city_case"' in eng)
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()
