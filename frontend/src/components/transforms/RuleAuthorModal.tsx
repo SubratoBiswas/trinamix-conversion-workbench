@@ -1309,8 +1309,20 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
       // Editing a rule that already exists updates it in place; only a genuinely
       // new rule is inserted. Previously every save inserted, so reopening and
       // saving stacked duplicate rules on the same field.
-      if (editingRuleId) await MappingApi.updateRule(editingRuleId, body);
-      else await MappingApi.addRule(String(conversionId), body);
+      const _saved = editingRuleId
+        ? await MappingApi.updateRule(editingRuleId, body)
+        : await MappingApi.addRule(String(conversionId), body);
+      // Saving a rule re-binds the mapping row to the rule's source column, because
+      // the rule save is the LATEST decision. Say so when it actually moved — a
+      // retarget the analyst cannot see is the same class of problem as one that
+      // never happened.
+      const _sync: any = (_saved as any)?.mapping_sync;
+      if (_sync?.synced && _sync?.previous_source_column
+          && _sync.previous_source_column !== _sync.source_column) {
+        setLoadError(
+          `Mapping updated: this field now reads "${_sync.source_column}" `
+          + `(was "${_sync.previous_source_column}").`);
+      }
       onSaved();
     } catch (e: any) {
       setSaveError(e?.response?.data?.detail || "Failed to save rule");

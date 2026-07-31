@@ -603,45 +603,61 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
     return (await enrich_mapping_with_samples(conv, [m]))[0]
 
 
-async def _sync_mapping_to_rule(r: TransformationRule, actor: str) -> None:
+async def _sync_mapping_to_rule(r: TransformationRule, actor: str) -> dict:
     """Make Mapping Review agree with the rule the analyst just saved.
 
-    The rule dialog asks for a Source column and a Target FBDI field, and stores both
-    on the RULE. The Mapping Review screen reads the MAPPING row — so after saving
-    "Address Name <- City, value mapping" the field still showed SOURCE "(none)" and
-    "Required field unmapped", which is the analyst's report: "I updated this in the
-    custom rule, but it is not reflecting in the mapping section".
+    The rule dialog asks for a Source column and a Target FBDI field and stores both
+    on the RULE; Mapping Review reads the MAPPING row. Two artefacts describing one
+    decision, so the screen and the rule disagreed — "I updated this in the custom
+    rule, but it is not reflecting in the mapping section".
 
-    Two artefacts describing one decision is the problem; this makes the rule write
-    the decision down where the screen, the required-field gate and the generator all
-    already look.
+    THE RULE SAVE IS THE LATEST DECISION, so it wins. A first cut of this only filled
+    an EMPTY binding, on the reasoning that retargeting an existing mapping would be
+    presumptuous — and that reasoning is wrong here, for two reasons the analyst then
+    demonstrated with Supplier Name:
 
-    Deliberately conservative. It only FILLS an empty binding — a field the analyst
-    has already bound to a different column keeps that column, because the mapping is
-    the more specific statement and silently retargeting it would be the eBOS
-    "shows city, ships PRIMARY" bug pointed the other way. And a not_applicable
-    mapping is lifted, because attaching a rule to a field is saying it should carry
-    a value: leaving it discarded is how a correctly authored rule produced nothing.
+      * the binding it refused to touch had been put there by the LEARNING ENGINE
+        ("Auto-applied from learning library"), not by a person. Deferring to an
+        engine mapping over a person's live edit inverts the whole precedence;
+      * and the dialog PRE-FILLS the source column from the mapping. If the analyst
+        does not touch it, this writes back the value that was already there and
+        nothing moves. It can only change the binding when they deliberately chose a
+        different column — which is exactly the case they are complaining is ignored.
+
+    The previous value is returned rather than discarded silently, so a retarget is
+    visible in the response instead of being something the analyst has to notice.
+
+    A not_applicable mapping is also lifted: attaching a rule to a field says it
+    should carry a value, and leaving it discarded is how a correctly authored rule
+    produced nothing at all.
     """
     if not r.target_field_id or not (r.source_column or "").strip():
-        return
+        return {"synced": False}
     try:
         m = await MappingSuggestion.find_one(
             MappingSuggestion.conversion_id == r.conversion_id,
             MappingSuggestion.target_field_id == r.target_field_id,
         )
         if m is None:
-            return
+            return {"synced": False, "note": "no mapping row for this target field"}
         patch: dict = {}
-        if not (m.source_column or "").strip():
+        _prev = (m.source_column or "").strip()
+        if _prev != (r.source_column or "").strip():
             patch["source_column"] = r.source_column
         if (m.status or "") in ("not_applicable", "rejected"):
             patch["status"] = "overridden"
-        if patch:
-            patch.update({"approved_by": actor, "approved_at": datetime.utcnow()})
-            await m.set(patch)
+        if not patch:
+            return {"synced": False, "note": "mapping already agreed with the rule"}
+        patch.update({"approved_by": actor, "approved_at": datetime.utcnow()})
+        await m.set(patch)
+        # Stale the outputs too: the file on disk was built from the old binding.
+        await _mark_outputs_stale(r.conversion_id)
+        return {"synced": True, "source_column": r.source_column,
+                "previous_source_column": _prev or None,
+                "status": patch.get("status")}
     except Exception as exc:  # noqa: BLE001 — never fail the rule save over this
         log.warning("could not sync mapping to rule %s: %s", r.id, exc)
+        return {"synced": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
 
 
 @router.post("/conversions/{conversion_id}/rules", response_model=TransformationRuleOut)
@@ -665,7 +681,7 @@ async def add_rule(
     r = TransformationRule(conversion_id=conv.id, sequence=seq, **data)
     await r.insert()
     await _mark_outputs_stale(conv.id)
-    await _sync_mapping_to_rule(r, user.email)
+    _sync = await _sync_mapping_to_rule(r, user.email)
     # Learning capture is best-effort — a failure here must not fail the save
     # (and previously surfaced as an opaque "Failed to save rule" with no CORS).
     try:
@@ -684,6 +700,9 @@ async def add_rule(
         "description": r.description,
         "sequence": r.sequence,
         "created_at": r.created_at,
+        # What the save did to the MAPPING row, so a retarget is visible rather
+        # than something the analyst has to spot.
+        "mapping_sync": _sync,
     }
 
 
@@ -905,7 +924,7 @@ async def update_rule(
         setattr(r, k, v)
     await r.save()
     await _mark_outputs_stale(r.conversion_id)
-    await _sync_mapping_to_rule(r, user.email)
+    _sync = await _sync_mapping_to_rule(r, user.email)
     # Re-learn so the edited definition (not the superseded one) is what future
     # conversions inherit. Best-effort, exactly as in add_rule.
     try:
@@ -922,6 +941,9 @@ async def update_rule(
         "description": r.description,
         "sequence": r.sequence,
         "created_at": r.created_at,
+        # What the save did to the MAPPING row, so a retarget is visible rather
+        # than something the analyst has to spot.
+        "mapping_sync": _sync,
     }
 
 

@@ -648,6 +648,8 @@ export interface TransformationRule {
   description: string | null;
   sequence: number;
   created_at: string;
+  /** What saving the rule did to the mapping row. */
+  mapping_sync?: Record<string, any> | null;
 }
 
 export interface ValidationIssue {

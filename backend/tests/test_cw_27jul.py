@@ -300,18 +300,45 @@ def test_the_rules_source_column_survives_frame_pruning():
 def test_saving_a_rule_writes_the_binding_onto_the_mapping():
     """"I updated this in the custom rule, but it is not reflecting in the mapping
     section." Two artefacts describing one decision: the rule holds the source column,
-    the screen and the required-field gate read the mapping. The rule now writes the
-    decision down where they already look — filling an EMPTY binding only, and lifting
-    a not_applicable row, because attaching a rule to a field says it should carry a
-    value."""
+    the screen and the required-field gate read the mapping.
+
+    The rule save is the LATEST decision, so it wins — it does not merely fill an
+    empty binding. A first cut only filled empties, and the analyst immediately found
+    the case that breaks: Supplier Name was already bound to `Name` BY THE LEARNING
+    ENGINE ("Auto-applied from learning library"), so a rule saying `Legal Name` was
+    refused in favour of an engine mapping. That inverts the whole precedence.
+
+    It is safe because the dialog PRE-FILLS the source column from the mapping: leave
+    it alone and this writes back what was already there, so the binding can only move
+    when the analyst deliberately picks a different column.
+    """
     body = (_ROOT / "app" / "routers" / "mapping.py").read_text(encoding="utf-8")
     check("the sync exists", "async def _sync_mapping_to_rule(" in body)
-    check("it runs on create", "await _sync_mapping_to_rule(r, user.email)" in body)
-    check("it only fills an empty binding",
-          'if not (m.source_column or "").strip():' in body)
+    check("it runs on create", "_sync = await _sync_mapping_to_rule(r, user.email)" in body)
+    check("it re-binds whenever the rule names a different column",
+          'if _prev != (r.source_column or "").strip():' in body)
+    check("it no longer refuses an existing binding",
+          'if not (m.source_column or "").strip():\n            patch["source_column"]' not in body)
     check("it lifts a discarded mapping",
           'if (m.status or "") in ("not_applicable", "rejected"):' in body)
+    check("it stales the outputs built on the old binding",
+          "await _mark_outputs_stale(r.conversion_id)" in body)
     check("and it never fails the save", "never fail the rule save over this" in body)
+
+
+def test_a_retarget_is_reported_rather_than_silent():
+    """Moving a binding under the analyst without saying so is the same class of
+    problem as not moving it at all."""
+    body = (_ROOT / "app" / "routers" / "mapping.py").read_text(encoding="utf-8")
+    check("the previous column comes back", '"previous_source_column": _prev or None' in body)
+    check("both rule endpoints return it", body.count('"mapping_sync": _sync,') == 2)
+    sch = (_ROOT / "app" / "schemas" / "transformation.py").read_text(encoding="utf-8")
+    # response_model STRIPS unknown keys — returning it from the router is not enough.
+    check("and the response model declares it",
+          "mapping_sync: dict[str, Any] | None = None" in sch)
+    if _FE.exists():
+        ui = (_FE / "components" / "transforms" / "RuleAuthorModal.tsx").read_text(encoding="utf-8")
+        check("the UI says what moved", "previous_source_column" in ui)
 
 
 def test_the_mapping_screen_reloads_after_a_rule_is_saved():

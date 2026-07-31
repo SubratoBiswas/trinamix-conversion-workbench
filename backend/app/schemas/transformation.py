@@ -24,6 +24,11 @@ class TransformationRuleOut(ApiOut):
     description: str | None = None
     sequence: int
     created_at: datetime
+    # What saving the rule did to the MAPPING row — e.g. {"synced": true,
+    # "source_column": "Legal Name", "previous_source_column": "Name"}. Declared
+    # HERE because response_model silently strips keys it does not know about: the
+    # router can return it all it likes and FastAPI will drop it on the way out.
+    mapping_sync: dict[str, Any] | None = None
 
     class Config:
         from_attributes = True
