@@ -78,6 +78,11 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
     for r in rules or []:
         cfg = r.get("config") or {}
         rt = (r.get("rule_type") or "").upper()
+        # The rule's OWN source column. Undeclared, it is pruned out of the frame
+        # before the rule ever runs — the exact failure that made Supplier Site ship
+        # empty on 8,561 rows, one layer over.
+        if r.get("source_column"):
+            cols.add(r["source_column"])
         if rt in ("CONCAT", "COALESCE"):
             cols.update(c for c in (cfg.get("columns") or []) if c)
         elif rt == "CONDITIONAL" and cfg.get("if_column"):
@@ -370,6 +375,10 @@ def _transform_frame(
         if m.source_column and m.source_column in src.columns
     }
     ctx_all = list(needed_cols | {c for c in (context_cols or set()) if c in src.columns})
+    # Case/punctuation-insensitive column lookup — the analyst types "City", the
+    # extract may say "city" or "Bill To City", and losing a whole rule to one
+    # capital letter is not a failure worth having.
+    _norm_col_lookup = {_norm_hdr(c): c for c in src.columns}
     col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
     records: list[dict] | None = None
     for m in sorted_mappings:
@@ -431,6 +440,23 @@ def _transform_frame(
                           "config": m.suggested_transformation.get("config", {})})
         dv = m.default_value
         has_src = bool(m.source_column) and m.source_column in col_cache and not _discarded
+        # The RULE's own source column, when the mapping has none. The rule dialog
+        # asks for it ("the legacy column this rule transforms") and generation never
+        # read it — so "Address Name <- City, value mapping" fed the rule an empty
+        # string on every row. The mapping still wins where it has one: a person
+        # binding the field in Mapping Review is the more specific statement.
+        _rule_src = None
+        if not has_src:
+            for _r in rules:
+                _c = _r.get("source_column")
+                if _c and _c in src.columns:
+                    _rule_src = _c
+                    break
+                if _c:
+                    _c2 = _norm_col_lookup.get(_norm_hdr(_c))
+                    if _c2 is not None:
+                        _rule_src = _c2
+                        break
         if rules:
             # A transform rule (CASE_WHEN / COALESCE / CONCAT / …) can derive its
             # value from OTHER columns via the per-row context, so it must run even
@@ -442,7 +468,8 @@ def _transform_frame(
             # CASE_WHEN into a constant "EMAIL" whenever source_column was null).
             if records is None:
                 records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
-            src_vals = col_cache[m.source_column] if has_src else None
+            src_vals = (col_cache[m.source_column] if has_src
+                        else (src[_rule_src].tolist() if _rule_src else None))
             # row_index is the GLOBAL row number. It was never passed here at all —
             # only the mapping PREVIEW endpoint set it — so SEQUENCE read
             # ctx.get("row_index", 0) and returned start+0 for every row. Party
@@ -646,7 +673,16 @@ async def build_converted_dataframe(
     for r in rules_list:
         if r.target_field_id:
             pipelines.setdefault(r.target_field_id, []).append(
-                {"rule_type": r.rule_type, "config": r.rule_config or {}}
+                # source_column is a FIELD ON THE RULE, and it was being dropped here.
+                # The rule dialog asks "Source column — the legacy column this rule
+                # transforms", stores it, and shows it back in the saved-rules banner;
+                # generation then fed the rule the MAPPING's source value instead and
+                # ignored the rule's own column entirely. With no mapped source that is
+                # an empty string, so a VALUE_MAP on Address Name <- City evaluated
+                # against "" on every row and returned its default. Shipped, visible in
+                # the UI, and inert.
+                {"rule_type": r.rule_type, "config": r.rule_config or {},
+                 "source_column": r.source_column}
             )
 
     # Extra per-row context columns for rule evaluation: suggested-transform refs
@@ -1087,7 +1123,23 @@ _CONTROL_DEFAULTS: dict[str, str] = {
     # EMAIL, Fax=Yes -> FAX, else blank). A blanket constant here was forcing every
     # row to EMAIL and overwriting the derivation.
     # --- Supplier address (POZ_SUPPLIER_ADDRESSES_INT) ---
-    "address name": "PRIMARY",
+    # "address name": "PRIMARY" — REMOVED. The signed strategy says the opposite in
+    # so many words (supplier_strategy_defaults.json: "Address Name is the City Name
+    # (e.g. Austin). NOT the constant 'PRIMARY'."), and the analyst reported it
+    # twice: "Address name is shown mapped correctly to city in the UI, but the
+    # generated file contains (static value PRIMARY)".
+    #
+    # Removing it from _AUTHORITATIVE was not enough, because the plain
+    # _CONTROL_DEFAULTS branch fills any column that reaches finalize entirely blank
+    # and has NO explicitly_mapped guard at all. So whenever the city did not
+    # materialise in the frame — a renamed column, a sheet-routing miss, a mapping
+    # row that lost the dedup — PRIMARY was written on every row, and the screen
+    # (which reads the mapping) and the file (which reads the frame) disagreed.
+    #
+    # A control default is for a column nobody has an opinion about. This one has a
+    # signed opinion, so it does not belong in the table in either form: an
+    # unpopulated Address Name must ship EMPTY and be visible as a gap, not be
+    # papered over with a value the strategy forbids.
     "pay": "Y",
     "ordering": "Y",
     "rfq or bidding": "Y",

@@ -40,11 +40,31 @@ def _is_master_key_field(target_object: str | None, target_field: str | None) ->
 
 
 async def _business_object_for(conversion: Conversion) -> str | None:
+    """The object key a learning is filed under.
+
+    This has to agree with whatever READS it, or a captured learning is stored under
+    a key nobody asks for and is simply never seen again. Two consumers matter:
+    ``defaults_service`` keys its example_default lookup on ``conversion.target_object``,
+    and the Learning Center lists by the raw stored string with exact equality.
+
+    The template's business_object is preferred because it is the precise interface
+    ("Supplier Address" rather than the bundle's name) — but where the two disagree
+    the conversion's own target_object is what the readers use, so it wins. Three
+    bundled templates carry business_object="Supplier" while their conversions are
+    "Supplier Import"/"Supplier Address", which is exactly the drift that made an
+    eBOS Supplier Address default vanish from the Learning Center (CW #7): written
+    under one spelling, asked for under the other.
+    """
+    _tgt = (getattr(conversion, "target_object", None) or "").strip()
     if conversion.template_id:
         tpl = await FBDITemplate.get(conversion.template_id)
-        if tpl and tpl.business_object:
-            return tpl.business_object
-    return conversion.target_object
+        _bo = ((tpl.business_object if tpl else None) or "").strip()
+        if _bo:
+            # Same thing under two spellings → prefer the one the readers use.
+            if _tgt and _normalize(_bo) != _normalize(_tgt):
+                return _tgt
+            return _bo
+    return _tgt or None
 
 
 async def source_erp_for_conversion(conversion) -> str | None:

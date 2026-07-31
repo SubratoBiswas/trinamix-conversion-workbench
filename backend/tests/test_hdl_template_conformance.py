@@ -1,15 +1,32 @@
-"""The client's own HDL template, used as the specification it is.
+"""The client's HDL template is the FORMAT the download must take — not a gold record.
+
+Analyst, 31-Jul, drawing the line: "treat template as purely a format in which FBDI
+downloads should happen, the inputs are for reference, check the mappings file for
+mapping and perform the mapping."
+
+So this file asserts STRUCTURE and nothing else:
+
+  * every component the template shows exists, carrying at least the attributes it
+    shows, in the order it shows them;
+  * the two-pass Worker split, and the assignment number that only pass two sets;
+  * that each target field reads the SOURCE COLUMN THE MAPPING FILE NAMES.
+
+It deliberately does NOT assert the template's sample VALUES. Those are one
+hand-written row for one employee and several are illustrative rather than expected:
+the company reads "Nextpower LLC" where the real input says "Nextracker LLC, USA",
+and DefaultExpenseAccount shows a full accounting flexfield where the mapped column
+holds a cost centre. Pinning those would turn a reference into a contract and fail
+the next time a legitimate value changed. Extra attributes are allowed for the same
+reason — the template is a floor, not a ceiling.
 
 CW_Issues 31-Jul, row 28: "While testing them in our tool, we noticed that some
 fields are not being reflected as expected. For example, the PersonName,
 AssignmentSupervisor, etc fields."
 
-Three documents came with that: HDL Template 3.xlsx (a hand-built load file with a
-real sample row for employee 1007802), the mapping workbook, and the actual input
-INTXXX_CR_Oracle_Fusion_Demographic_V2. Generating that employee's records from the
-real input and diffing against the template's own row is the strongest check
-available here — it is the client stating, attribute by attribute, what they expect
-to load — and it found seven things, none of which any existing test was looking for:
+Three documents came with that: HDL Template 3.xlsx, the mapping workbook, and the
+actual input INTXXX_CR_Oracle_Fusion_Demographic_V2. Generating employee 1007802 from
+the real input and comparing the SHAPE against the template found seven structural
+gaps, none of which any existing test was looking for:
 
   PersonName      MiddleNames was MISSING and KnownAs sat in its place. Getting a
                   component's attribute LIST wrong is not cosmetic; this IS
@@ -130,17 +147,25 @@ def rendered(obj, name):
                     [render_cell(f, resolve) for f in fields]))
 
 
-def test_every_component_matches_the_templates_attribute_list_and_order():
-    """HDL reads METADATA positionally against the names on that line, so a missing
-    or reordered attribute is a different file, not a cosmetic difference."""
+def test_every_component_covers_the_templates_attributes_in_its_order():
+    """The template is the FORMAT: every attribute it lists must be present, and in
+    the relative order it lists them, because HDL reads METADATA positionally against
+    the names on that line. Extra attributes are allowed — the template is a floor,
+    not a ceiling, and a later Oracle requirement should not fail here."""
     seen = {}
     for obj in HDL_LOAD_ORDER:
         for cn, fields in HDL_OBJECTS[obj]["components"]:
             seen.setdefault(cn, [f["name"] for f in fields])
     for cn, want in TEMPLATE_ATTRS.items():
         check(f"{cn} exists", cn in seen, f"components are {sorted(seen)}")
-        check(f"{cn} attributes match the template", seen[cn] == want,
-              f"\n      got  {seen[cn]}\n      want {want}")
+        got = seen[cn]
+        missing = [a for a in want if a not in got]
+        check(f"{cn} carries every attribute the template shows", not missing,
+              f"missing {missing}")
+        positions = [got.index(a) for a in want]
+        check(f"{cn} keeps the template's relative order",
+              positions == sorted(positions),
+              f"\n      got  {got}\n      want {want} in order")
 
 
 def test_the_two_worker_passes_are_the_templates_two_sheets():
@@ -175,8 +200,11 @@ def test_the_assignment_number_exists_in_pass_two_and_not_in_pass_one():
           f"got {two_as['ManagerAssignmentNumber']!r}")
 
 
-def test_the_values_match_the_templates_own_sample_row():
-    """Attribute-for-attribute against what the client wrote by hand for 1007802."""
+def test_each_field_reads_the_column_the_mapping_file_names():
+    """Values, checked against the MAPPING FILE rather than the template's sample row.
+    The mapping file is the authority for which source column feeds which target
+    field; the template's row is one hand-written example and several of its values
+    are illustrative."""
     w = rendered("Worker", "Worker")
     check("PersonNumber", w["PersonNumber"] == "1007802")
     check("SourceSystemId", w["SourceSystemId"] == "Workday_1007802")
@@ -221,16 +249,16 @@ def test_the_values_match_the_templates_own_sample_row():
           job["Name"] == "VP2, Supply Chain Management", f"got {job['Name']!r}")
 
 
-def test_the_default_expense_account_is_populated_even_though_incomplete():
-    """The mapping workbook wrote this field off. The template proves it exists, so
-    populating it with the cost centre is right — and it is NOT yet the full
-    accounting flexfield string the template shows, which is a crosswalk the client
-    still owes. Populated-and-visibly-short beats absent-and-invisible."""
+def test_the_default_expense_account_carries_the_mapped_column():
+    """The mapping workbook's row 39 says Cost_Center -> DefaultExpenseAccount, and
+    the workbook's own TRX comment saying no Oracle field exists is contradicted by
+    the template, which carries the attribute on Assignment. So: the attribute exists
+    (format, from the template) and it reads Cost_Center (mapping, from the mapping
+    file). The template's own cell shows a full accounting flexfield string — that is
+    a sample, not a transformation this file invents."""
     a = rendered("Worker", "Assignment")
-    check("populated from Cost_Center", a["DefaultExpenseAccount"] == "200",
+    check("reads the mapped column verbatim", a["DefaultExpenseAccount"] == "200",
           f"got {a['DefaultExpenseAccount']!r}")
-    check("and it is one segment, not the template's full string",
-          a["DefaultExpenseAccount"] != "1200.00000.10000.0000.0000.000.000000")
 
 
 def test_a_candidate_source_list_survives_either_spelling():

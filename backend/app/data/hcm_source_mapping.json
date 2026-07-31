@@ -182,9 +182,8 @@
       ],
       "verified_against_extract": true,
       "source_row": 39,
-      "note": "The workbook's TRX comment reads 'No suitable field is available in Oracle for this information', and it is wrong: the client's own HDL template carries DefaultExpenseAccount on Assignment. OPEN: the template shows a full accounting flexfield string (1200.00000.10000.0000.0000.000.000000) while Cost_Center holds one segment (200/400), so a crosswalk from cost centre to account string is still needed. Seeded as the mapping so the column is populated and visibly wrong rather than absent and invisible.",
-      "in_real_input_file": true,
-      "needs_crosswalk": true
+      "note": "Mapping-file row 39: Cost_Center -> DefaultExpenseAccount, taken as written. The workbook's own TRX comment ('No suitable field is available in Oracle for this information') is contradicted by the client's HDL template, which carries DefaultExpenseAccount on Assignment \u2014 so the attribute exists (format, from the template) and it reads Cost_Center (mapping, from the mapping file). The template's cell shows a full accounting flexfield string; that is a SAMPLE, not a transformation invented here. Analyst, 31-Jul: 'treat template as purely a format in which FBDI downloads should happen, the inputs are for reference, check the mappings file for mapping and perform the mapping.'",
+      "in_real_input_file": true
     },
     {
       "source_column": "Cost Center Name",
@@ -276,5 +275,6 @@
     }
   ],
   "_hdl_objects": "The five .dat files the generator writes, in load order: Location, Job, Position, PositionHierarchy, Worker. WorkRelationship is not a file \u2014 Worker.dat carries it as a child block \u2014 so hdl_object is the file and hdl_components are the blocks inside it.",
-  "_real_input": "The tool is fed INTXXX_CR_Oracle_Fusion_Demographic_V2 \u2014 23 columns, UNDERSCORED (Employee_ID, Job Code, Manager_ID), header on row 2 \u2014 NOT the 31-column 'Workday Extract' tab of the mapping workbook. All five columns previously flagged as coming from other Workday files (Manager_ID, Location_Code, Job_Code, Job Profile, Military_Service) are present in it. Column matching normalises punctuation, so underscore-vs-space resolves either way."
+  "_real_input": "The tool is fed INTXXX_CR_Oracle_Fusion_Demographic_V2 \u2014 23 columns, UNDERSCORED (Employee_ID, Job Code, Manager_ID), header on row 2 \u2014 NOT the 31-column 'Workday Extract' tab of the mapping workbook. All five columns previously flagged as coming from other Workday files (Manager_ID, Location_Code, Job_Code, Job Profile, Military_Service) are present in it. Column matching normalises punctuation, so underscore-vs-space resolves either way.",
+  "_authority": "Two documents, two jobs. The HDL TEMPLATE is the FORMAT the download must take: which components exist, which attributes they carry, in what order, and the two-pass Worker split. Its sample VALUES are reference only \u2014 the company reads 'Nextpower LLC' where the real input says 'Nextracker LLC, USA'. The MAPPING FILE is the authority for which source column feeds which target field. Neither is used for the other's job."
 }

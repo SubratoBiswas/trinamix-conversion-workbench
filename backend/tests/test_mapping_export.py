@@ -31,11 +31,35 @@ RECS = [
 ]
 
 
+def test_the_bands_are_the_ones_the_analyst_asked_for():
+    """CW_Issues row 3, verbatim: "grouped into confidence bands (eg. 90-100, 80-90,
+    75-80, 50-75, below 50, 0)". This shipped with six bands of its own invention at
+    different cut points — the same idea, close enough to look done, and impossible
+    for the functional team to reconcile against what they asked for."""
+    from app.services.mapping_export_service import BANDS
+    labels = [lbl for _k, lbl, *_ in BANDS]
+    assert labels == ["100% - Exact Match", "90-100%", "80-90%", "75-80%",
+                      "50-75%", "Below 50%", "0% - No Match Found"], labels
+
+
 def test_band_for_boundaries():
     assert band_for(100) == "exact"
-    assert band_for(96) == "b95" and band_for(92) == "b90" and band_for(87) == "b85"
-    assert band_for(80) == "b75" and band_for(60) == "b50" and band_for(30) == "b0"
+    # Every boundary, on both sides — a band table is only as good as its edges.
+    assert band_for(99) == "b90" and band_for(90) == "b90"
+    assert band_for(89) == "b80" and band_for(80) == "b80"
+    assert band_for(79) == "b75" and band_for(75) == "b75"
+    assert band_for(74) == "b50" and band_for(50) == "b50"
+    assert band_for(49) == "b0" and band_for(1) == "b0"
     assert band_for(0) == "none" and band_for(None) == "none"
+
+
+def test_no_confidence_falls_in_a_band():
+    """Every 0-100 value lands in exactly one band — no gaps, no overlaps. A gap
+    would silently drop fields out of the workbook entirely."""
+    from app.services.mapping_export_service import BANDS
+    keys = {k for k, *_ in BANDS}
+    for c in range(0, 101):
+        assert band_for(c) in keys, c
 
 
 def _open():
@@ -47,7 +71,7 @@ def test_summary_counts_and_total():
     s = wb["Summary"]
     counts = {r[0]: r[1] for r in s.iter_rows(min_row=4, max_row=12, values_only=True) if r[0]}
     assert counts["100% - Exact Match"] == 1
-    assert counts["0-50%"] == 2
+    assert counts["Below 50%"] == 2
     assert counts["0% - No Match Found"] == 1
     assert counts["Total"] == 5
 
@@ -55,13 +79,13 @@ def test_summary_counts_and_total():
 def test_only_nonempty_bands_get_sheets():
     wb = _open()
     assert "100pct_-_Exact_Match" in wb.sheetnames
-    assert "0-50pct" in wb.sheetnames
-    assert "95-100pct" not in wb.sheetnames  # empty band → no sheet
+    assert "Below_50pct" in wb.sheetnames
+    assert "90-100pct" not in wb.sheetnames  # empty band → no sheet
 
 
 def test_band_sheet_headers_and_rows():
     wb = _open()
-    ws = wb["0-50pct"]
+    ws = wb["Below_50pct"]
     assert [ws.cell(row=2, column=c).value for c in range(1, 8)] == [
         "Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason",
         "Excluded (Do-Not-Map Rule)", "Vetted Alternatives (AI-checked)",

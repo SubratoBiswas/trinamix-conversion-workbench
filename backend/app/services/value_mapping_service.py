@@ -431,12 +431,20 @@ async def accept_value_map(
             await Crosswalk(conversion_id=conv.id, name=field.field_name,
                             field_name=field.field_name, source_value=src,
                             target_value=tgt).insert()
+        # include_deleted=True: without it a retired crosswalk is invisible, this
+        # inserts a duplicate, and the learning the analyst deleted is back. CW #5.
         lm = await LearnedMapping.find_one(
             LearnedMapping.kind == "crosswalk",
             LearnedMapping.target_field == field.field_name,
             LearnedMapping.original_value == src,
+            include_deleted=True,
         )
-        if not lm:
+        if lm is not None and getattr(lm, "is_deleted", False):
+            # Accepting a value map is an explicit user action, so it revives — in
+            # place, so there is one row rather than a ghost pair.
+            await lm.set({"resolved_value": tgt, "is_deleted": False,
+                          "deleted_at": None, "deleted_by": None})
+        elif not lm:
             await LearnedMapping(
                 kind="crosswalk", category="Value Crosswalk",
                 original_value=src, resolved_value=tgt,

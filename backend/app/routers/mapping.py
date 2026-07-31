@@ -316,10 +316,33 @@ async def source_columns(conversion_id: str, _: User = Depends(get_current_user)
             })
     else:
         from app.models.dataset import DatasetColumnProfile
+        # EVERY bound source, not just the first. A two-sheet workbook (Customer +
+        # Address) becomes two datasets on one conversion, and this read the singular
+        # conv.dataset_id — so Mapping Review offered only the first sheet's columns.
+        #
+        # The auto-mapper had already got this right (mapping_service._sources_for_
+        # conversion unions source_dataset_ids), which made the failure worse than a
+        # plain omission: the AI could propose a mapping to an Address column that the
+        # analyst could then neither see nor re-pick from the dropdown. Two layers
+        # disagreeing about what the sources ARE.
+        _ds_ids = [d for d in (conv.source_dataset_ids or []) if d] or (
+            [conv.dataset_id] if conv.dataset_id else [])
         profs = await DatasetColumnProfile.find(
-            DatasetColumnProfile.dataset_id == conv.dataset_id
+            {"dataset_id": {"$in": _ds_ids}}
         ).sort(+DatasetColumnProfile.position).to_list()
+        # Sheets repeat column names (both carry `entityid`). One entry per NAME —
+        # the mapping stores a column name, so two entries would be the same choice
+        # twice with no way to tell them apart. First source wins, which is the
+        # sheet order the analyst uploaded.
+        _seen_names: set = set()
+        _ds_order = {str(d): i for i, d in enumerate(_ds_ids)}
+        profs.sort(key=lambda x: (_ds_order.get(str(getattr(x, "dataset_id", "")), 99),
+                                  x.position or 0))
         for p in profs:
+            _nm = (p.column_name or "").strip().lower()
+            if _nm in _seen_names:
+                continue
+            _seen_names.add(_nm)
             columns.append({
                 "id": int(str(p.id)[-8:], 16) if not isinstance(p.id, int) else p.id,
                 "column_name": p.column_name,
@@ -545,6 +568,47 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
     return (await enrich_mapping_with_samples(conv, [m]))[0]
 
 
+async def _sync_mapping_to_rule(r: TransformationRule, actor: str) -> None:
+    """Make Mapping Review agree with the rule the analyst just saved.
+
+    The rule dialog asks for a Source column and a Target FBDI field, and stores both
+    on the RULE. The Mapping Review screen reads the MAPPING row — so after saving
+    "Address Name <- City, value mapping" the field still showed SOURCE "(none)" and
+    "Required field unmapped", which is the analyst's report: "I updated this in the
+    custom rule, but it is not reflecting in the mapping section".
+
+    Two artefacts describing one decision is the problem; this makes the rule write
+    the decision down where the screen, the required-field gate and the generator all
+    already look.
+
+    Deliberately conservative. It only FILLS an empty binding — a field the analyst
+    has already bound to a different column keeps that column, because the mapping is
+    the more specific statement and silently retargeting it would be the eBOS
+    "shows city, ships PRIMARY" bug pointed the other way. And a not_applicable
+    mapping is lifted, because attaching a rule to a field is saying it should carry
+    a value: leaving it discarded is how a correctly authored rule produced nothing.
+    """
+    if not r.target_field_id or not (r.source_column or "").strip():
+        return
+    try:
+        m = await MappingSuggestion.find_one(
+            MappingSuggestion.conversion_id == r.conversion_id,
+            MappingSuggestion.target_field_id == r.target_field_id,
+        )
+        if m is None:
+            return
+        patch: dict = {}
+        if not (m.source_column or "").strip():
+            patch["source_column"] = r.source_column
+        if (m.status or "") in ("not_applicable", "rejected"):
+            patch["status"] = "overridden"
+        if patch:
+            patch.update({"approved_by": actor, "approved_at": datetime.utcnow()})
+            await m.set(patch)
+    except Exception as exc:  # noqa: BLE001 — never fail the rule save over this
+        log.warning("could not sync mapping to rule %s: %s", r.id, exc)
+
+
 @router.post("/conversions/{conversion_id}/rules", response_model=TransformationRuleOut)
 async def add_rule(
     conversion_id: str, payload: TransformationRuleCreate, user: User = Depends(get_current_user)
@@ -566,6 +630,7 @@ async def add_rule(
     r = TransformationRule(conversion_id=conv.id, sequence=seq, **data)
     await r.insert()
     await _mark_outputs_stale(conv.id)
+    await _sync_mapping_to_rule(r, user.email)
     # Learning capture is best-effort — a failure here must not fail the save
     # (and previously surfaced as an opaque "Failed to save rule" with no CORS).
     try:
@@ -805,6 +870,7 @@ async def update_rule(
         setattr(r, k, v)
     await r.save()
     await _mark_outputs_stale(r.conversion_id)
+    await _sync_mapping_to_rule(r, user.email)
     # Re-learn so the edited definition (not the superseded one) is what future
     # conversions inherit. Best-effort, exactly as in add_rule.
     try:

@@ -38,11 +38,14 @@ async def _learn(business_object, target_field, *, kind, original, resolved,
     leaks to another client)."""
     if not business_object or not target_field:
         return
+    # include_deleted=True: a retired steering rule is invisible to a plain
+    # find_one, so the next prompt re-created it as a duplicate. CW #5.
     existing = await LearnedMapping.find_one(
         LearnedMapping.kind == kind,
         LearnedMapping.target_object == business_object,
         LearnedMapping.target_field == target_field,
         LearnedMapping.client_id == client_id,
+        include_deleted=True,
     )
     doc = {
         "kind": kind, "category": "Steering (prompt)",
@@ -52,6 +55,9 @@ async def _learn(business_object, target_field, *, kind, original, resolved,
         "captured_from": "prompt", "captured_at": datetime.utcnow(),
     }
     if existing:
+        # Typing the directive is an explicit user action, so it revives in place.
+        if getattr(existing, "is_deleted", False):
+            doc = {**doc, "is_deleted": False, "deleted_at": None, "deleted_by": None}
         await existing.set(doc)
     else:
         await LearnedMapping(**doc).insert()

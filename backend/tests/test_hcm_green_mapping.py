@@ -280,9 +280,14 @@ def test_cost_center_does_have_an_oracle_field_after_all():
     check("and DefaultExpenseAccount is a real attribute",
           "Assignment" in FIELD_COMPONENTS.get("DefaultExpenseAccount", set()),
           f"lives on {sorted(FIELD_COMPONENTS.get('DefaultExpenseAccount', set()))}")
-    # Still honestly incomplete: the template shows a full accounting flexfield
-    # string and Cost_Center holds one segment.
-    check("the remaining gap is recorded", cc.get("needs_crosswalk") is True)
+    # And it is mapped as the mapping FILE writes it — Cost_Center, verbatim. The
+    # template's cell shows a full accounting flexfield string, but the template is
+    # the FORMAT, not the mapping. Analyst, 31-Jul: "treat template as purely a
+    # format in which FBDI downloads should happen ... check the mappings file for
+    # mapping and perform the mapping."
+    check("mapped from the column the mapping file names",
+          cc["source_column"] == "Cost Center")
+    check("and no crosswalk was invented", "needs_crosswalk" not in cc)
     # The seeder's skip stays — the next workbook may genuinely have such a row.
     seed = (_ROOT / "app" / "services" / "catalog_seed_service.py").read_text(encoding="utf-8")
     check("the seeder can still skip a fieldless row",

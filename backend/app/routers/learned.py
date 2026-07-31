@@ -76,7 +76,23 @@ async def list_learned(
         filters.append({"is_global": True})
     elif client_id:
         try:
-            filters.append({"$or": [{"is_global": True}, {"client_id": PydanticObjectId(client_id)}]})
+            filters.append({"$or": [
+                {"is_global": True},
+                {"client_id": PydanticObjectId(client_id)},
+                # UNTAGGED rows. client_id_for_conversion falls back to the default
+                # client and CAN return None, and the capture then writes
+                # client_id=None with is_global=False — a row that matched NEITHER
+                # branch and so was invisible the moment a client was selected. That
+                # is "default values in the learning centre is not getting populated"
+                # (CW #7): the learning existed, the list simply could not see it.
+                #
+                # scope_query already rescues exactly these rows for the defaults
+                # layer; this endpoint hand-rolled its filter and did not. Two
+                # readers of one collection disagreeing about what is in scope is
+                # what made the row invisible on screen while it still applied to
+                # the file.
+                {"client_id": None},
+            ]})
         except Exception:
             raise HTTPException(400, "Invalid client_id")
     query = LearnedMapping.find(*filters)
@@ -522,13 +538,19 @@ async def update_learned(
     payload: LearnedMappingUpdate,
     _: User = Depends(get_current_user),
 ):
-    item = await LearnedMapping.get(PydanticObjectId(learned_id))
+    # find_one + include_deleted, not get(): get() delegates to find_one and this
+    # model filters tombstones out of find, so a retired row is invisible to it.
+    # Harmless here today, but the same blind spot two lines down in delete_learned
+    # meant a retired learning could never be purged — so the model is simply never
+    # read through get().
+    _q = LearnedMapping.id == PydanticObjectId(learned_id)
+    item = await LearnedMapping.find_one(_q, include_deleted=True)
     if not item:
         raise HTTPException(404, "Not found")
     updates = payload.model_dump(exclude_unset=True)
     if updates:
         await item.set(updates)
-        item = await LearnedMapping.get(PydanticObjectId(learned_id))
+        item = await LearnedMapping.find_one(_q, include_deleted=True)
     return _serialize(item)
 
 
@@ -546,7 +568,12 @@ async def delete_learned(
     the row stops applying and stops being listed, and nothing automatic can
     resurrect it. ``?purge=true`` still removes the document outright.
     """
-    item = await LearnedMapping.get(PydanticObjectId(learned_id))
+    # Beanie's Document.get() delegates to find_one, and LearnedMapping.find injects
+    # {'is_deleted': {'$ne': True}} — so get() is TOMBSTONE-BLIND. An already-retired
+    # row therefore 404'd here, which meant ?purge=true could never remove one: the
+    # only rows you could purge were the ones you had not deleted yet.
+    item = await LearnedMapping.find_one(
+        LearnedMapping.id == PydanticObjectId(learned_id), include_deleted=True)
     if not item:
         raise HTTPException(404, "Not found")
     # Retiring the rule is only half of it. Applying a learning WRITES a

@@ -16,14 +16,23 @@ import io
 import re
 
 # (key, label, lo, hi, sheet_name, description) — hi is exclusive except the 100 band.
+# THE BANDS ARE THE ANALYST'S, not ours. CW_Issues row 3, verbatim: "The suggestions
+# and their probabilities should be grouped into confidence bands (eg. 90-100, 80-90,
+# 75-80, 50-75, below 50, 0)." This shipped with six bands of its own invention —
+# 95-100, 90-95, 85-90, 75-85, 50-75, 0-50 — the same idea at different cut points,
+# which is close enough to look done and different enough that a band count cannot be
+# reconciled against anything they asked for.
+#
+# 100 and 0 keep their own sheets at either end: a learned/auto-applied match is not a
+# "90-100 suggestion", and "no plausible source found" is the number actually being
+# chased — 1,256 of 1,365 Item fields on the analyst's own Sheet4 tally.
 BANDS = [
     ("exact",  "100% - Exact Match", 100, 101, "100pct_-_Exact_Match",   "Learned / auto-applied mapping"),
-    ("b95",    "95-100%",             95, 100, "95-100pct",               "Very high confidence suggestion"),
-    ("b90",    "90-95%",              90,  95, "90-95pct",                "High confidence suggestion"),
-    ("b85",    "85-90%",              85,  90, "85-90pct",                "Good confidence suggestion"),
-    ("b75",    "75-85%",              75,  85, "75-85pct",                "Medium confidence suggestion — review recommended"),
+    ("b90",    "90-100%",             90, 100, "90-100pct",               "High confidence suggestion"),
+    ("b80",    "80-90%",              80,  90, "80-90pct",                "Good confidence suggestion"),
+    ("b75",    "75-80%",              75,  80, "75-80pct",                "Medium confidence suggestion — review recommended"),
     ("b50",    "50-75%",              50,  75, "50-75pct",                "Low confidence suggestion — review required"),
-    ("b0",     "0-50%",                1,  50, "0-50pct",                 "Very low confidence suggestion — likely needs manual mapping"),
+    ("b0",     "Below 50%",            1,  50, "Below_50pct",             "Very low confidence suggestion — likely needs manual mapping"),
     ("none",   "0% - No Match Found",  0,   1, "0pct_-_No_Match_Found",   "No plausible source field identified"),
 ]
 _HEADERS = ["Target FBDI Field", "Suggested Source Field", "Confidence %", "Reason",

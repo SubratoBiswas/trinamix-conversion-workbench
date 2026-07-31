@@ -246,13 +246,35 @@ export const ConvertFilePage: React.FC = () => {
     setCreating(true); setError(null);
     const proj = projects.find((p) => p.id === projectId);
     const outputMode = /fbdi/i.test((proj as any)?.target_environment || "") ? "fbdi_download" : "fusion_load";
+    // A workbook is fanned out to one ROW PER SHEET above (analyzeAll), so a
+    // Customer + Address book gives two ready rows. Creating a conversion set from
+    // each of them produced TWO conversion sets for one workbook, each bound to one
+    // sheet — CW_Issues row 1. The per-row "Generate set" button had always done it
+    // correctly (it collects the siblings and sends dataset_ids); this loop did not,
+    // so the same page had two behaviours and the primary button was the wrong one.
+    //
+    // Group by the underlying File: one conversion set per workbook, every sheet
+    // bound to it, the first sheet leading. The generator then routes each Oracle
+    // interface sheet to whichever source supplies its mapped columns.
+    const byWorkbook: { lead: Item; all: Item[] }[] = [];
+    for (const it of ready) {
+      const grp = byWorkbook.find((g) => g.lead.file === it.file);
+      if (grp) grp.all.push(it);
+      else byWorkbook.push({ lead: it, all: [it] });
+    }
     try {
-      for (const it of ready) {
+      for (const grp of byWorkbook) {
+        const it = grp.lead;
+        const datasetIds = grp.all.map((o) => o.datasetId!).filter(Boolean);
         const tpl = templates.find((t) => t.id === it.templateId);
         const targetObject = tpl?.business_object || tpl?.name;
-        await DatasetsApi.classifyLearn(it.datasetId!, {
-          source_system: it.source, template_id: it.templateId, target_object: targetObject || undefined,
-        }).catch(() => {});
+        // Classify every sheet, not only the lead — the learning is per dataset.
+        for (const o of grp.all) {
+          await DatasetsApi.classifyLearn(o.datasetId!, {
+            source_system: o.source, template_id: o.templateId,
+            target_object: targetObject || undefined,
+          }).catch(() => {});
+        }
         // For a multi-file conversion object (supplier/customer/item/…), fan out
         // the FULL FBDI set from this one dataset — so the engagement gets the
         // whole load sequence starting at step 1 (e.g. Supplier Import), not just
@@ -261,7 +283,10 @@ export const ConvertFilePage: React.FC = () => {
         let fannedOut = false;
         try {
           const r = await ConversionsApi.generateSet({
-            project_id: projectId, dataset_id: it.datasetId!, object_type: targetObject || "",
+            project_id: projectId, object_type: targetObject || "",
+            ...(datasetIds.length > 1
+              ? { dataset_ids: datasetIds }
+              : { dataset_id: it.datasetId! }),
           });
           fannedOut = (r.created?.length || 0) + (r.existing?.length || 0) > 0;
           // Honor any steps the user unticked in the preview: drop them.

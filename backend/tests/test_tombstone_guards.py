@@ -56,6 +56,21 @@ def check(name, cond, detail=""):
     raise AssertionError(f"{name} {detail}".strip())
 
 
+# Functions that legitimately construct a LearnedMapping with no tombstone lookup.
+# Deliberately short, and each entry is a claim that has to stay true.
+_INSERT_ALLOWED = {
+    # The Learning Center's explicit "add a learning" button. There is nothing to
+    # resurrect: the analyst is creating a row, by hand, on purpose.
+    ("routers/learned.py", "create_learned"),
+}
+
+_GET_LINES: dict = {}
+
+
+def _is_get(rel_path, lineno):
+    return _GET_LINES.get((rel_path, lineno), False)
+
+
 def _call_sites():
     """(relative path, function, line, passes include_deleted, mentions is_deleted)."""
     out = []
@@ -69,7 +84,13 @@ def _call_sites():
         for n in ast.walk(tree):
             if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
                 continue
-            if n.func.attr not in ("find", "find_one", "find_all"):
+            # `get` matters as much as `find`: Beanie's Document.get() DELEGATES to
+            # find_one, and LearnedMapping.find injects {'is_deleted': {'$ne': True}},
+            # so get() is tombstone-blind too — and it takes no include_deleted
+            # argument at all, so a get() on this model can never be made safe. Two
+            # live resurrections hid behind it, including the Learning Center's own
+            # delete endpoint, where it meant a retired row could never be purged.
+            if n.func.attr not in ("find", "find_one", "find_all", "get"):
                 continue
             if not (isinstance(n.func.value, ast.Name)
                     and n.func.value.id == "LearnedMapping"):
@@ -79,8 +100,10 @@ def _call_sites():
                 if f.lineno <= n.lineno <= (f.end_lineno or f.lineno):
                     if owner is None or f.lineno > owner.lineno:
                         owner = f
+            _rel = str(p.relative_to(_APP)).replace(os.sep, "/")
+            _GET_LINES[(_rel, n.lineno)] = (n.func.attr == "get")
             out.append((
-                str(p.relative_to(_APP)).replace(os.sep, "/"),
+                _rel,
                 owner.name if owner else "?",
                 n.lineno,
                 any(k.arg == "include_deleted" for k in n.keywords),
@@ -102,6 +125,52 @@ def test_no_dead_tombstone_guard():
             if mentions and not inc and (f, fn) not in _ALLOWED]
     check("no function guards on is_deleted while filtering it out", not dead,
           "\n        " + "\n        ".join(f"{f}:{ln} in {fn}()" for f, fn, ln in dead))
+
+
+def test_no_write_path_inserts_without_first_looking_for_a_tombstone():
+    """THE test that should have existed. The old audit anchored on "mentions
+    is_deleted AND does not pass include_deleted", which can only ever catch a DEAD
+    guard — a function that already knows about tombstones. It could not catch a
+    MISSING one, and six write paths had no idea tombstones existed: manual-map save,
+    apply-proposal, accept-value-map, mapping-workbook import, prompt steering and
+    classify-learn. Every one of them re-created a learning the analyst had deleted.
+
+    Anchor on the INSERT instead: any function that constructs a LearnedMapping must
+    have queried with include_deleted=True somewhere on its own body, or it cannot
+    have seen the tombstone it is about to step over.
+    """
+    bad = []
+    for p in sorted(_APP.rglob("*.py")):
+        src = p.read_text(encoding="utf-8")
+        if "LearnedMapping(" not in src:
+            continue
+        tree = ast.parse(src)
+        funcs = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for f in funcs:
+            body = ast.unparse(f)
+            constructs = any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "LearnedMapping"
+                for n in ast.walk(f))
+            if not constructs:
+                continue
+            rel = str(p.relative_to(_APP)).replace(os.sep, "/")
+            if (rel, f.name) in _INSERT_ALLOWED:
+                continue
+            if "include_deleted=True" not in body:
+                bad.append(f"{rel}:{f.lineno} in {f.name}()")
+    check("every insert path can see tombstones first", not bad,
+          "\n        " + "\n        ".join(bad))
+
+
+def test_get_is_never_used_on_this_model():
+    """LearnedMapping.get() cannot be made tombstone-safe — it takes no
+    include_deleted. Use find_one(LearnedMapping.id == ..., include_deleted=True)."""
+    gets = [(f, fn, ln) for f, fn, ln, inc, _m in _call_sites()
+            if ln and f and fn and _is_get(f, ln)]
+    check("no LearnedMapping.get() call sites remain", not gets,
+          "\n        " + "\n        ".join(f"{f}:{ln} in {fn}()" for f, fn, ln in gets))
 
 
 def test_the_interactive_save_path_can_see_tombstones():

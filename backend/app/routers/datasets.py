@@ -309,10 +309,19 @@ async def classify_learn(dataset_id: str, body: dict, _: User = Depends(get_curr
     sig = column_signature([p.column_name for p in col_profiles])
 
     # De-dup: update the existing signature record if present.
+    # include_deleted=True: without it a retired signature is invisible and this
+    # re-inserts it. Unlike the analyst-driven paths, classify-learn runs
+    # AUTOMATICALLY on upload, so a tombstone here is respected rather than revived —
+    # an automatic path must never undo a deletion (QA #5's original rule).
     existing = await LearnedMapping.find_one(
         LearnedMapping.kind == "file_signature",
         LearnedMapping.original_value == sig,
+        include_deleted=True,
     )
+    if existing is not None and getattr(existing, "is_deleted", False):
+        await ds.set({"source_system": source_system or ds.source_system})
+        return {"learned": False, "signature": sig, "id": str(existing.id),
+                "note": "this file signature was retired by a user; not re-learned"}
     if existing:
         await existing.set({
             "resolved_value": source_system or existing.resolved_value,

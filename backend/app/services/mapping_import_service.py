@@ -187,19 +187,28 @@ async def import_mapping_file(
         note = cell(row, i_note) or None
         sheet = cell(row, i_sheet) or None
 
+        # include_deleted=True: a retired row is invisible to a plain find_one, so
+        # re-importing a workbook re-created every learning the analyst had deleted
+        # since the last import. CW #5.
         existing = await LearnedMapping.find_one(
             LearnedMapping.kind == "column_mapping",
             LearnedMapping.target_object == obj,
             LearnedMapping.target_field == tgt,
             LearnedMapping.original_value == src,
+            include_deleted=True,
         )
+        _revive = bool(existing is not None and getattr(existing, "is_deleted", False))
         cfg = {"source_column": src, "fbdi_sheet": sheet, "note": note, "confidence": 0.95}
         if existing:
             # Refresh metadata but keep it as one rule — re-importing a corrected
             # sheet should update, not duplicate.
+            # Uploading the workbook is an explicit user action, so a retired row
+            # is revived IN PLACE rather than duplicated beside its tombstone.
             await existing.set({
                 "resolved_value": tgt, "rule_config": cfg,
                 "source_erp": sys, "captured_from": "mapping workbook",
+                **({"is_deleted": False, "deleted_at": None, "deleted_by": None}
+                   if _revive else {}),
             })
             updated += 1
             continue

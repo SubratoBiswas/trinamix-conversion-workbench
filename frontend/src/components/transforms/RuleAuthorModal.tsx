@@ -986,6 +986,46 @@ const RULE_SPECS: Record<string, RuleSpec> = {
   // Conditional
   CONDITIONAL: { label: "If / then / else (single)", description: "Single equality check across two columns", defaultConfig: () => ({ if_column: "", equals: "", then: "", else: "" }), rowAware: true, Form: ConditionalForm },
   CASE_WHEN: { label: "Case / when (multi-branch)", description: "Multiple conditions with comparison ops", defaultConfig: () => ({ branches: [], default: "" }), rowAware: true, Form: CaseWhenForm },
+  // Types the BACKEND accepts that have no bespoke form here. They are seeded by
+  // the supplier and customer rule catalogs (PHONE_PART, PREFIX, SELF_LOOKUP,
+  // SEQUENCE, SUFFIX_WHEN, MAP_BOOLEAN, CONDITIONAL_DATE), so an analyst opening a
+  // supplier field hit `RULE_SPECS[type]` === undefined and the very next line
+  // dereferenced it — the modal threw, React unmounted the tree, and the analyst
+  // saw an empty dialog. That is CW #6: "the saved transformation does not appear",
+  // for a rule that saves correctly and reaches the output file.
+  //
+  // Each gets a real entry and edits through the raw JSON editor. A form we have
+  // not written is a reason to show the config, not to lose it.
+  MAP_BOOLEAN: { label: "Map boolean (Y/N)", description: "Normalise yes/no/true/false spellings", defaultConfig: () => ({}), Form: RawConfigOnly },
+  CONDITIONAL_DATE: { label: "Conditional date", description: "Pick a date column by condition", defaultConfig: () => ({}), rowAware: true, Form: RawConfigOnly },
+  PHONE_PART: { label: "Phone part", description: "Country / area / number / extension from one phone string", defaultConfig: () => ({ part: "number" }), Form: RawConfigOnly },
+  PREFIX: { label: "Prefix", description: "Prepend a fixed string", defaultConfig: () => ({ value: "" }), Form: RawConfigOnly },
+  SUFFIX: { label: "Suffix", description: "Append a fixed string", defaultConfig: () => ({ value: "" }), Form: RawConfigOnly },
+  SUFFIX_WHEN: { label: "Suffix when", description: "Append a string only when a condition holds", defaultConfig: () => ({}), rowAware: true, Form: RawConfigOnly },
+  SEQUENCE: { label: "Running sequence", description: "Unique running key with an optional variant form", defaultConfig: () => ({ prefix: "", width: 6, start: 1 }), needsSourceColumn: false, Form: RawConfigOnly },
+  SELF_LOOKUP: { label: "Self lookup", description: "Resolve a value from another row of the same file", defaultConfig: () => ({}), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
+  CITY_COUNTRY_KEY: { label: "Country-city key", description: "Join an ISO country code and a city into one key", defaultConfig: () => ({}), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
+  BLANK_IF_EQUALS: { label: "Blank if equals", description: "Clear the value when it duplicates another column", defaultConfig: () => ({ other_column: "" }), rowAware: true, Form: RawConfigOnly },
+};
+
+/** Fallback editor for rule types with no bespoke form. */
+function RawConfigOnly({ config }: { config: any }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="mb-1 font-medium text-slate-700">No visual editor for this rule type yet.</div>
+      <div>Its settings are shown and editable under <span className="font-medium">Advanced (raw JSON)</span> below. The rule itself works normally.</div>
+      <pre className="mt-2 max-h-40 overflow-auto rounded bg-white p-2 text-[11px] text-slate-700">{JSON.stringify(config ?? {}, null, 2)}</pre>
+    </div>
+  );
+}
+
+/** Never let an unknown rule type take the dialog down. */
+const UNKNOWN_SPEC: RuleSpec = {
+  label: "Saved rule",
+  description: "This rule type has no editor in this build; its configuration is shown as raw JSON.",
+  defaultConfig: () => ({}),
+  needsSourceColumn: false,
+  Form: RawConfigOnly,
 };
 
 const RULE_GROUPS: { label: string; types: string[] }[] = [
@@ -1066,6 +1106,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   const [existingRules, setExistingRules] = useState<TransformationRule[]>([]);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [loadingExisting, setLoadingExisting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const applyRuleToForm = (r: TransformationRule) => {
     const cfg = r.rule_config || {};
@@ -1113,6 +1154,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     let cancelled = false;
     (async () => {
       setLoadingExisting(true);
+      setLoadError(null);
       try {
         const all = await MappingApi.rules(String(conversionId));
         if (cancelled) return;
@@ -1125,8 +1167,17 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
           const last = mine[mine.length - 1];
           if (last) applyRuleToForm(last);
         }
-      } catch {
-        /* listing is best-effort — authoring a new rule still works */
+      } catch (e: any) {
+        // NOT best-effort, silently. A failed list is indistinguishable from "no
+        // rule saved" if it says nothing, and that is exactly how the earlier
+        // ObjectId 500 presented to the analyst — as a missing rule. Authoring a new
+        // rule still works, so this warns rather than blocking.
+        if (!cancelled) {
+          setLoadError(
+            e?.response?.data?.detail ||
+            "Could not load the rules already saved for this conversion — this dialog may be showing a blank form for a field that already has one.",
+          );
+        }
       } finally {
         if (!cancelled) setLoadingExisting(false);
       }
@@ -1175,12 +1226,16 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   // Default config swap on type change
   const onTypeChange = (next: string) => {
     setType(next);
-    const cfg = RULE_SPECS[next].defaultConfig();
+    const cfg = (RULE_SPECS[next] || UNKNOWN_SPEC).defaultConfig();
     setConfig(cfg);
     setAdvancedRaw(JSON.stringify(cfg, null, 2));
   };
 
-  const spec = RULE_SPECS[type];
+  // Belt and braces. Even with every backend type registered above, a rule saved by
+  // a NEWER build than this bundle would otherwise crash the dialog — and the
+  // failure mode is silent (React unmounts, no error), which is what made CW #6 read
+  // as "the rule does not appear" rather than "the page broke".
+  const spec = RULE_SPECS[type] || UNKNOWN_SPEC;
 
   // Sync advanced JSON ↔ form config
   useEffect(() => {
@@ -1405,6 +1460,11 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
 
           {/* Rules already saved for this field — loaded back so the analyst sees
               what is live, can edit it, or add another on top. */}
+          {loadError ? (
+            <div className="rounded-md border border-warning/50 bg-warning-subtle/40 px-3 py-2 text-[11px] text-warning">
+              {loadError}
+            </div>
+          ) : null}
           {loadingExisting ? (
             <div className="rounded-md border border-line bg-canvas px-3 py-2 text-[11px] text-ink-muted">
               Checking for rules already saved on this field…

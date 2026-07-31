@@ -9,6 +9,7 @@ with an optional transform rule, vets the pair (deterministic guard, optional AI
 and saves the result straight into the learning library — client-scoped, with a
 reason recorded in the audit trail.
 """
+from datetime import datetime
 from typing import Optional
 
 from beanie import PydanticObjectId
@@ -342,16 +343,33 @@ async def save(payload: dict, user: User = Depends(get_current_user)):
         reason = (r.get("reason") or "").strip()
         captured = f"manual mapping: {reason}" if reason else "manual mapping"
 
+        # include_deleted=True is LOAD-BEARING. LearnedMapping.find injects
+        # {'is_deleted': {'$ne': True}}, so without it a retired row is INVISIBLE
+        # here, this falls through to INSERT, and the learning the analyst deleted
+        # comes back as a second row sitting beside its own tombstone. That is
+        # CW_Issues #5 — "when I delete items from the Learning Center while working
+        # on supplier files, they reappear" — and this is the fourth place it has
+        # been found. The audit test missed it because it only flagged functions that
+        # already MENTIONED is_deleted; this one never did.
         existing = await LearnedMapping.find_one(
             LearnedMapping.kind == "column_mapping",
             LearnedMapping.target_object == target_object,
             LearnedMapping.target_field == tgt,
+            include_deleted=True,
         )
         if not src:
             if r.get("clear") and existing:
-                await existing.delete()
+                # TOMBSTONE rather than hard-delete. A hard delete leaves nothing for
+                # the next startup seed to respect, so the row returns on the next
+                # boot — the same bug by a different route.
+                await existing.set({"is_deleted": True,
+                                    "deleted_at": datetime.utcnow(),
+                                    "deleted_by": user.email})
                 cleared += 1
             continue
+        # Typing a mapping HERE is the explicit user action that revives a retired
+        # learning, and it revives IN PLACE so there is one row rather than a pair.
+        _revived = bool(existing is not None and getattr(existing, "is_deleted", False))
 
         # MANY sources -> ONE destination. A comma-separated source means the field is
         # built from several legacy columns, i.e. a CONCAT. Store the join rule with all
@@ -373,6 +391,8 @@ async def save(payload: dict, user: User = Depends(get_current_user)):
                 "source_erp": source_system, "captured_from": captured,
                 "captured_by": user.email,
                 **({"client_id": cid} if cid is not None else {}),
+                **({"is_deleted": False, "deleted_at": None, "deleted_by": None}
+                   if _revived else {}),
             })
             updated += 1
         else:

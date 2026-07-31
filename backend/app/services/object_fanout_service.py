@@ -176,6 +176,25 @@ async def generate_object_template_set(
     }
     existing_pairs = set(existing_by_pair.keys())
 
+    # Idempotency was keyed on the PRIMARY dataset alone, so a second call naming a
+    # different sheet of the same workbook collided with nothing and inserted a
+    # duplicate conversion for the same template — one Customer Import per sheet
+    # (CW_Issues row 1). The caller is fixed to send every sheet at once; this is the
+    # backstop, because "the UI stopped doing it" is not the same as "it cannot
+    # happen". A conversion is treated as the same one when it targets this template
+    # AND its bound sources OVERLAP the requested set — deliberately not "same
+    # template" alone, since a project may legitimately load two different Customer
+    # extracts.
+    _want = {str(x) for x in all_ds_ids}
+    for _c in existing_convs:
+        if not _c.template_id:
+            continue
+        _have = {str(x) for x in (getattr(_c, "source_dataset_ids", None) or [])}
+        if _have & _want:
+            _k = (str(dataset.id), str(_c.template_id))
+            existing_pairs.add(_k)
+            existing_by_pair.setdefault(_k, _c)
+
     created: list[dict] = []
     existing: list[dict] = []
     missing: list[dict] = []
