@@ -430,6 +430,11 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
     # open kept whatever they had. "Apply to all previous conversions" is this step,
     # and it was missing entirely from the steering path.
     fanout = {"conversions": 0, "mappings": 0, "stale_outputs": 0}
+    # WHY conversions were passed over, merged across every directive. The loop below
+    # summed only the keys already in `fanout`, so the reasons the fan-out now returns
+    # were computed and then dropped one line before the caller — the exact shape this
+    # codebase keeps producing: a fact recorded everywhere and read nowhere.
+    fan_skipped: dict = {}
     if touched:
         try:
             from app.models.learned import LearnedMapping
@@ -446,11 +451,15 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
                 r = await propagate_learning_to_open_conversions(
                     lm, conversion, captured_by=actor or "steering-prompt",
                     extra_object_keys=bundle)
-                for k in fanout:
+                for k in ("conversions", "mappings", "stale_outputs"):
                     fanout[k] += int(r.get(k, 0) or 0)
+                for _why, _n in (r.get("skipped") or {}).items():
+                    fan_skipped[_why] = fan_skipped.get(_why, 0) + int(_n or 0)
         except Exception as exc:  # noqa: BLE001 — never fail the steer on the fan-out
             log.exception("steering: propagating to existing conversions failed")
             fanout["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    if fan_skipped:
+        fanout["skipped"] = fan_skipped
 
     return {"applied": applied, "unmatched": unmatched, "unresolved": unresolved,
             "ai_used": ai_used, "propagated": fanout,
@@ -460,22 +469,14 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
 async def _bundle_objects(conversion, business_object: str | None) -> list[str]:
     """Every target object in this conversion's project — its load-sequence siblings.
 
-    A Supplier load is six conversions with six different business objects, and the
-    analyst types one instruction meaning all of them.
+    Now a thin call through to ``learning_service.bundle_objects_for``. It lived here,
+    privately, which is exactly why the steer box fanned out across all six supplier
+    conversions and the mapping grid — where corrections are actually made — fanned out
+    to one. Two answers to "which conversions does this reach?" in one application is
+    the bug, not the duplication.
     """
-    try:
-        pid = getattr(conversion, "project_id", None)
-        if not pid:
-            return []
-        out, seen = [], {(business_object or "").strip().lower()}
-        for c in await Conversion.find(Conversion.project_id == pid).to_list():
-            o = (getattr(c, "target_object", None) or "").strip()
-            if o and o.lower() not in seen:
-                seen.add(o.lower())
-                out.append(o)
-        return out
-    except Exception:                                           # noqa: BLE001
-        return []
+    from app.services.learning_service import bundle_objects_for
+    return await bundle_objects_for(conversion)
 
 
 async def _source_columns(conversion) -> list[str]:

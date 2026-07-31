@@ -408,9 +408,17 @@ async def update_mapping(
         if _lm is not None:
             try:
                 from app.services.learning_service import (
-                    propagate_learning_to_open_conversions)
+                    bundle_objects_for, propagate_learning_to_open_conversions)
+                # ACROSS THE LOAD SEQUENCE. This fan-out was scoped to the edited
+                # conversion's own business object, so correcting Supplier Name on the
+                # Supplier Import tab reached other Supplier Import conversions and
+                # NOT Address, Site, Site Assignment, Contacts or Banks — one sixth of
+                # what the analyst is looking at, with nothing on screen to say which
+                # five were skipped. The steer box already worked this way; the mapping
+                # grid, where corrections are actually made, did not.
                 _prop = await propagate_learning_to_open_conversions(
-                    _lm, conv, captured_by=user.email)
+                    _lm, conv, captured_by=user.email,
+                    extra_object_keys=await bundle_objects_for(conv))
             except Exception as exc:  # noqa: BLE001
                 log.exception("propagating the saved learning failed for %s", mapping_id)
                 # NOT silent. Both call sites swallowed this and returned 200 with a
@@ -559,9 +567,14 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
     if learned and lm is not None:
         try:
             from app.services.learning_service import (
-                propagate_learning_to_open_conversions)
+                bundle_objects_for, propagate_learning_to_open_conversions)
+            # Across the load sequence, for the same reason as the save path — and
+            # more sharply here, because "leave this blank" that reaches one of six
+            # conversions leaves the field populated in the other five while the
+            # analyst has every reason to believe blank means blank.
             _prop = await propagate_learning_to_open_conversions(
-                lm, conv, captured_by=user.email)
+                lm, conv, captured_by=user.email,
+                extra_object_keys=await bundle_objects_for(conv))
         except Exception as exc:  # noqa: BLE001
             log.exception("keep-blank: propagating the suppression failed")
             _prop = {"error": f"{type(exc).__name__}: {exc}"[:300]}
@@ -590,9 +603,10 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
         if _lm is not None:
             try:
                 from app.services.learning_service import (
-                    propagate_learning_to_open_conversions)
+                    bundle_objects_for, propagate_learning_to_open_conversions)
                 _p = await propagate_learning_to_open_conversions(
-                    _lm, conv, captured_by=user.email)
+                    _lm, conv, captured_by=user.email,
+                    extra_object_keys=await bundle_objects_for(conv))
                 log.info("approve %s propagated: %s", mapping_id, _p)
             except Exception:  # noqa: BLE001 — never fail the approve on the fan-out
                 log.exception("propagating the approved learning failed for %s",

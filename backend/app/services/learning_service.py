@@ -366,6 +366,42 @@ async def _upsert(*, kind, category, original_value, resolved_value,
     return lm
 
 
+async def bundle_objects_for(conversion) -> list[str]:
+    """Every target object in this conversion's project — its load-sequence siblings.
+
+    A Supplier load is SIX conversions with six different business objects — Import,
+    Address, Site, Site Assignment, Contacts, Banks — shown as six tabs across the top
+    of one screen. An analyst who corrects Supplier Name on the tab in front of them
+    means all six, and said so: "I changed the mapping for supplier name in one of the
+    conversions but it does not reflect in existing supplier conversions, it should
+    affect everywhere and for future mappings as well" (31-Jul).
+
+    An object-scoped fan-out reaches one sixth of that, and the five it misses look
+    exactly like the five it reached, because nothing on any screen says which
+    conversions an edit was meant to travel to.
+
+    This used to live privately in steering_service — which is why only the steer box
+    behaved this way while the mapping grid, where corrections are actually made, did
+    not. Widening the fan-out does not widen what it writes: field-name matching, the
+    source-column check and the date test still apply per conversion, so a sibling
+    with no such field or no such column is skipped exactly as before.
+    """
+    try:
+        pid = getattr(conversion, "project_id", None)
+        if not pid:
+            return []
+        here = _normalize(await _business_object_for(conversion) or "")
+        out, seen = [], {here}
+        for c in await Conversion.find(Conversion.project_id == pid).to_list():
+            o = (getattr(c, "target_object", None) or "").strip()
+            if o and _normalize(o) not in seen:
+                seen.add(_normalize(o))
+                out.append(o)
+        return out
+    except Exception:                                           # noqa: BLE001
+        return []
+
+
 async def record_learning_from_mapping(
     mapping: MappingSuggestion, conversion: Conversion, captured_by: str | None
 ) -> LearnedMapping | None:
@@ -439,6 +475,28 @@ async def record_learning_from_mapping(
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
     )
+    # AND FOR THE SIBLINGS, so a conversion created LATER inherits it too. The fan-out
+    # can only reach conversions that exist; the library is the only thing a future one
+    # asks, and apply_learned_to_conversion asks it under ITS OWN object. Without a row
+    # per object in the load sequence, a correction made today is right for the six
+    # supplier conversions on screen and silently absent from the six created next
+    # month — the same instruction, quietly changing meaning with time.
+    #
+    # COLUMN MAPPINGS ONLY. A default carries the sheet it was set on (Oracle repeats
+    # field names across sheets — Customer has 19), and that sheet name does not exist
+    # in a sibling's template, so copying it across would either bind to nothing or,
+    # unscoped, spray a default over every sheet of the sibling that happens to have a
+    # column of that name. Existing sibling conversions still receive defaults through
+    # the fan-out, where the scope is evaluated against each template properly.
+    for _obj in await bundle_objects_for(conversion):
+        await _upsert(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=mapping.source_column, resolved_value=target_field,
+            target_object=_obj, target_field=target_field,
+            rule_type=rule_type, rule_config=rule_config,
+            project_id=conversion.project_id, client_id=_cid, source_erp=_src,
+            captured_from=captured_from, captured_by=captured_by,
+        )
     if rule_type and _is_master_key_field(business_object, target_field):
         await _upsert(
             kind="reference_standard", category="Reference Key Standard",
@@ -529,14 +587,14 @@ async def propagate_learning_to_open_conversions(
     regenerating dozens of files behind the analyst's back is not.
     """
     from app.models.fbdi import FBDIField, FBDISheet
-    from app.services.client_service import client_id_for_conversion
+    from app.services.client_service import explicit_client_id_for_conversion
 
     if lm is None or not lm.target_field:
         return {"conversions": 0, "mappings": 0, "stale_outputs": 0}
     business_object = await _business_object_for(origin)
     if not business_object:
         return {"conversions": 0, "mappings": 0, "stale_outputs": 0}
-    cid = await client_id_for_conversion(origin)
+    cid = await explicit_client_id_for_conversion(origin)
     src = await source_erp_for_conversion(origin)
     as_of = _effective_of(lm)
     _keys = {_normalize(k) for k in object_keys_for_object(business_object)}
@@ -551,6 +609,17 @@ async def propagate_learning_to_open_conversions(
         _keys |= {_normalize(x) for x in object_keys_for_object(_k)}
 
     touched_convs = touched_maps = staled = skipped_newer = 0
+    # WHY a conversion was passed over. Without this the payload said "conversions: 0"
+    # and nothing else, and every diagnosis of "my change did not reach the others"
+    # started from a screenshot. Nought because no template has the field, nought
+    # because the column is missing from those extracts, and nought because a client
+    # tag disagrees are three different problems with three different answers, and
+    # they were indistinguishable.
+    skipped: dict[str, int] = {}
+
+    def _skip(reason: str):
+        skipped[reason] = skipped.get(reason, 0) + 1
+
     now = datetime.utcnow()
     for conv in await Conversion.find_all().to_list():
         # The origin is skipped when the edit came from ITS screen — it is already
@@ -565,21 +634,29 @@ async def propagate_learning_to_open_conversions(
         # business_object and the conversion's target_object disagreed by so much as
         # a space.
         if _normalize(await _business_object_for(conv)) not in _keys:
+            _skip("different business object")
             continue
-        # Client scope: a row nobody tagged is not another tenant's, so it is in
-        # scope. A strict != skipped EVERY conversion whenever either side was
-        # untagged, which is the shape that made a whole reseed report zeros.
-        cconv = await client_id_for_conversion(conv)
+        # Client scope: a conversion nobody tagged is not another tenant's, so it is
+        # in scope. This compares EXPLICIT tags only. It used to call
+        # client_id_for_conversion, which falls back to the default client — so an
+        # untagged project arrived here wearing the default tenant's id, compared
+        # unequal to a tagged one, and was skipped as a cross-tenant leak. The
+        # `cconv is not None` guard was written for exactly that case and could never
+        # fire, because the fallback had already substituted an id.
+        cconv = await explicit_client_id_for_conversion(conv)
         if cid is not None and cconv is not None and cconv != cid:
+            _skip("different client")
             continue
         # Source-system scope, same rule the apply pass uses: a SyteLine conversion
         # must not inherit a NetSuite correction.
         csrc = await source_erp_for_conversion(conv)
         if src and csrc and csrc != src:
+            _skip("different source system")
             continue
         fields = await FBDIField.find(FBDIField.template_id == conv.template_id).to_list()
         ids = {f.id for f in fields if _norm_field(f.field_name) == _norm_field(lm.target_field)}
         if not ids:
+            _skip("template has no such field")
             continue
         # Sheet scope. record_learning_from_mapping writes sheets=[...] on a default
         # precisely so it stays on the sheet it was set on, and this loop matched by
@@ -592,6 +669,7 @@ async def propagate_learning_to_open_conversions(
             _sheet_of = {f.id: _sheets.get(getattr(f, "sheet_id", None)) for f in fields}
             ids = {i for i in ids if sheet_allowed(lm, _sheet_of.get(i))}
             if not ids:
+                _skip("field is on a sheet this learning is scoped away from")
                 continue
         # The source column this instruction names has to EXIST in this conversion's
         # extract, or propagation points a mapping at a column that is not there —
@@ -602,6 +680,7 @@ async def propagate_learning_to_open_conversions(
             if _cols is not None:
                 _src_ok = _normalize(lm.original_value) in _cols
         if not _src_ok:
+            _skip(f'no column "{lm.original_value}" in that conversion\'s extract')
             continue
         hit = False
         for m in await MappingSuggestion.find(
@@ -642,9 +721,11 @@ async def propagate_learning_to_open_conversions(
                 ConvertedOutput.conversion_id == conv.id).update(
                     {"$set": {"status": "stale"}})
             staled += int(getattr(res, "modified_count", 0) or 0)
+    if skipped_newer:
+        skipped["a later decision by a person"] = skipped_newer
     return {"conversions": touched_convs, "mappings": touched_maps,
             "stale_outputs": staled, "target_field": lm.target_field,
-            "skipped_newer_decision": skipped_newer,
+            "skipped_newer_decision": skipped_newer, "skipped": skipped,
             "as_of": as_of.isoformat() if as_of else None,
             "captured_by": captured_by}
 

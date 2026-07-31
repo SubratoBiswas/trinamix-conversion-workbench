@@ -210,9 +210,12 @@ FUTURE = datetime(2030, 1, 1)       # a decision made after the steer
 class World:
     """Builds the fakes and installs them over the two services under test."""
 
-    def __init__(self, *, extra_conversions=(), person_dates=None):
+    def __init__(self, *, extra_conversions=(), person_dates=None,
+                 clients=None, erps=None):
         self.convs, self.tpls, self.fields, self.maps = [], [], [], []
         self.learned, self.profiles, self.outputs = [], [], []
+        self.clients = dict(clients or {})
+        self.erps = dict(erps or {})
         person_dates = person_dates or {}
 
         def add(obj, project, cid, dsid, *, field_name="Supplier Name",
@@ -285,12 +288,23 @@ class World:
             mod.LearnedMapping = self.LearnedMapping
         ls.DatasetColumnProfile = self.DatasetColumnProfile
 
-        async def _no_erp(_c):
-            return None
+        # Tenant and source-system scope, per conversion. These are the two
+        # boundaries a fan-out that walks EVERY conversion in the database depends
+        # on to stay honest, so the harness has to be able to express them.
+        _erps, _clients = self.erps, self.clients
+
+        async def _no_erp(c):
+            return _erps.get(getattr(c, "id", None))
         ls.source_erp_for_conversion = _no_erp
 
-        async def _cid(_c):
-            return None
+        async def _cid(c):
+            # The READ resolver: falls back to a default tenant, as the real one does.
+            return _clients.get(getattr(c, "id", None)) or "default-client"
+
+        async def _explicit_cid(c):
+            # The SCOPE resolver: None when nobody tagged the project. The gap between
+            # these two is the whole bug — see explicit_client_id_for_conversion.
+            return _clients.get(getattr(c, "id", None))
 
         async def _scope(_c):
             return {}
@@ -306,7 +320,8 @@ class World:
             "app.models.dataset", DatasetColumnProfile=self.DatasetColumnProfile)
         sys.modules["app.services.client_service"] = _module(
             "app.services.client_service",
-            client_id_for_conversion=_cid, scope_query=_scope)
+            client_id_for_conversion=_cid, scope_query=_scope,
+            explicit_client_id_for_conversion=_explicit_cid)
         return self
 
     def __exit__(self, *exc):
@@ -532,6 +547,177 @@ def test_leave_blank_propagates_as_a_suppression():
         check("and it is stored for every object in the sequence",
               {lm.target_object for lm in w.learned if lm.kind == "suppress_field"}
               == set(SUPPLIER_OBJECTS))
+
+
+
+# ── 7. the MAPPING GRID, which is where corrections are actually made ────────
+def _record_and_propagate(world, obj="Supplier Import"):
+    """Exactly what PUT /mappings/{id} does after a deliberate edit: capture the
+    learning, then fan it out. Driven through the real functions."""
+    from app.services.learning_service import (
+        bundle_objects_for, propagate_learning_to_open_conversions,
+        record_learning_from_mapping)
+    conv = world.conv(obj)
+    m = world.mapping(obj)
+
+    async def _go():
+        lm = await record_learning_from_mapping(m, conv, captured_by="analyst")
+        assert lm is not None, "nothing was captured, so nothing can propagate"
+        return await propagate_learning_to_open_conversions(
+            lm, conv, captured_by="analyst",
+            extra_object_keys=await bundle_objects_for(conv))
+    return asyncio.run(_go())
+
+
+def test_editing_a_mapping_row_reaches_the_whole_load_sequence():
+    """The report, in the analyst's words: "I changed the mapping for supplier name
+    in one of the conversions for nextpower client but it does not reflect in
+    existing supplier conversions, it should affect everywhere and for future
+    mappings as well."
+
+    The steer box fanned out across the bundle; this path did not, so a correction
+    typed into the grid reached one conversion of six and the five it missed looked
+    exactly like the five it reached.
+    """
+    with World() as w:
+        # The analyst edits the row on the tab in front of them.
+        m = w.mapping("Supplier Import")
+        m.source_column = "Legal Name"
+        m.status = "approved"
+        m.approved_by = "analyst"
+        res = _record_and_propagate(w)
+        got = w.sources()
+        check("every conversion in the sequence followed",
+              all(v == "Legal Name" for v in got.values()), f"got {got}")
+        check("and the five siblings are reported",
+              res.get("conversions") == 5, f"got {res!r}")
+
+
+def test_the_row_edit_is_stored_for_future_sibling_conversions_too():
+    """The half a fan-out cannot do. A Supplier Banks conversion created next month
+    asks the library under its OWN object, and there was no row there."""
+    with World() as w:
+        m = w.mapping("Supplier Import")
+        m.source_column = "Legal Name"
+        m.status = "approved"
+        m.approved_by = "analyst"
+        _record_and_propagate(w)
+        objs = {lm.target_object for lm in w.learned
+                if lm.kind == "column_mapping" and lm.original_value == "Legal Name"}
+        check("one learning per object in the sequence", objs == set(SUPPLIER_OBJECTS),
+              f"got {sorted(objs)}")
+
+
+def test_all_three_mapping_grid_call_sites_pass_the_bundle():
+    """The test above drives the two functions directly, which proves they work
+    together but not that the ROUTER asks for it — and the router forgetting is
+    exactly the bug that was reported. Save, Keep blank and Approve are three
+    separate call sites and each one has to widen; two out of three is a version of
+    this bug that is harder to see, not a fixed one."""
+    from pathlib import Path as _P
+    src = (_P(__file__).resolve().parent.parent / "app" / "routers" / "mapping.py"
+           ).read_text(encoding="utf-8")
+    calls = src.count("propagate_learning_to_open_conversions(")
+    passes = src.count("extra_object_keys=await bundle_objects_for(conv)")
+    check("the three call sites are still there \u2014 save, keep blank, approve",
+          calls == 3, f"found {calls}")
+    check("and every one of them passes the load sequence", passes == calls,
+          f"{passes} of {calls} do")
+
+
+# ── 8. how far it travels: projects yes, tenants no ─────────────────────────
+def test_it_crosses_projects_for_the_same_client():
+    """Asked directly, 31-Jul: "will changes and learnings in one project affect the
+    older or existing projects, and will it affect new projects created?"
+
+    The fan-out walks EVERY conversion, not the current project — a project is a
+    piece of filing, not a boundary. A NextPower supplier decision is a NextPower
+    supplier decision wherever the conversion happens to be filed.
+    """
+    with World(extra_conversions=[
+            ("Supplier Address", "proj-june", "c-old", "ds-old"),
+            ("Supplier Site", "proj-sept", "c-next", "ds-next")]) as w:
+        steer(w)
+        for cid, label in [("c-old", "an earlier project"), ("c-next", "a later project")]:
+            m = next(x for x in w.maps if x.conversion_id == cid)
+            check(f"{label} was corrected too", m.source_column == "Legal Name",
+                  f"got {m.source_column!r}")
+
+
+def test_it_does_not_cross_into_another_client():
+    """The boundary that has to hold, and the one nobody would notice failing until
+    another tenant's mapping showed up in their file."""
+    with World(extra_conversions=[
+            ("Supplier Address", "proj-acme", "c-acme", "ds-acme")],
+            clients={"c1": "nextpower", "c2": "nextpower", "c3": "nextpower",
+                     "c4": "nextpower", "c5": "nextpower", "c6": "nextpower",
+                     "c-acme": "acme"}) as w:
+        res = steer(w)
+        m = next(x for x in w.maps if x.conversion_id == "c-acme")
+        check("the other tenant is untouched", m.source_column == "Name",
+              f"got {m.source_column!r} — a NextPower decision reached Acme")
+        check("and the five siblings still were", res["propagated"]["conversions"] == 5,
+              f"got {res['propagated']!r}")
+
+
+def test_it_does_not_cross_into_another_source_system():
+    """A SyteLine extract has no `legal_name`; inheriting a NetSuite correction would
+    point a mapping at a column that is not there, which reads as mapped and ships
+    an empty column."""
+    with World(extra_conversions=[
+            ("Supplier Address", "proj-syte", "c-syte", "ds-syte")],
+            erps={"c1": "netsuite", "c2": "netsuite", "c3": "netsuite",
+                  "c4": "netsuite", "c5": "netsuite", "c6": "netsuite",
+                  "c-syte": "syteline"}) as w:
+        steer(w)
+        m = next(x for x in w.maps if x.conversion_id == "c-syte")
+        check("the SyteLine conversion keeps its own mapping",
+              m.source_column == "Name", f"got {m.source_column!r}")
+
+
+def test_an_untagged_project_is_not_treated_as_another_tenant():
+    """The reported case, exactly: "the mapping I changed in one project did not
+    refresh the mapping of another existing project when client and source is same."
+
+    The client check compared the values `client_id_for_conversion` returns, and that
+    function FALLS BACK to the default client. So a project nobody tagged arrived at
+    the comparison wearing the default tenant's id, compared unequal to a project
+    tagged NextPower, and was skipped as a cross-tenant leak — while the guard written
+    for precisely this case, `cconv is not None`, could never fire, because the
+    fallback had already substituted an id.
+    """
+    with World(extra_conversions=[
+            ("Supplier Address", "proj-untagged", "c-untagged", "ds-untagged")],
+            clients={"c1": "nextpower", "c2": "nextpower", "c3": "nextpower",
+                     "c4": "nextpower", "c5": "nextpower", "c6": "nextpower"}) as w:
+        # c-untagged deliberately absent from `clients` — nobody tagged that project.
+        res = steer(w)
+        m = next(x for x in w.maps if x.conversion_id == "c-untagged")
+        check("the untagged project was corrected", m.source_column == "Legal Name",
+              f"got {m.source_column!r} — skipped as if it were another tenant")
+        check("and it is counted", res["propagated"]["conversions"] == 6,
+              f"got {res['propagated']!r}")
+
+
+def test_the_result_says_why_a_conversion_was_passed_over():
+    """"conversions: 0" and nothing else is why every one of these started from a
+    screenshot. A conversion whose template lacks the field, one whose extract lacks
+    the column, and one belonging to another tenant are three different problems with
+    three different answers, and they were indistinguishable."""
+    with World(extra_conversions=[
+            ("Supplier Address", "proj-acme", "c-acme", "ds-acme")],
+            clients={"c1": "nextpower", "c2": "nextpower", "c3": "nextpower",
+                     "c4": "nextpower", "c5": "nextpower", "c6": "nextpower",
+                     "c-acme": "acme"}) as w:
+        # And one sibling whose extract simply does not carry the column.
+        w.profiles = [x for x in w.profiles
+                      if not (x.dataset_id == "ds6" and x.column_name == "Legal Name")]
+        w.DatasetColumnProfile._items[:] = w.profiles
+        res = steer(w)
+        sk = res["propagated"].get("skipped") or {}
+        check("the other tenant is named", sk.get("different client") == 1, f"got {sk}")
+        check("so is the missing column",
+              any("no column" in k for k in sk), f"got {sk}")
 
 
 def _all():

@@ -182,10 +182,22 @@ export default function LearnFromExamplePanel({
                         </span>
                       ) : (
                         <span className="text-ink-muted">
-                          No other conversion in this project carries that field with a
-                          matching source column, so only this one changed. It is stored
-                          in the learning library for future conversions.
+                          No other conversion was changed. It is stored in the learning
+                          library for future conversions.
                         </span>
+                      )}
+                      {/* Why the others were passed over. "0 conversions" alone is
+                          indistinguishable between "nothing else needed it" and
+                          "everything else was filtered out for a reason you would
+                          want to know about". */}
+                      {steer.propagated.skipped &&
+                        Object.keys(steer.propagated.skipped).length > 0 && (
+                        <div className="mt-0.5 text-ink-muted">
+                          Passed over:{" "}
+                          {Object.entries(steer.propagated.skipped)
+                            .map(([why, n]) => `${n} — ${why}`)
+                            .join("; ")}
+                        </div>
                       )}
                     </div>
                   )}

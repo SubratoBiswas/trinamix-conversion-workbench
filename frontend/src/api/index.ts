@@ -369,6 +369,11 @@ export const ConversionsApi = {
         unresolved?: { field: string; wanted_source: string; reason: string }[];
         /** What the instruction did to conversions that ALREADY exist. */
         propagated?: { conversions: number; mappings: number; stale_outputs: number;
+                       /** Why other conversions were passed over, e.g.
+                        *  {"different client": 2, "template has no such field": 1}.
+                        *  A bare "conversions: 0" is why every one of these was
+                        *  diagnosed from a screenshot. */
+                       skipped?: Record<string, number>;
                        error?: string };
         ai_used?: boolean;
         parsed_by?: "ai" | "rule" | "none";

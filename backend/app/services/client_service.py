@@ -71,6 +71,38 @@ async def client_id_for_conversion(conversion) -> Optional[PydanticObjectId]:
     return await default_client_id()
 
 
+async def explicit_client_id_for_conversion(conversion) -> Optional[PydanticObjectId]:
+    """The client this conversion is EXPLICITLY tagged with, or None if nobody said.
+
+    ``client_id_for_conversion`` falls back to the default client, which is right for
+    a READ - an untagged conversion should still see the bootstrap tenant's library.
+    It is wrong for a SCOPE COMPARISON, and quietly so: the fallback turns "nobody
+    tagged this project" into a real, specific client id before the comparison ever
+    sees it, so an untagged project reads as a DIFFERENT TENANT from a tagged one and
+    a correction made in the tagged project is skipped as a cross-tenant leak.
+
+    That is the reported symptom - "the mapping I changed in one project did not
+    refresh the mapping of another existing project when client and source is same" -
+    and the check it defeated was written to allow exactly this case. Its comment says
+    "a row nobody tagged is not another tenant's, so it is in scope", and its
+    ``cconv is not None`` guard could never be false, because the fallback had already
+    substituted an id. A guard that reads as protective and cannot fire.
+
+    So: this function answers the question the scope check is actually asking, and
+    returns None when the answer is genuinely unknown.
+    """
+    try:
+        from app.models.project import Project
+        pid = getattr(conversion, "project_id", None)
+        if pid:
+            proj = await Project.get(pid)
+            if proj and getattr(proj, "client_id", None):
+                return proj.client_id
+    except Exception:  # noqa: BLE001 — never block on resolution
+        pass
+    return None
+
+
 def scope_filter(client_id: Optional[PydanticObjectId]) -> dict:
     """Synchronous filter fragment: rows for this client OR global rows. When the
     client is unknown (None), return an empty filter (behave like the old
