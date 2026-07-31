@@ -1467,7 +1467,19 @@ export const MappingReviewPage: React.FC = () => {
           sourceColumns={sourceColumns}
           defaultTargetFieldId={ruleAuthorMapping?.target_field_id ?? null}
           defaultSourceColumn={ruleAuthorMapping?.source_column ?? null}
-          onSaved={() => { setRuleAuthorOpen(false); flash("Rule saved & added to library"); }}
+          /* RELOAD. This closed the modal and flashed a message without refetching
+             anything, so the grid and the inspector kept showing their in-memory copy
+             — SOURCE "(none)", "Required field with no source and no default" — for a
+             field the rule had just bound to a column. Saving a rule now also writes
+             that binding onto the mapping row server-side; this is the half that makes
+             the screen show it without a manual page reload. Both halves are the same
+             report: "the change in transformation rule is not reflecting in the
+             mapping section." */
+          onSaved={async () => {
+            setRuleAuthorOpen(false);
+            flash("Rule saved & added to library");
+            await loadAll();
+          }}
         />
       )}
 

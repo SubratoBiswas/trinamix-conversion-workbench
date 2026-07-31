@@ -312,3 +312,23 @@ def test_saving_a_rule_writes_the_binding_onto_the_mapping():
     check("it lifts a discarded mapping",
           'if (m.status or "") in ("not_applicable", "rejected"):' in body)
     check("and it never fails the save", "never fail the rule save over this" in body)
+
+
+def test_the_mapping_screen_reloads_after_a_rule_is_saved():
+    """The other half of "not reflecting in the mapping section", and it is in the
+    browser: onSaved closed the modal and flashed a message without refetching
+    anything, so the grid and the inspector kept showing their in-memory copy —
+    SOURCE "(none)", "Required field with no source and no default" — for a field the
+    rule had just bound to a column.
+
+    The server-side sync makes the binding TRUE; this makes the screen SHOW it. Both
+    were needed, which is why fixing only the backend still looked broken.
+    """
+    if not _FE.exists():
+        print("  SKIP  frontend not present in this checkout")
+        return
+    body = (_FE / "pages" / "MappingReviewPage.tsx").read_text(encoding="utf-8")
+    i = body.index("<RuleAuthorModal")
+    block = body[i:i + 1600]
+    check("onSaved refetches", "await loadAll();" in block,
+          "the modal closes and the grid keeps its stale copy")
