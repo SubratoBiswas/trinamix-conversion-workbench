@@ -133,12 +133,76 @@ export default function LearnFromExamplePanel({
                   )}
                 </div>
               )}
-              {steer && (steer.applied.length > 0 || steer.unmatched.length > 0) && (
+              {/* Rendered whenever a prompt was sent — NOT only when something was
+                  applied. A directive naming a column this extract does not have
+                  lands in `unresolved`, where applied and unmatched are both empty,
+                  so the old condition rendered nothing at all: a rule that did
+                  nothing looked exactly like a rule that worked. */}
+              {steer && (
                 <div>
                   <span className="font-semibold text-ink">From prompt:</span>{" "}
-                  <span className="text-emerald-700">{steer.applied.length} applied</span>
+                  <span className={steer.applied.length ? "text-emerald-700" : "text-ink-muted"}>
+                    {steer.applied.length} applied
+                  </span>
+                  {steer.parsed_by && (
+                    <span className="text-ink-subtle">
+                      {" "}({steer.parsed_by === "ai" ? "read by AI"
+                        : steer.parsed_by === "rule" ? "read by rule" : "not understood"})
+                    </span>
+                  )}
+                  {steer.applied.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {steer.applied.map((a, i) => (
+                        <span key={i} className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] text-emerald-800">
+                          {a.field}{" "}
+                          {a.suppressed ? "← (blank)" : a.source ? `← ${a.source}` : `= ${a.default}`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* The fan-out. This is what "global rule setter" means, and it was
+                      invisible from here: a propagation that reached five sibling
+                      conversions and one that threw looked identical. */}
+                  {steer.propagated && (
+                    <div className="mt-1 text-[10px]">
+                      {steer.propagated.error ? (
+                        <span className="text-red-600">
+                          Could not apply to other conversions: {steer.propagated.error}
+                        </span>
+                      ) : steer.propagated.conversions > 0 ? (
+                        <span className="text-brand-dark">
+                          Also applied to {steer.propagated.conversions} other conversion
+                          {steer.propagated.conversions === 1 ? "" : "s"} in this load
+                          sequence ({steer.propagated.mappings} mapping
+                          {steer.propagated.mappings === 1 ? "" : "s"}
+                          {steer.propagated.stale_outputs > 0 &&
+                            `, ${steer.propagated.stale_outputs} output${
+                              steer.propagated.stale_outputs === 1 ? "" : "s"} now stale`}
+                          ), and stored in the learning library for future ones.
+                        </span>
+                      ) : (
+                        <span className="text-ink-muted">
+                          No other conversion in this project carries that field with a
+                          matching source column, so only this one changed. It is stored
+                          in the learning library for future conversions.
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {(steer.unresolved?.length ?? 0) > 0 && (
+                    <div className="mt-1 text-[10px] text-amber-700">
+                      {steer.unresolved!.map((u, i) => (
+                        <div key={i}>
+                          {u.field}: no column called “{u.wanted_source}” in this file —
+                          left unchanged rather than mapped to nothing.
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {steer.unmatched.length > 0 && (
-                    <span className="text-ink-muted"> · couldn't parse: {steer.unmatched.join("; ")}</span>
+                    <div className="mt-1 text-[10px] text-ink-muted">
+                      Couldn't parse: {steer.unmatched.join("; ")}
+                    </div>
                   )}
                 </div>
               )}

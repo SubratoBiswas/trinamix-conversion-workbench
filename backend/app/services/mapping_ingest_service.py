@@ -51,6 +51,26 @@ _SHEET = ("fbdi work sheet", "fbdi sheet", "interface sheet", "target sheet",
           "worksheet", "interface table", "sheet")
 _SYS = ("source system", "source erp", "source app", "system", "erp")
 _NOTE = ("comments", "comment", "notes", "note", "remarks", "rationale")
+# The PHYSICAL column name, when the workbook carries one alongside the label.
+#
+# Debayon Mallik, 31-Jul: "for mapping we must consider the Source Table Column name
+# (the last column of the mapping file) as the source columns." A mapping workbook is
+# written by a functional analyst, who names columns the way the legacy UI shows them
+# — "1099 Eligible", "Permanent Account Number (PAN)", "CNPJ/CPF" — while the extract
+# is a database dump whose headers are federal_reportable, pan, cnpj. Binding on the
+# label produces a mapping that reads as mapped on screen and writes an EMPTY column,
+# which is this tool's most expensive failure precisely because nothing looks wrong.
+# Against the NextPower supplier workbook and the real NetSuite extract the label
+# bound 50 of 55 rows; the physical name bound 55 of 55.
+#
+# It is a PER-ROW preference, not a per-sheet one. The same workbook's SyteLine rows
+# leave this column empty, because there the label already IS the physical name
+# (vend_num, addr##1, terms_code) — switching the whole sheet to the technical column
+# would have dropped all 40 of them.
+_SRC_PHYSICAL = ("source table column name", "source table column", "source table field",
+                 "physical column name", "physical column", "table column name",
+                 "database column", "db column", "technical column name",
+                 "technical column", "extract column name", "extract column")
 
 
 def _find(headers: list[str], aliases: tuple[str, ...]) -> Optional[int]:
@@ -165,7 +185,14 @@ async def _resolve_layout(headers: list[str], sample: list[list[Any]]) -> tuple[
     """Deterministic first; the model only sees sheets that could not be resolved."""
     cols = {"source_field": _find(headers, _SRC), "target_field": _find(headers, _TGT),
             "target_object": _find(headers, _OBJ), "fbdi_sheet": _find(headers, _SHEET),
-            "source_system": _find(headers, _SYS), "notes": _find(headers, _NOTE)}
+            "source_system": _find(headers, _SYS), "notes": _find(headers, _NOTE),
+            "source_physical": _find(headers, _SRC_PHYSICAL)}
+    # A physical-name column that resolved to the SAME column as the label is not a
+    # second column; dropping it here keeps the row loop's "prefer physical" rule from
+    # becoming a no-op that still claims to have applied.
+    if cols["source_physical"] is not None and cols["source_physical"] in (
+            cols["source_field"], cols["target_field"]):
+        cols["source_physical"] = None
     ok = (cols["source_field"] is not None and cols["target_field"] is not None
           and cols["source_field"] != cols["target_field"])
     if ok:
@@ -253,8 +280,15 @@ async def analyze_mapping_file(
         def cell(row: list[Any], i: Optional[int]) -> str:
             return "" if i is None or i >= len(row) else _txt(row[i])
 
+        physical_used = 0
         for raw in grid[h_idx + 1:]:
-            src = cell(raw, cols["source_field"])
+            label = cell(raw, cols["source_field"])
+            # PREFER THE PHYSICAL NAME, ROW BY ROW. Where the workbook gives one it is
+            # the name the extract actually has; where the cell is blank the label is
+            # already physical (every SyteLine row in the NextPower workbook), so the
+            # fallback is not a degradation, it is the other half of the same rule.
+            physical = cell(raw, cols["source_physical"])
+            src = physical or label
             tgt = cell(raw, cols["target_field"])
             if not src or not tgt:
                 proposal.count_skipped += 1
@@ -272,10 +306,15 @@ async def analyze_mapping_file(
                 continue
             seen.add(key)
             row_no += 1
+            if physical:
+                physical_used += 1
             proposal.rows.append(ProposedMapping(
                 row_no=row_no, target_object=obj.strip(), target_field=tgt,
                 source_field=cands[0], source_alternatives=cands[1:],
-                source_raw=(src if src != cands[0] else None),
+                # The analyst's own wording for the column is kept when it differs, so
+                # the proposal screen can still show "1099 Eligible" next to
+                # federal_reportable rather than a name nobody in the room recognises.
+                source_raw=(src if src != cands[0] else (label if physical else None)),
                 fbdi_sheet=cell(raw, cols["fbdi_sheet"]) or None,
                 # Row value, then the sheet's detected system, then the form.
                 # Detection sits ahead of the form because a per-sheet answer is
@@ -284,6 +323,11 @@ async def analyze_mapping_file(
                                or sheet_system or source_system),
                 notes=cell(raw, cols["notes"]) or None,
             ))
+        if physical_used:
+            notes.append(
+                f"{sheet_name}: {physical_used} row(s) bound to "
+                f"'{headers[cols['source_physical']]}' — the physical column name — "
+                f"rather than the analyst's label.")
 
     proposal.layout_method = ("mixed" if len(methods) > 1 else (methods.pop() if methods else "failed"))
     proposal.layout_note = " · ".join(notes[:8])

@@ -43,6 +43,14 @@ _ALLOWED = {
     ("services/mapping_ingest_service.py", "supersede_previous"):
         "Retires learnings a superseded document asserted. An already-retired row "
         "needs no second tombstone, so excluding it is right.",
+    ("services/catalog_seed_service.py", "seed_supplier_source_mapping"):
+        "The prior-edition lookup REWRITES the row the previous workbook wrote, so a "
+        "rebound field keeps one answer instead of two. Finding a RETIRED row there "
+        "and rewriting it would resurrect a tombstone under a new value — the analyst "
+        "retired that binding on purpose. Hiding it is correct: the new edition's "
+        "mapping is then inserted as its own row, which is what a fresh instruction "
+        "should do. The other lookup in this function does pass include_deleted=True, "
+        "because that one exists precisely to detect the tombstone and skip.",
 }
 
 

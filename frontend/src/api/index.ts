@@ -355,7 +355,24 @@ export const ConversionsApi = {
         mapped: { field: string; source: string; match: number }[];
         defaults: { field: string; value: string }[];
       };
-      steer?: { applied: { field: string; source?: string; default?: string }[]; unmatched: string[] };
+      /** The backend has always returned the fan-out counts and the unresolved
+       *  columns; this type declared neither, so the panel could not show them and
+       *  "did my rule reach the other five conversions?" had no answer on screen —
+       *  which is the one question a global rule setter exists to answer. */
+      steer?: {
+        applied: { field: string; source?: string; default?: string;
+                   suppressed?: boolean; via?: string }[];
+        unmatched: string[];
+        /** Field matched, but this extract has no column by that name. Reported
+         *  rather than written: a mapping pointing at a missing column reads as
+         *  mapped on screen and produces an empty column in the file. */
+        unresolved?: { field: string; wanted_source: string; reason: string }[];
+        /** What the instruction did to conversions that ALREADY exist. */
+        propagated?: { conversions: number; mappings: number; stale_outputs: number;
+                       error?: string };
+        ai_used?: boolean;
+        parsed_by?: "ai" | "rule" | "none";
+      };
     }>(`/conversions/${conversionId}/learn-from-example`, fd, { timeout: 300_000 }).then(r => r.data);
   },
   /** Unified source columns for the Mapping Review canvas. Returns dataset

@@ -785,11 +785,17 @@ async def seed_customer_sheet_scope() -> dict:
             "suppressions_updated": sup_updated, "left_retired": retired}
 
 
-_SUPPLIER_SOURCE_MAP = _DATA / "supplier_source_mapping_30jul.json"
+_SUPPLIER_SOURCE_MAP_30JUL = _DATA / "supplier_source_mapping_30jul.json"
+_SUPPLIER_SOURCE_MAP_31JUL = _DATA / "supplier_source_mapping_31jul.json"
+# NEWEST FIRST. "The last mapping with respect to date is final" (analyst, 31-Jul), so
+# the edition the seeder reads is the latest one shipped, and the older file stays on
+# disk only as the fallback for an environment that has not taken the new data yet.
+_SUPPLIER_SOURCE_MAP_EDITIONS = [_SUPPLIER_SOURCE_MAP_31JUL, _SUPPLIER_SOURCE_MAP_30JUL]
+_SUPPLIER_SOURCE_MAP = _SUPPLIER_SOURCE_MAP_30JUL      # kept for older imports
 
 
 async def seed_supplier_source_mapping() -> dict:
-    """Seed the GREEN rows of NXT Supplier Mapping_30Jul26.xlsx as client-scoped,
+    """Seed the GREEN rows of the NXT Supplier Mapping workbook as client-scoped,
     source-system-scoped column mappings.
 
     Green is the workbook's own legend for "Mapped". The other colours mean
@@ -798,21 +804,45 @@ async def seed_supplier_source_mapping() -> dict:
     Oracle field is "DFF" or "standard" are excluded too: a descriptive flexfield is a
     decision about where a value belongs, not a mapping the engine can apply.
 
+    THE SOURCE COLUMN IS THE PHYSICAL ONE. Debayon Mallik, 31-Jul: "for mapping we must
+    consider the Source Table Column name (the last column of the mapping file) as the
+    source columns." That column holds the name the extract actually has
+    (``federal_reportable``, ``legal_name``); "Source Column Name" holds the NetSuite
+    UI label ("1099 Eligible", "Legal Name"). Binding on the label put five named
+    Oracle fields — Federal reportable, Tax Registration Number, Prefix, Taxpayer ID
+    and B2B Supplier Site Code — onto columns the file does not contain, which reads as
+    mapped on screen and ships an empty column. SyteLine rows have no technical column
+    and never needed one: there the label already IS the physical name (``vend_num``,
+    ``addr##1``). Extraction is in the data file; this function only loads it.
+
+    A NEW EDITION SUPERSEDES THE OLD ONE IN PLACE. The 31-Jul workbook rebinds seven
+    fields that the 30-Jul workbook had bound differently — including swapping Supplier
+    Name and Alternate Name — and a plain find-or-insert would leave BOTH live, which
+    is the forking problem that makes "the latest instruction wins" unexpressible: two
+    rows for one field cannot say which is current. Rows written by the superseded
+    edition are therefore rewritten rather than duplicated, and only those: a learning
+    from any other source, and one the analyst retired, is left exactly as it is.
+
     Keyed by source system, so NetSuite's mapping for a field and SyteLine's are two
-    rows. Idempotent, and it honours tombstones like every other seeder — a learning
-    the analyst retired is not resurrected by a reseed.
+    rows. Idempotent, and it honours tombstones like every other seeder.
     """
     import json as _json
-    if not _SUPPLIER_SOURCE_MAP.exists():
-        return {"seeded": 0, "note": "supplier_source_mapping_30jul.json not found"}
+    path = next((p for p in _SUPPLIER_SOURCE_MAP_EDITIONS if p.exists()), None)
+    if path is None:
+        return {"seeded": 0, "note": "no supplier_source_mapping_*.json found"}
     try:
-        doc = _json.loads(_SUPPLIER_SOURCE_MAP.read_text(encoding="utf-8"))
+        doc = _json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         return {"seeded": 0, "error": str(exc)}
     nid = await _nextpower_client_id()
     _eff = _effective_date_of(doc)
-    src_label = "NXT Supplier Mapping 30Jul26 (green rows)"
-    seeded = kept = retired = 0
+    # The label is the row's IDENTITY across editions — the next edition finds its
+    # predecessor's rows by this exact string — so it is carried in the data file
+    # rather than derived from the filename, which would change under a rename.
+    src_label = (doc.get("_label")
+                 or f"NXT Supplier Mapping ({path.stem.rsplit('_', 1)[-1]}, green rows)")
+    superseded = (doc.get("_supersedes") or "").strip()
+    seeded = kept = retired = rebound = 0
     for m in doc.get("mappings", []):
         tgt, col = (m.get("target_field") or "").strip(), (m.get("source_column") or "").strip()
         if not (tgt and col):
@@ -831,16 +861,39 @@ async def seed_supplier_source_mapping() -> dict:
         if existing:
             kept += 1
             continue
+        # No row for THIS column — but the superseded edition may hold a row for the
+        # same (field, system) pointing somewhere else. Rewrite that one instead of
+        # adding a second, so the field keeps exactly one answer.
+        prior = None
+        if superseded:
+            prior = await LearnedMapping.find_one(
+                LearnedMapping.kind == "column_mapping",
+                LearnedMapping.target_object == "Supplier",
+                LearnedMapping.target_field == tgt,
+                LearnedMapping.source_erp == m.get("source_erp"),
+                LearnedMapping.captured_from == superseded,
+            )
+        payload = {
+            "original_value": col, "resolved_value": tgt,
+            "rule_config": {"oracle_page": m.get("sheet") or "", "note": m.get("note") or "",
+                            "workbook_column_name": m.get("workbook_column_name") or "",
+                            "bound_by": m.get("bound_by") or ""},
+            "captured_from": src_label, "effective_date": _eff,
+        }
+        if prior is not None:
+            await prior.set(payload)
+            rebound += 1
+            continue
         await LearnedMapping(
             kind="column_mapping", category="Column Mapping Alias",
-            original_value=col, resolved_value=tgt,
             target_object="Supplier", target_field=tgt,
             client_id=nid, is_global=False, source_erp=m.get("source_erp"),
-            rule_config={"oracle_page": m.get("sheet") or "", "note": m.get("note") or ""},
-            captured_from=src_label, effective_date=_eff,
+            **payload,
         ).insert()
         seeded += 1
-    return {"seeded": seeded, "already_present": kept, "left_retired": retired,
+    return {"edition": path.name, "seeded": seeded, "rebound_from_previous_edition": rebound,
+            "already_present": kept, "left_retired": retired,
+            "excluded_with_reason": doc.get("_excluded_with_reason", []),
             "open_questions": doc.get("_open_questions", [])}
 
 

@@ -513,6 +513,20 @@ async def reseed_supplier(_: User = Depends(get_current_user)):
     return {"field_mappings": fields, "transforms": transforms}
 
 
+@router.post("/reseed-supplier-source-mapping")
+async def reseed_supplier_source_mapping(_: User = Depends(get_current_user)):
+    """Re-run the supplier mapping-workbook seed on demand.
+
+    It only ever ran at startup, which is the shape that makes "did the new workbook
+    actually land?" unanswerable without a redeploy — and this edition rebinds seven
+    fields, so the answer matters. The payload names the edition it read, how many
+    rows it rewrote from the previous edition, and every row it declined to import
+    with the reason, so a caller can see what was NOT done as well as what was.
+    """
+    from app.services.catalog_seed_service import seed_supplier_source_mapping
+    return await seed_supplier_source_mapping()
+
+
 @router.post("/reseed-supplier-corrections")
 async def reseed_supplier_corrections(_: User = Depends(get_current_user)):
     """Re-run the 30-Jul analyst corrections on demand.
