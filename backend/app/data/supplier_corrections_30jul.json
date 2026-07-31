@@ -26,7 +26,9 @@
     {
       "target_object": "Supplier",
       "target_field": "Inactive Date",
-      "action": "blank"
+      "action": "blank",
+      "applies_to_all_sheets": true,
+      "note": "Blank on every sheet. Measured in the 30-Jul 22:18 output: the Supplier, Address and Site sheets were correctly empty while POZ_SUP_CONTACTS carried the literal 'No' on all 3,813 rows - a Yes/No value in a DATE column, which Oracle rejects outright. The correction was filed against Supplier only, so the contacts sheet never saw it."
     },
     {
       "target_object": "Supplier",
@@ -82,20 +84,9 @@
     {
       "target_object": "Supplier",
       "target_field": "Alternate Name",
-      "action": "rule",
-      "rule_type": "CASE_WHEN",
-      "rule_config": {
-        "branches": [
-          {
-            "if_column": "Supplier Name",
-            "op": "notblank",
-            "then": ""
-          }
-        ],
-        "default": ""
-      },
+      "action": "frame_rule_only",
       "frame_rule": "blank_when_equals:Supplier Name",
-      "note": "Blank when it merely repeats Supplier Name. Needs the finished frame to compare the two columns, so it runs as a frame rule in the strategy overlay, not per cell."
+      "note": "Do not populate Alternate Name when it DUPLICATES Supplier Name. Implemented by the BLANK_IF_EQUALS frame rule in supplier_strategy_defaults.json, which compares the two finished OUTPUT columns - a row-local CASE_WHEN cannot do this, because the per-row context holds SOURCE columns and 'Supplier Name' is a TARGET field. The CASE_WHEN that used to sit here returned '' on every branch and on its default, so the moment the overlay began running it blanked ALL 1,286 alternate names instead of only the duplicates. Measured in the 30-Jul 22:18 output: Alternate Name was 0 of 3,872."
     },
     {
       "target_object": "Supplier",
@@ -176,7 +167,8 @@
         "separator": "-",
         "resolve_country_from_city": true
       },
-      "note": "Country Code is already clean 2-character ISO in the NetSuite extract - every non-blank value is exactly 2 characters (US 2,592, BR 1,652, IN 1,172, CN 358, AU 290) - so the rule joins, it does not convert. 'Country' next to it holds full names, and picking that column would have produced 'United States-Chicago' on 2,592 rows. Analyst 30-Jul: keep just the country code when there is no city, keep just the city when there is no code, and where the code is missing derive it FROM the city. MEASURED on this extract: 6,196 rows have both, 1,066 have a code and no city, 233 have neither, and ZERO have a city without a code - so the derivation has nothing to resolve here today. It is built anyway because eBOS and SyteLine extracts are not this one."
+      "note": "Country Code is already clean 2-character ISO in the NetSuite extract - every non-blank value is exactly 2 characters (US 2,592, BR 1,652, IN 1,172, CN 358, AU 290) - so the rule joins, it does not convert. 'Country' next to it holds full names, and picking that column would have produced 'United States-Chicago' on 2,592 rows. Analyst 30-Jul: keep just the country code when there is no city, keep just the city when there is no code, and where the code is missing derive it FROM the city. MEASURED on this extract: 6,196 rows have both, 1,066 have a code and no city, 233 have neither, and ZERO have a city without a code - so the derivation has nothing to resolve here today. It is built anyway because eBOS and SyteLine extracts are not this one. Applied to ALL supplier sheets, because the site key has to be IDENTICAL wherever it appears or the assignment rows cannot link to the sites. Measured in the 30-Jul 22:18 output: POZ_SUPPLIER_SITES_INT said 'Hyderabad' while POZ_SITE_ASSIGNMENTS_INT said 'BU Hyderabad' for the same site - 3,878 assignment rows that would not have matched a single site.",
+      "applies_to_all_sheets": true
     },
     {
       "target_object": "Supplier",
