@@ -25,9 +25,53 @@ import pandas as pd
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _ORDER_FILE = _DATA / "supplier_fbdi_column_order.json"
 _NAMES_FILE = _DATA / "supplier_fbdi_file_names.json"
+_CUSTOMER_FILE = _DATA / "customer_fbdi_column_order.json"
 
 _order_cache: dict | None = None
 _names_cache: dict | None = None
+_customer_cache: dict | None = None
+
+
+def customer_layout() -> dict:
+    """The Customer Import layout, keyed by normalised interface-table name.
+
+    Oracle's Customer Import workbook and the CSVs its macro generates DO NOT
+    share a column order, and the mismatch is silent: the column COUNT is
+    identical, so a file built in worksheet order looks perfectly well formed and
+    loads every value one or more columns out of place. Three of the fifteen
+    interfaces are affected — HZ_IMP_ACCTSITES_T and HZ_IMP_ACCTSITEUSES_T move
+    Account Number and Party Site Number to the end, and
+    RA_CUSTOMER_PROFILES_INT_ALL moves six columns.
+
+    The CSVs are written HEADERLESS, so position is the only thing carrying
+    meaning. This is exactly the class of defect that cannot be caught by reading
+    the output — which is why the order is data, and tested.
+    """
+    global _customer_cache
+    if _customer_cache is None:
+        try:
+            doc = json.loads(_CUSTOMER_FILE.read_text(encoding="utf-8"))
+            _customer_cache = {norm_hdr(k): v for k, v in (doc.get("sheets") or {}).items()}
+            _customer_cache["__sequence__"] = doc.get("load_sequence") or []
+        except Exception:  # noqa: BLE001 — a missing file just disables the reorder
+            _customer_cache = {}
+    return _customer_cache
+
+
+def customer_load_sequence() -> list:
+    """The 15 Customer interfaces in the order Oracle loads them — parents first.
+
+    Parties, then Party Sites, then the account layers, then the contact layers.
+    A child row whose parent has not loaded is rejected, so the ORDER is part of
+    the deliverable, not a presentation choice.
+    """
+    return list(customer_layout().get("__sequence__") or [])
+
+
+def customer_sheet_spec(sheet_name: str) -> dict | None:
+    """The layout entry for one Customer interface sheet, or None."""
+    e = customer_layout().get(norm_hdr(safe_sheet_name(sheet_name)))
+    return e if isinstance(e, dict) else None
 
 
 def norm_hdr(s: Any) -> str:
@@ -72,6 +116,53 @@ def csv_name_for(sheet_name: str) -> str:
     """Oracle CSV base-name for an interface sheet (falls back to a safe sheet name)."""
     return (supplier_file_names().get("csv_by_sheet", {}).get(
         norm_hdr(safe_sheet_name(sheet_name))) or safe_sheet_name(sheet_name))
+
+
+def apply_customer_layout(sdf: "pd.DataFrame", sheet_name: str, is_customer: bool,
+                          for_csv: bool = True) -> "pd.DataFrame":
+    """Reorder one Customer interface sheet to Oracle's own column sequence.
+
+    ``for_csv`` picks WHICH sequence: the CSV order the loader reads, or the
+    worksheet order a human sees in the Oracle template. They are not the same on
+    three of the fifteen interfaces, and shipping one where the other is expected
+    is a silent corruption — same column count, every value shifted.
+
+    Columns the spec does not list are kept and appended, so nothing is ever
+    dropped; a template that has gained a column still round-trips.
+    """
+    if not is_customer:
+        return sdf
+    spec = customer_sheet_spec(sheet_name)
+    if not spec:
+        return sdf
+    order = spec.get("csv_order" if for_csv else "fbdi_order") or []
+    if not order:
+        return sdf
+    by_norm: dict = {}
+    for c in sdf.columns:
+        by_norm.setdefault(norm_hdr(c), c)
+    seen: set = set()
+    ordered: list = []
+    for h in order:
+        c = by_norm.get(norm_hdr(h))
+        if c is not None and c not in seen:
+            ordered.append(c)
+            seen.add(c)
+    for c in sdf.columns:
+        if c not in seen:
+            ordered.append(c)
+            seen.add(c)
+    return sdf[ordered].copy()
+
+
+def customer_csv_name_for(sheet_name: str) -> str | None:
+    """Oracle's CSV base-name for a Customer interface — HzImpPartiesT and friends.
+
+    Oracle matches the file inside the zip by NAME, so a correctly ordered CSV
+    called HZ_IMP_PARTIES_T.csv is simply not read.
+    """
+    spec = customer_sheet_spec(sheet_name)
+    return (spec or {}).get("csv")
 
 
 def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: bool,

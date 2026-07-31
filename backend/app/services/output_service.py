@@ -976,6 +976,10 @@ def _safe_sheet_name(s: str) -> str:
 # zip/CSV names per the Tejaswi spec).
 from app.services.supplier_fbdi_layout import (  # noqa: E402
     apply_supplier_layout as _supplier_layout,
+    apply_customer_layout as _customer_layout,
+    norm_hdr as _norm_hdr,
+    customer_csv_name_for as _customer_csv_name,
+    customer_load_sequence as _customer_sequence,
     csv_name_for as _csv_name_for,
     zip_name_for as _zip_name_for,
 )
@@ -1556,6 +1560,28 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         return _supplier_layout(sdf, sheet_name, _is_supplier, with_end=with_end,
                                 batch_id_first=batch_id_first)
 
+    def _apply_customer_layout(sdf: pd.DataFrame, sheet_name: str,
+                               for_csv: bool = True) -> pd.DataFrame:
+        # Customer Import ships its CSVs in a column order that differs from the
+        # worksheet order on three of fifteen interfaces. The counts match, so a
+        # file in the wrong order is indistinguishable from a correct one by eye —
+        # it just loads every value into the neighbouring column.
+        return _customer_layout(sdf, sheet_name, _is_customer, for_csv=for_csv)
+
+    def _customer_sheet_sort(sheets_in: list) -> list:
+        # Oracle rejects a child row whose parent has not loaded, so the files go
+        # into the zip parents-first: Parties, Party Sites, the account layers,
+        # then the contact layers. Any sheet the sequence does not name keeps its
+        # existing relative position at the end rather than being dropped.
+        seq = [_norm_hdr(x) for x in _customer_sequence()]
+        if not seq or not _is_customer:
+            return sheets_in
+
+        def key(sh):
+            k = _norm_hdr(_safe_sheet_name(sh.sheet_name))
+            return (seq.index(k) if k in seq else len(seq))
+        return sorted(sheets_in, key=key)
+
     def _write_all() -> tuple[str, str, int, int]:
         """Serialize to disk, STREAMING one interface sheet at a time so peak memory
         stays at ~one sheet — not all 19 at once, which OOM'd the worker on a large
@@ -1664,6 +1690,31 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                     # Oracle FBDI CSVs are headerless by default (data only, END
                     # last); the user's Include-header toggle can force headers on.
                     zf.writestr(f"{cbase}.csv", sdf.to_csv(index=False, header=_hdr))
+                    total_rows = max(total_rows, len(sdf))
+                    total_cols += len(sdf.columns)
+                    del sdf
+            return name, str(path), total_rows, total_cols
+
+        # Customer FBDI load package: the same shape as the supplier one, but the
+        # column order and the file names come from the Customer sequence spec.
+        if _is_customer and _customer_sequence() and len(sheets_with_fields) > 1:
+            import zipfile as _zip
+            name = f"CustomerImport_{ts}.zip"
+            path = out_dir / name
+            with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
+                for _i, s in enumerate(_customer_sheet_sort(sheets_with_fields), 1):
+                    if _sheet_carries_data(s):
+                        sdf = _finalize(fields_by_sheet[s.id])
+                        _cust_apply(sdf)
+                    else:
+                        sdf = _headers_only(fields_by_sheet[s.id])
+                    sdf = _apply_customer_layout(sdf, s.sheet_name, for_csv=True)
+                    cbase = _customer_csv_name(s.sheet_name) or _safe_sheet_name(s.sheet_name)
+                    # Numbered so the load ORDER survives a directory listing — the
+                    # sequence is part of the deliverable, and an analyst unzipping
+                    # into a folder otherwise gets them alphabetically.
+                    zf.writestr(f"{_i:02d}_{cbase}.csv",
+                                sdf.to_csv(index=False, header=_hdr))
                     total_rows = max(total_rows, len(sdf))
                     total_cols += len(sdf.columns)
                     del sdf
