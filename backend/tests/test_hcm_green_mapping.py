@@ -45,7 +45,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.hdl_schema import (  # noqa: E402
-    HDL_LOAD_ORDER, JOB, LOCATION, PERSON_NAME, WORK_RELATIONSHIP, all_components,
+    HDL_LOAD_ORDER, HDL_OBJECTS, JOB, LOCATION, PERSON_NAME, WORK_RELATIONSHIP,
+    all_components, object_label,
 )
 from app.services.hdl_output_service import render_cell                # noqa: E402
 from app.services.learning_service import sheet_allowed                # noqa: E402
@@ -70,6 +71,26 @@ EXTRACT_HEADERS = {
     "Manager - Level 08", "Manager - Level 09", "Location", "Position", "Business Title",
     "Country", "Email", "Cost Center", "Cost Center Name",
 }
+
+# The REAL input file the tool is fed: INTXXX_CR_Oracle_Fusion_Demographic_V2, 23
+# columns, header on row 2, spelled with UNDERSCORES. This is NOT the 31-column
+# 'Workday Extract' tab of the mapping workbook, and the difference is the whole of
+# "some fields are not being reflected as expected".
+REAL_INPUT = [
+    "Employee_ID", "Preferred_Name", "Legal_First_Name", "Legal_Last_Name", "Company",
+    "Hire_Date", "Worker_Type", "Active_Status", "Manager_ID", "Location", "Location_Code",
+    "Country", "Cost_Center", "Cost Center Hierarchy Name", "Cost_Center_Name",
+    "Business_Title", "Job Profile", "Position", "Position_ID", "Job Code", "Email",
+    "Military_Service",
+]
+
+
+def _n(s):
+    """Column matching normalises punctuation away, so Employee_ID == Employee ID."""
+    return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+REAL_INPUT_NORM = {_n(c) for c in REAL_INPUT}
 
 # field name -> {component names carrying it}, and component -> owning .dat object.
 FIELD_COMPONENTS: dict[str, set] = {}
@@ -115,29 +136,35 @@ def test_only_the_green_rows_came_across():
           not ({m["source_row"] for m in _MAPS} & {c["source_row"] for c in _CONSTS}))
 
 
-def test_source_columns_are_spelled_the_way_the_extract_spells_them():
-    """Underscores are the mapping tab's convention, not the data's."""
+def test_source_columns_are_spelled_the_way_the_data_spells_them():
+    """Underscores are the mapping tab's convention. The 'Workday Extract' tab uses
+    spaces; the REAL input file the tool is fed uses underscores. Column matching
+    normalises punctuation away, so either spelling resolves — what must not happen
+    is storing a name that appears in NEITHER."""
     for m in _MAPS:
-        if not m.get("verified_against_extract"):
-            continue
         col = m["source_column"]
-        check(f"{col!r} is a real extract header", col in EXTRACT_HEADERS)
-        check(f"{col!r} carries no underscore", "_" not in col)
+        alias = m.get("as_written_in_workbook")
+        known = (col in EXTRACT_HEADERS or _n(col) in REAL_INPUT_NORM
+                 or (alias and (alias in EXTRACT_HEADERS or _n(alias) in REAL_INPUT_NORM)))
+        check(f"{col!r} exists in the extract tab or the real input", known)
     aliased = [m for m in _MAPS if m.get("verified_against_extract")
                and "_" in (m.get("as_written_in_workbook") or "")]
     check("the workbook's own spelling is still recorded as an alias",
           len(aliased) >= 8, f"only {len(aliased)}")
 
 
-def test_the_columns_we_could_not_verify_are_flagged_rather_than_assumed():
-    """Five green rows name columns absent from THIS extract — their Source File cell
-    is blank in the workbook because they come from other Workday files."""
-    unverified = sorted(m["source_column"] for m in _MAPS if not m.get("verified_against_extract"))
-    check("exactly the five off-extract columns",
-          unverified == ["Job Profile", "Job_Code", "Location_Code", "Manager_ID", "Military_Service"],
-          f"got {unverified}")
-    for col in unverified:
-        check(f"{col!r} is genuinely not in this extract", col not in EXTRACT_HEADERS)
+def test_the_five_columns_once_written_off_are_all_in_the_real_input():
+    """They were flagged "from other Workday files" because their Source File cell is
+    blank in the workbook and they are absent from its 'Workday Extract' tab. The
+    file the tool is actually fed —
+    INTXXX_CR_Oracle_Fusion_Demographic_V2, 23 columns — carries every one of them.
+    Job Code is the one that mattered: JobCode was reading Business Title, and the
+    real column holds GSSSSM_VP2, the exact value the client's HDL template shows."""
+    for col in ("Job Profile", "Job Code", "Location_Code", "Manager_ID", "Military_Service"):
+        check(f"{col!r} is in the real input", _n(col) in REAL_INPUT_NORM)
+    for m in _MAPS:
+        check(f"{m['source_column']!r} resolves against the real input",
+              m.get("in_real_input_file") is True)
 
 
 def test_every_seeded_field_exists_on_the_component_it_claims():
@@ -162,7 +189,7 @@ def test_every_seeded_field_exists_on_the_component_it_claims():
             check(f"{c} carries {fld}", c in FIELD_COMPONENTS.get(fld, set()),
                   f"{fld} lives on {sorted(FIELD_COMPONENTS.get(fld, set()))}")
         obj = entry.get("hdl_object")
-        if obj:
+        if obj and obj in HDL_LOAD_ORDER:
             check(f"{fld}'s .dat file matches its components",
                   all(COMPONENT_OBJECT[c] == obj for c in comps)
                   or len({COMPONENT_OBJECT[c] for c in comps}) > 1,
@@ -202,27 +229,30 @@ def test_the_default_date_rows_are_constants_and_not_column_mappings():
         check("no mapping treats the default-date text as a column",
               "default value" not in m["source_column"].lower(), f"got {m['source_column']!r}")
     pairs = sorted((c["hdl_object"], c["target_field"], c["value"]) for c in _CONSTS)
+    # The mapping workbook writes "1/1/1900"; the client's own HDL template says
+    # 1990-01-01. One digit apart, and the template is the artefact they load.
     check("both EffectiveStartDate defaults are present",
-          pairs == [("Job", "EffectiveStartDate", "1900/01/01"),
-                    ("Location", "EffectiveStartDate", "1900/01/01")], f"got {pairs}")
+          pairs == [("Job", "EffectiveStartDate", "1990/01/01"),
+                    ("Location", "EffectiveStartDate", "1990/01/01")], f"got {pairs}")
 
 
-def test_the_loader_actually_writes_the_1900_default():
+def test_the_loader_actually_writes_the_setup_date_default():
     """The JSON is documentation until the generator agrees with it. Location and Job
     are deduped setup objects — the hire date they used to carry came from whichever
     employee row survived the dedupe, so it changed with the extract."""
     for comp, label in ((LOCATION, "Location"), (JOB, "Job")):
         f = spec(comp, "EffectiveStartDate")
         check(f"{label}.EffectiveStartDate is a constant", f["kind"] == "const", f"got {f['kind']}")
-        check(f"{label} renders 1900/01/01 whatever the row says",
-              render_cell(f, lambda n, s: "2017/01/01") == "1900/01/01")
+        check(f"{label} renders 1990/01/01 whatever the row says",
+              render_cell(f, lambda n, s: "2017/01/01") == "1990/01/01")
 
 
 def test_preferred_name_has_somewhere_to_land():
     """Row 12 maps Preferred_Name -> KnownAs, and PersonName had no KnownAs."""
     f = spec(PERSON_NAME, "KnownAs")
     check("PersonName now carries KnownAs", f is not None)
-    check("sourced from the extract's Preferred Name", f["source"] == "Preferred Name")
+    check("sourced from Preferred Name in either spelling",
+          "Preferred Name" in f["source"] and "Preferred_Name" in f["source"])
     check("and it renders", render_cell(f, lambda n, s: "Antonio Sendín") == "Antonio Sendín")
 
 
@@ -230,26 +260,40 @@ def test_military_service_is_sourced_rather_than_hard_blank():
     """Row 54. It was ``blank``, so a supplied value would have been discarded — and
     it renders empty today only because the column is in another Workday file."""
     f = spec(WORK_RELATIONSHIP, "OnMilitaryServiceFlag")
-    check("no longer hard-blank", f["kind"] == "source", f"got {f['kind']}")
-    check("reads Military_Service", f["source"] == "Military_Service")
+    check("no longer hard-blank", f["kind"] == "const_if_blank", f"got {f['kind']}")
+    check("reads Military_Service", "Military_Service" in f["source"])
     check("a supplied value survives", render_cell(f, lambda n, s: "Y") == "Y")
-    check("an absent column still renders empty", render_cell(f, lambda n, s: None) == "")
+    # The client's template shows N where the extract is silent, and the real input
+    # populates the column on 23 of 2,773 rows — so both halves are load-bearing.
+    check("and a silent row defaults to N", render_cell(f, lambda n, s: None) == "N")
 
 
-def test_a_green_row_with_no_oracle_field_is_recorded_but_not_seeded():
-    """Cost Center. The workbook's own comment: no suitable Oracle field exists. It
-    belongs in the Learning Center as intent, not as a mapping onto a phantom field."""
-    cc = [m for m in _MAPS if m["source_column"] == "Cost Center"]
-    check("the row is kept", len(cc) == 1)
-    check("flagged as having no Oracle field", cc[0].get("oracle_field_exists") is False)
+def test_cost_center_does_have_an_oracle_field_after_all():
+    """The workbook's TRX comment reads "No suitable field is available in Oracle for
+    this information", and I recorded it as fact. The client's own HDL template
+    carries DefaultExpenseAccount on Assignment — so the comment was wrong and my
+    deference to it was worse, because a row marked "no field" is never looked at
+    again. Reading the template beat reading the note about the data."""
+    cc = [m for m in _MAPS if m["source_column"] == "Cost Center"][0]
+    check("no longer written off", cc.get("oracle_field_exists") is not False)
+    check("it lands on Assignment", cc["hdl_components"] == ["Assignment"])
+    check("and DefaultExpenseAccount is a real attribute",
+          "Assignment" in FIELD_COMPONENTS.get("DefaultExpenseAccount", set()),
+          f"lives on {sorted(FIELD_COMPONENTS.get('DefaultExpenseAccount', set()))}")
+    # Still honestly incomplete: the template shows a full accounting flexfield
+    # string and Cost_Center holds one segment.
+    check("the remaining gap is recorded", cc.get("needs_crosswalk") is True)
+    # The seeder's skip stays — the next workbook may genuinely have such a row.
     seed = (_ROOT / "app" / "services" / "catalog_seed_service.py").read_text(encoding="utf-8")
-    check("and the seeder skips it",
+    check("the seeder can still skip a fieldless row",
           'if m.get("oracle_field_exists") is False:' in seed and "no_field += 1" in seed)
 
 
-def test_workrelationship_is_a_block_of_worker_not_a_sixth_dat_file():
-    check("five .dat files", HDL_LOAD_ORDER == ["Location", "Job", "Position",
-                                                "PositionHierarchy", "Worker"])
+def test_workrelationship_is_a_block_of_worker_not_a_separate_dat_file():
+    check("six load objects", HDL_LOAD_ORDER == ["Location", "Job", "Position",
+                                                 "PositionHierarchy", "Worker",
+                                                 "WorkerAssignmentSupervisor"],
+          f"got {HDL_LOAD_ORDER}")
     check("WorkRelationship is not one of them", "WorkRelationship" not in HDL_LOAD_ORDER)
     check("it is a component of Worker.dat", COMPONENT_OBJECT["WorkRelationship"] == "Worker")
     mil = [m for m in _MAPS if m["source_column"] == "Military_Service"][0]

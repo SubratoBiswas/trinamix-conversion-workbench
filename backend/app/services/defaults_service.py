@@ -201,6 +201,15 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     # Reusable constants captured from gold examples for this object — scoped to
     # this conversion's client (+ global) so another client's defaults don't show.
     learned: dict[str, str] = {}
+    # Per-field SHEET SCOPE, carried out to the caller. A default is keyed by field
+    # NAME, and Oracle repeats field names across a multi-sheet interface — Customer
+    # has 19 — so an unscoped default reaches every sheet that has a column of that
+    # name. LearnedMapping.sheets / exclude_sheets and sheet_allowed already existed;
+    # this function never consulted them, so the scope was recorded and ignored.
+    # Analyst, 31-Jul: "Insert Update Indicator was set a default value as I and
+    # approved. However it should only reflect in the RA_CUSTOMER_PROFILES_INT_ALL
+    # sheet, where it is a mandatory field."
+    scopes: dict[str, dict] = {}
     if target_object:
         from app.services.client_service import client_id_for_conversion, scope_query
         _scope = await scope_query(await client_id_for_conversion(conversion))
@@ -211,6 +220,11 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
         ):
             if lm.target_field and lm.resolved_value:
                 learned[_norm(lm.target_field)] = lm.resolved_value
+                _only = [s for s in (getattr(lm, "sheets", None) or []) if str(s).strip()]
+                _never = [s for s in (getattr(lm, "exclude_sheets", None) or []) if str(s).strip()]
+                if _only or _never:
+                    scopes[_norm(lm.target_field)] = {"sheets": _only,
+                                                      "exclude_sheets": _never}
 
     defaults: dict[str, str] = {}
     detail: list[dict] = []
@@ -283,4 +297,4 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     # an absent default and a deliberately blanked field look identical otherwise,
     # and the analyst needs to see that their decision took.
     return {"defaults": defaults, "detail": detail, "ai_used": ai_used,
-            "suppressed": sorted(suppressed)}
+            "suppressed": sorted(suppressed), "scopes": scopes}

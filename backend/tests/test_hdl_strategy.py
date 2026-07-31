@@ -11,6 +11,7 @@ Pure: stdlib only.
 """
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -121,10 +122,12 @@ def test_work_relationship_defaults():
     # from an absent column rather than from a decision.
     f = spec(WORK_RELATIONSHIP, "OnMilitaryServiceFlag")
     check("OnMilitaryServiceFlag is sourced, per the field-mapping workbook",
-          f["kind"] == "source", f"got {f['kind']}")
-    check("from Military_Service", f["source"] == "Military_Service")
-    check("and still renders empty while that column is absent",
-          render_cell(f, lambda n, s: None) == "")
+          f["kind"] == "const_if_blank", f"got {f['kind']}")
+    check("from Military_Service", "Military_Service" in f["source"])
+    check("a supplied value survives", render_cell(f, lambda n, s: "Y") == "Y")
+    # The client's HDL template shows N, and the real input populates the column on
+    # 23 of its 2,773 rows — so a silent row defaults rather than shipping empty.
+    check("and a silent row defaults to N", render_cell(f, lambda n, s: None) == "N")
 
 
 def test_work_terms_defaults():
@@ -136,10 +139,12 @@ def test_work_terms_defaults():
     check("PeriodOfServiceId cross-references WorkRelationship",
           key_of(WORK_TERMS, "PeriodOfServiceId(SourceSystemId)")
           == "WorkRelationship_<Employee ID>")
-    # OI-02: BusinessUnitShortCode is an open item, so it must ship blank rather
-    # than carry a guessed value.
-    check("BusinessUnitShortCode blank (OI-02)",
-          spec(WORK_TERMS, "BusinessUnitShortCode")["kind"] == "blank")
+    # OI-02 was open, so this shipped blank rather than carrying a guessed value.
+    # The client's HDL template closes it: every WorkTerms and Assignment row reads
+    # "NXT LLC BU". A required attribute shipped empty is not the safe option once
+    # the answer is written down in their own artefact.
+    check("BusinessUnitShortCode is the template's value (OI-02 closed)",
+          const_of(WORK_TERMS, "BusinessUnitShortCode") == "NXT LLC BU")
 
 
 def test_assignment_defaults_and_cross_references():
@@ -188,18 +193,43 @@ def test_load_order_matches_the_document():
     check("Job second", HDL_LOAD_ORDER[1] == "Job")
     check("Worker before its children", "Worker" in HDL_LOAD_ORDER)
     worker_components = [c for c, _ in HDL_OBJECTS["Worker"]["components"]]
-    check("Worker.dat orders its components as the document lists them",
+    check("Worker(Employee) orders its components as the template lists them",
           worker_components == ["Worker", "PersonName", "PersonEmail",
-                                "WorkRelationship", "WorkTerms", "Assignment",
-                                "AssignmentSupervisor"],
+                                "WorkRelationship", "WorkTerms", "Assignment"],
           f"got {worker_components}")
+    # SIX objects, not five: the client's template splits Worker into two passes and
+    # the analyst confirmed it. The supervisor pass comes LAST because a supervisor
+    # row points at the MANAGER's assignment number, so every worker — managers
+    # included — has to exist before any of those links can resolve.
+    sup = [c for c, _ in HDL_OBJECTS["WorkerAssignmentSupervisor"]["components"]]
+    check("the supervisor pass re-states the assignment chain then links it",
+          sup == ["WorkRelationship", "WorkTerms", "Assignment",
+                  "AssignmentSupervisor"], f"got {sup}")
+    check("and it loads after the employee pass",
+          HDL_LOAD_ORDER.index("WorkerAssignmentSupervisor")
+          > HDL_LOAD_ORDER.index("Worker"))
 
 
 def test_every_load_object_names_its_dat_file():
+    """The .dat is named for the BUSINESS OBJECT, not for the pass. Both Worker
+    passes therefore contain Worker.dat — HDL identifies the object by the file
+    name, so calling the second one WorkerAssignmentSupervisor.dat would simply not
+    be recognised. They are told apart by the zip, which carries the client
+    template's own sheet label."""
+    from app.services.hdl_schema import object_label
     for obj in HDL_LOAD_ORDER:
-        check(f"{obj} -> {obj}.dat",
-              HDL_OBJECTS[obj]["dat"] == f"{obj}.dat",
+        want = "Worker.dat" if obj.startswith("Worker") else f"{obj}.dat"
+        check(f"{obj} -> {want}", HDL_OBJECTS[obj]["dat"] == want,
               f"got {HDL_OBJECTS[obj]['dat']}")
+    check("the two Worker passes share a .dat name",
+          HDL_OBJECTS["Worker"]["dat"] == HDL_OBJECTS["WorkerAssignmentSupervisor"]["dat"])
+    check("but are labelled apart",
+          object_label("Worker") == "Worker(Employee)"
+          and object_label("WorkerAssignmentSupervisor") == "Worker(AssignmentSupervisor)")
+    check("and the zip uses the label",
+          "_object_label(obj)" in (Path(__file__).resolve().parent.parent / "app"
+                                   / "services" / "hdl_output_service.py")
+          .read_text(encoding="utf-8"))
 
 
 def test_setup_objects_are_deduplicated():

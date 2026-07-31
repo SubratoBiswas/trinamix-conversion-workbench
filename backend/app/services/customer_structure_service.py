@@ -96,7 +96,7 @@ def apply_customer_structure(
     report: dict[str, dict] = {}
     for name, fr in sheet_frames.items():
         touched = apply_to_frame(fr, source_system=source_system, batch_id=batch_id,
-                                 ref=ref, level=level)
+                                 ref=ref, level=level, sheet_name=name)
         if touched:
             report[name] = {"rows": len(fr), "filled": touched}
     return report
@@ -109,23 +109,67 @@ def reference_series(frame: "pd.DataFrame", n_rows: int, source_system: str) -> 
     return _reference_series(frame, n_rows, source_system)
 
 
+def level_for_sheet(sheet_name: str | None) -> str | None:
+    """Which linkage level an interface sheet sits at, or None when unknown.
+
+    The site-level sheets are the reason this exists. ``apply_to_frame`` was called
+    with a hardcoded ``level="account"`` for EVERY sheet, and the account branch
+    writes Account Site Source System and its Reference to EMPTY STRING. So on
+    HZ_IMP_ACCTSITES_T and HZ_IMP_ACCTSITEUSES_T — the two sheets where the site key
+    is the whole point — it was blanked on every row. That is CW_Issues 31-Jul
+    verbatim: "Account Site Source System: NETSUITE (default value) -> appears blank
+    in the output file."
+
+    Only the two sheets whose level is not in doubt are named. Everything else
+    returns None and keeps the caller's level, because inventing a party-level
+    sentinel on sheets nobody has reported would be changing behaviour on a guess.
+    """
+    key = _norm(sheet_name)
+    if not key:
+        return None
+    if key in ("hzimpacctsitest", "hzimpacctsiteusest"):
+        return "site"
+    return None
+
+
 def apply_to_frame(
     fr: "pd.DataFrame", *, source_system: str, batch_id: str,
     ref: list[str], level: str = "account",
+    sheet_name: str | None = None, protected: set[str] | None = None,
 ) -> list[str]:
     """Fill the linkage + sentinel columns on ONE interface frame, in place, using
     a shared reference. Returns the columns touched. Splitting this out lets the
     output writer process sheets one at a time instead of holding all 19 in memory
-    (which OOM'd the worker on a large Customer load)."""
+    (which OOM'd the worker on a large Customer load).
+
+    ``protected`` is the set of columns THE ANALYST HAS DECIDED — a default they
+    typed, a source column they approved, or a Keep blank they pressed. This pass
+    used to overwrite all of them unconditionally, which is the single cause behind
+    four separate 31-Jul issues: Batch Identifier came back after Keep blank, and
+    Customer Account Source System, Party Original System and Account Site Source
+    System all ignored a NETSUITE default that the UI and the mapping sheet both
+    showed correctly. Generated glue is a FALLBACK for what no source supplies; it
+    was behaving as an override.
+
+    ``sheet_name`` lets the level be derived per sheet instead of assumed.
+    """
     cols = list(fr.columns)
     touched: list[str] = []
     rows = len(fr)
     rref = ref[:rows] if len(ref) >= rows else ref + [f"{i + 100000}" for i in range(len(ref), rows)]
+    level = level_for_sheet(sheet_name) or level
+    guarded = {_norm(c) for c in (protected or set())}
 
     def setcol(col: str | None, value: Any):
-        if col is not None:
-            fr[col] = value
-            touched.append(col)
+        if col is None:
+            return
+        if _norm(col) in guarded:
+            # The analyst has spoken about this column on this sheet. Their value
+            # is the deliverable; the glue exists for the columns they have not
+            # filled in.
+            return
+        fr[col] = value
+        touched.append(col)
 
     setcol(_find(cols, "batch"), batch_id)
 

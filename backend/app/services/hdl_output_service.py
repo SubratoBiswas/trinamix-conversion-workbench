@@ -36,7 +36,7 @@ from app.models.mapping import MappingSuggestion
 from app.models.output import ConvertedOutput
 from app.parsers import parse_tabular
 from app.services.hdl_schema import (
-    COUNTRY_ISO2, HDL_LOAD_ORDER, HDL_OBJECTS,
+    COUNTRY_ISO2, HDL_LOAD_ORDER, HDL_OBJECTS, object_label as _object_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,16 +172,26 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             if fn and getattr(m, "source_column", None):
                 override[fn] = m.source_column
 
-    def _resolve_col(field_name: str, schema_source: str | None) -> str | None:
+    def _resolve_col(field_name: str, schema_source) -> str | None:
         """Actual dataset column for a field: mapping override first, then the
-        schema's canonical source (normalized match)."""
+        schema's canonical source (normalized match).
+
+        ``schema_source`` may be a LIST of candidate spellings — the first one present
+        in the dataset wins. The client's real input file is not the extract tab the
+        schema was written against: JobCode's canonical source was "Business Title"
+        while the file carries a proper "Job Code" holding GSSSSM_VP2 — the exact
+        value their own HDL template shows. One guessed spelling binds to nothing and
+        fails silently, which is the whole class of "fields are not being reflected".
+        """
         ov = override.get(field_name)
         if ov and ov in src.columns:
             return ov
         if ov and _norm(ov) in col_by_norm:
             return col_by_norm[_norm(ov)]
-        if schema_source and _norm(schema_source) in col_by_norm:
-            return col_by_norm[_norm(schema_source)]
+        for cand in (schema_source if isinstance(schema_source, (list, tuple))
+                     else [schema_source]):
+            if cand and _norm(cand) in col_by_norm:
+                return col_by_norm[_norm(cand)]
         return None
 
     def _cell(row: pd.Series, spec: dict) -> str:
@@ -218,11 +228,18 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
         logger.warning("HDL: no Active Status column found — every row kept; "
                     "strategy A-03 expects inactive employees to be excluded")
 
-    def _rows_for(scope: str, dedup_source: str | None):
+    def _rows_for(scope: str, dedup_source):
         if scope == "none":
             return []
         if scope == "distinct" and dedup_source:
-            col = col_by_norm.get(_norm(dedup_source))
+            # Candidate list, same reasoning as _resolve_col: Location dedupes on
+            # Location_Code in the real file and on Location in the extract tab.
+            col = None
+            for cand in (dedup_source if isinstance(dedup_source, (list, tuple))
+                         else [dedup_source]):
+                col = col_by_norm.get(_norm(cand))
+                if col:
+                    break
             if not col:
                 return []
             seen: set[str] = set()
@@ -272,8 +289,11 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                 with zipfile.ZipFile(inner, "w", zipfile.ZIP_DEFLATED) as iz:
                     iz.writestr(spec["dat"], dat)
                 # The numeric prefix is the load sequence, so the upload order is
-                # not something the analyst has to remember from the document.
-                outer.writestr(f"{seq:02d}_{obj}.zip", inner.getvalue())
+                # not something the analyst has to remember from the document. The
+                # label is the client template's own sheet name, so the two Worker
+                # passes are told apart at a glance — both contain Worker.dat,
+                # because both load the same business object.
+                outer.writestr(f"{seq:02d}_{_object_label(obj)}.zip", inner.getvalue())
         return total_rows, total_attrs
 
     import asyncio

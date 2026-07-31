@@ -1,15 +1,16 @@
 {
-  "_source": "Customer_Import_FBDI_Sequence_Mapping_V2 1.xlsx (analyst, 30-Jul-2026)",
-  "_effective_date": "2026-07-30",
+  "_source": "Customer_Import_FBDI_Sequence_Mapping_V2 2.xlsx (Tejaswi Medi, 29-Jul-2026; forwarded by Tejaswini 31-Jul-2026)",
+  "_effective_date": "2026-07-31",
+  "_supersedes": "Customer_Import_FBDI_Sequence_Mapping_V2 1.xlsx (30-Jul-2026)",
   "_why": [
     "Oracle's Customer Import workbook and the CSVs its macro generates DO NOT",
     "share a column order. Three of the fifteen interfaces differ, and the",
     "difference is silent: the column COUNT is identical, so a file built in sheet",
     "order looks correct and loads every value into the wrong column.",
     "",
-    "HZ_IMP_ACCTSITES_T      — Account Number and Party Site Number move to the END",
-    "HZ_IMP_ACCTSITEUSES_T   — Account Number and Party Site Number move to the END",
-    "RA_CUSTOMER_PROFILES_INT_ALL — Party Original System/Reference, Credit Analyst,",
+    "HZ_IMP_ACCTSITES_T      \u2014 Account Number and Party Site Number move to the END",
+    "HZ_IMP_ACCTSITEUSES_T   \u2014 Account Number and Party Site Number move to the END",
+    "RA_CUSTOMER_PROFILES_INT_ALL \u2014 Party Original System/Reference, Credit Analyst,",
     "                               Credit Review Cycle, Last/Next Review Date move",
     "                               to the END",
     "",
@@ -34,12 +35,48 @@
     "HZ_IMP_PERSONLANG",
     "RA_CUSTOMER_PROFILES_INT_ALL"
   ],
+  "load_scope": [
+    "HZ_IMP_PARTIES_T",
+    "HZ_IMP_PARTYSITES_T",
+    "HZ_IMP_PARTYSITEUSES_T",
+    "HZ_IMP_ACCOUNTS_T",
+    "HZ_IMP_ACCTSITES_T",
+    "HZ_IMP_ACCTSITEUSES_T",
+    "HZ_IMP_ACCTCONTACTS_T",
+    "HZ_IMP_CONTACTPTS_T",
+    "HZ_IMP_CONTACTROLES",
+    "HZ_IMP_CONTACTS_T",
+    "HZ_IMP_LOCATIONS_T",
+    "HZ_IMP_RELSHIPS_T",
+    "HZ_IMP_ROLERESP",
+    "HZ_IMP_PERSONLANG",
+    "RA_CUSTOMER_PROFILES_INT_ALL"
+  ],
+  "excluded_interfaces": [
+    {
+      "sheet": "HZ_IMP_ACCOUNTRELS",
+      "reason": "Not among the 15 interfaces NextPower loads (Summary tab of V2_2). Tejaswini, 31-Jul: 'they are working on 15 files only, mentioned in the sheet, so we do not have to generate all of the 19 FBDI output files.'"
+    },
+    {
+      "sheet": "HZ_IMP_CLASSIFICS_T",
+      "reason": "Not among the 15 loaded interfaces."
+    },
+    {
+      "sheet": "RA_CUST_PAY_METHOD_INT_ALL",
+      "reason": "Not among the 15 loaded interfaces."
+    },
+    {
+      "sheet": "RA_CUSTOMER_BANKS_INT_ALL",
+      "reason": "Not among the 15 loaded interfaces."
+    }
+  ],
   "sheets": {
     "HZ_IMP_PARTIES_T": {
       "object": "Parties",
       "csv": "HzImpPartiesT",
       "field_count": 49,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Party Original System",
@@ -148,6 +185,7 @@
       "csv": "HzImpPartySitesT",
       "field_count": 48,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Party Original System",
@@ -254,6 +292,7 @@
       "csv": "HzImpPartySiteUsesT",
       "field_count": 43,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Party Original System",
@@ -350,6 +389,7 @@
       "csv": "HzImpAccountsT",
       "field_count": 84,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Customer Account Source System",
@@ -528,6 +568,7 @@
       "csv": "HzImpAcctSitesT",
       "field_count": 89,
       "reorders": true,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Customer Account Source System",
@@ -716,6 +757,7 @@
       "csv": "HzImpAcctSiteUsesT",
       "field_count": 45,
       "reorders": true,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Account Number",
@@ -816,6 +858,7 @@
       "csv": "HzImpAcctContactsT",
       "field_count": 68,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Customer Account Source System",
@@ -962,6 +1005,7 @@
       "csv": "HzImpContactPtsT",
       "field_count": 79,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Contact Point Original System",
@@ -1130,6 +1174,7 @@
       "csv": "HzImpContactRoles",
       "field_count": 67,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Interface Row ID",
@@ -1274,6 +1319,7 @@
       "csv": "HzImpContactsT",
       "field_count": 66,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Insert Update Indicator",
@@ -1416,6 +1462,7 @@
       "csv": "HzImpLocationsT",
       "field_count": 87,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Location Original System",
@@ -1600,6 +1647,7 @@
       "csv": "HzImpRelshipsT",
       "field_count": 69,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Subject Relationship Party Original System",
@@ -1748,6 +1796,7 @@
       "csv": "HzImpRoleResp",
       "field_count": 64,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Insert Update Code",
@@ -1886,6 +1935,7 @@
       "csv": "HzImpPersonLang",
       "field_count": 6,
       "reorders": false,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "Party Original System",
@@ -1908,6 +1958,7 @@
       "csv": "RaCustomerProfilesIntAll",
       "field_count": 132,
       "reorders": true,
+      "csv_terminator": "END",
       "fbdi_order": [
         "*Batch Identifier",
         "*Insert Update Indicator",

@@ -1,6 +1,12 @@
 """Customer Import: the CSV column order is NOT the worksheet column order.
 
-From Customer_Import_FBDI_Sequence_Mapping_V2 1.xlsx (analyst, 30-Jul). Each of
+From Customer_Import_FBDI_Sequence_Mapping_V2 2.xlsx (Tejaswi Medi, 29-Jul;
+forwarded 31-Jul), which supersedes V2 1. Re-extracting V2_2 and diffing it against
+what V2_1 produced gave column-for-column agreement on all fifteen interfaces and
+the same three reorderings, so the second workbook is an independent confirmation
+of the first rather than a correction. Its real additions are two: every CSV column
+now ends with an explicit END row, and the Summary tab now names the CSV files.
+Each of
 the fifteen interface tabs lists its columns twice — once as the Oracle FBDI
 worksheet shows them, once as the generated CSV carries them. On twelve tabs the
 two lists agree. On three they do not:
@@ -31,8 +37,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd                                              # noqa: E402
 from app.services.supplier_fbdi_layout import (                  # noqa: E402
-    apply_customer_layout, customer_csv_name_for, customer_load_sequence,
-    customer_sheet_spec,
+    apply_customer_layout, customer_csv_name_for, customer_in_load_scope,
+    customer_load_sequence, customer_sheet_spec,
 )
 
 _DOC = json.loads((Path(__file__).resolve().parent.parent / "app" / "data"
@@ -132,12 +138,13 @@ def test_the_reorder_actually_moves_the_data():
     fbdi = spec["fbdi_order"]
     df = pd.DataFrame([{c: f"<{c}>" for c in fbdi}], columns=fbdi)
     out = apply_customer_layout(df, "HZ_IMP_ACCTSITEUSES_T", True, for_csv=True)
-    check("column order is now the CSV order", list(out.columns) == spec["csv_order"],
-          f"got {list(out.columns)[:5]}")
+    cols = [c for c in out.columns if c != "END"]
+    check("column order is now the CSV order", cols == spec["csv_order"],
+          f"got {cols[:5]}")
     # Every cell still sits under its own name — nothing was shifted or lost.
-    for c in out.columns:
+    for c in cols:
         check(f"{c} kept its value", out.iloc[0][c] == f"<{c}>")
-    check("no columns lost", len(out.columns) == len(fbdi))
+    check("no columns lost", len(cols) == len(fbdi))
 
 
 def test_worksheet_order_is_still_available_for_the_xlsx():
@@ -168,8 +175,9 @@ def test_a_column_the_spec_does_not_list_is_kept():
     cols = spec["csv_order"] + ["Some New Oracle Column"]
     df = pd.DataFrame([{c: 1 for c in cols}], columns=cols)
     out = apply_customer_layout(df, "HZ_IMP_PARTIES_T", True, for_csv=True)
-    check("nothing dropped", len(out.columns) == len(cols))
-    check("the stranger is appended", list(out.columns)[-1] == "Some New Oracle Column")
+    kept = [c for c in out.columns if c != "END"]
+    check("nothing dropped", len(kept) == len(cols))
+    check("the stranger is appended", kept[-1] == "Some New Oracle Column")
 
 
 def test_oracle_csv_file_names():
@@ -194,11 +202,82 @@ def test_the_generator_uses_all_of_this():
     """Seam. A layout spec nothing calls is the inert-feature failure again."""
     out = (Path(__file__).resolve().parent.parent / "app" / "services"
            / "output_service.py").read_text(encoding="utf-8")
-    check("the CSV reorder is applied", "_apply_customer_layout(sdf, s.sheet_name, for_csv=True)" in out)
+    check("the CSV reorder is applied",
+          "_apply_customer_layout(sdf, s.sheet_name, for_csv=True," in out)
+    check("with the END terminator", "with_end=True)" in out)
+    check("and only the loaded interfaces are written",
+          "_customer_in_scope(s.sheet_name)" in out)
     check("Oracle's file names are used", "_customer_csv_name(s.sheet_name)" in out)
     check("the load sequence orders the zip", "_customer_sheet_sort(" in out)
     check("and the sequence is numbered so it survives a listing",
           'f"{_i:02d}_{cbase}.csv"' in out)
+
+
+def test_v2_2_confirms_v2_1_rather_than_correcting_it():
+    """Provenance. Two independently produced workbooks agreeing column-for-column
+    is the strongest evidence available that the order is right — and if V2_2 had
+    disagreed, the shipped CSVs would have been silently wrong for two days."""
+    check("V2_2 is the recorded source", "V2 2.xlsx" in _DOC["_source"])
+    check("and it says what it replaces", "V2 1.xlsx" in (_DOC.get("_supersedes") or ""))
+    check("still the same three reorderings",
+          sorted(k for k, v in _DOC["sheets"].items() if v["reorders"]) == sorted(REORDERING))
+
+
+def test_every_csv_carries_the_end_terminator():
+    """V2_2's substantive addition: every one of the 15 CSV columns now ends with an
+    explicit END row. The supplier package has always written the terminator; the
+    customer package never did, so Customer CSVs shipped without one."""
+    for name, spec in _DOC["sheets"].items():
+        check(f"{name} records the terminator", spec.get("csv_terminator") == "END")
+    spec = customer_sheet_spec("HZ_IMP_PARTIES_T")
+    df = pd.DataFrame([{c: "v" for c in spec["csv_order"]}], columns=spec["csv_order"])
+    out = apply_customer_layout(df, "HZ_IMP_PARTIES_T", True, for_csv=True)
+    check("END is the last column", list(out.columns)[-1] == "END")
+    check("and it is on the data row", out.iloc[0]["END"] == "END")
+
+
+def test_end_is_not_written_into_the_workbook_a_human_opens():
+    """The Oracle template has no END column — it is a CSV record terminator."""
+    spec = customer_sheet_spec("HZ_IMP_PARTIES_T")
+    df = pd.DataFrame([{c: "v" for c in spec["fbdi_order"]}], columns=spec["fbdi_order"])
+    out = apply_customer_layout(df, "HZ_IMP_PARTIES_T", True, for_csv=False)
+    check("no END in the xlsx", "END" not in list(out.columns))
+
+
+def test_the_terminator_is_not_doubled():
+    """Applying the layout twice must not produce two END columns."""
+    spec = customer_sheet_spec("HZ_IMP_PARTIES_T")
+    df = pd.DataFrame([{c: "v" for c in spec["csv_order"]}], columns=spec["csv_order"])
+    once = apply_customer_layout(df, "HZ_IMP_PARTIES_T", True, for_csv=True)
+    twice = apply_customer_layout(once, "HZ_IMP_PARTIES_T", True, for_csv=True)
+    check("one END", sum(1 for c in twice.columns if c == "END") == 1,
+          f"got {list(twice.columns)[-3:]}")
+
+
+def test_only_the_fifteen_loaded_interfaces_are_generated():
+    """Tejaswini, 31-Jul: "they are working on 15 files only, mentioned in the sheet,
+    so we do not have to generate all of the 19 FBDI output files."
+
+    The four left out are the SAME four the analyst had been naming one at a time as
+    per-field exclusions — "in all sheets except HZ_IMP_CLASSIFICS_T", "…except
+    RA_CUST_PAY_METHOD_INT_ALL, RA_CUSTOMER_BANKS_INT_ALL, HZ_IMP_ACCOUNTRELS".
+    Those exclusions were an analyst working around a file set that was too big.
+    """
+    for iface in customer_load_sequence():
+        check(f"{iface} is generated", customer_in_load_scope(iface) is True)
+    for iface in ("HZ_IMP_ACCOUNTRELS", "HZ_IMP_CLASSIFICS_T",
+                  "RA_CUST_PAY_METHOD_INT_ALL", "RA_CUSTOMER_BANKS_INT_ALL"):
+        check(f"{iface} is not", customer_in_load_scope(iface) is False)
+    named = {x["sheet"] for x in _DOC["excluded_interfaces"]}
+    check("all four are named with a reason", len(named) == 4)
+    check("each carries a reason",
+          all((x.get("reason") or "").strip() for x in _DOC["excluded_interfaces"]))
+
+
+def test_an_unknown_interface_is_never_silently_dropped():
+    """Scope narrows a deliverable, so its failure mode must be inclusion. A sheet
+    the spec has never heard of is generated, not discarded."""
+    check("unknown sheet stays in", customer_in_load_scope("HZ_IMP_SOMETHING_NEW") is True)
 
 
 if __name__ == "__main__":

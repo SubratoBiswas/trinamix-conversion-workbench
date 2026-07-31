@@ -253,7 +253,7 @@ def _category_for(rule_type: str | None) -> str:
 async def _upsert(*, kind, category, original_value, resolved_value,
                   target_object=None, target_field=None, rule_type=None,
                   rule_config=None, project_id=None, captured_from, captured_by,
-                  client_id=None, source_erp=None,
+                  client_id=None, source_erp=None, sheets=None,
                   revive: bool = False) -> LearnedMapping | None:
     """Insert or update a learning.
 
@@ -296,6 +296,8 @@ async def _upsert(*, kind, category, original_value, resolved_value,
                 "project_id": project_id, "client_id": client_id, "is_global": False,
                 "source_erp": source_erp,
             }
+            if sheets is not None:
+                patch["sheets"] = list(sheets)
             if revive and getattr(lm, "is_deleted", False):
                 patch.update({"is_deleted": False, "deleted_at": None, "deleted_by": None})
             await lm.set(patch)
@@ -306,6 +308,7 @@ async def _upsert(*, kind, category, original_value, resolved_value,
         target_field=target_field, rule_type=rule_type, rule_config=rule_config or {},
         project_id=project_id, captured_from=captured_from, captured_by=captured_by,
         client_id=client_id, is_global=False, source_erp=source_erp,
+        sheets=list(sheets) if sheets is not None else [],
     )
     await lm.insert()
     return lm
@@ -328,14 +331,29 @@ async def record_learning_from_mapping(
         return None
     tpl = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
     target_field = None
+    _sheet_id = None
     if tpl:
         fields = await FBDIField.find(FBDIField.template_id == tpl.id).to_list()
         for f in fields:
             if f.id == mapping.target_field_id:
                 target_field = f.field_name
+                _sheet_id = getattr(f, "sheet_id", None)
                 break
     if not target_field:
         return None
+    # The interface sheet this decision was made ON. Oracle repeats field names
+    # across sheets — Customer has 19 — so a name-keyed default captured from one
+    # sheet was applied to all of them. Analyst, 31-Jul: "Insert Update Indicator
+    # was set a default value as I and approved. However it should only reflect in
+    # the RA_CUSTOMER_PROFILES_INT_ALL sheet, where it is a mandatory field."
+    _sheet_name = None
+    if _sheet_id is not None:
+        try:
+            from app.models.fbdi import FBDISheet
+            _sh = await FBDISheet.get(_sheet_id)
+            _sheet_name = getattr(_sh, "sheet_name", None) if _sh else None
+        except Exception:  # noqa: BLE001 — scope is a refinement, never a blocker
+            _sheet_name = None
     rule_type = None
     rule_config: dict = {}
     if mapping.suggested_transformation and isinstance(mapping.suggested_transformation, dict):
@@ -356,6 +374,10 @@ async def record_learning_from_mapping(
             rule_type="default", rule_config={"default_value": _default},
             project_id=conversion.project_id, client_id=_cid, source_erp=_src,
             captured_from=captured_from, captured_by=captured_by,
+            # Scoped to the sheet it was set on. A multi-sheet interface repeats
+            # field names, so an unscoped default reaches every sheet that happens
+            # to have a column of the same name.
+            sheets=[_sheet_name] if _sheet_name else None,
         )
     lm = await _upsert(
         kind="column_mapping", category="Column Mapping Alias",

@@ -355,6 +355,16 @@ async def update_mapping(
     if data.get("status") == "approved":
         data["approved_by"] = user.email
         data["approved_at"] = datetime.utcnow()
+    elif ("default_value" in data or "source_column" in data) and \
+            (m.status or "") in ("approved", "overridden"):
+        # Editing the DEFAULT of an already-approved mapping is the analyst speaking
+        # again, and the precedence they set on 30-Jul is "whichever is latest".
+        # exclude_unset means status is absent on this call, so the stamps were left
+        # at the ORIGINAL approval — an edit made today could lose to a rule file
+        # dated yesterday, and the generator's date test would be reading a
+        # timestamp that no longer describes when the decision was made.
+        data["approved_by"] = user.email
+        data["approved_at"] = datetime.utcnow()
     await m.set(data)
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)

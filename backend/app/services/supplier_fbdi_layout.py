@@ -53,6 +53,8 @@ def customer_layout() -> dict:
             doc = json.loads(_CUSTOMER_FILE.read_text(encoding="utf-8"))
             _customer_cache = {norm_hdr(k): v for k, v in (doc.get("sheets") or {}).items()}
             _customer_cache["__sequence__"] = doc.get("load_sequence") or []
+            _customer_cache["__scope__"] = doc.get("load_scope") or doc.get("load_sequence") or []
+            _customer_cache["__excluded__"] = doc.get("excluded_interfaces") or []
         except Exception:  # noqa: BLE001 — a missing file just disables the reorder
             _customer_cache = {}
     return _customer_cache
@@ -72,6 +74,42 @@ def customer_sheet_spec(sheet_name: str) -> dict | None:
     """The layout entry for one Customer interface sheet, or None."""
     e = customer_layout().get(norm_hdr(safe_sheet_name(sheet_name)))
     return e if isinstance(e, dict) else None
+
+
+def customer_in_load_scope(sheet_name: str) -> bool:
+    """Is this interface one of the 15 NextPower actually loads?
+
+    Oracle's Customer template ships 19 interface tables; the client loads 15.
+    Tejaswini, 31-Jul: "they are working on 15 files only, mentioned in the sheet,
+    so we do not have to generate all of the 19 FBDI output files."
+
+    The four left out — HZ_IMP_ACCOUNTRELS, HZ_IMP_CLASSIFICS_T,
+    RA_CUST_PAY_METHOD_INT_ALL and RA_CUSTOMER_BANKS_INT_ALL — are the SAME four the
+    analyst had been naming one at a time as per-field exclusions ("in all sheets
+    except HZ_IMP_CLASSIFICS_T", "…except RA_CUST_PAY_METHOD_INT_ALL,
+    RA_CUSTOMER_BANKS_INT_ALL, HZ_IMP_ACCOUNTRELS"). Those exclusions were an analyst
+    working around a file set that was too big. Stated once, as scope, they stop
+    having to be restated per field.
+
+    Scope is DATA (``load_scope``), not a constant here: putting an interface back is
+    a one-line edit to the spec file, which matters because the same issue list also
+    asks about a default on HZ_IMP_ACCOUNTRELS.
+
+    An unknown sheet is IN scope. A spec that cannot be read must never silently
+    shrink the deliverable.
+    """
+    scope = customer_layout().get("__scope__") or []
+    if not scope:
+        return True
+    key = norm_hdr(safe_sheet_name(sheet_name))
+    known = {norm_hdr(x) for x in customer_layout().get("__sequence__") or []}
+    excluded = {norm_hdr(x.get("sheet")) for x in (customer_layout().get("__excluded__") or [])
+                if isinstance(x, dict) and x.get("sheet")}
+    if key in excluded:
+        return False
+    if key in {norm_hdr(x) for x in scope}:
+        return True
+    return key not in known
 
 
 def norm_hdr(s: Any) -> str:
@@ -119,13 +157,20 @@ def csv_name_for(sheet_name: str) -> str:
 
 
 def apply_customer_layout(sdf: "pd.DataFrame", sheet_name: str, is_customer: bool,
-                          for_csv: bool = True) -> "pd.DataFrame":
+                          for_csv: bool = True, with_end: bool | None = None) -> "pd.DataFrame":
     """Reorder one Customer interface sheet to Oracle's own column sequence.
 
     ``for_csv`` picks WHICH sequence: the CSV order the loader reads, or the
     worksheet order a human sees in the Oracle template. They are not the same on
     three of the fifteen interfaces, and shipping one where the other is expected
     is a silent corruption — same column count, every value shifted.
+
+    ``with_end`` appends the ``END`` record terminator, which is what V2_2 of the
+    sequence workbook added: every one of the 15 CSV columns now ends with an
+    explicit END row. The supplier package has always written it; the customer
+    package never did, so Customer CSVs shipped without a terminator. Defaults to
+    ``for_csv`` — END belongs in the CSV the loader reads and NOT in the xlsx a
+    human opens, because the Oracle template has no END column.
 
     Columns the spec does not list are kept and appended, so nothing is ever
     dropped; a template that has gained a column still round-trips.
@@ -135,9 +180,11 @@ def apply_customer_layout(sdf: "pd.DataFrame", sheet_name: str, is_customer: boo
     spec = customer_sheet_spec(sheet_name)
     if not spec:
         return sdf
+    if with_end is None:
+        with_end = bool(for_csv)
     order = spec.get("csv_order" if for_csv else "fbdi_order") or []
     if not order:
-        return sdf
+        return sdf if not with_end else _with_end(sdf)
     by_norm: dict = {}
     for c in sdf.columns:
         by_norm.setdefault(norm_hdr(c), c)
@@ -152,7 +199,22 @@ def apply_customer_layout(sdf: "pd.DataFrame", sheet_name: str, is_customer: boo
         if c not in seen:
             ordered.append(c)
             seen.add(c)
-    return sdf[ordered].copy()
+    out = sdf[ordered].copy()
+    return _with_end(out) if with_end else out
+
+
+def _with_end(sdf: "pd.DataFrame") -> "pd.DataFrame":
+    """Append the FBDI record terminator as a trailing 'END' column.
+
+    Same shape the supplier package uses. Idempotent: a frame that already carries
+    an END column is returned unchanged, so a double-applied layout cannot produce
+    two terminators.
+    """
+    if any(str(c).strip().upper() == "END" for c in sdf.columns):
+        return sdf
+    out = sdf.copy()
+    out["END"] = "END"
+    return out
 
 
 def customer_csv_name_for(sheet_name: str) -> str | None:

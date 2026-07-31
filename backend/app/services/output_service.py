@@ -97,6 +97,14 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
             # it matches against, and the column whose value it returns.
             cols.update(c for c in (cfg.get("key_column"), cfg.get("match_column"),
                                     cfg.get("value_column")) if c)
+        elif rt == "SEQUENCE":
+            # The variant condition can name a source column as easily as a target
+            # one (Party Number's names a target). Declaring it costs nothing when
+            # it is a target — the frame simply has no such column — and is the
+            # difference between working and silently defaulting when it is not.
+            _v = cfg.get("variant") or {}
+            if _v.get("if_column"):
+                cols.add(_v["if_column"])
     return cols
 
 
@@ -284,11 +292,62 @@ def _build_self_index(src: pd.DataFrame, configs: list[dict]) -> dict:
     return index
 
 
+class _RowWithTargets:
+    """A per-row context that can also see the TARGET columns already computed.
+
+    A rule whose condition names another TARGET field could not work at all. The
+    per-row context is built from SOURCE columns, so ``row.get("Party Type")``
+    returned None on every row, silently, and the rule fell through to its default.
+    Three 31-Jul issues are that one fact:
+
+        row 36  "Cannot apply transformation logic where the value of a target field
+                 (Party Number) depends on the value of another target field
+                 (Party Type)."
+        row 23  Party Type "still shows blank rows instead of default as ORGANIZATION"
+        row 16/22  "Tried using custom transformation rule, but its not working"
+
+    It is the same shape as BLANK_IF_EQUALS, which had to be lifted out of the
+    row-local engine entirely for exactly this reason.
+
+    Targets are consulted only where the SOURCE has no column of that name, so this
+    is purely additive: every rule that resolves today resolves identically, and only
+    the lookups that used to return nothing now find a value. Fields are computed in
+    target-sequence order, so a rule can read any field that precedes it — which is
+    the order Oracle's own templates put dependencies in (Party Type is column 4,
+    Party Number column 5).
+    """
+    __slots__ = ("_src", "_tgt", "_i")
+
+    def __init__(self, src_row: dict, targets: dict, i: int):
+        self._src = src_row
+        self._tgt = targets
+        self._i = i
+
+    def get(self, key, default=None):
+        v = self._src.get(key, _MISSING)
+        if v is not _MISSING:
+            return v
+        col = self._tgt.get(key)
+        return col[self._i] if col is not None else default
+
+    def __getitem__(self, key):
+        v = self.get(key, _MISSING)
+        if v is _MISSING:
+            raise KeyError(key)
+        return v
+
+    def __contains__(self, key):
+        return key in self._src or key in self._tgt
+
+
+_MISSING = object()
+
+
 def _transform_frame(
     src: pd.DataFrame, sorted_mappings: list, fields_by_id: dict, pipelines: dict,
     context_cols: set[str] | None = None, target_object: str | None = None,
     self_index: dict | None = None, city_country: dict | None = None,
-    city_case: dict | None = None,
+    city_case: dict | None = None, row_offset: int = 0,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -355,10 +414,18 @@ def _transform_frame(
         # A BLANK directive still skips, because blank is what discarding means.
         _ov_early = _strategy_directive(target_object, tgt.field_name)
         _ov_writes = bool(_ov_early and ("rule" in _ov_early or "constant" in _ov_early))
-        if (_discarded and not _ov_writes
+        # ...and the analyst's OWN transformation rules are the third thing that can
+        # write a derived column. They were read AFTER this guard, so a rule the
+        # analyst authored in the UI never ran on a field whose mapping is
+        # not_applicable — which is precisely what a derived field's mapping is.
+        # CW_Issues, twice, in the analyst's own status column: "Tried using custom
+        # transformation rule, but its not working" (rows 16 and 22). The strategy
+        # overlay was rescued from this trap on 30-Jul; the rules the analyst types
+        # were left in it.
+        rules = list(pipelines.get(tgt.id, []))
+        if (_discarded and not _ov_writes and not rules
                 and not (m.default_value and str(m.default_value).strip())):
             continue
-        rules = list(pipelines.get(tgt.id, []))
         if m.suggested_transformation and not rules and m.status != "rejected":
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
@@ -376,9 +443,17 @@ def _transform_frame(
             if records is None:
                 records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
             src_vals = col_cache[m.source_column] if has_src else None
+            # row_index is the GLOBAL row number. It was never passed here at all —
+            # only the mapping PREVIEW endpoint set it — so SEQUENCE read
+            # ctx.get("row_index", 0) and returned start+0 for every row. Party
+            # Number, a required UNIQUE key, would have shipped NXT000001 on all
+            # 5,489 rows while the preview showed a correct running sequence. And it
+            # has to be global, not chunk-local, or the numbering restarts every
+            # 20,000 rows and the 18 sheets that reference it stop agreeing.
             col_values = [
                 apply_pipeline(rules, (src_vals[i] if src_vals is not None else ""),
-                               row=records[i], ctx=_rule_ctx)
+                               row=_RowWithTargets(records[i], out_cols, i),
+                               ctx={**_rule_ctx, "row_index": row_offset + i})
                 for i in range(n_rows)
             ]
         elif has_src:
@@ -455,7 +530,8 @@ def _transform_frame(
                 if records is None:
                     records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
                 col_values = [apply_pipeline([_ov["rule"]], col_values[i],
-                                             row=records[i], ctx=_rule_ctx)
+                                             row=_RowWithTargets(records[i], out_cols, i),
+                                             ctx={**_rule_ctx, "row_index": row_offset + i})
                               for i in range(n_rows)]
         out_cols[tgt.field_name] = col_values
         lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
@@ -642,7 +718,7 @@ async def build_converted_dataframe(
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx, _city_idx, _city_case)
+                _obj_name_for_overlay, _self_idx, _city_idx, _city_case, start)
             parts.append(odf)
             if not lin0:
                 lin0 = lin
@@ -980,6 +1056,7 @@ from app.services.supplier_fbdi_layout import (  # noqa: E402
     norm_hdr as _norm_hdr,
     customer_csv_name_for as _customer_csv_name,
     customer_load_sequence as _customer_sequence,
+    customer_in_load_scope as _customer_in_scope,
     csv_name_for as _csv_name_for,
     zip_name_for as _zip_name_for,
 )
@@ -1034,6 +1111,50 @@ _CONTROL_DEFAULTS: dict[str, str] = {
     "insert update flag": "I",
     "create or update record": "1",
 }
+
+
+def _by_a_person(m) -> bool:
+    """Did a PERSON make this decision, as opposed to the learning engine?
+
+    The same line drawn in the strategy overlay and in ``learning_service._eligible``.
+    An engine-applied default is a suggestion; it must not be able to force a value
+    onto a sheet, or a seeded row re-populates the very fields the analyst has been
+    clearing. A row with no recorded approver counts as NOT a person, because reading
+    those as human approvals is what let seeded mappings outrank the analyst before.
+    """
+    who = str(getattr(m, "approved_by", "") or "").strip()
+    return bool(who) and who != "learning-engine"
+
+
+def analyst_default(m) -> str | None:
+    """The default value THE ANALYST typed on this mapping row, or None.
+
+    Module-level and pure so the rule can be tested directly. It decides whether a
+    constant reaches the file, whether an otherwise-empty interface sheet is written
+    with rows at all, and whether the generated linkage may overwrite the column —
+    three separate 31-Jul issues turn on it.
+    """
+    dv = getattr(m, "default_value", None)
+    if dv is None or not str(dv).strip():
+        return None
+    if (getattr(m, "status", "") or "") not in ("approved", "overridden"):
+        return None
+    return str(dv) if _by_a_person(m) else None
+
+
+def analyst_keeps_blank(m) -> bool:
+    """Keep blank: not_applicable with the default cleared, decided by a person.
+
+    not_applicable WITH a default means "populate with this constant" (Invoice Match
+    Option = Receipt), which is the opposite instruction — so the cleared default is
+    load-bearing, not incidental.
+    """
+    if (getattr(m, "status", "") or "") != "not_applicable":
+        return False
+    dv = getattr(m, "default_value", None)
+    if dv is not None and str(dv).strip():
+        return False
+    return _by_a_person(m)
 
 
 def _header_label(f) -> str:
@@ -1343,11 +1464,17 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # sees (Issue #2). use_ai=False keeps generation off the model path (fast); the
     # reported fields are curated/control defaults, so they're covered.
     _eff_defaults: dict = {}
+    _eff_scopes: dict = {}
     try:
         from app.services.defaults_service import compute_effective_defaults
-        _eff_defaults = (await compute_effective_defaults(conversion, use_ai=False)).get("defaults", {}) or {}
+        _eff = await compute_effective_defaults(conversion, use_ai=False)
+        _eff_defaults = _eff.get("defaults", {}) or {}
+        # Which sheets each default may touch. Without this a default captured on
+        # one sheet reached every sheet with a column of the same name.
+        _eff_scopes = _eff.get("scopes", {}) or {}
     except Exception:  # noqa: BLE001 — defaults are best-effort; never block generation
         _eff_defaults = {}
+        _eff_scopes = {}
 
     fmt = fmt.lower()
     out_dir = settings.output_path / f"conversion_{conversion.id}"
@@ -1417,6 +1544,108 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         wanted.discard(None)
         return route_frame(wanted, _src_frames, df)
 
+    # ── Per-sheet analyst decisions ─────────────────────────────────────────
+    # The transformed frame is keyed by FIELD NAME (`out_cols[tgt.field_name]`), so
+    # every interface sheet reads the same single column per name. Oracle repeats
+    # field names across sheets constantly, which makes a per-sheet decision
+    # impossible to express in that frame: one sheet's default is applied to all of
+    # them, and where two sheets disagree the later mapping silently wins.
+    #
+    # Both halves were reported on 31-Jul, from opposite ends:
+    #   "Role Type … set … for both target sheets, however it only reflects in the
+    #    HZ_IMP_ACCTCONTACTS_T sheet and not in HZ_IMP_CONTACTROLES"   (too narrow)
+    #   "Insert Update Indicator was set … as I … However it should only reflect in
+    #    the RA_CUSTOMER_PROFILES_INT_ALL sheet"                        (too wide)
+    #
+    # MappingSuggestion rows are already per-sheet — target_field_id belongs to one
+    # sheet — so the decision exists; only the frame could not carry it. Rather than
+    # re-key the whole frame (which every other path depends on), each sheet's own
+    # rows are re-applied to that sheet's finished frame. Last write, per sheet.
+    _mbyfield: dict = {}
+    for _tid, _m in _best_m.items():
+        _mbyfield[_tid] = _m
+
+    _analyst_default = analyst_default
+    _analyst_keeps_blank = analyst_keeps_blank
+
+    def _sheet_decisions(sfields: list) -> tuple[dict, set]:
+        """(field_name -> constant to write, {field names the analyst decided}).
+
+        The second half is what protects a column from the linkage glue, which used
+        to overwrite Batch Identifier, Party Original System, Customer Account
+        Source System and Account Site Source System unconditionally.
+        """
+        consts: dict = {}          # field_name -> (value, fill_blank_only)
+        decided: set = set()
+        for f in sfields:
+            m = _mbyfield.get(f.id)
+            if m is None:
+                continue
+            if _analyst_keeps_blank(m):
+                consts[f.field_name] = ("", False)
+                decided.add(f.field_name)
+                continue
+            dv = _analyst_default(m)
+            has_src = bool((m.source_column or "").strip())
+            if dv is not None:
+                # A default alongside a mapped column is a FALLBACK for the rows the
+                # source leaves empty — overwriting a real mapped value with it is
+                # the eBOS "Address Name shows city in the UI, ships PRIMARY" bug.
+                consts[f.field_name] = (dv, has_src)
+                decided.add(f.field_name)
+            elif has_src and (m.status or "") in ("approved", "overridden"):
+                decided.add(f.field_name)
+        return consts, decided
+
+    class _Scope:
+        __slots__ = ("sheets", "exclude_sheets")
+
+        def __init__(self, d: dict):
+            self.sheets = list(d.get("sheets") or [])
+            self.exclude_sheets = list(d.get("exclude_sheets") or [])
+
+    def _eff_for_sheet(sfields: list) -> dict:
+        """The effective defaults allowed on THIS sheet.
+
+        Same ``sheet_allowed`` the matcher and the learning library use — one
+        resolver, so the screen, the library and the file cannot drift apart.
+        A default with no recorded scope reaches every sheet, which is the
+        behaviour every existing row was captured under.
+        """
+        if not _eff_scopes:
+            return _eff_defaults
+        name = _sheet_name_of(sfields)
+        try:
+            from app.services.learning_service import sheet_allowed
+        except Exception:  # noqa: BLE001
+            return _eff_defaults
+        return {k: v for k, v in _eff_defaults.items()
+                if k not in _eff_scopes or sheet_allowed(_Scope(_eff_scopes[k]), name)}
+
+    def _sheet_name_of(sfields: list) -> str | None:
+        for f in sfields:
+            sid = getattr(f, "sheet_id", None)
+            if sid is not None and sid in _sheet_name_by_id:
+                return _sheet_name_by_id[sid]
+        return None
+
+    _sheet_name_by_id = {s.id: s.sheet_name for s in sheets}
+
+    def _apply_sheet_decisions(sdf: pd.DataFrame, sfields: list) -> pd.DataFrame:
+        consts, _ = _sheet_decisions(sfields)
+        if not consts or len(sdf) == 0:
+            return sdf
+        for fname, (val, blank_only) in consts.items():
+            if fname not in sdf.columns:
+                continue
+            if blank_only:
+                cur = sdf[fname].astype(str).str.strip()
+                sdf[fname] = [val if cur.iat[i] in ("", "nan", "None") else sdf[fname].iat[i]
+                              for i in range(len(sdf))]
+            else:
+                sdf[fname] = val
+        return sdf
+
     def _finalize(sfields: list) -> pd.DataFrame:
         # Req 8 — exactly this sheet's interface columns, in sequence, blanks
         # where unmapped, no instruction rows. Data ops (date reformat, control
@@ -1431,8 +1660,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
         sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys | _strategy_blanks,
-                                      effective=_eff_defaults,
+                                      effective=_eff_for_sheet(sfields),
                                       explicitly_mapped=explicitly_mapped_keys)
+        # THIS sheet's own analyst decisions, re-applied after the shared frame and
+        # the control defaults. The frame is keyed by field name and cannot hold a
+        # per-sheet decision; these rows can, and they are the analyst speaking
+        # directly, so they outrank both the control table and the effective
+        # defaults. See _sheet_decisions.
+        sdf = _apply_sheet_decisions(sdf, sfields)
         # Cross-column strategy rules need the finished frame (see
         # strategy_overlay.apply_frame_rules) — e.g. blank Alternate Name where it
         # duplicates Supplier Name. Runs AFTER control defaults so a default that
@@ -1500,13 +1735,25 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         except Exception:  # noqa: BLE001
             return []
 
-    def _cust_apply(frame) -> None:
+    def _cust_apply(frame, sheet_name: str | None = None,
+                    sfields: list | None = None) -> None:
         if not _is_customer or not _ref_cache:
             return
         try:
             from app.services.customer_structure_service import apply_to_frame
+            # Columns the analyst decided on THIS sheet are off limits to the glue.
+            # The glue generates the linkage no source system supplies; it is not a
+            # licence to overwrite a value a person typed. Four 31-Jul issues —
+            # Batch Identifier after Keep blank, and the NETSUITE defaults on Party
+            # Original System / Customer Account Source System / Account Site Source
+            # System — were this one line missing.
+            _prot: set = set()
+            if sfields:
+                _, _prot = _sheet_decisions(sfields)
+                _prot = {_header_label(f) for f in sfields if f.field_name in _prot} | _prot
             apply_to_frame(frame, source_system=_cust_src, batch_id=_cust_batch,
-                           ref=_ref_cache, level="account")
+                           ref=_ref_cache, level="account",
+                           sheet_name=sheet_name, protected=_prot)
         except Exception:  # noqa: BLE001
             pass
 
@@ -1534,6 +1781,20 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         tid for tid, m in _best_m.items()
         if getattr(m, "source_column", None) and (m.status not in ("not_applicable", "rejected"))
     }
+    # A field the ANALYST gave a constant to is content too. Requiring a source
+    # column meant a sheet whose whole contribution is constants was written
+    # headers-only — zero rows — and a default written onto zero rows is invisible.
+    # That is the shape of three 31-Jul issues: Role Type = CONTACT reached
+    # HZ_IMP_ACCTCONTACTS_T (which has mapped columns) and not HZ_IMP_CONTACTROLES
+    # (which does not); Relationship Type and Relationship Code reached neither
+    # HZ_IMP_RELSHIPS_T nor HZ_IMP_ACCOUNTRELS.
+    #
+    # Person-set only, deliberately: an engine-seeded default must not be able to
+    # switch an optional interface back on, or the 19-sheets-of-linkage-glue problem
+    # this suppression exists to prevent returns through the back door.
+    _analyst_const_field_ids = {
+        tid for tid, m in _best_m.items() if analyst_default(m) is not None
+    }
 
     def _sheet_carries_data(s) -> bool:
         if not _suppress_optional:
@@ -1541,9 +1802,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         key = re.sub(r"[^a-z0-9]", "", (s.sheet_name or "").lower())
         if key in _backbone_keys:
             return True
-        # An optional child table emits data only when a real source column is
-        # actually mapped into it; otherwise it's written headers-only (empty tab).
-        return any(f.id in _mapped_field_ids for f in fields_by_sheet.get(s.id, []))
+        # An optional child table emits data when a real source column is mapped into
+        # it, OR when the analyst has typed a constant for one of its fields;
+        # otherwise it's written headers-only (empty tab).
+        return any(f.id in _mapped_field_ids or f.id in _analyst_const_field_ids
+                   for f in fields_by_sheet.get(s.id, []))
 
     def _headers_only(sfields: list) -> pd.DataFrame:
         cols = _dedup([_header_label(f) for f in sfields])
@@ -1615,7 +1878,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for s in sheets_with_fields:
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
-                        _cust_apply(sdf)
+                        _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
                     frames[s.sheet_name] = sdf
@@ -1642,7 +1905,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                     for s in sheets_with_fields:
                         if _sheet_carries_data(s):
                             sdf = _finalize(fields_by_sheet[s.id])
-                            _cust_apply(sdf)
+                            _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
                         else:
                             sdf = _headers_only(fields_by_sheet[s.id])
                         # NO supplier CSV layout here. The two outputs follow
@@ -1682,7 +1945,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for s in sheets_with_fields:
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
-                        _cust_apply(sdf)
+                        _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
                     sdf = _apply_supplier_layout(sdf, s.sheet_name)
@@ -1701,14 +1964,31 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             import zipfile as _zip
             name = f"CustomerImport_{ts}.zip"
             path = out_dir / name
+            # 15 of the template's 19 interfaces. Tejaswini, 31-Jul: "they are
+            # working on 15 files only, mentioned in the sheet, so we do not have to
+            # generate all of the 19 FBDI output files." The four dropped are named
+            # in the spec file with their reason, and logged here — a deliverable
+            # that quietly got smaller is worse than one that says so.
+            _in_scope = [s for s in _customer_sheet_sort(sheets_with_fields)
+                         if _customer_in_scope(s.sheet_name)]
+            _dropped = [s.sheet_name for s in sheets_with_fields
+                        if not _customer_in_scope(s.sheet_name)]
+            if _dropped:
+                log.info("Customer package: %d of %d interfaces written; not loaded "
+                         "by this client: %s", len(_in_scope), len(sheets_with_fields),
+                         ", ".join(sorted(_dropped)))
             with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
-                for _i, s in enumerate(_customer_sheet_sort(sheets_with_fields), 1):
+                for _i, s in enumerate(_in_scope, 1):
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
-                        _cust_apply(sdf)
+                        _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
-                    sdf = _apply_customer_layout(sdf, s.sheet_name, for_csv=True)
+                    # V2_2 of the sequence workbook spells the terminator out: every
+                    # one of the 15 CSV columns now ends with an explicit END row.
+                    # The supplier package has always written it; this one never did.
+                    sdf = _apply_customer_layout(sdf, s.sheet_name, for_csv=True,
+                                                 with_end=True)
                     cbase = _customer_csv_name(s.sheet_name) or _safe_sheet_name(s.sheet_name)
                     # Numbered so the load ORDER survives a directory listing — the
                     # sequence is part of the deliverable, and an analyst unzipping
@@ -1728,7 +2008,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for i, s in enumerate(sheets_with_fields, 1):
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
-                        _cust_apply(sdf)
+                        _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
                     sdf = _apply_supplier_layout(sdf, s.sheet_name)
