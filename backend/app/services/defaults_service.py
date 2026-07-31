@@ -124,6 +124,16 @@ async def _ai_infer_defaults(target_object: str, fields: list[dict]) -> dict[str
         return {}
 
 
+async def _template_object(conversion) -> str | None:
+    """The template's own business_object spelling, or None."""
+    try:
+        from app.models.fbdi import FBDITemplate
+        tpl = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
+        return (getattr(tpl, "business_object", None) or None) if tpl else None
+    except Exception:                                           # noqa: BLE001
+        return None
+
+
 async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True) -> dict:
     """Return effective defaults for every unmapped target field of a conversion.
 
@@ -151,6 +161,16 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     ).to_list()
     by_fid = {m.target_field_id: m for m in maps}
     target_object = conversion.target_object or ""
+    # ONE OBJECT KEY. A learning is WRITTEN under the template's business_object and
+    # was READ here under the conversion's target_object with exact string equality —
+    # so where those spellings differ the row is filed where nobody looks. The
+    # generator uses the write key, so the value reached the FBDI file while being
+    # invisible on this screen: a correct fix looking broken, which invites re-fixing
+    # something that is not wrong.
+    from app.services.learning_service import object_keys_for_object
+    _obj_keys = sorted(set(object_keys_for_object(target_object)) |
+                       set(object_keys_for_object(
+                           (await _template_object(conversion)) or "")))
 
     # The same three sources output_service consults, resolved the same way, so the
     # screen and the file can no longer disagree about what is blank.
@@ -177,8 +197,7 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
             from app.services.client_service import client_id_for_conversion, scope_query
             _sc = await scope_query(await client_id_for_conversion(conversion))
             async for lm in LearnedMapping.find(
-                LearnedMapping.kind == "suppress_field",
-                LearnedMapping.target_object == target_object,
+                {"kind": "suppress_field", "target_object": {"$in": _obj_keys}},
                 _sc,
             ):
                 if lm.target_field:
@@ -213,11 +232,19 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     if target_object:
         from app.services.client_service import client_id_for_conversion, scope_query
         _scope = await scope_query(await client_id_for_conversion(conversion))
-        async for lm in LearnedMapping.find(
-            LearnedMapping.kind == "example_default",
-            LearnedMapping.target_object == target_object,
+        # ORDERED. This was a plain loop with no sort, so the LAST row in Mongo
+        # natural order won — and _upsert updates in place, so an edited (newer)
+        # learning keeps its original early position and loses to any later-inserted
+        # competitor. That is a concrete "I updated the default and the screen still
+        # shows the old one". The engine ranks by effective date; so does this now,
+        # applied oldest-first so the newest write lands last and wins.
+        from app.services.learning_service import _effective_of
+        _rows = await LearnedMapping.find(
+            {"kind": "example_default", "target_object": {"$in": _obj_keys}},
             _scope,
-        ):
+        ).to_list()
+        _rows.sort(key=_effective_of)
+        for lm in _rows:
             if lm.target_field and lm.resolved_value:
                 learned[_norm(lm.target_field)] = lm.resolved_value
                 _only = [s for s in (getattr(lm, "sheets", None) or []) if str(s).strip()]
@@ -272,10 +299,11 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
             defaults[c["norm"]] = v
             detail.append({"field": c["norm"], "label": c["label"], "value": v, "source": "ai"})
             # Cache as reusable example_default (instant + consistent next time).
+            # Look under EVERY spelling this object answers to, or the AI cache
+            # writes a second row under the other one and the two then compete.
             exists = await LearnedMapping.find_one(
-                LearnedMapping.kind == "example_default",
-                LearnedMapping.target_object == target_object,
-                LearnedMapping.target_field == c["label"],
+                {"kind": "example_default", "target_object": {"$in": _obj_keys},
+                 "target_field": c["label"]},
                 include_deleted=True,
             )
             # A retired default must stay retired — don't let the AI cache

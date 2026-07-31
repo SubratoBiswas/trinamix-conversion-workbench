@@ -46,9 +46,50 @@ async def create_learned(
     payload: LearnedMappingCreate,
     user: User = Depends(get_current_user),
 ):
-    item = LearnedMapping(**payload.model_dump(), captured_by=user.email)
+    data = payload.model_dump()
+    # A learning added by hand is effective NOW — the precedence is "the last mapping
+    # with respect to date is final", and a row with no date falls back to captured_at,
+    # which every startup seed re-stamps.
+    data.setdefault("effective_date", datetime.utcnow())
+    item = LearnedMapping(**data, captured_by=user.email)
     await item.insert()
-    return _serialize(item)
+    out = _serialize(item)
+    try:
+        out["propagation"] = await _reapply_learning(item, user.email)
+    except Exception as exc:  # noqa: BLE001 — never fail the save on the fan-out
+        out["propagation"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    return out
+
+
+async def _reapply_learning(item: LearnedMapping, actor: str) -> dict:
+    """Push a learning edited or added HERE onto the conversions it applies to.
+
+    PATCH and POST were a bare ``await item.set(...)`` / ``insert()``: editing a rule
+    in the Learning Centre reached NO conversion at all, not even a stale mark. The
+    library and the files silently drifted apart, and the only way to find out was to
+    regenerate and read the output.
+
+    Propagation needs an origin conversion to resolve client and source scope from.
+    Any conversion of the same object will do — they are the population the learning
+    applies to — so the most recently updated one is used. With none, there is
+    nothing to propagate to and that is reported rather than hidden.
+    """
+    from app.services.learning_service import (
+        object_keys_for_object, propagate_learning_to_open_conversions)
+    keys = set(object_keys_for_object(item.target_object))
+    if not keys or not item.target_field:
+        return {"conversions": 0, "mappings": 0, "note": "learning has no object/field"}
+    convs = [c for c in await Conversion.find_all().to_list()
+             if (c.target_object or "") in keys and c.template_id]
+    if not convs:
+        return {"conversions": 0, "mappings": 0,
+                "note": f"no conversion currently targets {item.target_object!r}"}
+    convs.sort(key=lambda c: getattr(c, "updated_at", None) or datetime.min, reverse=True)
+    # skip_origin=False: the edit came from the LIBRARY, not from one conversion's
+    # screen, so there is no conversion that is "already correct" — the newest one is
+    # borrowed purely to resolve client and source scope, and it must be updated too.
+    return await propagate_learning_to_open_conversions(
+        item, convs[0], captured_by=actor, skip_origin=False)
 
 
 @router.get("", response_model=list[LearnedMappingOut])
@@ -70,7 +111,13 @@ async def list_learned(
     if project_id:
         filters.append(LearnedMapping.project_id == PydanticObjectId(project_id))
     if target_object:
-        filters.append(LearnedMapping.target_object == target_object)
+        # Every spelling this object answers to. Written under the template's
+        # business_object and asked for here under the conversion's target_object,
+        # compared with exact equality, a learning is filed where nobody looks — and
+        # the generator uses the write key, so the value reaches the file while the
+        # screen shows nothing.
+        from app.services.learning_service import object_keys_for_object
+        filters.append({"target_object": {"$in": object_keys_for_object(target_object)}})
     # Client scope: 'global' → only global rows; a client id → that client + global.
     if client_id == "global":
         filters.append({"is_global": True})
@@ -96,7 +143,13 @@ async def list_learned(
         except Exception:
             raise HTTPException(400, "Invalid client_id")
     query = LearnedMapping.find(*filters)
-    items = await query.sort("-captured_at").to_list()
+    items = await query.to_list()
+    # Sorted by the SAME date the engine ranks on. captured_at is re-stamped by every
+    # startup seed, so a seeded row with an ancient effective_date sorted to the top
+    # of this list while ranking LAST in the engine — the list and the file disagreeing
+    # about which instruction is current, which is the whole complaint.
+    from app.services.learning_service import _effective_of
+    items.sort(key=_effective_of, reverse=True)
 
     if q:
         needle = q.strip().lower()
@@ -549,9 +602,17 @@ async def update_learned(
         raise HTTPException(404, "Not found")
     updates = payload.model_dump(exclude_unset=True)
     if updates:
+        # Editing it is stating it again, today.
+        updates.setdefault("effective_date", datetime.utcnow())
         await item.set(updates)
         item = await LearnedMapping.find_one(_q, include_deleted=True)
-    return _serialize(item)
+    out = _serialize(item)
+    if updates:
+        try:
+            out["propagation"] = await _reapply_learning(item, "learning-centre")
+        except Exception as exc:  # noqa: BLE001
+            out["propagation"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    return out
 
 
 @router.delete("/{learned_id}")

@@ -288,14 +288,32 @@ async def _upsert(*, kind, category, original_value, resolved_value,
     # source_erp is part of the identity: the same target field is fed by a
     # different column depending on which legacy system the extract came from,
     # so NetSuite's Item rule and SyteLine's must be two rows, not one.
+    # ONE ANSWER PER FIELD for the kinds that HAVE one answer. The key used to
+    # include rule_type, and the loop below then matched on original_value — so
+    # changing the source column, or adding a transform, matched nothing and INSERTED
+    # a second learning while the old one stayed live and competing. "I updated the
+    # mapping" reliably produced two rules and a coin toss.
+    #
+    # Analyst, 31-Jul: "the last mapping with respect to date should be considered
+    # final". Two live rows for one field cannot express that, so for these kinds the
+    # row is found by (object, field, client, source) alone and UPDATED in place —
+    # source column, transform and all.
+    #
+    # crosswalk and value maps are deliberately excluded: those are one row per source
+    # VALUE, so original_value is part of their identity and collapsing them would
+    # destroy the map.
+    _SINGLE_ANSWER = {"column_mapping", "example_default", "suppress_field",
+                      "reference_standard"}
+    _single = kind in _SINGLE_ANSWER
     query = {
         "kind": kind,
         "target_object": target_object,
         "target_field": target_field,
-        "rule_type": rule_type,
         "client_id": client_id,
         "source_erp": source_erp,
     }
+    if not _single:
+        query["rule_type"] = rule_type
     norm_orig = _normalize(original_value)
     # include_deleted=True is LOAD-BEARING. LearnedMapping.find injects
     # {'is_deleted': {'$ne': True}}, so without it a tombstoned row is invisible
@@ -304,8 +322,12 @@ async def _upsert(*, kind, category, original_value, resolved_value,
     # analyst deleted, on the next approve / default / rule save that touches the
     # field. Third instance of CW #5, this time on the interactive path.
     existing = await LearnedMapping.find(query, include_deleted=True).to_list()
+    if _single and existing:
+        # Newest first, so an edit lands on the row the engine would have picked
+        # rather than on whichever happened to be inserted first.
+        existing.sort(key=_effective_of, reverse=True)
     for lm in existing:
-        if _normalize(lm.original_value) == norm_orig:
+        if _single or _normalize(lm.original_value) == norm_orig:
             if getattr(lm, "is_deleted", False) and not revive:
                 # User retired this learning — respect that and do not resurrect.
                 return None
@@ -316,6 +338,12 @@ async def _upsert(*, kind, category, original_value, resolved_value,
                 "project_id": project_id, "client_id": client_id, "is_global": False,
                 "source_erp": source_erp,
             }
+            if _single:
+                # The changed parts. Without these the row kept its OLD source column
+                # and transform while reporting itself as freshly captured.
+                patch.update({"original_value": original_value,
+                              "rule_type": rule_type,
+                              "effective_date": datetime.utcnow()})
             if sheets is not None:
                 patch["sheets"] = list(sheets)
             if revive and getattr(lm, "is_deleted", False):
@@ -329,6 +357,10 @@ async def _upsert(*, kind, category, original_value, resolved_value,
         project_id=project_id, captured_from=captured_from, captured_by=captured_by,
         client_id=client_id, is_global=False, source_erp=source_erp,
         sheets=list(sheets) if sheets is not None else [],
+        # An interactively captured decision is effective NOW. Without a date it
+        # falls back to captured_at, which every redeploy re-stamps on seeded rows —
+        # so a startup seed would out-rank the analyst after any restart.
+        effective_date=datetime.utcnow(),
     )
     await lm.insert()
     return lm
@@ -462,27 +494,41 @@ ANALYST_APPROVED = "analyst-approved"
 
 async def propagate_learning_to_open_conversions(
     lm: "LearnedMapping", origin: Conversion, *, captured_by: str | None = None,
+    skip_origin: bool = True,
 ) -> dict:
-    """Push one analyst correction onto the conversions that already exist.
+    """Push one analyst decision onto every conversion it applies to — by DATE.
 
-    Analyst, 30-Jul: "any rule or correction I make apply in learning so that it will be
-    available for all current and future conversions". Capturing the learning already
-    covered FUTURE conversions — they read the library when they are created. The ones
-    that already exist did not, so a correction made today reached everything except the
-    work in front of you, which is the case that matters most.
+    THE RULE, as the analyst stated it on 31-Jul: "the mapping file will provide the
+    initial mapping, the gold standard the initial reference for output, but after
+    conversion if the user wants to change any mapping, remove etc, the tool should
+    apply it and update or include the learning center. THE LAST MAPPING WITH RESPECT
+    TO DATE SHOULD BE CONSIDERED FINAL, and existing and new conversions should map
+    and generate output according to that."
 
-    What it will and will not touch, deliberately:
-      * still-suggested mappings, and mappings the ENGINE auto-approved -> updated.
-      * anything a PERSON approved or overrode -> left exactly as it is. Two analysts
-        can disagree; a library entry must not silently overwrite a colleague's
-        decision. They see it as a suggestion on the next review instead.
-      * the origin conversion itself -> skipped, it is already correct.
+    That replaces what this function used to do. It used to skip ANY mapping a person
+    had approved or overridden, forever — the reasoning being that a library entry
+    must not overwrite a colleague's decision. The effect was that in a conversion the
+    analyst had already worked through, which is most of them, a correction reached
+    almost nothing; "apply to all existing conversions" was never what happened, and
+    nothing said so.
+
+    Now the comparison is a DATE, in both directions and for everyone:
+
+      * a person's decision made AFTER this instruction stands — they spoke last;
+      * a person's decision made BEFORE it is superseded — the instruction is the
+        later statement of the same intent, which is exactly what "I changed my mind"
+        means;
+      * an engine-applied mapping never outranks anything.
+
+    An undated decision is treated as OLDER than a dated instruction. A row with no
+    approved_at cannot be shown to have come later, and the alternative — reading it
+    as newer — is the behaviour that made corrections vanish.
 
     Affected outputs are marked stale rather than regenerated: the file on disk no
     longer matches the rules that would now run, and saying so is honest where
     regenerating dozens of files behind the analyst's back is not.
     """
-    from app.models.fbdi import FBDIField
+    from app.models.fbdi import FBDIField, FBDISheet
     from app.services.client_service import client_id_for_conversion
 
     if lm is None or not lm.target_field:
@@ -492,15 +538,30 @@ async def propagate_learning_to_open_conversions(
         return {"conversions": 0, "mappings": 0, "stale_outputs": 0}
     cid = await client_id_for_conversion(origin)
     src = await source_erp_for_conversion(origin)
+    as_of = _effective_of(lm)
+    _keys = {_normalize(k) for k in object_keys_for_object(business_object)}
 
-    touched_convs = touched_maps = staled = 0
+    touched_convs = touched_maps = staled = skipped_newer = 0
     now = datetime.utcnow()
     for conv in await Conversion.find_all().to_list():
-        if conv.id == origin.id or not conv.template_id:
+        # The origin is skipped when the edit came from ITS screen — it is already
+        # correct. When the edit came from the Learning Centre there is no origin in
+        # that sense, only a conversion borrowed to resolve client/source scope, and
+        # skipping it would leave one conversion silently un-updated.
+        if (skip_origin and conv.id == origin.id) or not conv.template_id:
             continue
-        if await _business_object_for(conv) != business_object:
+        # Object match on the NORMALISED key, and against every spelling this object
+        # answers to. A bare != on the raw string made two conversions of the same
+        # real object invisible to each other whenever the template's
+        # business_object and the conversion's target_object disagreed by so much as
+        # a space.
+        if _normalize(await _business_object_for(conv)) not in _keys:
             continue
-        if await client_id_for_conversion(conv) != cid:
+        # Client scope: a row nobody tagged is not another tenant's, so it is in
+        # scope. A strict != skipped EVERY conversion whenever either side was
+        # untagged, which is the shape that made a whole reseed report zeros.
+        cconv = await client_id_for_conversion(conv)
+        if cid is not None and cconv is not None and cconv != cid:
             continue
         # Source-system scope, same rule the apply pass uses: a SyteLine conversion
         # must not inherit a NetSuite correction.
@@ -511,22 +572,55 @@ async def propagate_learning_to_open_conversions(
         ids = {f.id for f in fields if _norm_field(f.field_name) == _norm_field(lm.target_field)}
         if not ids:
             continue
+        # Sheet scope. record_learning_from_mapping writes sheets=[...] on a default
+        # precisely so it stays on the sheet it was set on, and this loop matched by
+        # field NAME across every sheet in the template — so propagation was strictly
+        # wider than what the readers would then honour. Two layers, two answers.
+        _sheet_of: dict = {}
+        if getattr(lm, "sheets", None) or getattr(lm, "exclude_sheets", None):
+            _sheets = {sh.id: sh.sheet_name for sh in await FBDISheet.find(
+                FBDISheet.template_id == conv.template_id).to_list()}
+            _sheet_of = {f.id: _sheets.get(getattr(f, "sheet_id", None)) for f in fields}
+            ids = {i for i in ids if sheet_allowed(lm, _sheet_of.get(i))}
+            if not ids:
+                continue
+        # The source column this instruction names has to EXIST in this conversion's
+        # extract, or propagation points a mapping at a column that is not there —
+        # which reads as mapped on screen and produces nothing in the file.
+        _src_ok = True
+        if lm.kind == "column_mapping" and lm.original_value:
+            _cols = await _dataset_columns_for(conv)
+            if _cols is not None:
+                _src_ok = _normalize(lm.original_value) in _cols
+        if not _src_ok:
+            continue
         hit = False
         for m in await MappingSuggestion.find(
                 MappingSuggestion.conversion_id == conv.id).to_list():
             if m.target_field_id not in ids:
                 continue
             approver = (getattr(m, "approved_by", None) or "")
-            if m.status in ("overridden",) or (
-                    m.status == "approved" and approver != "learning-engine"):
-                continue        # a person decided this — leave it alone
+            _by_person = bool(approver) and approver != "learning-engine"
+            if _by_person:
+                _when = getattr(m, "approved_at", None)
+                # Their word stands only while it is the LATER one.
+                if _when is not None and as_of is not None and _when > as_of:
+                    skipped_newer += 1
+                    continue
             patch = {"status": "approved", "review_required": 0,
                      "approved_by": "learning-engine", "approved_at": now}
             if lm.kind == "column_mapping" and lm.original_value:
                 patch["source_column"] = lm.original_value
             elif lm.kind == "example_default":
                 patch["default_value"] = lm.resolved_value
-            if lm.rule_type:
+            elif lm.kind == "suppress_field":
+                # "Remove this mapping" is a decision like any other and had NO
+                # branch here at all — a suppression set status=approved and left the
+                # source column in place, i.e. it did the opposite of what it said.
+                patch.update({"status": "not_applicable", "source_column": None,
+                              "default_value": None,
+                              "suggested_transformation": None})
+            if lm.rule_type and lm.kind != "suppress_field":
                 patch["suggested_transformation"] = {
                     "rule_type": lm.rule_type, "config": lm.rule_config or {}}
             await m.set(patch)
@@ -541,7 +635,51 @@ async def propagate_learning_to_open_conversions(
             staled += int(getattr(res, "modified_count", 0) or 0)
     return {"conversions": touched_convs, "mappings": touched_maps,
             "stale_outputs": staled, "target_field": lm.target_field,
+            "skipped_newer_decision": skipped_newer,
+            "as_of": as_of.isoformat() if as_of else None,
             "captured_by": captured_by}
+
+
+async def _dataset_columns_for(conv) -> set | None:
+    """Normalised column names of a conversion's bound sources, or None if unknown.
+
+    None means "cannot tell", and the caller then does NOT filter — refusing to
+    propagate because a profile is missing would be worse than the problem.
+    """
+    try:
+        ids = [d for d in (getattr(conv, "source_dataset_ids", None) or []) if d]
+        if not ids and getattr(conv, "dataset_id", None):
+            ids = [conv.dataset_id]
+        if not ids:
+            return None
+        profs = await DatasetColumnProfile.find({"dataset_id": {"$in": ids}}).to_list()
+        if not profs:
+            return None
+        return {_normalize(p.column_name) for p in profs if p.column_name}
+    except Exception:                                           # noqa: BLE001
+        return None
+
+
+def object_keys_for_object(business_object: str | None) -> list[str]:
+    """Every spelling one business object answers to.
+
+    A learning is WRITTEN under the template's business_object and READ, in the
+    defaults layer and the Learning Centre, under the conversion's target_object.
+    Where those differ the row is filed where nobody looks — and because the
+    generator uses the write key, the value reaches the FBDI file while being
+    invisible on screen, which is the worst version: it makes a correct fix look
+    broken and invites re-fixing something that is not wrong.
+
+    Rather than migrate the stored strings, every reader asks for all of them.
+    """
+    b = (business_object or "").strip()
+    if not b:
+        return []
+    out = {b}
+    for alt in (b.replace("_", " "), b.replace(" ", "_"), b.title(), b.upper(), b.lower()):
+        if alt.strip():
+            out.add(alt.strip())
+    return sorted(out)
 
 
 def _effective_of(lm) -> datetime:

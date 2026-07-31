@@ -375,39 +375,55 @@ async def update_mapping(
     if not m:
         raise HTTPException(404, "Mapping not found")
     data = payload.model_dump(exclude_unset=True)
-    if data.get("status") == "approved":
-        data["approved_by"] = user.email
-        data["approved_at"] = datetime.utcnow()
-    elif ("default_value" in data or "source_column" in data) and \
-            (m.status or "") in ("approved", "overridden"):
-        # Editing the DEFAULT of an already-approved mapping is the analyst speaking
-        # again, and the precedence they set on 30-Jul is "whichever is latest".
-        # exclude_unset means status is absent on this call, so the stamps were left
-        # at the ORIGINAL approval — an edit made today could lose to a rule file
-        # dated yesterday, and the generator's date test would be reading a
-        # timestamp that no longer describes when the decision was made.
+    # ANY deliberate edit is the analyst deciding, and it is dated NOW. The precedence
+    # they set is "the last mapping with respect to date is final", which only works
+    # if every decision carries the date it was actually made. exclude_unset means
+    # `status` is absent when someone edits a column or a default without re-pressing
+    # Approve, so the stamps used to stay at the ORIGINAL approval — an edit made
+    # today could lose to a rule file dated yesterday.
+    _DECISION_FIELDS = {"source_column", "default_value", "status",
+                        "suggested_transformation"}
+    _is_decision = bool(_DECISION_FIELDS & set(data))
+    if _is_decision:
         data["approved_by"] = user.email
         data["approved_at"] = datetime.utcnow()
     await m.set(data)
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
-    # Learn on save when the analyst has made a decision: a source column OR an
-    # explicit default. The default-only case used to be dropped here, so
-    # "Default values" stayed empty in the Learning Centre until a Generate ran
-    # (QA issue #7).
-    if m.status in ("approved", "overridden") and (
-        m.source_column or (m.default_value and str(m.default_value).strip())
-    ):
+    # LEARN ON ANY DELIBERATE EDIT — not only on an approved one.
+    #
+    # This used to require status in (approved, overridden), and `status` is absent
+    # from the payload unless the UI sends it. So changing the source column of a row
+    # still sitting in "suggested" and saving captured NOTHING: the conversion in
+    # front of the analyst was right, the library never heard about it, and nothing
+    # propagated. The sibling Approve endpoint had no such gate, which is why Approve
+    # propagated and Save silently did not — one screen, two behaviours.
+    #
+    # A rejected/not_applicable edit is a decision too — "remove this mapping" — and
+    # is captured through the keep-blank path, which now propagates as well.
+    _prop: dict | None = None
+    if _is_decision and (m.source_column
+                         or (m.default_value and str(m.default_value).strip())):
         _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
         if _lm is not None:
             try:
                 from app.services.learning_service import (
                     propagate_learning_to_open_conversions)
-                await propagate_learning_to_open_conversions(
+                _prop = await propagate_learning_to_open_conversions(
                     _lm, conv, captured_by=user.email)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 log.exception("propagating the saved learning failed for %s", mapping_id)
-    return (await enrich_mapping_with_samples(conv, [m]))[0]
+                # NOT silent. Both call sites swallowed this and returned 200 with a
+                # normal payload, so a propagation that threw and one that reached 12
+                # conversions looked identical to the analyst.
+                _prop = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    out = (await enrich_mapping_with_samples(conv, [m]))[0]
+    if _prop is not None:
+        try:
+            out["propagation"] = _prop
+        except Exception:  # noqa: BLE001 — a non-dict response shape must not break
+            pass
+    return out
 
 
 class ValueMapPair(BaseModel):
@@ -507,6 +523,7 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
     await _mark_outputs_stale(m.conversion_id)
 
     learned = False
+    lm = None
     try:
         from app.models.fbdi import FBDIField
         from app.services.client_service import client_id_for_conversion
@@ -533,8 +550,26 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
     except Exception:  # noqa: BLE001 — the decision is saved either way
         log.exception("keep-blank: could not record the suppression learning")
 
+    # "Remove this mapping" is a decision like any other and has to reach the
+    # conversions that already exist. This captured the suppression and then stopped,
+    # so a field the analyst blanked here stayed populated everywhere else — the one
+    # direction where the gap is silently destructive, because the analyst has every
+    # reason to believe a blank means blank.
+    _prop: dict | None = None
+    if learned and lm is not None:
+        try:
+            from app.services.learning_service import (
+                propagate_learning_to_open_conversions)
+            _prop = await propagate_learning_to_open_conversions(
+                lm, conv, captured_by=user.email)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("keep-blank: propagating the suppression failed")
+            _prop = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+
     out = (await enrich_mapping_with_samples(conv, [m]))[0]
     out["learned_suppression"] = learned
+    if _prop is not None:
+        out["propagation"] = _prop
     return out
 
 
