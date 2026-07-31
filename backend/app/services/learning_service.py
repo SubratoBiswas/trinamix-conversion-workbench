@@ -1068,8 +1068,18 @@ async def apply_learned_to_conversion(
     _src = await source_erp_for_conversion(conversion)
     _srcq = source_scope(_src)
 
+    # Every spelling this object answers to, not one exact string. This is the LAST
+    # reader still comparing `target_object` with `==`. The Learning Centre and the
+    # defaults layer were both widened to `object_keys_for_object` when it turned out
+    # a learning is WRITTEN under the template's business_object and READ under the
+    # conversion's target_object — but this function is the one that actually puts a
+    # stored mapping onto a row, so an exact match here meant a correction filed as
+    # "Supplier Address" never reached a conversion whose object reads
+    # "Supplier_Address", and nothing on screen said the two were different objects.
+    _obj_keys = object_keys_for_object(business_object) or [business_object]
+
     def _q(kind: str) -> dict:
-        base = {"kind": kind, "target_object": business_object}
+        base = {"kind": kind, "target_object": {"$in": _obj_keys}}
         if _scope and _srcq:
             return {**base, "$and": [_scope, _srcq]}
         return {**base, **_scope, **_srcq}

@@ -32,35 +32,58 @@ def _norm(s: str) -> str:
 
 
 async def _learn(business_object, target_field, *, kind, original, resolved,
-                 rule_type=None, client_id=None):
+                 rule_type=None, client_id=None, objects=None):
     """Store a steering directive as a reusable, CLIENT-SCOPED learned rule so it
     applies to future conversions of the same object for this client (and never
-    leaks to another client)."""
+    leaks to another client).
+
+    ACROSS THE WHOLE LOAD SEQUENCE, not just the object the analyst happened to be
+    looking at. This is the half of "affect existing AND future conversions" that the
+    fan-out cannot cover. Propagation walks conversions that exist NOW; a conversion
+    created tomorrow inherits nothing from it and instead asks the library, and
+    `apply_learned_to_conversion` asks by ITS OWN business object. So a rule typed on
+    the Supplier Import screen was stored under "Supplier" alone — today's other five
+    supplier conversions were corrected by the fan-out, and next month's five were
+    not. Same instruction, right for a week, silently wrong afterwards, and no screen
+    would ever show the difference.
+
+    One row per sibling object fixes that at the point the question is asked. A row
+    written for an object whose template has no such field is inert: every reader
+    matches the target field by name against that template first.
+    """
     if not business_object or not target_field:
         return
-    # include_deleted=True: a retired steering rule is invisible to a plain
-    # find_one, so the next prompt re-created it as a duplicate. CW #5.
-    existing = await LearnedMapping.find_one(
-        LearnedMapping.kind == kind,
-        LearnedMapping.target_object == business_object,
-        LearnedMapping.target_field == target_field,
-        LearnedMapping.client_id == client_id,
-        include_deleted=True,
-    )
-    doc = {
-        "kind": kind, "category": "Steering (prompt)",
-        "original_value": str(original), "resolved_value": str(resolved),
-        "target_object": business_object, "target_field": target_field,
-        "rule_type": rule_type, "client_id": client_id, "is_global": False,
-        "captured_from": "prompt", "captured_at": datetime.utcnow(),
-    }
-    if existing:
-        # Typing the directive is an explicit user action, so it revives in place.
-        if getattr(existing, "is_deleted", False):
-            doc = {**doc, "is_deleted": False, "deleted_at": None, "deleted_by": None}
-        await existing.set(doc)
-    else:
-        await LearnedMapping(**doc).insert()
+    seen, targets = set(), []
+    for obj in [business_object, *(objects or [])]:
+        k = (obj or "").strip()
+        if k and k.lower() not in seen:
+            seen.add(k.lower())
+            targets.append(k)
+    for obj in targets:
+        # include_deleted=True: a retired steering rule is invisible to a plain
+        # find_one, so the next prompt re-created it as a duplicate. CW #5.
+        existing = await LearnedMapping.find_one(
+            LearnedMapping.kind == kind,
+            LearnedMapping.target_object == obj,
+            LearnedMapping.target_field == target_field,
+            LearnedMapping.client_id == client_id,
+            include_deleted=True,
+        )
+        doc = {
+            "kind": kind, "category": "Steering (prompt)",
+            "original_value": str(original), "resolved_value": str(resolved),
+            "target_object": obj, "target_field": target_field,
+            "rule_type": rule_type, "client_id": client_id, "is_global": False,
+            "captured_from": "prompt", "captured_at": datetime.utcnow(),
+        }
+        if existing:
+            # Typing the directive is an explicit user action, so it revives in place.
+            if getattr(existing, "is_deleted", False):
+                doc = {**doc, "is_deleted": False,
+                       "deleted_at": None, "deleted_by": None}
+            await existing.set(doc)
+        else:
+            await LearnedMapping(**doc).insert()
 
 
 # "clear X" / "blank X" / "leave X blank" / "don't map X" / "do not populate X"
@@ -111,7 +134,7 @@ def _strip_scope(text: str) -> str:
 
 
 async def _upsert(conversion, field, *, source_column, default_value, reason,
-                  business_object=None, client_id=None, actor=None):
+                  business_object=None, client_id=None, actor=None, objects=None):
     existing = await MappingSuggestion.find_one(
         MappingSuggestion.conversion_id == conversion.id,
         MappingSuggestion.target_field_id == field.id,
@@ -138,14 +161,16 @@ async def _upsert(conversion, field, *, source_column, default_value, reason,
     # Persist as a reusable client-scoped rule.
     if source_column:
         await _learn(business_object, field.field_name, kind="column_mapping",
-                     original=source_column, resolved=field.field_name, client_id=client_id)
+                     original=source_column, resolved=field.field_name,
+                     client_id=client_id, objects=objects)
     elif default_value is not None:
         await _learn(business_object, field.field_name, kind="example_default",
                      original="(default)", resolved=default_value, rule_type="default",
-                     client_id=client_id)
+                     client_id=client_id, objects=objects)
 
 
-async def _suppress(conversion, field, business_object, client_id=None, actor=None):
+async def _suppress(conversion, field, business_object, client_id=None, actor=None,
+                    objects=None):
     """Force a field to stay blank (status not_applicable), overriding AI mapping,
     and learn it as a reusable client-scoped suppression for this object."""
     existing = await MappingSuggestion.find_one(
@@ -164,7 +189,8 @@ async def _suppress(conversion, field, business_object, client_id=None, actor=No
     else:
         await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
     await _learn(business_object, field.field_name, kind="suppress_field",
-                 original="(blank)", resolved="", rule_type="suppress", client_id=client_id)
+                 original="(blank)", resolved="", rule_type="suppress",
+                 client_id=client_id, objects=objects)
 
 
 async def _ai_parse_directives(lines: list[str], field_names: list[str],
@@ -273,6 +299,12 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
     business_object = template.business_object or conversion.target_object
     from app.services.client_service import client_id_for_conversion
     client_id = await client_id_for_conversion(conversion)
+    # The load-sequence siblings, computed ONCE and used for both halves of "change
+    # everywhere": the library rows written below (which is what a conversion created
+    # next month will read) and the fan-out at the end (which is what conversions that
+    # already exist get). Computing it only for the fan-out, as this did, covered the
+    # existing six and silently missed every future one.
+    bundle = await _bundle_objects(conversion, business_object)
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
     by_key = {}
     for f in fields:
@@ -312,19 +344,20 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
             return None
         await _upsert(conversion, f, source_column=col, default_value=None,
                       reason=f"prompt ({via}): map", business_object=business_object,
-                      client_id=client_id, actor=actor)
+                      client_id=client_id, actor=actor, objects=bundle)
         applied.append({"field": f.field_name, "source": col, "via": via})
         return ("column_mapping", f.field_name)
 
     async def _do_default(f, val, via):
         await _upsert(conversion, f, source_column=None, default_value=str(val),
                       reason=f"prompt ({via}): default", business_object=business_object,
-                      client_id=client_id, actor=actor)
+                      client_id=client_id, actor=actor, objects=bundle)
         applied.append({"field": f.field_name, "default": str(val), "via": via})
         return ("example_default", f.field_name)
 
     async def _do_suppress(f, via):
-        await _suppress(conversion, f, business_object, client_id, actor=actor)
+        await _suppress(conversion, f, business_object, client_id, actor=actor,
+                        objects=bundle)
         applied.append({"field": f.field_name, "suppressed": True, "via": via})
         return ("suppress_field", f.field_name)
 
@@ -403,10 +436,8 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
             from app.services.learning_service import (
                 object_keys_for_object, propagate_learning_to_open_conversions)
             keys = object_keys_for_object(business_object)
-            # Every object in this project's load sequence — "correct the mapping for
-            # all the output" means the whole bundle, not just the sheet in front of
-            # the analyst.
-            bundle = await _bundle_objects(conversion, business_object)
+            # `bundle` is already computed above — it is the same list that decided
+            # which library rows to write, and the two must not be allowed to drift.
             for kind, field in touched:
                 lm = await LearnedMapping.find_one(
                     {"kind": kind, "target_object": {"$in": keys}, "target_field": field})
