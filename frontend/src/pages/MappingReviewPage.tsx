@@ -1467,6 +1467,10 @@ export const MappingReviewPage: React.FC = () => {
           sourceColumns={sourceColumns}
           defaultTargetFieldId={ruleAuthorMapping?.target_field_id ?? null}
           defaultSourceColumn={ruleAuthorMapping?.source_column ?? null}
+          mappingIdForField={(tfid) =>
+            mappings.find((m) => String(m.target_field_id) === String(tfid))?.id != null
+              ? String(mappings.find((m) => String(m.target_field_id) === String(tfid))!.id)
+              : undefined}
           /* RELOAD. This closed the modal and flashed a message without refetching
              anything, so the grid and the inspector kept showing their in-memory copy
              — SOURCE "(none)", "Required field with no source and no default" — for a

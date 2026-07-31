@@ -494,7 +494,7 @@ ANALYST_APPROVED = "analyst-approved"
 
 async def propagate_learning_to_open_conversions(
     lm: "LearnedMapping", origin: Conversion, *, captured_by: str | None = None,
-    skip_origin: bool = True,
+    skip_origin: bool = True, extra_object_keys: list[str] | None = None,
 ) -> dict:
     """Push one analyst decision onto every conversion it applies to — by DATE.
 
@@ -540,6 +540,15 @@ async def propagate_learning_to_open_conversions(
     src = await source_erp_for_conversion(origin)
     as_of = _effective_of(lm)
     _keys = {_normalize(k) for k in object_keys_for_object(business_object)}
+    # ACROSS THE BUNDLE. A Supplier load is SIX conversions — Import, Address, Site,
+    # Site Assignment, Contacts, Banks — each a different business object, so an
+    # object-scoped fan-out reaches one sixth of what the analyst calls "the output".
+    # The steer box passes every object in the load sequence so a typed instruction
+    # corrects the whole thing. Field-name matching, the source-column check and the
+    # date test all still apply per conversion, so a sheet that has no such field or
+    # no such column is skipped exactly as before.
+    for _k in (extra_object_keys or []):
+        _keys |= {_normalize(x) for x in object_keys_for_object(_k)}
 
     touched_convs = touched_maps = staled = skipped_newer = 0
     now = datetime.utcnow()

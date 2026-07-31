@@ -1051,6 +1051,8 @@ interface RuleAuthorModalProps {
   defaultTargetFieldId?: number | null;
   defaultSourceColumn?: string | null;
   onSaved: () => void;
+  /** target_field_id -> mapping id, so a mapping-change intent can be applied. */
+  mappingIdForField?: (targetFieldId: string) => string | undefined;
 }
 
 export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
@@ -1062,6 +1064,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   defaultTargetFieldId,
   defaultSourceColumn,
   onSaved,
+  mappingIdForField,
 }) => {
   const [type, setType] = useState<string>("VALUE_MAP");
   // FBDI field ids are ObjectId hex strings, not numbers — keep them as-is.
@@ -1107,6 +1110,9 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // "remap" | "default" | "blank" — the sentence is a MAPPING change, so Save
+  // applies it to the mapping instead of creating a transformation rule.
+  const [nlIntent, setNlIntent] = useState<string | null>(null);
 
   const applyRuleToForm = (r: TransformationRule) => {
     const cfg = r.rule_config || {};
@@ -1155,6 +1161,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     (async () => {
       setLoadingExisting(true);
       setLoadError(null);
+      setNlIntent(null);
       try {
         const all = await MappingApi.rules(String(conversionId));
         if (cancelled) return;
@@ -1209,10 +1216,44 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
       });
       // Mirror the translated rule into the structured form. The user
       // can confirm or edit before saving.
-      setType(res.rule_type);
-      setConfig(res.config || {});
-      setAdvancedRaw(JSON.stringify(res.config || {}, null, 2));
-      setNlExplanation(res.explanation || null);
+      // INTENT FIRST. Three of the four things typed about one column are MAPPING
+      // changes, not transformations. Answering "Supplier Name should be mapped from
+      // Legal Name" with a Value-mapping rule pre-filled with placeholder pairs
+      // (active -> production) is neither what was asked for nor anything anyone
+      // would keep — so a remap/default/blank sets the form to the mapping change
+      // and Save applies it without inventing a rule.
+      const _intent = (res as any).intent as string | undefined;
+      setNlIntent(_intent || null);
+      if (_intent === "remap") {
+        const _c = (res as any).source_column as string;
+        setSourceColumn(_c);
+        setType("CONSTANT");            // placeholder; not saved for a remap
+      } else if (_intent === "default") {
+        setType("CONSTANT");
+        setConfig({ value: String((res as any).value ?? "") });
+        setAdvancedRaw(JSON.stringify({ value: String((res as any).value ?? "") }, null, 2));
+      } else if (_intent === "blank") {
+        setType("CONSTANT");
+        setConfig({ value: "" });
+        setAdvancedRaw(JSON.stringify({ value: "" }, null, 2));
+      } else {
+        setType(res.rule_type);
+        setConfig(res.config || {});
+        setAdvancedRaw(JSON.stringify(res.config || {}, null, 2));
+      }
+      // The SOURCE COLUMN the sentence named. The translator used to return only
+      // rule_type and config, so typing "Supplier Name should be mapped from Legal
+      // Name" set the target field and left the source picker on whatever the
+      // mapping had — `Name` — which is the opposite of what was asked for.
+      const _ns = (res as any).source_column as string | undefined;
+      const _from = (res as any).source_column_changed_from as string | undefined;
+      if (_ns) setSourceColumn(_ns);
+      // One assignment, computed once — two setState calls here meant a stale
+      // explanation from the previous Translate could survive.
+      setNlExplanation(
+        _ns && _from && _from !== _ns
+          ? `${res.explanation || ""} Source column set to "${_ns}" (was "${_from}").`.trim()
+          : (res.explanation || null));
       setNlAmbiguities(res.ambiguities || []);
       setNlSource(res.source || "ai");
     } catch (e: any) {
@@ -1299,6 +1340,30 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     }
     setSaving(true);
     try {
+      // A MAPPING change, not a transformation. Saving a junk CONSTANT rule
+      // alongside it would leave a rule nobody wants in the Rule Library and, for a
+      // blank, a rule that fights the suppression.
+      if (nlIntent === "remap" || nlIntent === "default" || nlIntent === "blank") {
+        const mid = mappingIdForField?.(String(targetFieldId));
+        if (!mid) {
+          setSaveError("Could not find this field's mapping row to update.");
+          setSaving(false);
+          return;
+        }
+        if (nlIntent === "blank") {
+          await MappingApi.keepBlank(mid);
+        } else {
+          await MappingApi.update(mid, {
+            status: "overridden",
+            source_column: nlIntent === "remap" ? sourceColumn : null,
+            default_value: nlIntent === "default"
+              ? String((config as any)?.value ?? "") : null,
+          } as any);
+        }
+        onSaved();
+        setSaving(false);
+        return;
+      }
       const body = {
         target_field_id: targetFieldId != null ? String(targetFieldId) : undefined,
         source_column: sourceColumn || undefined,

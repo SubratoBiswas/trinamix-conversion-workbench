@@ -71,20 +71,47 @@ _SUPPRESS_RES = [
     re.compile(r"^\s*leave\s+(?P<f>.+?)\s+(?:blank|empty)\s*$", re.I),
     re.compile(r"^\s*(?P<f>.+?)\s+(?:should be|must be)\s+(?:blank|empty)\s*$", re.I),
 ]
+# "map X from Y" / "X should be mapped to Y" / "X from source Y"  (source column)
+#
+# ORDER MATTERS, and getting it wrong was destructive rather than merely useless.
+# "supplier name should be mapped to legal name" was caught by the DEFAULT pattern
+# `(?P<f>.+?) should be (?P<v>.+?)`, which read the field as "supplier name" and the
+# CONSTANT as the literal string "mapped to legal name for all conversions" — and
+# then wrote that sentence into the column on every row. A mapping instruction has
+# to be recognised as a mapping BEFORE anything is allowed to read it as a default,
+# so the map patterns are tried first and they explicitly cover "mapped to/from".
+_MAP_RES = [
+    re.compile(r"^\s*(?:map|pull|take)\s+(?P<f>.+?)\s+from\s+(?P<c>.+?)\s*$", re.I),
+    re.compile(r"^\s*(?P<f>.+?)\s+(?:should\s+be\s+|must\s+be\s+|is\s+)?"
+               r"mapped\s+(?:to|from|with|using)\s+(?P<c>.+?)\s*$", re.I),
+    re.compile(r"^\s*(?:map|set)\s+(?P<f>.+?)\s+(?:to|=)\s+(?:column|source)\s+(?P<c>.+?)\s*$", re.I),
+    re.compile(r"^\s*(?P<f>.+?)\s+from\s+(?:source\s+)?(?P<c>.+?)\s*$", re.I),
+]
 # "default X to Y" / "set X = Y" / "X as Y"  (default value)
 _DEFAULT_RES = [
     re.compile(r"^\s*(?:default|set|make)\s+(?P<f>.+?)\s+(?:to|=|as)\s+(?P<v>.+?)\s*$", re.I),
     re.compile(r"^\s*(?P<f>.+?)\s+(?:should be|defaults? to)\s+(?P<v>.+?)\s*$", re.I),
 ]
-# "map X from Y" / "X from source Y"  (source column)
-_MAP_RES = [
-    re.compile(r"^\s*(?:map|pull|take)\s+(?P<f>.+?)\s+from\s+(?P<c>.+?)\s*$", re.I),
-    re.compile(r"^\s*(?P<f>.+?)\s+from\s+(?:source\s+)?(?P<c>.+?)\s*$", re.I),
-]
+
+# Trailing scope phrases the analyst adds by habit. They are not part of the column
+# name — "legal name for all conversions" is the column "legal name" — and leaving
+# them on produced a source column that matches nothing.
+_SCOPE_TAIL = re.compile(
+    r"\s*(?:,\s*)?\b(?:for|in|across|on)\s+(?:all|every|each)\s+"
+    r"(?:the\s+)?(?:conversions?|sheets?|files?|objects?|records?|rows?)\s*\.?\s*$", re.I)
+
+
+def _strip_scope(text: str) -> str:
+    prev = None
+    out = (text or "").strip()
+    while prev != out:
+        prev = out
+        out = _SCOPE_TAIL.sub("", out).strip().rstrip(",.")
+    return out
 
 
 async def _upsert(conversion, field, *, source_column, default_value, reason,
-                  business_object=None, client_id=None):
+                  business_object=None, client_id=None, actor=None):
     existing = await MappingSuggestion.find_one(
         MappingSuggestion.conversion_id == conversion.id,
         MappingSuggestion.target_field_id == field.id,
@@ -97,6 +124,12 @@ async def _upsert(conversion, field, *, source_column, default_value, reason,
         "status": "approved",
         "review_required": 0,
         "updated_at": datetime.utcnow(),
+        # A steering instruction is the ANALYST deciding, so it is stamped like one.
+        # These rows used to be written status=approved with NO approver and NO date,
+        # which under "the last decision by date is final" made them unrankable: they
+        # could never be shown to be recent, so any dated rule beat them.
+        "approved_by": actor or "steering-prompt",
+        "approved_at": datetime.utcnow(),
     }
     if existing:
         await existing.set(payload)
@@ -112,7 +145,7 @@ async def _upsert(conversion, field, *, source_column, default_value, reason,
                      client_id=client_id)
 
 
-async def _suppress(conversion, field, business_object, client_id=None):
+async def _suppress(conversion, field, business_object, client_id=None, actor=None):
     """Force a field to stay blank (status not_applicable), overriding AI mapping,
     and learn it as a reusable client-scoped suppression for this object."""
     existing = await MappingSuggestion.find_one(
@@ -123,6 +156,8 @@ async def _suppress(conversion, field, business_object, client_id=None):
         "source_column": None, "default_value": None, "confidence": 1.0,
         "reason": "prompt: leave blank", "status": "not_applicable",
         "review_required": 0, "updated_at": datetime.utcnow(),
+        "approved_by": actor or "steering-prompt",
+        "approved_at": datetime.utcnow(),
     }
     if existing:
         await existing.set(payload)
@@ -132,30 +167,57 @@ async def _suppress(conversion, field, business_object, client_id=None):
                  original="(blank)", resolved="", rule_type="suppress", client_id=client_id)
 
 
-async def _ai_parse_directives(lines: list[str], field_names: list[str]) -> list[dict]:
-    """Use the Claude API to turn free-form English steering lines the regex parser
-    couldn't handle into structured directives. Returns a list of
-    {action: map|default|suppress, field, value?, source?}. Best-effort: on any
-    error (no key, network, bad JSON) returns [] so steering still works offline."""
+async def _ai_parse_directives(lines: list[str], field_names: list[str],
+                               source_names: list[str] | None = None) -> list[dict]:
+    """Turn free-form English steering into structured directives, with the model.
+
+    THE MODEL GOES FIRST. It used to be a fallback for whatever the regexes could not
+    place, which is backwards: the regexes are a small fixed set of shapes and they
+    fail SILENTLY AND DESTRUCTIVELY outside them. "supplier name should be mapped to
+    legal name" matched the DEFAULT pattern and wrote that whole sentence into the
+    column as a constant. A model reads it correctly, and the regexes are the
+    fallback for when there is no API key.
+
+    It is also given the real SOURCE COLUMN list. Without it the model had to guess
+    the spelling of the column the analyst meant — "legal name" against a file whose
+    header is `Legal Name` or `legalname` — and a guessed column binds to nothing.
+
+    Returns {action: map|default|suppress, field, value?, source?}. Best-effort: on
+    any error (no key, network, bad JSON) returns [] so steering still works offline.
+    """
     from app.config import settings
     api_key = getattr(settings, "ANTHROPIC_API_KEY", None)
     if not api_key or not lines:
         return []
     import httpx
     fields_blob = "\n".join(f"- {n}" for n in field_names[:400])
+    sources_blob = "\n".join(f"- {n}" for n in (source_names or [])[:400])
     prompt = (
-        "You map plain-English data-migration instructions to structured directives "
-        "against a fixed list of Oracle FBDI target fields.\n\n"
-        "TARGET FIELDS:\n" + fields_blob + "\n\n"
-        "INSTRUCTIONS (one per line):\n" + "\n".join(f"- {l}" for l in lines) + "\n\n"
-        "For each instruction you can confidently act on, output one JSON object with:\n"
+        "You turn plain-English data-migration instructions into structured "
+        "directives, against a fixed list of Oracle target fields and a fixed list "
+        "of the legacy source columns actually present in this file.\n\n"
+        "TARGET FIELDS (Oracle side):\n" + fields_blob + "\n\n"
+        + ("SOURCE COLUMNS (legacy file):\n" + sources_blob + "\n\n"
+           if sources_blob else "")
+        + "INSTRUCTIONS (one per line):\n" + "\n".join(f"- {l}" for l in lines) + "\n\n"
+        "For each instruction you can confidently act on, output one JSON object:\n"
         '  "action": "map" | "default" | "suppress",\n'
-        '  "field": the EXACT target field name from the list it applies to,\n'
-        '  "value": the constant (for action=default), or\n'
-        '  "source": the source column name (for action=map).\n'
-        "Use 'suppress' when the user wants the field left blank / not populated. "
-        "Only include instructions you can match to a listed field. "
-        'Respond with ONLY a JSON array, e.g. [{"action":"default","field":"Business Relationship","value":"PROSPECTIVE"}].'
+        '  "field":  the EXACT target field name, copied from the TARGET FIELDS list,\n'
+        '  "source": for action=map, the EXACT source column, copied from the SOURCE\n'
+        "            COLUMNS list (never invent one; omit the directive if no listed\n"
+        "            column is clearly the one meant),\n"
+        '  "value":  for action=default, the constant to write.\n\n'
+        "Rules:\n"
+        "- 'X should be mapped to Y', 'map X from Y', 'X comes from Y' are all "
+        "action=map, where X is the TARGET field and Y the SOURCE column. Do NOT "
+        "read these as a constant.\n"
+        "- action=default is only for a literal constant value ('set Import Action "
+        "to CREATE'), never for a sentence describing a mapping.\n"
+        "- Use 'suppress' when the field should be left blank / not populated.\n"
+        "- Ignore scope phrases like 'for all conversions' — they are not part of "
+        "any column name.\n"
+        "- Only include instructions you can match to a listed field.\n"
+        'Respond with ONLY a JSON array, e.g. [{"action":"map","field":"Supplier Name","source":"Legal Name"}].'
     )
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
@@ -180,7 +242,31 @@ async def _ai_parse_directives(lines: list[str], field_names: list[str]) -> list
         return []
 
 
-async def apply_steer_prompt(conversion: Conversion, prompt: str) -> dict:
+async def apply_steer_prompt(conversion: Conversion, prompt: str,
+                             actor: str | None = None) -> dict:
+    """Turn typed English into mappings, apply them, learn them, and push them out.
+
+    Analyst, 31-Jul: "If I add a rule here, it should be converted from English to a
+    rule and applied in the mappings, stored in learning, applied to all previous
+    (existing) conversions and future conversions too" — and "all should be done
+    using AI, or a Python function whichever is available."
+
+    So: THE MODEL PARSES FIRST and the deterministic parser is the fallback, not the
+    other way round. That ordering is not a preference. The regexes are a small fixed
+    set of shapes that fail SILENTLY AND DESTRUCTIVELY outside them: "supplier name
+    should be mapped to legal name for all conversions" matched
+    `(?P<f>.+?) should be (?P<v>.+?)` and wrote the sentence
+    "mapped to legal name for all conversions" into the column as a CONSTANT, on
+    every row. Both parsers are fixed; the model simply reads it right.
+
+    Four things happen to every directive, which is the whole of the request:
+      1. applied to THIS conversion's mapping row, stamped and dated as an analyst
+         decision so it can be ranked;
+      2. stored in the learning library, so future conversions inherit it;
+      3. PROPAGATED to conversions that already exist — this is what was missing, and
+         it is the half the analyst asked about by name;
+      4. reported, with counts, including anything that could not be resolved.
+    """
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
     if not template:
         return {"applied": [], "unmatched": [], "error": "no template"}
@@ -196,91 +282,187 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str) -> dict:
         k = _norm(name)
         if k in by_key:
             return by_key[k]
-        # loose contains match as a fallback
-        for kk, f in by_key.items():
+        for kk, f in by_key.items():            # loose contains as a fallback
             if k and (k in kk or kk in k):
                 return f
         return None
 
-    applied, unmatched = [], []
-    # split on newlines, semicolons, and " and " between clauses
-    lines = re.split(r"[\n;]+", prompt or "")
-    for raw in lines:
-        line = raw.strip().rstrip(".")
-        if not line:
+    # The REAL source columns. Both parsers resolve against these, so a column the
+    # analyst half-remembers ("legal name") binds to the one the file actually has
+    # ("Legal Name") — and a name that matches nothing is REPORTED rather than
+    # written onto the mapping, where it would read as mapped and produce nothing.
+    src_names = await _source_columns(conversion)
+    src_by_key = {_norm(c): c for c in src_names}
+
+    def find_source(name: str):
+        k = _norm(_strip_scope(name))
+        if k in src_by_key:
+            return src_by_key[k]
+        hits = [c for kk, c in src_by_key.items() if k and (k in kk or kk in k)]
+        return hits[0] if len(hits) == 1 else None
+
+    applied, unmatched, unresolved = [], [], []
+    lines = [l.strip().rstrip(".") for l in re.split(r"[\n;]+", prompt or "") if l.strip()]
+
+    async def _do_map(f, col_raw, via):
+        col = find_source(col_raw)
+        if not col:
+            unresolved.append({"field": f.field_name, "wanted_source": _strip_scope(col_raw),
+                               "reason": "no column by that name in this file", "via": via})
+            return None
+        await _upsert(conversion, f, source_column=col, default_value=None,
+                      reason=f"prompt ({via}): map", business_object=business_object,
+                      client_id=client_id, actor=actor)
+        applied.append({"field": f.field_name, "source": col, "via": via})
+        return ("column_mapping", f.field_name)
+
+    async def _do_default(f, val, via):
+        await _upsert(conversion, f, source_column=None, default_value=str(val),
+                      reason=f"prompt ({via}): default", business_object=business_object,
+                      client_id=client_id, actor=actor)
+        applied.append({"field": f.field_name, "default": str(val), "via": via})
+        return ("example_default", f.field_name)
+
+    async def _do_suppress(f, via):
+        await _suppress(conversion, f, business_object, client_id, actor=actor)
+        applied.append({"field": f.field_name, "suppressed": True, "via": via})
+        return ("suppress_field", f.field_name)
+
+    touched: list[tuple] = []
+
+    # ── 1. THE MODEL, on everything ─────────────────────────────────────────
+    ai_used = False
+    handled_idx: set[int] = set()
+    directives = await _ai_parse_directives(lines, [f.field_name for f in fields], src_names)
+    if directives:
+        ai_used = True
+        for d in directives:
+            f = find_field(str(d.get("field", "")))
+            if not f:
+                continue
+            action = str(d.get("action", "")).lower()
+            res = None
+            if action == "suppress":
+                res = await _do_suppress(f, "ai")
+            elif action == "map" and d.get("source"):
+                res = await _do_map(f, str(d["source"]), "ai")
+            elif action == "default" and d.get("value") is not None:
+                res = await _do_default(f, d["value"], "ai")
+            if res:
+                touched.append(res)
+            # Mark the line this directive came from as handled.
+            fk = _norm(f.field_name)
+            for i, l in enumerate(lines):
+                if i not in handled_idx and fk and fk[:8] in _norm(l):
+                    handled_idx.add(i)
+                    break
+
+    # ── 2. the deterministic parser, on whatever is left ────────────────────
+    for i, line in enumerate(lines):
+        if i in handled_idx:
             continue
-        handled = False
-        # Suppression first — "leave X blank" must not be read as "default X to blank".
-        for rx in _SUPPRESS_RES:
-            m = rx.match(line)
+        res = None
+        for rx in _SUPPRESS_RES:                 # blank first — "leave X blank" is
+            m = rx.match(line)                   # not "default X to blank"
             if m:
                 f = find_field(m.group("f"))
                 if f:
-                    await _suppress(conversion, f, business_object, client_id)
-                    applied.append({"field": f.field_name, "suppressed": True})
-                    handled = True
+                    res = await _do_suppress(f, "rule")
                 break
-        if handled:
-            continue
-        for rx in _MAP_RES:
-            m = rx.match(line)
-            if m:
-                f = find_field(m.group("f"))
-                if f:
-                    await _upsert(conversion, f, source_column=m.group("c").strip(),
-                                  default_value=None, reason="prompt: map",
-                                  business_object=business_object, client_id=client_id)
-                    applied.append({"field": f.field_name, "source": m.group("c").strip()})
-                    handled = True
-                break
-        if handled:
-            continue
-        for rx in _DEFAULT_RES:
-            m = rx.match(line)
-            if m:
-                f = find_field(m.group("f"))
-                if f:
-                    val = m.group("v").strip().strip('"\'')
-                    await _upsert(conversion, f, source_column=None, default_value=val,
-                                  reason="prompt: default",
-                                  business_object=business_object, client_id=client_id)
-                    applied.append({"field": f.field_name, "default": val})
-                    handled = True
-                break
-        if not handled:
+        if res is None:
+            for rx in _MAP_RES:                  # MAP before DEFAULT — see _MAP_RES
+                m = rx.match(line)
+                if m:
+                    f = find_field(m.group("f"))
+                    if f:
+                        res = await _do_map(f, m.group("c"), "rule")
+                    break
+        if res is None:
+            for rx in _DEFAULT_RES:
+                m = rx.match(line)
+                if m:
+                    f = find_field(m.group("f"))
+                    if f:
+                        res = await _do_default(f, m.group("v").strip().strip('"\''),
+                                                "rule")
+                    break
+        if res:
+            touched.append(res)
+        elif not any(u["field"] and _norm(u["field"])[:8] in _norm(line)
+                     for u in unresolved):
             unmatched.append(line)
 
-    # AI fallback: anything the regex parser couldn't place is sent to Claude, which
-    # returns structured directives against the real field list. Applied + stored as
-    # client-scoped rules exactly like the deterministic ones. No key / offline → the
-    # lines simply stay in `unmatched`, so steering still works without AI.
-    ai_used = False
-    if unmatched:
-        directives = await _ai_parse_directives(unmatched, [f.field_name for f in fields])
-        if directives:
-            ai_used = True
-            still: list[str] = []
-            resolved_lines = {d.get("field", "").lower() for d in directives}
-            for d in directives:
-                f = find_field(str(d.get("field", "")))
-                if not f:
+    # ── 3. out to the conversions that already exist ────────────────────────
+    # Capturing the learning only ever covered FUTURE conversions; the ones already
+    # open kept whatever they had. "Apply to all previous conversions" is this step,
+    # and it was missing entirely from the steering path.
+    fanout = {"conversions": 0, "mappings": 0, "stale_outputs": 0}
+    if touched:
+        try:
+            from app.models.learned import LearnedMapping
+            from app.services.learning_service import (
+                object_keys_for_object, propagate_learning_to_open_conversions)
+            keys = object_keys_for_object(business_object)
+            # Every object in this project's load sequence — "correct the mapping for
+            # all the output" means the whole bundle, not just the sheet in front of
+            # the analyst.
+            bundle = await _bundle_objects(conversion, business_object)
+            for kind, field in touched:
+                lm = await LearnedMapping.find_one(
+                    {"kind": kind, "target_object": {"$in": keys}, "target_field": field})
+                if lm is None:
                     continue
-                action = str(d.get("action", "")).lower()
-                if action == "suppress":
-                    await _suppress(conversion, f, business_object, client_id)
-                    applied.append({"field": f.field_name, "suppressed": True, "via": "ai"})
-                elif action == "map" and d.get("source"):
-                    await _upsert(conversion, f, source_column=str(d["source"]).strip(),
-                                  default_value=None, reason="prompt (AI): map",
-                                  business_object=business_object, client_id=client_id)
-                    applied.append({"field": f.field_name, "source": str(d["source"]).strip(), "via": "ai"})
-                elif action == "default" and d.get("value") is not None:
-                    await _upsert(conversion, f, source_column=None, default_value=str(d["value"]),
-                                  reason="prompt (AI): default",
-                                  business_object=business_object, client_id=client_id)
-                    applied.append({"field": f.field_name, "default": str(d["value"]), "via": "ai"})
-            # keep as unmatched only the lines the AI didn't resolve to a field
-            unmatched = [l for l in unmatched
-                         if not any(rf and rf in l.lower() for rf in resolved_lines)]
+                r = await propagate_learning_to_open_conversions(
+                    lm, conversion, captured_by=actor or "steering-prompt",
+                    extra_object_keys=bundle)
+                for k in fanout:
+                    fanout[k] += int(r.get(k, 0) or 0)
+        except Exception as exc:  # noqa: BLE001 — never fail the steer on the fan-out
+            log.exception("steering: propagating to existing conversions failed")
+            fanout["error"] = f"{type(exc).__name__}: {exc}"[:200]
 
-    return {"applied": applied, "unmatched": unmatched, "ai_used": ai_used}
+    return {"applied": applied, "unmatched": unmatched, "unresolved": unresolved,
+            "ai_used": ai_used, "propagated": fanout,
+            "parsed_by": "ai" if ai_used else ("rule" if applied else "none")}
+
+
+async def _bundle_objects(conversion, business_object: str | None) -> list[str]:
+    """Every target object in this conversion's project — its load-sequence siblings.
+
+    A Supplier load is six conversions with six different business objects, and the
+    analyst types one instruction meaning all of them.
+    """
+    try:
+        pid = getattr(conversion, "project_id", None)
+        if not pid:
+            return []
+        out, seen = [], {(business_object or "").strip().lower()}
+        for c in await Conversion.find(Conversion.project_id == pid).to_list():
+            o = (getattr(c, "target_object", None) or "").strip()
+            if o and o.lower() not in seen:
+                seen.add(o.lower())
+                out.append(o)
+        return out
+    except Exception:                                           # noqa: BLE001
+        return []
+
+
+async def _source_columns(conversion) -> list[str]:
+    """Every source column bound to this conversion, across all its sheets."""
+    try:
+        from app.models.dataset import DatasetColumnProfile
+        ids = [d for d in (getattr(conversion, "source_dataset_ids", None) or []) if d]
+        if not ids and getattr(conversion, "dataset_id", None):
+            ids = [conversion.dataset_id]
+        if not ids:
+            return []
+        profs = await DatasetColumnProfile.find({"dataset_id": {"$in": ids}}).to_list()
+        out, seen = [], set()
+        for p in profs:
+            n = (p.column_name or "").strip()
+            if n and _norm(n) not in seen:
+                seen.add(_norm(n))
+                out.append(n)
+        return out
+    except Exception:                                           # noqa: BLE001
+        return []

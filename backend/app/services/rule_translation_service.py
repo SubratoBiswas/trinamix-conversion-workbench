@@ -38,12 +38,70 @@ _YES_RE = re.compile(r"(?i)^(y|yes|true|1|x)$")
 
 
 async def _source_columns(conversion: Conversion) -> list[str]:
-    if not getattr(conversion, "dataset_id", None):
+    """Every column of every bound source — not just the first sheet.
+
+    This read the singular conversion.dataset_id, so on a multi-sheet workbook the
+    translator could not see (and therefore could not resolve) a column living on
+    any sheet but the first. Same defect the Mapping Review column list had.
+    """
+    ids = [d for d in (getattr(conversion, "source_dataset_ids", None) or []) if d]
+    if not ids and getattr(conversion, "dataset_id", None):
+        ids = [conversion.dataset_id]
+    if not ids:
         return []
     cols = await DatasetColumnProfile.find(
-        DatasetColumnProfile.dataset_id == conversion.dataset_id
-    ).sort("+position").to_list()
-    return [c.column_name for c in cols if c.column_name]
+        {"dataset_id": {"$in": ids}}).sort("+position").to_list()
+    out, seen = [], set()
+    for c in cols:
+        n = (c.column_name or "").strip()
+        if n and n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return out
+
+
+# "X should be mapped from Y" / "map X from Y" / "X comes from Y" — the phrase that
+# names the SOURCE column. Anchored on the mapping verb so the tail is the column.
+# The field name can sit between the verb and the preposition — "map Address Name
+# FROM City" — so an optional short phrase is allowed there. Non-greedy, so the
+# FIRST preposition wins and the tail is the column.
+_FROM_RE = re.compile(
+    r"(?i)\b(?:mapped|map|mapping|pulled|pull|taken|take|read|comes?|sourced?)\s+"
+    r"(?:\S+(?:\s+\S+){0,4}\s+)??(?:from|to|with|using|off)\s+(?P<c>.+?)\s*(?:[.;,]|$)")
+_SCOPE_TAIL_RE = re.compile(
+    r"(?i)\s*\b(?:for|in|across|on)\s+(?:all|every|each)\s+"
+    r"(?:the\s+)?(?:conversions?|sheets?|files?|objects?|records?|rows?)\s*\.?\s*$")
+
+
+def _source_from_description(desc: str, cols: list[str]) -> Optional[str]:
+    """The source column the sentence names, resolved against the REAL column list.
+
+    The translator returned rule_type and config and NOTHING about the source column,
+    so the modal kept whatever was pre-filled from the mapping. Typing "Supplier Name
+    should be mapped from Legal Name" set the target field correctly and left the
+    source on `Name` — the analyst's report, and the screenshot.
+    """
+    if not desc or not cols:
+        return None
+    m = _FROM_RE.search(desc)
+    phrase = (m.group("c") if m else "").strip()
+    phrase = _SCOPE_TAIL_RE.sub("", phrase).strip().strip("\"'")
+    if phrase:
+        hit = _match_column(cols, phrase)
+        if hit:
+            return hit
+    # Fallback: the LONGEST column name appearing literally in the sentence —
+    # longest matters, because "Legal Name" and "Name" both appear and the specific
+    # one is meant.
+    #
+    # Only when the sentence is actually ABOUT a binding. "trim the supplier name"
+    # is a transform on the column already chosen, and returning "Name" for it would
+    # silently retarget the field. No suggestion is much better than a wrong one.
+    low = desc.lower()
+    if not re.search(r"(?i)\b(?:from|mapped|mapping|sourced?)\b", low):
+        return None
+    hits = [c for c in cols if c.lower() in low]
+    return max(hits, key=len) if hits else None
 
 
 def _match_column(cols: list[str], phrase: str) -> Optional[str]:
@@ -71,6 +129,59 @@ def _match_column(cols: list[str], phrase: str) -> Optional[str]:
         cw = set(re.findall(r"[a-z0-9]+", c.lower()))
         if cw and cw <= pw:
             return c
+    return None
+
+
+# A single-column instruction is not always a TRANSFORMATION. Three of the four
+# things an analyst types about one column change the MAPPING and need no rule at
+# all, and forcing them into a rule is what produced the nonsense in the screenshot:
+# "Supplier Name should be mapped from Legal Name" came back as a VALUE MAPPING with
+# the placeholder pairs active->production, which is neither what was asked for nor
+# anything the analyst would keep.
+_BLANK_RE = re.compile(
+    r"(?i)\b(?:leave|keep)\s+(?:it\s+|this\s+)?(?:blank|empty)\b"
+    r"|\b(?:should\s+be|must\s+be)\s+(?:blank|empty)\b"
+    r"|\bdo\s*n[o']?t\s+(?:map|populate|fill)\b|\bblank\s+(?:it|this)\b")
+_CONST_RE = re.compile(
+    r"(?i)\b(?:set|default)\s+(?:it\s+|this\s+)?(?:to|=|as)\s+"
+    r"['\"]?(?P<v>[A-Za-z0-9_\-/. ]{1,40}?)['\"]?\s*(?:[.;,]|$)"
+    r"|\b(?:should\s+(?:always\s+)?be|always)\s+"
+    r"['\"](?P<v2>[^'\"]{1,40})['\"]")
+# A transformation verb means the sentence really is about a rule, so "set X to
+# uppercase" is not read as the constant "uppercase".
+_TRANSFORM_VERB = re.compile(
+    r"(?i)\b(?:trim|upper\s*case|uppercase|lower\s*case|lowercase|title\s*case|pad|"
+    r"substring|split|concat|combine|join|replace|regex|format|round|prefix|suffix|"
+    r"if\b|when\b|case\b|crosswalk|lookup|date)\b")
+
+
+def detect_intent(description: str, cols: list[str]) -> Optional[dict]:
+    """What the sentence is ABOUT, before asking what rule it is.
+
+    Returns {"intent": "remap"|"default"|"blank", ...} or None when it genuinely
+    describes a transformation. Deterministic and free — the model still runs for
+    the transformation case.
+    """
+    d = (description or "").strip()
+    if not d:
+        return None
+    if _BLANK_RE.search(d):
+        return {"intent": "blank",
+                "explanation": "Leaves this column empty in the output, and records "
+                               "the decision so it is not re-filled."}
+    src = _source_from_description(d, cols)
+    if src and not _TRANSFORM_VERB.search(d):
+        return {"intent": "remap", "source_column": src,
+                "explanation": f'Points this column at "{src}". No transformation '
+                               "rule is needed — it is a mapping change."}
+    if not _TRANSFORM_VERB.search(d):
+        m = _CONST_RE.search(d)
+        if m:
+            val = (m.group("v") or m.group("v2") or "").strip()
+            if val:
+                return {"intent": "default", "value": val,
+                        "explanation": f'Writes the constant "{val}" into this column '
+                                       "on every row."}
     return None
 
 
@@ -159,6 +270,9 @@ def _prompt(description: str, cols: list[str], target_field: Optional[str],
         "if Y is Yes set to B, else blank'), use CASE_WHEN with one branch per condition and a default. "
         "For Yes/No flags prefer op 'regex' with value '(?i)^(y|yes|true|1|x)$'.\n"
         "- Only reference columns from the list above, by their exact name.\n"
+        '- If the instruction names which SOURCE COLUMN the field should read '
+        '("mapped from Legal Name"), include "source_column" with that EXACT column '
+        "name from the list.\n"
         f"INSTRUCTION: {description}\n\n"
         'Respond with ONLY: {"rule_type":"...","config":{...},"explanation":"one sentence",'
         '"ambiguities":[{"phrase":"...","interpreted_as":"...","alternatives":["..."]}]}'
@@ -215,19 +329,51 @@ async def translate_rule(conversion: Conversion, description: str,
         except Exception:  # noqa: BLE001
             target_field = None
 
+    # The SOURCE COLUMN the sentence names. Returned on every path so the modal can
+    # move the picker: the translator used to hand back rule_type and config and
+    # nothing about the source, so "Supplier Name should be mapped from Legal Name"
+    # set the target field and left the source on whatever was pre-filled.
+    # INTENT FIRST. Three of the four things an analyst types about one column are
+    # mapping changes, not transformations, and answering them with a rule form is
+    # what put a Value mapping and its placeholder pairs in front of someone who
+    # asked to re-point a column.
+    intent = detect_intent(description or "", cols)
+    if intent:
+        return {**intent, "rule_type": None, "config": {},
+                "ambiguities": [], "source": "local",
+                **({"source_column_changed_from": source_column or None}
+                   if intent.get("intent") == "remap"
+                   and (intent.get("source_column") != source_column) else {})}
+
+    named_src = _source_from_description(description or "", cols)
+
+    def _with_src(res: dict) -> dict:
+        if named_src and named_src != source_column:
+            res = {**res, "source_column": named_src,
+                   "source_column_changed_from": source_column or None}
+        elif named_src:
+            res = {**res, "source_column": named_src}
+        return res
+
     # 1) deterministic fast-path
     local = _local_parse(description or "", cols)
     if local:
-        return local
+        return _with_src(local)
     # 2) Claude API
     ai = await _ai_translate(description or "", cols, target_field, source_column)
     if ai:
-        return ai
+        # The model may name the column itself; its answer wins when it is a REAL
+        # column, since it saw the whole sentence.
+        _ai_src = _match_column(cols, str(ai.get("source_column") or "")) if ai.get("source_column") else None
+        if _ai_src:
+            return {**ai, "source_column": _ai_src,
+                    "source_column_changed_from": source_column or None}
+        return _with_src(ai)
     # 3) safe fallback — a pass-through constant the user can edit, never an error
-    return {
+    return _with_src({
         "rule_type": "CONSTANT", "config": {"value": ""},
         "explanation": ("Couldn't translate this automatically (AI unavailable). "
                         "Pick a rule type and fill it in — for conditions on other "
                         "columns use Case / when (multi-branch)."),
         "ambiguities": [], "source": "local",
-    }
+    })

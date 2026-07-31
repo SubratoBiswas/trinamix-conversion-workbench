@@ -431,7 +431,7 @@ async def learn_from_example(
     conversion_id: str,
     file: UploadFile | None = File(None),
     prompt: str | None = Form(None),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Teach this conversion from a populated example output and/or a plain-text
     steering prompt. Infers source->target mappings + constant defaults from the
@@ -480,7 +480,11 @@ async def learn_from_example(
 
     if prompt and prompt.strip():
         from app.services.steering_service import apply_steer_prompt
-        result["steer"] = await apply_steer_prompt(conv, prompt)
+        # Pass the actor: a steering instruction is the analyst deciding, and under
+        # "the last decision by date is final" a decision with no author and no date
+        # cannot be ranked against anything.
+        result["steer"] = await apply_steer_prompt(
+            conv, prompt, actor=getattr(user, "email", None))
 
     if not result:
         raise HTTPException(400, "Provide an example file and/or a prompt")
