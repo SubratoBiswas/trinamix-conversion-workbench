@@ -71,6 +71,48 @@ async def client_id_for_conversion(conversion) -> Optional[PydanticObjectId]:
     return await default_client_id()
 
 
+async def resolve_client_for_project(raw_client_id, new_client_name: str | None):
+    """The tenant a new project belongs to: an existing client, or a new one by name.
+
+    REQUIRED, and deliberately not guessable. It used to fall back to the bootstrap
+    "default" client whenever the field was missing or the id malformed, which reads
+    as harmless and is not: every decision an analyst makes is stored as a CLIENT
+    rule, so the client is the key the whole library is filed and read under. A
+    project that quietly became "default" filed its rules there, and a correction made
+    in a properly tagged project was then skipped on reaching it — as a cross-tenant
+    leak. Silently guessing the most important scope in the system is not a kindness.
+
+    A NAME matches an existing client case-insensitively before it creates one, so
+    "NextPower" and "Nextpower" typed a week apart do not become two tenants whose
+    libraries can never see each other — which would be the same invisible split, just
+    arrived at from the other direction.
+
+    Returns the client id. Raises ValueError with a message meant for the analyst.
+    """
+    from app.models.client import Client
+    raw = str(raw_client_id).strip() if raw_client_id else ""
+    name = (new_client_name or "").strip()
+    if raw:
+        try:
+            cid = PydanticObjectId(raw)
+        except Exception:  # noqa: BLE001
+            raise ValueError("client_id is not a valid client id")
+        if await Client.get(cid) is None:
+            raise ValueError("That client no longer exists — pick another.")
+        return cid
+    if name:
+        for c in await Client.find_all().to_list():
+            if (getattr(c, "name", "") or "").strip().lower() == name.lower():
+                return c.id
+        c = Client(name=name)
+        await c.insert()
+        return c.id
+    raise ValueError(
+        "Pick a client for this project, or give a name to create one. Everything the "
+        "project learns is stored against its client, so the tenant cannot be set "
+        "correctly after the fact.")
+
+
 async def explicit_client_id_for_conversion(conversion) -> Optional[PydanticObjectId]:
     """The client this conversion is EXPLICITLY tagged with, or None if nobody said.
 

@@ -133,12 +133,17 @@ export const ConvertFilePage: React.FC = () => {
   };
 
   const createEngagement = async () => {
-    if (!engForm.name.trim()) return;
+    // The client is required now — see ProjectCreate. This form only has the
+    // free-text client name, so it is sent as new_client_name: the server matches an
+    // existing tenant case-insensitively and only creates one when there is no match,
+    // which is exactly "select or add new" through a single box.
+    if (!engForm.name.trim() || !engForm.client.trim()) return;
     setSavingEng(true); setError(null);
     try {
       const created: any = await ProjectsApi.create({
         name: engForm.name.trim(),
         client: engForm.client.trim() || undefined,
+        new_client_name: engForm.client.trim(),
         source_system: engForm.source_system || undefined,
         target_environment: engForm.target_environment || undefined,
         status: "planning",
@@ -689,12 +694,18 @@ export const ConvertFilePage: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="label">Client</label>
+                <label className="label">
+                  Client <span className="text-danger">*</span>
+                </label>
                 <input
                   className="input" value={engForm.client}
                   onChange={(e) => setEngForm({ ...engForm, client: e.target.value })}
                   placeholder="e.g. Phoenix Corp"
                 />
+                <p className="mt-1 text-[11px] text-ink-muted">
+                  Existing client names are matched; a new name creates the client.
+                  Every mapping rule this engagement learns is stored against it.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

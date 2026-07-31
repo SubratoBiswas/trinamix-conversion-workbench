@@ -182,6 +182,12 @@ export const SetupWizard: React.FC = () => {
   // Tenants (clients) the engagement can belong to. Its learnings/gold/templates
   // will scope to the picked client so they never leak across clients.
   const [clients, setClients] = useState<ClientSummary[]>([]);
+  // "__new__" in the picker means the analyst is naming a client instead of choosing
+  // one. Creating it here rather than sending them to the Clients page matters: the
+  // alternative to an easy "add new" is picking whatever is already in the list, and
+  // a project filed under the wrong tenant files every rule it learns under the wrong
+  // tenant too.
+  const [newClientName, setNewClientName] = useState("");
   const [sourceCode, setSourceCode] = useState<string>("");
   // File-based source: extract files uploaded during setup. When present, the
   // engagement's conversions are created from these files (not the module catalog).
@@ -212,7 +218,11 @@ export const SetupWizard: React.FC = () => {
         const cs = r.clients || [];
         setClients(cs);
         const def = cs.find((c) => c.is_default) || cs[0];
-        if (def) setDetails((d) => (d.client_id ? d : { ...d, client_id: def.id }));
+        // Deliberately NOT auto-selecting the default client. Pre-filling it is the
+        // same silent guess the server used to make, just moved to the browser: the
+        // analyst clicks Continue and the engagement is filed under whichever tenant
+        // happened to be marked default. One explicit choice, once.
+        void def;
       })
       .catch(() => setClients([]));
   }, []);
@@ -297,7 +307,13 @@ export const SetupWizard: React.FC = () => {
   );
 
   const canAdvance = useMemo(() => {
-    if (step === 1) return Boolean(details.name.trim());
+    // The CLIENT is required. Everything this engagement learns is stored against
+    // it — column mappings, defaults, suppressions — and it is the key those rules
+    // are read back under, so it cannot be inferred later. Guessing it silently is
+    // what produced "I changed the mapping in one project and it did not reach the
+    // other, same client and source".
+    if (step === 1) return Boolean(details.name.trim()) && Boolean(
+      details.client_id === "__new__" ? newClientName.trim() : details.client_id);
     if (step === 2) return Boolean(sourceCode);
     if (step === 3) {
       // File mode: no DB connection form — allow Continue once any in-flight
@@ -318,7 +334,7 @@ export const SetupWizard: React.FC = () => {
     // Step 4 (Scope) is optional — zero modules is OK; the engagement
     // can be planned without auto-creating conversions.
     return true;
-  }, [step, details, sourceCode, conn, isFileMode, fileItems]);
+  }, [step, details, newClientName, sourceCode, conn, isFileMode, fileItems]);
 
   const submit = async () => {
     setError(null);
@@ -327,10 +343,13 @@ export const SetupWizard: React.FC = () => {
       const payload: Partial<Project> & {
         initial_connection?: any;
         selected_modules?: string[];
+        new_client_name?: string;
       } = {
         name: details.name,
         client: details.client || undefined,
-        client_id: details.client_id || undefined,
+        client_id: details.client_id === "__new__" ? undefined : details.client_id,
+        new_client_name: details.client_id === "__new__"
+          ? newClientName.trim() : undefined,
         target_environment: details.target_environment || undefined,
         description: details.description || undefined,
         go_live_date: details.go_live_date || undefined,
@@ -446,7 +465,8 @@ export const SetupWizard: React.FC = () => {
       <Stepper step={step} />
 
       {step === 1 && (
-        <Step1Details details={details} setDetails={setDetails} clients={clients} />
+        <Step1Details details={details} setDetails={setDetails} clients={clients}
+          newClientName={newClientName} setNewClientName={setNewClientName} />
       )}
       {step === 2 && (
         <Step2Source
@@ -675,7 +695,9 @@ const Step1Details: React.FC<{
   details: EngagementDetails;
   setDetails: (d: EngagementDetails) => void;
   clients: ClientSummary[];
-}> = ({ details, setDetails, clients }) => (
+  newClientName: string;
+  setNewClientName: (v: string) => void;
+}> = ({ details, setDetails, clients, newClientName, setNewClientName }) => (
   <Card>
     <CardBody>
       <SectionTitle icon={<Building2 className="h-4 w-4" />}>Engagement details</SectionTitle>
@@ -688,23 +710,37 @@ const Step1Details: React.FC<{
             onChange={(e) => setDetails({ ...details, name: e.target.value })}
           />
         </Field>
-        <Field label="Client workspace (tenant)">
+        <Field label="Client workspace (tenant)" required>
           <select
             className="input"
             value={details.client_id}
             onChange={(e) => setDetails({ ...details, client_id: e.target.value })}
           >
-            {clients.length === 0 && <option value="">Loading clients…</option>}
+            {clients.length === 0
+              ? <option value="">Loading clients…</option>
+              : <option value="">Select a client…</option>}
             {clients.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}{c.is_default ? " (default)" : ""}
               </option>
             ))}
+            <option value="__new__">+ Add a new client…</option>
           </select>
+          {details.client_id === "__new__" && (
+            <input
+              className="input mt-2"
+              autoFocus
+              placeholder="New client name, e.g. NextPower"
+              value={newClientName}
+              onChange={(e) => setNewClientName(e.target.value)}
+            />
+          )}
           <p className="mt-1 text-[11px] text-ink-muted">
-            Everything this engagement learns — column mappings, defaults, suppressions —
-            is saved to this client and auto-applied to its future conversions, never shared
-            with other clients. Add clients on the Clients page.
+            Required. Everything this engagement learns — column mappings, defaults,
+            suppressions — is stored against this client and applied to its other
+            conversions and projects, old and new, and never to another client&apos;s.
+            It is the key those rules are read back under, so it cannot be set
+            correctly after the fact.
           </p>
         </Field>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

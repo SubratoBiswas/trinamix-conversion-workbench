@@ -21,6 +21,14 @@ del /f /q "~$*.xlsx" "~$*.pptx" 2>nul
 git rm -r --cached --ignore-unmatch _qa 1>nul 2>nul
 echo Staging...
 git add -A
+REM What is about to be committed, so "is this the latest?" is answerable from
+REM the window rather than from the file's timestamp. This script itself rarely
+REM changes -- an old date on launch_git.bat is normal and means nothing; the
+REM date that matters is COMMIT_MSG.txt's and the list of staged files below.
+echo.
+echo ---- Staged for this commit ----
+git diff --cached --name-only
+echo --------------------------------
 echo Committing (no-op if nothing changed)...
 if not exist "COMMIT_MSG.txt" (
   echo.
@@ -45,6 +53,16 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+REM The commit that was just pushed. Render builds this exact SHA, and
+REM /api/health now reports the SHA it is running -- so "is my fix live yet?"
+REM is a comparison, not a guess. They match => deployed. They differ => still
+REM building, wait and refresh.
+for /f %%i in ('git rev-parse --short HEAD') do set SHA=%%i
 echo.
-echo ====== DONE - committed and pushed. Press any key to close ======
+echo ====== DONE - committed and pushed ======
+echo   Pushed commit : %SHA%
+echo   Now check     : https://trinamix-conversion-backend.onrender.com/api/health
+echo   Deployed when the "commit" field there starts with %SHA%
+echo   (Render takes a few minutes to build.)
+echo.
 pause

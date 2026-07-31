@@ -167,10 +167,15 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     # generator uses the write key, so the value reached the FBDI file while being
     # invisible on this screen: a correct fix looking broken, which invites re-fixing
     # something that is not wrong.
-    from app.services.learning_service import object_keys_for_object
+    from app.services.learning_service import CLIENT_RULE, object_keys_for_object
+    # ...and CLIENT RULES (target_object=None), which belong to the client rather than
+    # to one object. Without None in this list a rule the analyst set is applied by
+    # the generator and invisible on the screen that is supposed to explain the
+    # generator — the exact "a correct fix looking broken" shape described above.
     _obj_keys = sorted(set(object_keys_for_object(target_object)) |
                        set(object_keys_for_object(
-                           (await _template_object(conversion)) or "")))
+                           (await _template_object(conversion)) or "")),
+                       key=str) + [CLIENT_RULE]
 
     # The same three sources output_service consults, resolved the same way, so the
     # screen and the file can no longer disagree about what is blank.

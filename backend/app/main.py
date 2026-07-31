@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import datetime as _dt
+
 from app import __version__
 from app.config import settings
 from app.database import init_db
@@ -286,13 +288,33 @@ async def _unhandled_exception_handler(request, exc):
     )
 
 
+_STARTED_AT = _dt.datetime.utcnow()
+
+
 @app.get("/api/health")
 def health() -> dict:
+    """Liveness, and WHICH BUILD IS ANSWERING.
+
+    ``version`` is a constant in app/__init__.py and has been "0.1.0" throughout, so
+    it could never answer the question that actually gets asked - "is the fix I just
+    pushed the code that is running?" Several rounds of "it does not work" / "that is
+    not deployed yet" were spent on both sides guessing at that, with a screenshot as
+    the only evidence and no way to tell a missing fix from an un-deployed one.
+
+    Render exposes the deployed commit as RENDER_GIT_COMMIT, so the running build can
+    simply say so. Unset (local, or another host) reports "unknown" rather than
+    pretending.
+    """
+    import os
+    _sha = (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "").strip()
     return {
         "status": "ok",
         "service": "trinamix-conversion-workbench",
         "version": __version__,
         "ai_provider": settings.AI_PROVIDER,
+        "commit": (_sha[:12] or "unknown"),
+        "branch": (os.getenv("RENDER_GIT_BRANCH") or "").strip() or None,
+        "started_at": _STARTED_AT.isoformat() + "Z",
     }
 
 

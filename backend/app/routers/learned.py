@@ -77,13 +77,21 @@ async def _reapply_learning(item: LearnedMapping, actor: str) -> dict:
     from app.services.learning_service import (
         object_keys_for_object, propagate_learning_to_open_conversions)
     keys = set(object_keys_for_object(item.target_object))
-    if not keys or not item.target_field:
-        return {"conversions": 0, "mappings": 0, "note": "learning has no object/field"}
-    convs = [c for c in await Conversion.find_all().to_list()
-             if (c.target_object or "") in keys and c.template_id]
+    if not item.target_field:
+        return {"conversions": 0, "mappings": 0, "note": "learning has no field"}
+    # A CLIENT RULE (target_object=None) is not about one object, so there is no
+    # object to match conversions on — any conversion will do as the origin, and the
+    # propagation itself is what decides who it reaches. Without this branch
+    # object_keys_for_object(None) returned [] and editing a client rule here
+    # propagated to NOTHING while reporting "learning has no object/field", which is
+    # both wrong and unhelpful.
+    _all = [c for c in await Conversion.find_all().to_list() if c.template_id]
+    convs = _all if item.target_object is None else [
+        c for c in _all if (c.target_object or "") in keys]
     if not convs:
         return {"conversions": 0, "mappings": 0,
-                "note": f"no conversion currently targets {item.target_object!r}"}
+                "note": (f"no conversion currently targets {item.target_object!r}"
+                         if item.target_object else "no conversion has a template yet")}
     convs.sort(key=lambda c: getattr(c, "updated_at", None) or datetime.min, reverse=True)
     # skip_origin=False: the edit came from the LIBRARY, not from one conversion's
     # screen, so there is no conversion that is "already correct" — the newest one is
@@ -116,8 +124,13 @@ async def list_learned(
         # compared with exact equality, a learning is filed where nobody looks — and
         # the generator uses the write key, so the value reaches the file while the
         # screen shows nothing.
-        from app.services.learning_service import object_keys_for_object
-        filters.append({"target_object": {"$in": object_keys_for_object(target_object)}})
+        from app.services.learning_service import object_keys_with_client_rules
+        # object_keys_WITH_CLIENT_RULES: a rule stored against the client rather than
+        # one object (target_object=None) must still be listed when the Learning
+        # Centre is filtered to an object, or the analyst's own saved rules vanish
+        # from the screen that exists to show them.
+        filters.append(
+            {"target_object": {"$in": object_keys_with_client_rules(target_object)}})
     # Client scope: 'global' → only global rows; a client id → that client + global.
     if client_id == "global":
         filters.append({"is_global": True})

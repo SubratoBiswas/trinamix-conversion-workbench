@@ -218,7 +218,7 @@ class World:
         self.erps = dict(erps or {})
         person_dates = person_dates or {}
 
-        def add(obj, project, cid, dsid, *, field_name="Supplier Name",
+        def add(obj, project, cid, dsid, field_name="Supplier Name", *,
                 approved_by=None, approved_at=None):
             tid = f"tpl-{cid}"
             self.tpls.append(Row(id=tid, business_object=obj))
@@ -387,18 +387,27 @@ def test_the_sentence_is_not_written_into_the_column_as_a_constant():
 
 
 # ── 2. the library, which is what a FUTURE conversion asks ───────────────────
-def test_the_rule_is_stored_for_every_object_in_the_load_sequence():
-    """The gap. Written under one object, a rule is invisible to the five siblings
-    created after today — the fan-out cannot reach a conversion that does not
-    exist yet, and the library is the only thing that can."""
+def test_the_rule_is_stored_once_as_a_client_rule():
+    """Analyst, 31-Jul: "whatever user is saving or changing in mapping, store it as
+    a mapping rule from client perspective (in this case NextPower), so it will
+    correctly propagate through older projects and conversions and newer projects and
+    conversions."
+
+    This replaces a copy-per-sibling-object write. That version needed the load
+    sequence threaded in from every call site, produced six rows to say one thing, and
+    still left an object created next month with nothing — so "everywhere" was a
+    growing list of writes any new call site could forget, and did, twice. One row,
+    owned by the client, is what every reader already looks at.
+    """
     with World() as w:
         steer(w)
-        objs = {lm.target_object for lm in w.learned if lm.kind == "column_mapping"}
-        check("one learning per supplier object", objs == set(SUPPLIER_OBJECTS),
-              f"got {sorted(objs)}")
-        check("each one names the column the analyst asked for",
-              {lm.original_value for lm in w.learned} == {"Legal Name"},
-              f"got {[lm.original_value for lm in w.learned]}")
+        cols = [lm for lm in w.learned if lm.kind == "column_mapping"]
+        check("exactly one column-mapping learning was written", len(cols) == 1,
+              f"got {len(cols)}: {[(lm.target_object, lm.original_value) for lm in cols]}")
+        check("and it is a CLIENT rule, not an object one",
+              cols[0].target_object is None, f"got {cols[0].target_object!r}")
+        check("naming the column the analyst asked for",
+              cols[0].original_value == "Legal Name", f"got {cols[0].original_value!r}")
 
 
 def test_a_conversion_created_after_the_steer_inherits_it():
@@ -479,13 +488,14 @@ def test_an_unrelated_object_is_left_alone():
     """The bundle is this project's load sequence, not everything in the database.
     A Customer conversion must not be touched by a supplier instruction."""
     with World(extra_conversions=[
-            ("Customer", "proj-cust", "c-cust", "ds-cust")]) as w:
+            ("Customer", "proj-cust", "c-cust", "ds-cust", "Customer Name")]) as w:
         steer(w)
         cust = next(m for m in w.maps if m.conversion_id == "c-cust")
         check("Customer keeps its own mapping", cust.source_column == "Name",
               f"got {cust.source_column!r}")
-        check("and no Customer learning was written",
-              all(lm.target_object != "Customer" for lm in w.learned))
+        check("because its template has no field of that name — which, with a client "
+              "rule, is now the guard that matters",
+              all(lm.target_field != "Customer Name" for lm in w.learned))
 
 
 # ── 4. the date rule still arbitrates ────────────────────────────────────────
@@ -544,9 +554,10 @@ def test_leave_blank_propagates_as_a_suppression():
                for m in [w.mapping(o)]
                if not (m.status == "not_applicable" and m.source_column is None)}
         check("every supplier conversion is blanked", not bad, f"got {bad}")
-        check("and it is stored for every object in the sequence",
-              {lm.target_object for lm in w.learned if lm.kind == "suppress_field"}
-              == set(SUPPLIER_OBJECTS))
+        sup = [lm for lm in w.learned if lm.kind == "suppress_field"]
+        check("and it is stored once, as a client rule",
+              len(sup) == 1 and sup[0].target_object is None,
+              f"got {[(x.target_object) for x in sup]}")
 
 
 
@@ -602,10 +613,12 @@ def test_the_row_edit_is_stored_for_future_sibling_conversions_too():
         m.status = "approved"
         m.approved_by = "analyst"
         _record_and_propagate(w)
-        objs = {lm.target_object for lm in w.learned
-                if lm.kind == "column_mapping" and lm.original_value == "Legal Name"}
-        check("one learning per object in the sequence", objs == set(SUPPLIER_OBJECTS),
-              f"got {sorted(objs)}")
+        rows = [lm for lm in w.learned
+                if lm.kind == "column_mapping" and lm.original_value == "Legal Name"]
+        check("one row, owned by the client", len(rows) == 1, f"got {len(rows)}")
+        check("with no business object on it — that is what makes it reach a "
+              "conversion created next month, whatever object it targets",
+              rows[0].target_object is None, f"got {rows[0].target_object!r}")
 
 
 def test_all_three_mapping_grid_call_sites_pass_the_bundle():
@@ -718,6 +731,57 @@ def test_the_result_says_why_a_conversion_was_passed_over():
         check("the other tenant is named", sk.get("different client") == 1, f"got {sk}")
         check("so is the missing column",
               any("no column" in k for k in sk), f"got {sk}")
+
+
+def test_the_fanout_uses_the_row_it_just_wrote_not_whatever_the_query_returns():
+    """A field usually carries MORE THAN ONE learning — the seeded workbook row, an
+    auto-captured one from a previous Generate, and the one the analyst just typed.
+    The fan-out used to go and find it again with find_one(kind, object, field): no
+    client filter, no source filter, no ordering. Mongo hands back whichever it likes,
+    so the fan-out could pick up a STALE row and push the OLD column across the whole
+    sequence — the tab the analyst typed on correct, every other tab quietly keeping
+    or regaining the previous mapping. Which is precisely what "it does not propagate"
+    looks like from the outside.
+    """
+    with World() as w:
+        # A stale learning for the same field, inserted FIRST so a naive find_one
+        # would reach it before the one the steer writes.
+        w.learned.append(Row(
+            id="lm-stale", kind="column_mapping", target_object="Supplier Import",
+            target_field="Supplier Name", original_value="Name",
+            resolved_value="Supplier Name", client_id="someone-else",
+            captured_at=OLD, effective_date=OLD))
+        steer(w)
+        got = w.sources()
+        check("no conversion was given the stale column",
+              all(v == "Legal Name" for v in got.values()),
+              f"got {got} — the fan-out propagated a stale learning")
+
+
+# ── 9. both plain-text doors write the same kind of row ─────────────────────
+def test_both_plain_text_entry_points_write_a_client_rule():
+    """Analyst, 31-Jul: "there are two places to change the rule or mapping using
+    plain text, one is the yellow global location, one is inside custom transformation
+    section for each column mapping."
+
+    They are different code paths and they drifted apart twice — the steer box gained
+    the load-sequence fan-out and the grid did not, then the grid gained it and the
+    custom-rule path did not. Asserting the SHAPE of what each writes is what stops a
+    third drift: whatever the door, the row is owned by the client.
+    """
+    from pathlib import Path as _P
+    src = (_P(__file__).resolve().parent.parent / "app" / "services"
+           / "learning_service.py").read_text(encoding="utf-8")
+    for fn in ("record_learning_from_mapping", "record_learning_from_rule"):
+        i = src.index(f"async def {fn}")
+        j = src.index("async def ", i + 10)
+        body = src[i:j]
+        check(f"{fn} writes a client rule",
+              "target_object=CLIENT_RULE" in body,
+              "it is still writing an object-scoped row")
+    steer_src = (_P(__file__).resolve().parent.parent / "app" / "services"
+                 / "steering_service.py").read_text(encoding="utf-8")
+    check("and so does the steer box", "CLIENT_RULE" in steer_src)
 
 
 def _all():

@@ -37,29 +37,27 @@ async def _learn(business_object, target_field, *, kind, original, resolved,
     applies to future conversions of the same object for this client (and never
     leaks to another client).
 
-    ACROSS THE WHOLE LOAD SEQUENCE, not just the object the analyst happened to be
-    looking at. This is the half of "affect existing AND future conversions" that the
-    fan-out cannot cover. Propagation walks conversions that exist NOW; a conversion
-    created tomorrow inherits nothing from it and instead asks the library, and
-    `apply_learned_to_conversion` asks by ITS OWN business object. So a rule typed on
-    the Supplier Import screen was stored under "Supplier" alone — today's other five
-    supplier conversions were corrected by the fan-out, and next month's five were
-    not. Same instruction, right for a week, silently wrong afterwards, and no screen
-    would ever show the difference.
+    AS A CLIENT RULE — one row, owned by the client rather than by whichever business
+    object the analyst happened to be looking at.
 
-    One row per sibling object fixes that at the point the question is asked. A row
-    written for an object whose template has no such field is inert: every reader
-    matches the target field by name against that template first.
+    Analyst, 31-Jul: "whatever user is saving or changing in mapping, store it or save
+    it as mapping rule from client perspective (in this case NextPower), so it will
+    correctly propagate through older projects and conversions and newer projects and
+    conversions." Both plain-text entry points — this box and the custom-transformation
+    box on a single column — write the same kind of row, so they cannot drift apart
+    again.
+
+    This replaces a copy-per-sibling-object write. That version needed the load
+    sequence passed in, produced six rows to express one decision, and still left an
+    object created next month with nothing — so "everywhere" was a growing list of
+    writes that any new call site could forget, and did. A client rule is one row that
+    every reader already looks at.
     """
-    if not business_object or not target_field:
-        return
-    seen, targets = set(), []
-    for obj in [business_object, *(objects or [])]:
-        k = (obj or "").strip()
-        if k and k.lower() not in seen:
-            seen.add(k.lower())
-            targets.append(k)
-    for obj in targets:
+    if not target_field:
+        return None
+    from app.services.learning_service import CLIENT_RULE
+    primary = None
+    for obj in [CLIENT_RULE]:
         # include_deleted=True: a retired steering rule is invisible to a plain
         # find_one, so the next prompt re-created it as a duplicate. CW #5.
         existing = await LearnedMapping.find_one(
@@ -82,8 +80,20 @@ async def _learn(business_object, target_field, *, kind, original, resolved,
                 doc = {**doc, "is_deleted": False,
                        "deleted_at": None, "deleted_by": None}
             await existing.set(doc)
+            row = existing
         else:
-            await LearnedMapping(**doc).insert()
+            row = await LearnedMapping(**doc).insert()
+        if primary is None:
+            primary = row
+    # The row that was actually written. The fan-out used to go and LOOK FOR IT
+    # again with find_one(kind, object, field) — no client filter, no source filter,
+    # no ordering — and a field can carry several learnings: the seeded workbook row,
+    # an auto-captured one, and this one. find_one returns whichever Mongo hands back
+    # first, so the fan-out could pick up a STALE row and push the OLD column to every
+    # conversion in the sequence. The analyst then sees the instruction applied on the
+    # tab they typed it on and the previous mapping re-asserted everywhere else, which
+    # reads exactly like "it did not propagate".
+    return primary
 
 
 # "clear X" / "blank X" / "leave X blank" / "don't map X" / "do not populate X"
@@ -160,13 +170,14 @@ async def _upsert(conversion, field, *, source_column, default_value, reason,
         await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
     # Persist as a reusable client-scoped rule.
     if source_column:
-        await _learn(business_object, field.field_name, kind="column_mapping",
-                     original=source_column, resolved=field.field_name,
-                     client_id=client_id, objects=objects)
-    elif default_value is not None:
-        await _learn(business_object, field.field_name, kind="example_default",
-                     original="(default)", resolved=default_value, rule_type="default",
-                     client_id=client_id, objects=objects)
+        return await _learn(business_object, field.field_name, kind="column_mapping",
+                            original=source_column, resolved=field.field_name,
+                            client_id=client_id, objects=objects)
+    if default_value is not None:
+        return await _learn(business_object, field.field_name, kind="example_default",
+                            original="(default)", resolved=default_value,
+                            rule_type="default", client_id=client_id, objects=objects)
+    return None
 
 
 async def _suppress(conversion, field, business_object, client_id=None, actor=None,
@@ -188,9 +199,9 @@ async def _suppress(conversion, field, business_object, client_id=None, actor=No
         await existing.set(payload)
     else:
         await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
-    await _learn(business_object, field.field_name, kind="suppress_field",
-                 original="(blank)", resolved="", rule_type="suppress",
-                 client_id=client_id, objects=objects)
+    return await _learn(business_object, field.field_name, kind="suppress_field",
+                        original="(blank)", resolved="", rule_type="suppress",
+                        client_id=client_id, objects=objects)
 
 
 async def _ai_parse_directives(lines: list[str], field_names: list[str],
@@ -342,24 +353,24 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
             unresolved.append({"field": f.field_name, "wanted_source": _strip_scope(col_raw),
                                "reason": "no column by that name in this file", "via": via})
             return None
-        await _upsert(conversion, f, source_column=col, default_value=None,
-                      reason=f"prompt ({via}): map", business_object=business_object,
-                      client_id=client_id, actor=actor, objects=bundle)
+        _lm = await _upsert(conversion, f, source_column=col, default_value=None,
+                            reason=f"prompt ({via}): map", business_object=business_object,
+                            client_id=client_id, actor=actor, objects=bundle)
         applied.append({"field": f.field_name, "source": col, "via": via})
-        return ("column_mapping", f.field_name)
+        return ("column_mapping", f.field_name, _lm)
 
     async def _do_default(f, val, via):
-        await _upsert(conversion, f, source_column=None, default_value=str(val),
-                      reason=f"prompt ({via}): default", business_object=business_object,
-                      client_id=client_id, actor=actor, objects=bundle)
+        _lm = await _upsert(conversion, f, source_column=None, default_value=str(val),
+                            reason=f"prompt ({via}): default", business_object=business_object,
+                            client_id=client_id, actor=actor, objects=bundle)
         applied.append({"field": f.field_name, "default": str(val), "via": via})
-        return ("example_default", f.field_name)
+        return ("example_default", f.field_name, _lm)
 
     async def _do_suppress(f, via):
-        await _suppress(conversion, f, business_object, client_id, actor=actor,
-                        objects=bundle)
+        _lm = await _suppress(conversion, f, business_object, client_id, actor=actor,
+                              objects=bundle)
         applied.append({"field": f.field_name, "suppressed": True, "via": via})
-        return ("suppress_field", f.field_name)
+        return ("suppress_field", f.field_name, _lm)
 
     touched: list[tuple] = []
 
@@ -443,9 +454,19 @@ async def apply_steer_prompt(conversion: Conversion, prompt: str,
             keys = object_keys_for_object(business_object)
             # `bundle` is already computed above — it is the same list that decided
             # which library rows to write, and the two must not be allowed to drift.
-            for kind, field in touched:
-                lm = await LearnedMapping.find_one(
-                    {"kind": kind, "target_object": {"$in": keys}, "target_field": field})
+            for kind, field, lm in touched:
+                # THE ROW JUST WRITTEN, not a re-query. Looking it up again by
+                # (kind, object, field) with no client filter, no source filter and no
+                # ordering picked an arbitrary row whenever a field carried more than
+                # one learning — the seeded workbook row, an auto-captured one, and
+                # this one all match — so the fan-out could take a STALE row and push
+                # the OLD column across the whole sequence. Nothing said so: the tab
+                # the analyst typed on was correct and every other tab quietly kept or
+                # regained the previous mapping.
+                if lm is None:
+                    lm = await LearnedMapping.find_one(
+                        {"kind": kind, "target_object": {"$in": keys},
+                         "target_field": field})
                 if lm is None:
                     continue
                 r = await propagate_learning_to_open_conversions(

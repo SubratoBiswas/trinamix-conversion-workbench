@@ -10,7 +10,22 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     client: Optional[str] = None                 # legacy free-text label
-    client_id: Optional[str] = None              # tenant this project belongs to
+    # THE TENANT, AND IT IS REQUIRED — either an existing client id, or
+    # ``new_client_name`` to create one in the same call.
+    #
+    # This was optional and fell back to the bootstrap "default" client, which reads
+    # as harmless and is not. Everything an analyst decides is stored as a CLIENT
+    # rule, so the client is the key the whole library is filed and read under: an
+    # untagged project silently files its decisions under "default", and a correction
+    # made in a properly tagged project is then skipped when it reaches that one — as
+    # a cross-tenant leak. That is the "changed the mapping in one project, it did not
+    # reach the other, same client and source" report. The fan-out no longer treats
+    # untagged as a foreign tenant, but leaving the hole open just moves the problem:
+    # the rules still land under the wrong client and cannot be found later.
+    #
+    # Asking once, at creation, is cheaper than any of that.
+    client_id: Optional[str] = None
+    new_client_name: Optional[str] = None        # create this client and use it
     target_environment: Optional[str] = None
     go_live_date: Optional[date] = None
     owner: Optional[str] = None

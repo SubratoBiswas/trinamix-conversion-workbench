@@ -182,10 +182,13 @@ def test_every_reader_asks_for_every_spelling_of_the_object():
         check(f"{want!r} is covered", want in keys, f"got {keys}")
     check("an empty object yields nothing", object_keys_for_object("") == [])
     check("defaults reads them all", '"target_object": {"$in": _obj_keys}' in _SRC["defaults_service.py"])
+    check("...including client rules", "+ [CLIENT_RULE]" in _SRC["defaults_service.py"])
     check("the Learning Centre reads them all",
-          '{"target_object": {"$in": object_keys_for_object(target_object)}}' in _SRC["learned.py"])
+          'object_keys_with_client_rules(target_object)' in _SRC["learned.py"])
     check("and propagation matches normalised",
-          "if _normalize(await _business_object_for(conv)) not in _keys:" in _SRC["learning_service.py"])
+          "_normalize(await _business_object_for(conv)) not in _keys" in _SRC["learning_service.py"])
+    check("but exempts a client rule from the object filter",
+          "if lm.target_object is not None and (" in _SRC["learning_service.py"])
 
 
 # ── 6. one ordering ─────────────────────────────────────────────────────────

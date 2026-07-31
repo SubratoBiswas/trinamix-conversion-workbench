@@ -467,36 +467,26 @@ async def record_learning_from_mapping(
             # to have a column of the same name.
             sheets=[_sheet_name] if _sheet_name else None,
         )
+    # AS A CLIENT RULE, which is what makes it reach everything. This used to
+    # write one copy per sibling object in the load sequence — six writes to express
+    # one decision, and still nothing for an object that does not exist yet. A single
+    # CLIENT_RULE row says it once: this client maps this field from this column, in
+    # every project and every conversion, existing or created next month.
+    #
+    # COLUMN MAPPINGS ONLY. A default carries the sheet it was set on (Oracle repeats
+    # field names across sheets — Customer has 19), and a sheet name means nothing
+    # outside the template it came from, so a client-level default would either bind
+    # to nothing or spray across every sheet with a column of that name. Defaults stay
+    # object-scoped and reach existing conversions through the fan-out, where sheet
+    # scope is evaluated per template.
     lm = await _upsert(
         kind="column_mapping", category="Column Mapping Alias",
         original_value=mapping.source_column, resolved_value=target_field,
-        target_object=business_object, target_field=target_field,
+        target_object=CLIENT_RULE, target_field=target_field,
         rule_type=rule_type, rule_config=rule_config,
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
     )
-    # AND FOR THE SIBLINGS, so a conversion created LATER inherits it too. The fan-out
-    # can only reach conversions that exist; the library is the only thing a future one
-    # asks, and apply_learned_to_conversion asks it under ITS OWN object. Without a row
-    # per object in the load sequence, a correction made today is right for the six
-    # supplier conversions on screen and silently absent from the six created next
-    # month — the same instruction, quietly changing meaning with time.
-    #
-    # COLUMN MAPPINGS ONLY. A default carries the sheet it was set on (Oracle repeats
-    # field names across sheets — Customer has 19), and that sheet name does not exist
-    # in a sibling's template, so copying it across would either bind to nothing or,
-    # unscoped, spray a default over every sheet of the sibling that happens to have a
-    # column of that name. Existing sibling conversions still receive defaults through
-    # the fan-out, where the scope is evaluated against each template properly.
-    for _obj in await bundle_objects_for(conversion):
-        await _upsert(
-            kind="column_mapping", category="Column Mapping Alias",
-            original_value=mapping.source_column, resolved_value=target_field,
-            target_object=_obj, target_field=target_field,
-            rule_type=rule_type, rule_config=rule_config,
-            project_id=conversion.project_id, client_id=_cid, source_erp=_src,
-            captured_from=captured_from, captured_by=captured_by,
-        )
     if rule_type and _is_master_key_field(business_object, target_field):
         await _upsert(
             kind="reference_standard", category="Reference Key Standard",
@@ -527,10 +517,16 @@ async def record_learning_from_rule(
     _cid = await client_id_for_conversion(conversion)
     # Learnings are keyed by source system too — see source_scope.
     _src = await source_erp_for_conversion(conversion)
+    # A CLIENT RULE, like every other decision the analyst makes by hand. The custom
+    # transformation box is the SECOND plain-text place a rule gets written — the
+    # analyst named both on 31-Jul, "one is the yellow global location, one is inside
+    # custom transformation section for each column mapping" — and the two must not
+    # behave differently. Object-scoped, this one reached the conversion it was typed
+    # on and no other, which is the same complaint arriving through a different door.
     lm = await _upsert(
         kind="rule", category=_category_for(rule.rule_type),
         original_value=rule.source_column or "", resolved_value=target_field,
-        target_object=business_object, target_field=target_field,
+        target_object=CLIENT_RULE, target_field=target_field,
         rule_type=rule.rule_type, rule_config=rule.rule_config or {},
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
@@ -633,7 +629,14 @@ async def propagate_learning_to_open_conversions(
         # real object invisible to each other whenever the template's
         # business_object and the conversion's target_object disagreed by so much as
         # a space.
-        if _normalize(await _business_object_for(conv)) not in _keys:
+        # A CLIENT RULE belongs to the client, not to one object, so it is not
+        # filtered by object at all — that is the whole point of it, and the reason
+        # this no longer needs a bundle passed in from every call site. Everything
+        # else still applies: the template must have the field, the extract must have
+        # the column, the client and source system must match, and a later human
+        # decision still wins.
+        if lm.target_object is not None and (
+                _normalize(await _business_object_for(conv)) not in _keys):
             _skip("different business object")
             continue
         # Client scope: a conversion nobody tagged is not another tenant's, so it is
@@ -748,6 +751,36 @@ async def _dataset_columns_for(conv) -> set | None:
         return {_normalize(p.column_name) for p in profs if p.column_name}
     except Exception:                                           # noqa: BLE001
         return None
+
+
+# A learning whose target_object is None is a CLIENT RULE: it belongs to the client,
+# not to one business object, and every object that has a field of that name answers
+# to it.
+#
+# Analyst, 31-Jul, after several rounds of widening object-scoped fan-outs one call
+# site at a time: "whatever user is saving or changing in mapping, store it or save it
+# as mapping rule from client perspective (in this case NextPower), so it will
+# correctly propagate through older projects and conversions and newer projects and
+# conversions."
+#
+# That is a better model than the one it replaces, and not only simpler. An
+# object-scoped decision has to be COPIED to each sibling object to reach the load
+# sequence, and copied again for objects that do not exist yet — so "everywhere"
+# was a growing list of writes, every one of which could be forgotten at a new call
+# site, and was. A client rule is ONE row that every reader already has to look at.
+# The scopes that carry real meaning are kept: the CLIENT (another tenant must never
+# inherit) and the SOURCE SYSTEM (a SyteLine extract does not have NetSuite's
+# columns). Both are properties of the data, not of how the work happens to be filed.
+CLIENT_RULE = None
+
+
+def object_keys_with_client_rules(business_object: str | None) -> list:
+    """Read key set: this object's spellings PLUS client-level rules.
+
+    Every reader of the library asks with this, so a client rule is visible to all of
+    them without each one growing its own special case.
+    """
+    return [*object_keys_for_object(business_object), CLIENT_RULE]
 
 
 def object_keys_for_object(business_object: str | None) -> list[str]:
@@ -1157,7 +1190,8 @@ async def apply_learned_to_conversion(
     # stored mapping onto a row, so an exact match here meant a correction filed as
     # "Supplier Address" never reached a conversion whose object reads
     # "Supplier_Address", and nothing on screen said the two were different objects.
-    _obj_keys = object_keys_for_object(business_object) or [business_object]
+    _obj_keys = (object_keys_with_client_rules(business_object)
+                 or [business_object, CLIENT_RULE])
 
     def _q(kind: str) -> dict:
         base = {"kind": kind, "target_object": {"$in": _obj_keys}}

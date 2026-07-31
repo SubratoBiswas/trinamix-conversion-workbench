@@ -93,20 +93,24 @@ async def create_project(payload: ProjectCreate, user: User = Depends(get_curren
     data.setdefault("owner", user.email)
     data.setdefault("created_at", datetime.utcnow())
     data.setdefault("updated_at", datetime.utcnow())
-    # Tenant: use the picked client, else fall back to the bootstrap (default)
-    # client so EVERY project is explicitly tenant-tagged. This is what lets each
-    # project's captured learnings attach to the right client automatically — an
-    # untagged project would have its captures resolve only for the default tenant.
+    # THE TENANT, AND IT IS REQUIRED. Either an existing client, or a name to create
+    # one with right here — the analyst should not have to leave a half-built project
+    # to go and add a client on another page.
+    #
+    # It used to fall back to the bootstrap "default" client whenever the field was
+    # missing or the id was malformed. That looks harmless and is not: every decision
+    # an analyst makes is stored as a CLIENT rule, so the client is the key the whole
+    # library is filed and read under. A project that quietly became "default" filed
+    # its rules there, and a correction made in a properly tagged project was then
+    # skipped when it reached that project — as a cross-tenant leak. Silently
+    # guessing the most important scope in the system is not a kindness.
     raw_cid = data.pop("client_id", None)
-    resolved_cid = None
-    if raw_cid:
-        try:
-            resolved_cid = PydanticObjectId(raw_cid)
-        except Exception:  # noqa: BLE001 — bad id -> fall back to default below
-            resolved_cid = None
-    if resolved_cid is None:
-        from app.services.client_service import default_client_id
-        resolved_cid = await default_client_id()
+    new_name = data.pop("new_client_name", None)
+    from app.services.client_service import resolve_client_for_project
+    try:
+        resolved_cid = await resolve_client_for_project(raw_cid, new_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     data["client_id"] = resolved_cid
     p = Project(**data)
     await p.insert()
