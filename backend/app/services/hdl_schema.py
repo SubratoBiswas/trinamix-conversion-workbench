@@ -100,7 +100,11 @@ def _blank(name, required=True):
 LOCATION = ("Location", [
     _const("SetCode", "COMMON"),
     _vmap("ActiveStatus", "Active Status", ACTIVE_STATUS_MAP),
-    _date("EffectiveStartDate", _HIRE),
+    # Field-mapping workbook row 43, "default value ( 1/1/1900 )". Location is a
+    # SETUP object deduped to one record per distinct location, so the hire date
+    # this used to take came from whichever employee row happened to survive the
+    # dedupe — arbitrary, and a different date on the next extract.
+    _const("EffectiveStartDate", "1900/01/01"),
     # Strategy 9.1: open-ended ONLY when the extract has no end date.
     _const_if_blank("EffectiveEndDate", "4712/12/31", "Location End Date",
                     required=False),
@@ -116,7 +120,8 @@ LOCATION = ("Location", [
 ])
 
 JOB = ("Job", [
-    _date("EffectiveStartDate", _HIRE),
+    # Field-mapping workbook row 45 — same reasoning as Location above.
+    _const("EffectiveStartDate", "1900/01/01"),
     _const("SetCode", "COMMON"),
     _src("JobCode", "Business Title"),
     _src("Name", "Business Title"),
@@ -163,6 +168,9 @@ PERSON_NAME = ("PersonName", [
     _const("NameType", "GLOBAL"),
     _src("FirstName", "Legal First Name"),
     _src("LastName", "Legal Last Name"),
+    # Field-mapping workbook row 12: Preferred_Name -> KnownAs. PersonName had no
+    # KnownAs attribute, so the green row had nowhere to land.
+    _src("KnownAs", "Preferred Name", required=False),
     _const("SourceSystemOwner", "Workday"),
     _key("SourceSystemId", "PersonName"),
 ])
@@ -179,7 +187,11 @@ PERSON_EMAIL = ("PersonEmail", [
 
 WORK_RELATIONSHIP = ("WorkRelationship", [
     _date("DateStart", _HIRE),
-    _blank("OnMilitaryServiceFlag"),
+    # Field-mapping workbook row 54: Military_Service -> OnMilitaryServiceFlag. It
+    # was hard-blank, which meant a supplied value would have been discarded. The
+    # column is in another Workday file, so until that file joins the load this
+    # still renders empty — but from an absent column, not from a decision.
+    _src("OnMilitaryServiceFlag", "Military_Service"),
     _const("PrimaryFlag", "Y"),
     _key("PersonId(SourceSystemId)", "Workday"),
     _src("WorkerNumber", _EMP_ID),

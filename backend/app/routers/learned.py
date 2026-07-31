@@ -459,6 +459,18 @@ async def reseed_supplier_corrections(_: User = Depends(get_current_user)):
     return await seed_supplier_corrections_30jul()
 
 
+@router.post("/reseed-hcm-mapping")
+async def reseed_hcm_mapping(_: User = Depends(get_current_user)):
+    """Re-run the HCM (Employee) green-row mapping seed on demand.
+
+    Returns the counts so "it ran" and "it changed something" stay distinguishable.
+    The rows land in the Learning Center like any other learning — same collection,
+    same list — scoped to source system Workday and object Employee HDL.
+    """
+    from app.services.catalog_seed_service import seed_hcm_source_mapping
+    return await seed_hcm_source_mapping()
+
+
 @router.post("/reseed-customer-sheet-scope")
 async def reseed_customer_sheet_scope(_: User = Depends(get_current_user)):
     """Re-run the Customer per-sheet scope on demand (CW_Issues 2 rows 13-15, 26)."""

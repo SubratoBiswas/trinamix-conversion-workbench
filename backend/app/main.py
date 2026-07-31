@@ -161,6 +161,14 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("customer sheet scope seed failed")
     try:
+        # GREEN rows of the NXT HCM Field Mapping workbook (Workday -> Employee HDL).
+        # Seeded after the base HDL mappings so the analyst's sheet wins a clash.
+        from app.services.catalog_seed_service import seed_hcm_source_mapping
+        r = await seed_hcm_source_mapping()
+        log.info("startup seed — HCM green mappings: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("HCM source mapping seed failed")
+    try:
         # Analyst-confirmed NextPower Customer mappings (NetSuite → the 19-sheet
         # Fusion Customer Import): account/party key references + name/tax/email/
         # phone/credit, propagated by field name across the interface sheets.

@@ -571,6 +571,117 @@ async def _sheet_objects_for(base_object: str) -> list[str]:
     return sorted(objs)
 
 
+_HCM_SOURCE_MAP = _DATA / "hcm_source_mapping.json"
+
+
+async def seed_hcm_source_mapping() -> dict:
+    """Seed the GREEN rows of the NXT HCM Field Mapping workbook.
+
+    Green is the workbook's own legend for "Mapped"; Yellow is a question to
+    NextPower, Orange a duplicate, Blue Oracle-required-but-missing, and Red
+    "Not to Bring". Only green is imported, and it is read by CELL FILL rather
+    than by eye — 20 of the 47 rows, every one of which also reads
+    "Bring to Oracle = Yes".
+
+    Two shapes beyond a plain column mapping, both taken from the workbook:
+
+      * ONE source column feeding SEVERAL targets. "Country" maps to Country AND
+        LegislationCode, so it becomes two learnings rather than one.
+      * A CONSTANT written where a source column would go — "default value
+        ( 1/1/1900 )" against EffectiveStartDate. That is a default, not a
+        mapping, so it is seeded as example_default and never as a column.
+
+    Scoped per HDL object through ``sheets``: the Location and Job fields must not
+    leak onto Worker just because the field name matches, which is the same
+    name-collision problem the Customer per-sheet scope exists to solve.
+
+    Idempotent, client- and source-scoped, tombstone-respecting.
+    """
+    import json as _json
+    if not _HCM_SOURCE_MAP.exists():
+        return {"seeded": 0, "note": "hcm_source_mapping.json not found"}
+    try:
+        doc = _json.loads(_HCM_SOURCE_MAP.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+    nid = await _nextpower_client_id()
+    eff = _effective_date_of(doc)
+    src = doc.get("_source") or "NXT HCM Field Mapping (green rows)"
+    OBJ = "Employee HDL"          # the object the existing HDL learnings already use
+    seeded = updated = retired = 0
+
+    async def _put(kind, field, original, resolved, comps, extra):
+        nonlocal seeded, updated, retired
+        existing = await LearnedMapping.find_one(
+            LearnedMapping.kind == kind,
+            LearnedMapping.target_object == OBJ,
+            LearnedMapping.target_field == field,
+            LearnedMapping.original_value == original,
+            LearnedMapping.client_id == nid,
+            include_deleted=True,
+        )
+        if existing and getattr(existing, "is_deleted", False):
+            retired += 1
+            return
+        payload = {"resolved_value": resolved, "sheets": list(comps or []),
+                   "effective_date": eff, "source_erp": "workday",
+                   "captured_from": src, "rule_config": extra}
+        if existing:
+            await existing.set(payload)
+            updated += 1
+            return
+        await LearnedMapping(
+            kind=kind,
+            category="Column Mapping Alias" if kind == "column_mapping" else "Default Value",
+            original_value=original, target_object=OBJ, target_field=field,
+            client_id=nid, is_global=False, **payload,
+        ).insert()
+        seeded += 1
+
+    # A green row whose Oracle field exists on no HDL component is recorded for the
+    # analyst but never seeded as a live mapping — the workbook's own comment on
+    # Cost Center is "No suitable field is available in Oracle for this information",
+    # and a learning pointing at a phantom field reads as done and does nothing.
+    no_field = 0
+    for m in doc.get("mappings", []):
+        col = (m.get("source_column") or "").strip()
+        fld = (m.get("target_field") or "").strip()
+        if not (col and fld):
+            continue
+        if m.get("oracle_field_exists") is False:
+            no_field += 1
+            continue
+        await _put("column_mapping", fld, col, fld, m.get("hdl_components"),
+                   {"hdl_object": m.get("hdl_object"),
+                    "hdl_components": m.get("hdl_components") or [],
+                    "hdl_block": m.get("hdl_block"),
+                    "as_written_in_workbook": m.get("as_written_in_workbook"),
+                    "as_written_in_workbook_target": m.get("as_written_in_workbook_target"),
+                    "verified_against_extract": m.get("verified_against_extract"),
+                    "note": m.get("note") or "", "source_row": m.get("source_row")})
+
+    for c in doc.get("constants", []):
+        fld = (c.get("target_field") or "").strip()
+        if not fld:
+            continue
+        # EffectiveStartDate lives on NINE components. The original_value carries the
+        # component so Location's 1900 default and Job's are two rows, not one row
+        # overwriting the other.
+        comps = c.get("hdl_components") or []
+        tag = f"(constant:{comps[0]})" if comps else "(constant)"
+        await _put("example_default", fld, tag, c.get("value") or "", comps,
+                   {"hdl_object": c.get("hdl_object"),
+                    "hdl_components": comps,
+                    "note": c.get("note") or "", "source_row": c.get("source_row")})
+
+    logger.info("HCM green mappings: %d seeded, %d updated, %d left retired, "
+                "%d with no Oracle field", seeded, updated, retired, no_field)
+    return {"seeded": seeded, "updated": updated, "left_retired": retired,
+            "no_oracle_field": no_field,
+            "mappings": len(doc.get("mappings", [])),
+            "constants": len(doc.get("constants", []))}
+
+
 _CUSTOMER_SHEET_SCOPE = _DATA / "customer_sheet_scope.json"
 
 

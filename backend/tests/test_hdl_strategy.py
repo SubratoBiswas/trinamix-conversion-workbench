@@ -113,10 +113,18 @@ def test_work_relationship_defaults():
           key_of(WORK_RELATIONSHIP, "SourceSystemId") == "WorkRelationship_<Employee ID>")
     check("PersonId cross-references the Worker key",
           key_of(WORK_RELATIONSHIP, "PersonId(SourceSystemId)") == "Workday_<Employee ID>")
-    # "Not sourced from Workday — default value pending Business confirmation."
-    # Blank is the honest representation of an undecided default.
-    check("OnMilitaryServiceFlag left blank pending confirmation",
-          spec(WORK_RELATIONSHIP, "OnMilitaryServiceFlag")["kind"] == "blank")
+    # The strategy doc read "Not sourced from Workday — default value pending
+    # Business confirmation", so blank was the honest representation of an undecided
+    # default. The field-mapping workbook (row 54, green) then named the source:
+    # Military_Service. Blank became the WRONG representation — it would discard the
+    # value once that Workday file joins the load. It still renders empty today,
+    # from an absent column rather than from a decision.
+    f = spec(WORK_RELATIONSHIP, "OnMilitaryServiceFlag")
+    check("OnMilitaryServiceFlag is sourced, per the field-mapping workbook",
+          f["kind"] == "source", f"got {f['kind']}")
+    check("from Military_Service", f["source"] == "Military_Service")
+    check("and still renders empty while that column is absent",
+          render_cell(f, lambda n, s: None) == "")
 
 
 def test_work_terms_defaults():

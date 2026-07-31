@@ -1,0 +1,211 @@
+{
+  "_source": "NXT HCM Field Mapping 1.xlsx, 'Source Files Mapping' tab — GREEN rows only",
+  "_effective_date": "2026-07-31",
+  "_scope": "Client NextPower · source system Workday · target object Employee HDL",
+  "_legend": "The workbook's own legend: Green = Mapped, Yellow = Questions to NEXTPOWER, Orange = Duplicate, Blue = Oracle required but missing from source, Red = Not to Bring. Only GREEN is imported — read by CELL FILL (FF92D050) on the Source Column Name cell, not by eye. 20 of the 47 rows are green, and every one of them also reads 'Bring to Oracle = Yes'.",
+  "_column_spellings": "The mapping tab writes source columns with UNDERSCORES (Employee_ID, Legal_First_Name) while the actual Workday extract header row uses SPACES (Employee ID, Legal First Name). Where the extract confirms a column, its REAL spelling is stored and the workbook spelling kept as an alias — the apply path resolves normalised, but the propagation path writes the stored value verbatim onto the mapping row, so storing the workbook spelling would leave a source column that does not exist in the dataset.",
+  "_scope_key": "HDL 'sheets' in this tool are COMPONENT names (Location, Job, Position, PositionHierarchy, Worker, PersonName, PersonEmail, WorkRelationship, WorkTerms, Assignment, AssignmentSupervisor) — that is what hdl_seed_service writes one FBDISheet per. Scoping a learning to the top-level .dat object instead would exclude it from the component the field actually lives in: FirstName is on PersonName, not Worker. So hdl_components below is measured against hdl_schema.all_components(), and the workbook's own '(Object)' suffix is the narrowing key — EffectiveStartDate appears on NINE components, and the 1/1/1900 constant belongs to exactly two of them.",
+  "mappings": [
+    {
+      "source_column": "Employee ID",
+      "as_written_in_workbook": "Employee_ID",
+      "target_field": "PersonNumber",
+      "hdl_object": "Worker",
+      "hdl_components": ["Worker", "PersonEmail"],
+      "verified_against_extract": true,
+      "source_row": 9
+    },
+    {
+      "source_column": "Preferred Name",
+      "as_written_in_workbook": "Preferred_Name",
+      "target_field": "KnownAs",
+      "hdl_object": "Worker",
+      "hdl_components": ["PersonName"],
+      "verified_against_extract": true,
+      "source_row": 12,
+      "note": "PersonName had no KnownAs attribute before this workbook; added to the loader schema so the green row has somewhere to land."
+    },
+    {
+      "source_column": "Legal First Name",
+      "as_written_in_workbook": "Legal_First_Name",
+      "target_field": "FirstName",
+      "hdl_object": "Worker",
+      "hdl_components": ["PersonName"],
+      "verified_against_extract": true,
+      "source_row": 13
+    },
+    {
+      "source_column": "Legal Last Name",
+      "as_written_in_workbook": "Legal_Last_Name",
+      "target_field": "LastName",
+      "hdl_object": "Worker",
+      "hdl_components": ["PersonName"],
+      "verified_against_extract": true,
+      "source_row": 14
+    },
+    {
+      "source_column": "Company",
+      "as_written_in_workbook": "Company",
+      "target_field": "LegalEmployerName",
+      "hdl_object": "Worker",
+      "hdl_components": ["WorkRelationship", "WorkTerms", "Assignment"],
+      "verified_against_extract": true,
+      "source_row": 17
+    },
+    {
+      "source_column": "Hire Date",
+      "as_written_in_workbook": "Hire_Date",
+      "target_field": "StartDate",
+      "hdl_object": "Worker",
+      "hdl_components": ["Worker"],
+      "verified_against_extract": true,
+      "source_row": 18
+    },
+    {
+      "source_column": "Worker Type",
+      "as_written_in_workbook": "Worker_Type",
+      "target_field": "WorkerType",
+      "hdl_object": "Worker",
+      "hdl_components": ["WorkRelationship", "Assignment"],
+      "verified_against_extract": true,
+      "source_row": 19
+    },
+    {
+      "source_column": "Active Status",
+      "as_written_in_workbook": "Active_Status",
+      "target_field": "ActiveStatus",
+      "hdl_object": "Location",
+      "hdl_components": ["Location", "Job", "Position"],
+      "verified_against_extract": true,
+      "source_row": 22,
+      "note": "No (Object) suffix in the workbook, so it applies to every component that sources ActiveStatus. PositionHierarchy is excluded deliberately — there it is the constant 'A', not a mapped value."
+    },
+    {
+      "source_column": "Manager_ID",
+      "as_written_in_workbook": "Manager_ID",
+      "target_field": "ManagerAssignmentNumber",
+      "as_written_in_workbook_target": "AssignmentSupervisor",
+      "hdl_object": "Worker",
+      "hdl_components": ["AssignmentSupervisor"],
+      "verified_against_extract": false,
+      "source_row": 24,
+      "note": "The workbook names the COMPONENT (AssignmentSupervisor); the attribute is ManagerAssignmentNumber. This extract has no Manager_ID — the loader parses the trailing id out of 'Manager - Level 01' (\"Jesus Prado (1001899)\" -> E1001899), which stands until the Manager_ID file is supplied."
+    },
+    {
+      "source_column": "Location",
+      "as_written_in_workbook": "Location",
+      "target_field": "LocationName",
+      "hdl_object": "Location",
+      "hdl_components": ["Location"],
+      "verified_against_extract": true,
+      "source_row": 34
+    },
+    {
+      "source_column": "Country",
+      "as_written_in_workbook": "Country",
+      "target_field": "Country",
+      "hdl_object": "Location",
+      "hdl_components": ["Location"],
+      "verified_against_extract": true,
+      "source_row": 37
+    },
+    {
+      "source_column": "Country",
+      "as_written_in_workbook": "Country",
+      "target_field": "LegislationCode",
+      "hdl_object": "Worker",
+      "hdl_components": ["PersonName"],
+      "verified_against_extract": true,
+      "source_row": 37
+    },
+    {
+      "source_column": "Email",
+      "as_written_in_workbook": "Email",
+      "target_field": "EmailAddress",
+      "hdl_object": "Worker",
+      "hdl_components": ["PersonEmail"],
+      "verified_against_extract": true,
+      "source_row": 38
+    },
+    {
+      "source_column": "Cost Center",
+      "as_written_in_workbook": "Cost_Center",
+      "target_field": "DefaultExpenseAccount",
+      "hdl_object": null,
+      "hdl_components": [],
+      "oracle_field_exists": false,
+      "verified_against_extract": true,
+      "source_row": 39,
+      "note": "The workbook's own TRX comment: 'No suitable field is available in Oracle for this information.' Recorded so the intent is visible in the Learning Center, but there is no attribute on any HDL component to write it to — it must not be presented as a live mapping."
+    },
+    {
+      "source_column": "Cost Center Name",
+      "as_written_in_workbook": "Cost_Center_Name",
+      "target_field": "DepartmentName",
+      "hdl_object": "Worker",
+      "hdl_components": ["Position", "Assignment"],
+      "verified_against_extract": true,
+      "source_row": 40
+    },
+    {
+      "source_column": "Location_Code",
+      "as_written_in_workbook": "Location_Code",
+      "target_field": "LocationCode",
+      "hdl_object": "Location",
+      "hdl_components": ["Location"],
+      "verified_against_extract": false,
+      "source_row": 44,
+      "note": "Location code from Workday. Transformation logic may be applied to align with Oracle naming conventions (e.g., NXT_IND_HYD). Assignment also carries a LocationCode attribute, but the workbook's (Location) suffix scopes this to the Location component."
+    },
+    {
+      "source_column": "Job_Code",
+      "as_written_in_workbook": "Job_Code",
+      "target_field": "JobCode",
+      "hdl_object": "Job",
+      "hdl_components": ["Job"],
+      "verified_against_extract": false,
+      "source_row": 46,
+      "note": "Job code from Workday. Transformation logic may be applied to align with Oracle naming conventions (e.g., NXT_SALES_DIR). Position and Assignment also carry JobCode; the (Job) suffix scopes this one."
+    },
+    {
+      "source_column": "Military_Service",
+      "as_written_in_workbook": "Military_Service",
+      "target_field": "OnMilitaryServiceFlag",
+      "hdl_object": "Worker",
+      "hdl_components": ["WorkRelationship"],
+      "verified_against_extract": false,
+      "source_row": 54,
+      "note": "Indicates whether the employee is currently on military service. Was hard-blank in the loader schema; now sourced, and still renders blank while the column is absent from the extract.",
+      "hdl_block": "WorkRelationship"
+    },
+    {
+      "source_column": "Job Profile",
+      "as_written_in_workbook": "Job Profile",
+      "target_field": "Name",
+      "hdl_object": "Job",
+      "hdl_components": ["Job"],
+      "verified_against_extract": false,
+      "source_row": 55,
+      "note": "Position also carries a Name attribute; the workbook's (Job) suffix scopes this one to Job."
+    }
+  ],
+  "constants": [
+    {
+      "target_field": "EffectiveStartDate",
+      "value": "1900/01/01",
+      "hdl_object": "Location",
+      "hdl_components": ["Location"],
+      "source_row": 43,
+      "note": "Represents the effective start date of the location record in Workday. EffectiveStartDate exists on NINE components — unscoped, this constant would date-stamp every worker record 1900."
+    },
+    {
+      "target_field": "EffectiveStartDate",
+      "value": "1900/01/01",
+      "hdl_object": "Job",
+      "hdl_components": ["Job"],
+      "source_row": 45,
+      "note": "Represents the effective start date of the job record in Workday."
+    }
+  ],
+  "_hdl_objects": "The five .dat files the generator writes, in load order: Location, Job, Position, PositionHierarchy, Worker. WorkRelationship is not a file — Worker.dat carries it as a child block — so hdl_object is the file and hdl_components are the blocks inside it."
+}
