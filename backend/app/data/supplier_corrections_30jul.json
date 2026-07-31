@@ -162,12 +162,21 @@
       "action": "rule",
       "rule_type": "CITY_COUNTRY_KEY",
       "rule_config": {
-        "country_column": "Country Code",
-        "city_column": "City",
+        "country_column": [
+          "Country Code",
+          "Billing Country Code",
+          "Shipping Country Code",
+          "Country"
+        ],
+        "city_column": [
+          "City",
+          "Billing City",
+          "Shipping City"
+        ],
         "separator": "-",
         "resolve_country_from_city": true
       },
-      "note": "Country Code is already clean 2-character ISO in the NetSuite extract - every non-blank value is exactly 2 characters (US 2,592, BR 1,652, IN 1,172, CN 358, AU 290) - so the rule joins, it does not convert. 'Country' next to it holds full names, and picking that column would have produced 'United States-Chicago' on 2,592 rows. Analyst 30-Jul: keep just the country code when there is no city, keep just the city when there is no code, and where the code is missing derive it FROM the city. MEASURED on this extract: 6,196 rows have both, 1,066 have a code and no city, 233 have neither, and ZERO have a city without a code - so the derivation has nothing to resolve here today. It is built anyway because eBOS and SyteLine extracts are not this one. Applied to ALL supplier sheets, because the site key has to be IDENTICAL wherever it appears or the assignment rows cannot link to the sites. Measured in the 30-Jul 22:18 output: POZ_SUPPLIER_SITES_INT said 'Hyderabad' while POZ_SITE_ASSIGNMENTS_INT said 'BU Hyderabad' for the same site - 3,878 assignment rows that would not have matched a single site.",
+      "note": "Country Code is already clean 2-character ISO in the NetSuite extract - every non-blank value is exactly 2 characters (US 2,592, BR 1,652, IN 1,172, CN 358, AU 290) - so the rule joins, it does not convert. 'Country' next to it holds full names, and picking that column would have produced 'United States-Chicago' on 2,592 rows. Analyst 30-Jul: keep just the country code when there is no city, keep just the city when there is no code, and where the code is missing derive it FROM the city. MEASURED on this extract: 6,196 rows have both, 1,066 have a code and no city, 233 have neither, and ZERO have a city without a code - so the derivation has nothing to resolve here today. It is built anyway because eBOS and SyteLine extracts are not this one. Applied to ALL supplier sheets, because the site key has to be IDENTICAL wherever it appears or the assignment rows cannot link to the sites. Measured in the 30-Jul 22:18 output: POZ_SUPPLIER_SITES_INT said 'Hyderabad' while POZ_SITE_ASSIGNMENTS_INT said 'BU Hyderabad' for the same site - 3,878 assignment rows that would not have matched a single site. CANDIDATES: the site sheet is routed to whichever bound source supplies most of its mapped columns, and that frame does not carry the plain 'Country Code' the rule originally named - the 30-Jul 22:18 output shipped 'Hyderabad' where it should have said 'IN-Hyderabad', with the city present and the code empty. Both columns now take a CANDIDATE LIST, first non-blank wins, matched case- and punctuation-insensitively. The extract carries Country Code, Billing Country Code and Shipping Country Code (all clean ISO-2) and City, Billing City and Shipping City.",
       "applies_to_all_sheets": true
     },
     {

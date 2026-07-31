@@ -546,8 +546,33 @@ def apply_rule(
         # stated fallback and is never worse than a dangling separator.
         sep = cfg.get("separator", "-")
         row = row or {}
-        cc = _to_str(row.get(cfg.get("country_column") or "", "")).strip()
-        city = _to_str(row.get(cfg.get("city_column") or "", "")).strip()
+
+        def _first(spec):
+            """First non-blank value across the candidate column names.
+
+            country_column / city_column accept a STRING or a LIST, because the
+            column a sheet actually carries is not always the one the analyst named.
+            The site sheet is routed to whichever bound source supplies most of its
+            mapped columns, and that frame turned out to hold "Billing Country Code"
+            / "Shipping Country Code" rather than the plain "Country Code" the rule
+            asked for — so the 30-Jul output shipped "Hyderabad" where it should have
+            said "IN-Hyderabad". Matching is case- and punctuation-insensitive for
+            the same reason "Internal Id" vs "Internal ID" cost the whole parent
+            lookup.
+            """
+            names = spec if isinstance(spec, (list, tuple)) else [spec]
+            by_norm = {re.sub(r"[^a-z0-9]", "", str(k).lower()): k for k in row}
+            for n in names:
+                key = by_norm.get(re.sub(r"[^a-z0-9]", "", str(n or "").lower()))
+                if key is None:
+                    continue
+                v = _to_str(row.get(key, "")).strip()
+                if v:
+                    return v
+            return ""
+
+        cc = _first(cfg.get("country_column") or "")
+        city = _first(cfg.get("city_column") or "")
         if not cc and city and cfg.get("resolve_country_from_city"):
             idx = (ctx or {}).get("city_country") or {}
             cc = idx.get(re.sub(r"[^a-z]", "", city.lower()), "")

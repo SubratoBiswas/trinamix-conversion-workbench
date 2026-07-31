@@ -87,7 +87,10 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
                 if br.get("if_column"):
                     cols.add(br["if_column"])
         elif rt == "CITY_COUNTRY_KEY":
-            cols.update(c for c in (cfg.get("country_column"), cfg.get("city_column")) if c)
+            for spec in (cfg.get("country_column"), cfg.get("city_column")):
+                for c in (spec if isinstance(spec, (list, tuple)) else [spec]):
+                    if c:
+                        cols.add(c)
         elif rt == "SELF_LOOKUP":
             # Parent Supplier reads THREE source columns and owns none of them, so
             # every one has to survive pruning: the key it looks up by, the column
@@ -135,7 +138,14 @@ def _build_city_country_index(src: pd.DataFrame, configs: list[dict]) -> dict:
 
     tally: dict[str, dict[str, int]] = {}
     for cfg in configs:
-        cc_col, city_col = _col(cfg.get("country_column")), _col(cfg.get("city_column"))
+        def _pick(spec):
+            for n in (spec if isinstance(spec, (list, tuple)) else [spec]):
+                c = _col(n)
+                if c is not None:
+                    return c
+            return None
+
+        cc_col, city_col = _pick(cfg.get("country_column")), _pick(cfg.get("city_column"))
         if cc_col is None or city_col is None:
             continue
         for cc, city in zip(src[cc_col].tolist(), src[city_col].tolist()):

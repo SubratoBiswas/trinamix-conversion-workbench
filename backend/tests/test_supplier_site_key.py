@@ -114,8 +114,20 @@ def test_the_index_ignores_rows_that_cannot_teach_anything():
 def test_it_reads_the_iso_column_not_the_country_name():
     d = directive_for("Supplier Site", "Supplier Site")
     cfg = d["rule"]["config"]
-    check("country column is the ISO code", cfg["country_column"] == "Country Code")
-    check("city column", cfg["city_column"] == "City")
+    # Both are CANDIDATE LISTS now — the sheet's frame may spell them Billing/
+    # Shipping. What still matters is that the ISO-2 code leads and the full
+    # country NAME never does: "Country" holds "United States", and choosing it
+    # would have produced "United States-Chicago" on 2,592 rows.
+    ccs = cfg["country_column"]
+    ccs = ccs if isinstance(ccs, list) else [ccs]
+    cities = cfg["city_column"]
+    cities = cities if isinstance(cities, list) else [cities]
+    check("the ISO code column leads", ccs[0] == "Country Code", f"got {ccs}")
+    check("every earlier candidate is a CODE column",
+          all("code" in c.lower() for c in ccs[:-1]), f"got {ccs}")
+    check("the full-name column is last resort only",
+          ccs[-1] == "Country" and len(ccs) > 1, f"got {ccs}")
+    check("city leads the city candidates", cities[0] == "City", f"got {cities}")
     check("separator is a hyphen", cfg["separator"] == "-")
     check("derivation is on", cfg.get("resolve_country_from_city") is True)
 
@@ -150,6 +162,46 @@ def test_existing_conversions_get_the_rule_too():
     check("the seeder calls it", "apply_rule_corrections(" in seed)
     check("with the file's date", "as_of=_effective_date_of(doc)" in seed)
     check("and reports what it did", '"rule_corrections": rules_applied' in seed)
+
+
+# ── The 30-Jul output said "Hyderabad", not "IN-Hyderabad" ───────────────────
+def test_the_key_reads_whichever_country_column_the_sheet_actually_carries():
+    """A sheet is routed to whichever bound source supplies most of its mapped
+    columns, and that frame need not carry the column the analyst named. The
+    30-Jul 22:18 bundle is the proof: POZ_SUPPLIER_SITES_INT shipped "Hyderabad"
+    on 4,388 rows — city present, country code empty — because the rule asked for
+    "Country Code" and that frame holds the Billing/Shipping spellings.
+    """
+    for label, row, want in (
+        ("plain",    {"Country Code": "IN", "City": "Hyderabad"}, "IN-Hyderabad"),
+        ("billing",  {"Billing Country Code": "IN", "Billing City": "Hyderabad"}, "IN-Hyderabad"),
+        ("shipping", {"Shipping Country Code": "BR", "Shipping City": "Sorocaba"}, "BR-Sorocaba"),
+        ("mixed",    {"Country Code": "US", "Billing City": "Chicago"}, "US-Chicago"),
+    ):
+        check(f"{label} spelling resolves", site(row) == want, f"got {site(row)!r}")
+
+
+def test_column_names_match_case_and_punctuation_insensitively():
+    check("lower-case, no space", site({"countrycode": "IN", "city": "Hyderabad"})
+          == "IN-Hyderabad", f"got {site({'countrycode': 'IN', 'city': 'Hyderabad'})!r}")
+
+
+def test_the_reported_row_shape_now_produces_the_full_key():
+    """City present, country code absent — exactly the 4,388 rows that shipped
+    bare city names. The index derives the code from the extract's own rows."""
+    check("derived", site({"City": "Hyderabad"}) == "IN-Hyderabad",
+          f"got {site({'City': 'Hyderabad'})!r}")
+
+
+def test_every_candidate_column_is_declared_to_the_generator():
+    """The generator prunes the frame to declared columns. A candidate the rule
+    might read but never declared is a column it will never see — which is how
+    Supplier Site shipped empty on 8,561 rows in the first place."""
+    from app.services.strategy_overlay import referenced_columns
+    cols = referenced_columns("Supplier Site")
+    for c in ("Country Code", "Billing Country Code", "Shipping Country Code",
+              "City", "Billing City", "Shipping City"):
+        check(f"{c} is declared", c in cols, f"got {sorted(cols)}")
 
 
 if __name__ == "__main__":
