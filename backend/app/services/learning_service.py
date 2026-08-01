@@ -345,7 +345,30 @@ async def _upsert(*, kind, category, original_value, resolved_value,
                               "rule_type": rule_type,
                               "effective_date": datetime.utcnow()})
             if sheets is not None:
-                patch["sheets"] = list(sheets)
+                # UNION, not replace. A default carries the sheet it was set on, and
+                # for the single-answer kinds the row is found by (object, field,
+                # client, source) WITHOUT the sheet — so setting the same default on
+                # a second sheet overwrote sheets=["A"] with sheets=["B"] and silently
+                # un-set the first one.
+                #
+                # Analyst, 31-Jul: "Role Type target field has been set a default
+                # value as CONTACT for both target sheets, however it only reflects
+                # in [one]". Both saves were accepted, both said approved, and the
+                # second quietly cancelled the first — the screen showed two defaults
+                # and the file carried one.
+                #
+                # Union is the safe direction: adding a sheet cannot remove a field
+                # from a sheet the analyst already set it on. NARROWING is done by
+                # pressing Keep blank on the sheet it should not apply to, which
+                # writes a suppression, rather than by re-saving with a shorter list.
+                _prev = [x for x in (getattr(lm, "sheets", None) or []) if x]
+                _seen, _merged = set(), []
+                for _s in [*_prev, *sheets]:
+                    _k = str(_s).strip().lower()
+                    if _s and _k not in _seen:
+                        _seen.add(_k)
+                        _merged.append(_s)
+                patch["sheets"] = _merged
             if revive and getattr(lm, "is_deleted", False):
                 patch.update({"is_deleted": False, "deleted_at": None, "deleted_by": None})
             await lm.set(patch)

@@ -287,3 +287,71 @@ if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()
     print("\nall 31-Jul customer default checks passed")
+
+# ── Role Type set on TWO sheets (CW 31-Jul, row 30) ─────────────────────────
+def test_setting_one_default_on_a_second_sheet_does_not_unset_the_first():
+    """Analyst: "Role Type target field has been set a default value as CONTACT for
+    both target sheets, however it only reflects in [one]."
+
+    A default carries the sheet it was set on, and for the single-answer kinds the
+    row is found by (object, field, client, source) WITHOUT the sheet — so the second
+    save overwrote sheets=["HZ_IMP_CONTACTS_T"] with sheets=["HZ_IMP_RELSHIPS_T"] and
+    silently cancelled the first. Both saves reported approved. The screen showed two
+    defaults and the file carried one, which is the shape that costs a whole
+    regenerate-and-read cycle to notice.
+    """
+    import asyncio
+    from app.services import learning_service as ls
+
+    rows = []
+
+    class _Row:
+        def __init__(self, **kw):
+            self.sheets = []
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+        async def set(self, patch):
+            for k, v in patch.items():
+                setattr(self, k, v)
+            return self
+
+        def __getattr__(self, n):
+            if n.startswith("__"):
+                raise AttributeError(n)
+            return None
+
+    class _LM:
+        def __init__(self, **kw):
+            self.r = _Row(**kw)
+            rows.append(self.r)
+
+        async def insert(self):
+            return self.r
+
+        @classmethod
+        def find(cls, _q, include_deleted=False):
+            class _Q:
+                async def to_list(_s):
+                    return list(rows)
+            return _Q()
+
+    _real, ls.LearnedMapping = ls.LearnedMapping, _LM
+    try:
+        async def _go():
+            for sheet in ("HZ_IMP_CONTACTS_T", "HZ_IMP_RELSHIPS_T"):
+                await ls._upsert(
+                    kind="example_default", category="Default Value",
+                    original_value="(default)", resolved_value="CONTACT",
+                    target_object="Customer", target_field="Role Type",
+                    captured_from="ui", captured_by="analyst", sheets=[sheet])
+        asyncio.run(_go())
+    finally:
+        ls.LearnedMapping = _real
+
+    check("it is still ONE learning, not two competing ones", len(rows) == 1,
+          f"got {len(rows)}")
+    check("and it now covers both sheets",
+          set(rows[0].sheets) == {"HZ_IMP_CONTACTS_T", "HZ_IMP_RELSHIPS_T"},
+          f"got {rows[0].sheets}")
+
