@@ -246,7 +246,7 @@ export const ProjectOverviewPage: React.FC = () => {
       // cleansed, validated), generated in the background so wide multi-source
       // objects can't hit the gateway timeout, then download the fast reuse-zip.
       const nObjs = new Set(convs.map((c) => objName(c))).size;
-      const _kind = fmt === "template" ? "filled Excel template" : "FBDI";
+      const _kind = fmt === "template" ? "FBDI Excel template" : "FBDI CSV";
       // CSV bundle is named _CSV; the filled Oracle workbooks keep _FBDI_templates.
       const _suffix = fmt === "template" ? "FBDI_templates" : "CSV";
       setDlStatus(`Merging & generating ${nObjs} ${_kind} file${nObjs === 1 ? "" : "s"}…`);
@@ -260,7 +260,7 @@ export const ProjectOverviewPage: React.FC = () => {
       const failed = (results || []).filter((r) => !r.ready);
       flash(failed.length
         ? `Bundle downloaded. ${failed.length} interface(s) had issues: ${failed.map((f) => f.object).join(", ")}.`
-        : `${fmt === "template" ? "Filled Excel templates" : "FBDI bundle"} generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
+        : `${fmt === "template" ? "FBDI Excel templates" : "FBDI CSV bundle"} generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
       refresh();
       loadRefStandards();
     } catch (e: any) {
@@ -450,12 +450,12 @@ export const ProjectOverviewPage: React.FC = () => {
             </Button>
             <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("csv")}>
               <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
-              {dlAll ? (dlStatus ?? "Working…") : "Download all FBDI"}
+              {dlAll ? (dlStatus ?? "Working…") : "Download all CSV"}
             </Button>
             <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("template")}
-              title="Merge each interface's sources and download the filled-in Oracle FBDI Excel templates">
+              title="Merge each interface's sources and download the filled-in Oracle FBDI Excel templates (.xlsm)">
               <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
-              {dlAll ? (dlStatus ?? "Working…") : "Download all (Excel templates)"}
+              {dlAll ? (dlStatus ?? "Working…") : "Download all (FBDI Excel)"}
             </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
@@ -619,7 +619,7 @@ export const ProjectOverviewPage: React.FC = () => {
                   title="Same pipeline, but write each interface's merged data INTO the real Oracle FBDI Excel template (POZ_SUPPLIERS_INT, EGP_STRUCTURES_INTERFACE, …) and download the filled templates as one .zip."
                 >
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
-                  {dlAll ? (dlStatus ?? "Working…") : "Filled Excel templates (.zip)"}
+                  {dlAll ? (dlStatus ?? "Working…") : "FBDI Excel templates (.zip)"}
                 </button>
                 {!fileBased && (
                   <button
@@ -800,7 +800,12 @@ export const ProjectOverviewPage: React.FC = () => {
                               title="Generate & download the FBDI CSV bundle"
                               className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
                             >
-                              <Download className="h-3 w-3" /> FBDI
+                              {/* "CSV" and "FBDI Excel", not "FBDI" and "Excel".
+                                  Both buttons produce FBDI — one the headerless CSV
+                                  bundle Oracle actually loads, the other the filled
+                                  .xlsm template. Labelling only the first "FBDI"
+                                  implied the second was something else. */}
+                              <Download className="h-3 w-3" /> CSV
                             </button>
                             <button
                               onClick={() => downloadTemplate(c)}
@@ -808,7 +813,7 @@ export const ProjectOverviewPage: React.FC = () => {
                               title="Generate & download the filled-in Oracle FBDI Excel template"
                               className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
                             >
-                              <Download className="h-3 w-3" /> {dlT === String(c.id) ? "…" : "Excel"}
+                              <Download className="h-3 w-3" /> {dlT === String(c.id) ? "…" : "FBDI Excel"}
                             </button>
                           </>
                         )}
