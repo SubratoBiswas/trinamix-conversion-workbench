@@ -34,6 +34,54 @@ def _is_hdl_template(t) -> bool:
     return (t.name or "").strip().lower() == _TEMPLATE_NAME.lower()
 
 
+def _field_docs_for(template_id, sheet_id, fields, start_seq: int) -> list:
+    """Build the FBDIField rows for one component. Extracted so the reconcile path
+    creates fields the SAME way the fresh-seed path does — two implementations of
+    'what a component looks like' would drift, and the one nobody exercises is the
+    one that would be wrong."""
+    out, seq = [], start_seq
+    for f in fields:
+        kind = f.get("kind")
+        note = {
+            "source": f"HDL attribute — mapped from source '{f.get('source')}'.",
+            "const": f"HDL structural constant — always '{f.get('value')}'.",
+            "key": f"HDL SourceSystemId composite key ('{f.get('prefix')}"
+                   f"{f.get('sep', '_')}<key>').",
+            "valuemap": f"Value-mapped from source '{f.get('source')}'.",
+            "date": f"Date reformatted from source '{f.get('source')}' to YYYY/MM/DD.",
+            "manager": f"Manager reference parsed from '{f.get('source')}'.",
+            "blank": "Required by Oracle; supplied by business (left blank).",
+        }.get(kind, "")
+        out.append(FBDIField(
+            template_id=template_id, sheet_id=sheet_id,
+            field_name=f["name"],
+            display_name=(f["name"] + " *") if f.get("required") else f["name"],
+            required=bool(f.get("required")),
+            data_type="date" if kind == "date" else "text",
+            sample_value=str(f.get("value")) if kind == "const" else None,
+            validation_notes=note,
+            sequence=seq,
+        ))
+        seq += 1
+    return out
+
+
+async def _add_components(tpl, comps, *, start_order: int = 0) -> list[str]:
+    """Add component sheets (and their fields) to an EXISTING template."""
+    seq = await FBDIField.find(FBDIField.template_id == tpl.id).count()
+    added, docs = [], []
+    for i, (_obj, comp_name, fields) in enumerate(comps):
+        sheet = FBDISheet(template_id=tpl.id, sheet_name=comp_name,
+                          sequence=start_order + i, field_count=len(fields))
+        await sheet.insert()
+        docs.extend(_field_docs_for(tpl.id, sheet.id, fields, seq))
+        seq += len(fields)
+        added.append(comp_name)
+    if docs:
+        await FBDIField.insert_many(docs)
+    return added
+
+
 async def ensure_employee_hdl() -> dict:
     """Guarantee the Employee HDL template exists with its component sheets +
     attribute fields. Returns a small status dict. Idempotent."""
@@ -43,9 +91,27 @@ async def ensure_employee_hdl() -> dict:
         # (re)build against the surviving template rather than duplicating it.
         tpl = existing[0]
         sheet_n = await FBDISheet.find(FBDISheet.template_id == tpl.id).count()
+        # RECONCILE, don't skip. "Has at least one sheet" is not the same as "has the
+        # sheets the schema declares", and treating them as the same is how a template
+        # seeded when hdl_schema had two objects stayed at two objects after the schema
+        # grew to six. The download then shipped one workbook with the two Worker tabs,
+        # which reads as a generation failure — the objects were not missing, they had
+        # never been created. A seeder that refuses to look at an existing row can only
+        # ever be right on a fresh database.
         if sheet_n > 0:
-            return {"seeded": False, "template_id": str(tpl.id), "sheets": sheet_n,
-                    "note": "Employee HDL template already present"}
+            _have = {(sh.sheet_name or "").strip().lower()
+                     for sh in await FBDISheet.find(
+                         FBDISheet.template_id == tpl.id).to_list()}
+            _want = [c for c in all_components()
+                     if (c[1] or "").strip().lower() not in _have]
+            if not _want:
+                return {"seeded": False, "template_id": str(tpl.id), "sheets": sheet_n,
+                        "note": "Employee HDL template already complete"}
+            added = await _add_components(tpl, _want, start_order=sheet_n)
+            return {"seeded": False, "reconciled": True, "template_id": str(tpl.id),
+                    "sheets": sheet_n + len(_want), "added_sheets": added,
+                    "note": (f"Added {len(added)} component sheet(s) the schema declares "
+                             f"and the template did not have: {', '.join(added)}")}
         target = tpl
     else:
         target = None

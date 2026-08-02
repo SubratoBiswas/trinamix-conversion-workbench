@@ -526,6 +526,21 @@ async def reseed_supplier(_: User = Depends(get_current_user)):
     return {"field_mappings": fields, "transforms": transforms}
 
 
+@router.post("/reseed-employee-hdl")
+async def reseed_employee_hdl(_: User = Depends(get_current_user)):
+    """Reconcile the Employee HDL template with the schema, on demand.
+
+    It only ran at startup and it SKIPPED any template that already had at least one
+    sheet — so when hdl_schema grew from two objects to six, the deployed template
+    stayed at two and the download shipped one workbook with the Worker tabs. That
+    reads as a generation failure; the objects had never been created. Now it adds
+    what is missing and reports which sheets it added, so the answer is visible
+    instead of inferred from a file.
+    """
+    from app.services.hdl_seed_service import ensure_employee_hdl
+    return await ensure_employee_hdl()
+
+
 @router.post("/reseed-supplier-source-mapping")
 async def reseed_supplier_source_mapping(_: User = Depends(get_current_user)):
     """Re-run the supplier mapping-workbook seed on demand.

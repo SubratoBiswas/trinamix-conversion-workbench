@@ -199,6 +199,15 @@ export const ProjectOverviewPage: React.FC = () => {
     setDlAll(true);
     const objName = (c: Conversion) =>
       (c as any).target_object || (c as any).template_name || c.name;
+
+  // HCM objects load through HCM Data Loader, not FBDI: pipe-delimited .dat files
+  // inside per-object zips, and there is no Oracle .xlsm template for them at all.
+  // Labelling those two buttons "CSV" and "FBDI Excel" on an Employee conversion
+  // describes a format the tool does not produce for it — which is how a download
+  // that routed somewhere else entirely read as a generation failure.
+  const isHdl = (c: any) =>
+    /(employee|worker|hcm|hdl|position|job|location)/i.test(
+      String(c?.target_object || c?.template_name || c?.name || ""));
     const setStage = (key: string, stage: GenStage) =>
       setGenProg((prev) => prev.map((p) => (p.key === key ? { ...p, stage } : p)));
     try {
@@ -797,7 +806,9 @@ export const ProjectOverviewPage: React.FC = () => {
                             <button
                               onClick={() => downloadFbdi(c)}
                               disabled={dl === String(c.id)}
-                              title="Generate & download the FBDI CSV bundle"
+                              title={isHdl(c)
+                                ? "Generate & download the HDL .dat files (one zip per object, in load order)"
+                                : "Generate & download the FBDI CSV bundle"}
                               className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
                             >
                               {/* "CSV" and "FBDI Excel", not "FBDI" and "Excel".
@@ -805,15 +816,19 @@ export const ProjectOverviewPage: React.FC = () => {
                                   bundle Oracle actually loads, the other the filled
                                   .xlsm template. Labelling only the first "FBDI"
                                   implied the second was something else. */}
-                              <Download className="h-3 w-3" /> CSV
+                              <Download className="h-3 w-3" /> {isHdl(c) ? "DAT files" : "CSV"}
                             </button>
                             <button
                               onClick={() => downloadTemplate(c)}
                               disabled={dlT === String(c.id)}
-                              title="Generate & download the filled-in Oracle FBDI Excel template"
+                              title={isHdl(c)
+                                ? "Generate & download the filled-in HDL template workbook"
+                                : "Generate & download the filled-in Oracle FBDI Excel template"}
                               className="btn-ghost h-7 px-2 text-xs disabled:opacity-50"
                             >
-                              <Download className="h-3 w-3" /> {dlT === String(c.id) ? "…" : "FBDI Excel"}
+                              <Download className="h-3 w-3" />{" "}
+                              {dlT === String(c.id)
+                                ? "…" : isHdl(c) ? "HDL Template" : "FBDI Excel"}
                             </button>
                           </>
                         )}
