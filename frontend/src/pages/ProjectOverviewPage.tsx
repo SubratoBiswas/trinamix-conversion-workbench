@@ -256,9 +256,18 @@ export const ProjectOverviewPage: React.FC = () => {
       // cleansed, validated), generated in the background so wide multi-source
       // objects can't hit the gateway timeout, then download the fast reuse-zip.
       const nObjs = new Set(convs.map((c) => objName(c))).size;
-      const _kind = fmt === "template" ? "FBDI Excel template" : "FBDI CSV";
+      // A project of HCM objects produces HDL .dat files, not FBDI anything. Saying
+      // "Merging & generating FBDI Excel template files" over an Employee load names
+      // the wrong loader while it runs, and then names the download the same way, so
+      // the file on disk carries the wrong word too.
+      const _allHdl = convs.length > 0 && convs.every((c) => isHdl(c));
+      const _kind = _allHdl
+        ? (fmt === "template" ? "HDL template" : "HDL .dat")
+        : (fmt === "template" ? "FBDI Excel template" : "FBDI CSV");
       // CSV bundle is named _CSV; the filled Oracle workbooks keep _FBDI_templates.
-      const _suffix = fmt === "template" ? "FBDI_templates" : "CSV";
+      const _suffix = _allHdl
+        ? (fmt === "template" ? "HDL_templates" : "DAT")
+        : (fmt === "template" ? "FBDI_templates" : "CSV");
       setDlStatus(`Merging & generating ${nObjs} ${_kind} file${nObjs === 1 ? "" : "s"}…`);
       const results = await OutputApi.downloadAll(
         pid,
@@ -668,7 +677,8 @@ export const ProjectOverviewPage: React.FC = () => {
                 <div className="mb-2 flex items-center justify-between">
                   <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
                     <RefreshCw className="h-3.5 w-3.5 animate-spin text-brand" />
-                    Generating FBDI bundle — {done}/{genProg.length} done{failed ? ` · ${failed} failed` : ""}
+                    Generating {conversions?.length && conversions.every((c) => isHdl(c))
+                      ? "HDL bundle" : "FBDI bundle"} — {done}/{genProg.length} done{failed ? ` · ${failed} failed` : ""}
                   </span>
                   <span className="font-mono tabular-nums text-ink-muted">{dlStatus ?? `${pctDone}%`}</span>
                 </div>
@@ -796,7 +806,16 @@ export const ProjectOverviewPage: React.FC = () => {
                         onChange={(e) => setOutputMode(c, e.target.value)}
                         title="How this conversion is delivered"
                       >
-                        <option value="fbdi_download">FBDI download</option>
+                        {/* Same value, honest label. An HCM object does not load
+                            through FBDI at all — it goes to HCM Data Loader as
+                            pipe-delimited .dat files — so calling the delivery mode
+                            "FBDI download" on an Employee row describes the wrong
+                            loader entirely. The stored value stays fbdi_download
+                            because it means "file download, not a live Fusion load";
+                            only what the analyst reads changes. */}
+                        <option value="fbdi_download">
+                          {isHdl(c) ? "HDL download" : "FBDI download"}
+                        </option>
                         <option value="fusion_load">Load to Fusion</option>
                       </select>
                     </td>
