@@ -1,1 +1,13 @@
-/* /index.html 200
+# SPA fallback. Every route is served by index.html and resolved client-side by
+# React Router, so a HARD navigation to a deep link -- opening /clients in a new
+# tab, or just pressing refresh -- must not be answered with a 404.
+#
+# render.yaml declares this same rewrite, but the frontend service was not built
+# from that manifest, so the rule never existed in production: the root URL worked
+# (Render serves index.html there by default) and every other path returned "Not
+# Found". It broke the "Add a new client" link, which opens /clients in a new tab,
+# and refresh on any page.
+#
+# Keeping it HERE rather than only in the dashboard means it is versioned, reviewed
+# and cannot be lost the next time the service is recreated.
+/*    /index.html   200
