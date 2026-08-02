@@ -15,6 +15,7 @@ Idempotent + non-destructive: skipped once a template with this business object
 from __future__ import annotations
 
 import logging
+import re
 
 from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField
 from app.services.hdl_schema import (
@@ -183,3 +184,67 @@ async def ensure_employee_hdl() -> dict:
                 sheet_docs, len(field_docs))
     return {"seeded": True, "template_id": str(target.id),
             "sheets": sheet_docs, "fields": len(field_docs)}
+
+_HCM_LIKE = re.compile(r"(worker|hcm|employee|hdl)", re.I)
+
+
+async def consolidate_employee_hdl() -> dict:
+    """One HDL template for the Employee object, and every conversion pointed at it.
+
+    Analyst, 02-Aug, after the generated workbook kept arriving with two tabs:
+    "Re-bind the Employee conversion to the 6-object template and delete Worker HCM
+    as a duplicate."
+
+    The filename was the diagnosis. The download was ``Worker_HCM.xlsx`` — that is a
+    TEMPLATE NAME, and that template carries two sheets. So reseeding the Employee HDL
+    template could never have fixed it: the conversion was never bound to the template
+    being repaired. Two templates claimed the same object, one of them was wrong, and
+    nothing on any screen said which one a conversion was using.
+
+    RETIRED, NOT DELETED. Generated outputs and mapping rows reference template_id, and
+    hard-deleting the row would orphan every artifact produced from it — the history
+    would stop explaining itself, which is worse than a stale row nobody selects. The
+    duplicate is marked status="retired" and dropped out of the pickers instead.
+
+    Reports what it moved and what it retired, by name, because a silent rebind of live
+    conversions is exactly the kind of change that has to be auditable after the fact.
+    """
+    canon_res = await ensure_employee_hdl()
+    canon = None
+    for t in await FBDITemplate.find_all().to_list():
+        if _is_hdl_template(t):
+            canon = t
+            break
+    if canon is None:
+        return {"error": "no canonical Employee HDL template"}
+    canon_sheets = await FBDISheet.find(FBDISheet.template_id == canon.id).count()
+
+    # Every OTHER template whose name reads like an HCM object. Matching on the name
+    # rather than a hardcoded "Worker HCM" so a second duplicate under another spelling
+    # is caught too — one-off cleanups that only know one bad name get run twice.
+    dupes = [t for t in await FBDITemplate.find_all().to_list()
+             if t.id != canon.id
+             and (t.status or "") != "retired"
+             and _HCM_LIKE.search(f"{t.name or ''} {t.business_object or ''}")]
+    if not dupes:
+        return {"canonical": canon.name, "canonical_sheets": canon_sheets,
+                "rebound": 0, "retired": [], "seed": canon_res,
+                "note": "no duplicate HCM template found"}
+
+    from app.models.conversion import Conversion
+    dupe_ids = {t.id for t in dupes}
+    moved = []
+    for c in await Conversion.find_all().to_list():
+        if c.template_id in dupe_ids:
+            await c.set({"template_id": canon.id})
+            moved.append(c.name)
+    retired = []
+    for t in dupes:
+        n = await FBDISheet.find(FBDISheet.template_id == t.id).count()
+        await t.set({"status": "retired"})
+        retired.append(f"{t.name} ({n} sheet{'' if n == 1 else 's'})")
+    logger.info("hdl consolidate: %d conversion(s) rebound to %s; retired %s",
+                len(moved), canon.name, ", ".join(retired))
+    return {"canonical": canon.name, "canonical_sheets": canon_sheets,
+            "rebound": len(moved), "conversions": moved[:25],
+            "retired": retired, "seed": canon_res}

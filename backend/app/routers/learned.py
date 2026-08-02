@@ -541,6 +541,24 @@ async def reseed_employee_hdl(_: User = Depends(get_current_user)):
     return await ensure_employee_hdl()
 
 
+@router.post("/consolidate-employee-hdl")
+async def consolidate_employee_hdl_endpoint(_: User = Depends(get_current_user)):
+    """Point every Employee conversion at the one complete HDL template, and retire
+    the duplicates.
+
+    The generated workbook arrived as Worker_HCM.xlsx with two tabs — a TEMPLATE name,
+    and that template has two sheets. So the conversion was never bound to the template
+    the seeder repairs; two templates claimed the same object and nothing on screen said
+    which one a conversion used. This rebinds and retires, and reports both by name,
+    because silently re-pointing live conversions has to be auditable afterwards.
+
+    Retires rather than deletes: outputs and mapping rows reference template_id, and
+    removing the row would orphan every artifact ever generated from it.
+    """
+    from app.services.hdl_seed_service import consolidate_employee_hdl
+    return await consolidate_employee_hdl()
+
+
 @router.post("/reseed-supplier-source-mapping")
 async def reseed_supplier_source_mapping(_: User = Depends(get_current_user)):
     """Re-run the supplier mapping-workbook seed on demand.

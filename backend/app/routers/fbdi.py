@@ -102,8 +102,23 @@ async def lookups_import(
 
 
 @router.get("/templates", response_model=list[FBDITemplateOut])
-async def list_templates(_: User = Depends(get_current_user)):
+async def list_templates(include_retired: bool = False,
+                         _: User = Depends(get_current_user)):
+    """Every template a conversion can be bound to.
+
+    RETIRED templates are hidden. A duplicate that claimed the same object as the real
+    one — "Worker HCM" alongside the six-object Employee HDL template — is what let a
+    conversion be pointed at a two-sheet template and emit two tabs, with nothing on
+    screen saying which of the two it was using. Retiring it is only half a fix while
+    it is still offered in the picker: the next conversion picks it again.
+
+    It is retired rather than deleted because outputs and mapping rows reference
+    template_id, so `include_retired=true` still returns it for anything that needs to
+    explain an artifact generated before the cleanup.
+    """
     templates = await FBDITemplate.find_all().sort("-uploaded_at").to_list()
+    if not include_retired:
+        templates = [t for t in templates if (t.status or "") != "retired"]
     return [{"id": str(t.id), **{k: v for k, v in t.model_dump().items() if k != "id"}} for t in templates]
 
 
