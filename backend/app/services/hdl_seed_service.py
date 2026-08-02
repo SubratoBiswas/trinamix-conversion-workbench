@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 
 from app.models.fbdi import FBDITemplate, FBDISheet, FBDIField
 from app.services.hdl_schema import (
@@ -109,6 +110,9 @@ async def ensure_employee_hdl() -> dict:
                 return {"seeded": False, "template_id": str(tpl.id), "sheets": sheet_n,
                         "note": "Employee HDL template already complete"}
             added = await _add_components(tpl, _want, start_order=sheet_n)
+            # The template changed, so it is now the most recent answer for this
+            # object — which is the whole point of latest-wins.
+            await tpl.set({"updated_at": datetime.utcnow()})
             return {"seeded": False, "reconciled": True, "template_id": str(tpl.id),
                     "sheets": sheet_n + len(_want), "added_sheets": added,
                     "note": (f"Added {len(added)} component sheet(s) the schema declares "
@@ -210,11 +214,17 @@ async def consolidate_employee_hdl() -> dict:
     conversions is exactly the kind of change that has to be auditable after the fact.
     """
     canon_res = await ensure_employee_hdl()
-    canon = None
-    for t in await FBDITemplate.find_all().to_list():
-        if _is_hdl_template(t):
-            canon = t
-            break
+    # Newest first, then most complete. Taking whatever the database returned first
+    # is how a two-sheet template beat an eleven-component one for a week; and two
+    # templates seeded in the same startup pass carry the same timestamp, so sheet
+    # count is the honest tiebreak — a complete template beats an empty shell, and
+    # fourteen of the seventeen retired on 02-Aug had ZERO sheets.
+    _cands = [t for t in await FBDITemplate.find_all().to_list() if _is_hdl_template(t)]
+    _sheets_of = {t.id: await FBDISheet.find(FBDISheet.template_id == t.id).count()
+                  for t in _cands}
+    _cands.sort(key=lambda t: (getattr(t, "updated_at", None) or t.uploaded_at,
+                               _sheets_of.get(t.id, 0)), reverse=True)
+    canon = _cands[0] if _cands else None
     if canon is None:
         return {"error": "no canonical Employee HDL template"}
     canon_sheets = await FBDISheet.find(FBDISheet.template_id == canon.id).count()
@@ -241,7 +251,7 @@ async def consolidate_employee_hdl() -> dict:
     retired = []
     for t in dupes:
         n = await FBDISheet.find(FBDISheet.template_id == t.id).count()
-        await t.set({"status": "retired"})
+        await t.set({"status": "retired", "updated_at": datetime.utcnow()})
         retired.append(f"{t.name} ({n} sheet{'' if n == 1 else 's'})")
     logger.info("hdl consolidate: %d conversion(s) rebound to %s; retired %s",
                 len(moved), canon.name, ", ".join(retired))

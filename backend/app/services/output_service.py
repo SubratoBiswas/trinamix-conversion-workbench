@@ -1365,7 +1365,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # Scope the import guard to the import only — a real error inside the HDL
     # generator must surface, not silently fall through to the FBDI path.
     if is_hdl_conversion and is_hdl_conversion(_tpl_for_route, conversion):
-        return await generate_hdl_artifact(conversion)
+        # fmt THREADED THROUGH. It was dropped here, so "HDL Template" and "DAT
+        # files" both returned the .dat bundle — the divert knew the conversion was
+        # HDL and forgot what the analyst had asked for.
+        return await generate_hdl_artifact(conversion, fmt=fmt)
 
     # How many target fields this object has — used to gate the two DB-heavy passes
     # below. A 19-sheet Customer/Item load has ~1200 fields; re-applying every

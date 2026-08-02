@@ -22,6 +22,23 @@ class FBDITemplate(Document):
     status: str = "parsed"
     description: Optional[str] = None
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    # WHEN THE TEMPLATE ITSELF LAST CHANGED — reparsed, reconciled, sheets added.
+    #
+    # Analyst, 02-Aug: "for templates and mappings also have a date time of when it
+    # was updated, use the latest one always, like learnings and mappings." That rule
+    # already governs the learning library and it is what templates never had: on
+    # 02-Aug SEVENTEEN templates claimed the Employee object, the resolver took
+    # whichever the database returned first, and a two-sheet "Worker HCM" beat an
+    # eleven-component "Employee HDL Import" for a week. Nothing was wrong with any
+    # single row; there was simply no answer to "which of these is current".
+    #
+    # uploaded_at cannot serve: it records when the FILE arrived, so a template
+    # reconciled today still looks as old as the day it was first seeded. This moves
+    # only when something CHANGES the template — never on a read, and never on a
+    # startup pass that finds nothing to do, because a timestamp that every redeploy
+    # re-stamps inverts the very precedence it exists to express. That is not
+    # hypothetical: it is exactly what captured_at did to the learnings layer.
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:
         name = "fbdi_templates"

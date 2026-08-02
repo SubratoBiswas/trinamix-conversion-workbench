@@ -44,6 +44,17 @@ logger = logging.getLogger(__name__)
 _EXCEL_EPOCH = datetime(1899, 12, 30)  # Excel/Workday serial-date origin
 
 
+class _NullCtx:
+    """Stands in for the outer zip when writing a workbook, so the object loop has
+    one implementation rather than two that can drift apart."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
 def _norm(s: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
@@ -256,7 +267,17 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    zip_name = f"Employee_HDL_{ts}.zip"
+    # TWO shapes of the same data, and the caller's fmt decides which.
+    #
+    # This function ignored fmt entirely, so "HDL Template" and "DAT files" both
+    # produced the .dat bundle. The analyst asked for the workbook: "for HDL template
+    # I am expecting output in HDL template excel with 6 tabs". Both are built from
+    # the SAME rows below — one writes them as pipe-delimited text for HCM Data
+    # Loader, the other lays them into worksheets that match the client's template —
+    # so the two can never disagree about content, only about container.
+    _as_book = str(fmt).lower() in ("template", "xlsx", "excel")
+    zip_name = (f"Employee_HDL_Template_{ts}.xlsx" if _as_book
+                else f"Employee_HDL_{ts}.zip")
     zip_path = out_dir / zip_name
 
     def _write() -> tuple[int, int]:
@@ -270,7 +291,14 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
         # created. A single zip holding all nine forces the analyst to unpack and
         # re-zip before every step, so each object gets its own zip, numbered in
         # load order, inside the download bundle (CW_Issues #26).
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as outer:
+        book = None
+        if _as_book:
+            from openpyxl import Workbook
+            book = Workbook()
+            book.remove(book.active)          # drop the default empty sheet
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) if not _as_book \
+                else _NullCtx() as outer:
             for seq, obj in enumerate(HDL_LOAD_ORDER, start=1):
                 spec = HDL_OBJECTS[obj]
                 rows = _rows_for(spec["row_scope"], spec.get("dedup_source"))
@@ -283,6 +311,16 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                     for r in rows:
                         vals = [_cell(r, f) for f in comp_fields]
                         lines.append("MERGE|" + comp_name + "|" + "|".join(vals))
+                if _as_book:
+                    # One worksheet per object, named and ordered exactly as the
+                    # client's HDL template — 01 Location … 06 Worker — with each
+                    # pipe-delimited line split back into cells so the workbook is
+                    # readable rather than one long string per row.
+                    ws = book.create_sheet(_object_label(obj)[:31])
+                    for ln in lines:
+                        ws.append(ln.split("|"))
+                    continue
+
                 dat = "\n".join(lines) + "\n"
 
                 inner = io.BytesIO()
@@ -294,6 +332,8 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                 # passes are told apart at a glance — both contain Worker.dat,
                 # because both load the same business object.
                 outer.writestr(f"{seq:02d}_{_object_label(obj)}.zip", inner.getvalue())
+        if _as_book:
+            book.save(zip_path)
         return total_rows, total_attrs
 
     import asyncio
