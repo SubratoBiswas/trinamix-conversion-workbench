@@ -195,11 +195,6 @@ export const ProjectOverviewPage: React.FC = () => {
   const [headerMode, setHeaderMode] = useState<"auto" | "on" | "off">("auto");
   const headerFlag = headerMode === "auto" ? undefined : headerMode === "on";
 
-  const downloadAllFbdi = async (fmt: "csv" | "template" = "csv") => {
-    setDlAll(true);
-    const objName = (c: Conversion) =>
-      (c as any).target_object || (c as any).template_name || c.name;
-
   // HCM objects load through HCM Data Loader, not FBDI: pipe-delimited .dat files
   // inside per-object zips, and there is no Oracle .xlsm template for them at all.
   // Labelling those two buttons "CSV" and "FBDI Excel" on an Employee conversion
@@ -208,6 +203,12 @@ export const ProjectOverviewPage: React.FC = () => {
   const isHdl = (c: any) =>
     /(employee|worker|hcm|hdl|position|job|location)/i.test(
       String(c?.target_object || c?.template_name || c?.name || ""));
+
+  const downloadAllFbdi = async (fmt: "csv" | "template" = "csv") => {
+    setDlAll(true);
+    const objName = (c: Conversion) =>
+      (c as any).target_object || (c as any).template_name || c.name;
+
     const setStage = (key: string, stage: GenStage) =>
       setGenProg((prev) => prev.map((p) => (p.key === key ? { ...p, stage } : p)));
     try {
