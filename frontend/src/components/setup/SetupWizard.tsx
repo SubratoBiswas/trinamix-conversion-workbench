@@ -182,12 +182,6 @@ export const SetupWizard: React.FC = () => {
   // Tenants (clients) the engagement can belong to. Its learnings/gold/templates
   // will scope to the picked client so they never leak across clients.
   const [clients, setClients] = useState<ClientSummary[]>([]);
-  // "__new__" in the picker means the analyst is naming a client instead of choosing
-  // one. Creating it here rather than sending them to the Clients page matters: the
-  // alternative to an easy "add new" is picking whatever is already in the list, and
-  // a project filed under the wrong tenant files every rule it learns under the wrong
-  // tenant too.
-  const [newClientName, setNewClientName] = useState("");
   const [sourceCode, setSourceCode] = useState<string>("");
   // File-based source: extract files uploaded during setup. When present, the
   // engagement's conversions are created from these files (not the module catalog).
@@ -211,21 +205,17 @@ export const SetupWizard: React.FC = () => {
     SourceSystemsApi.list().then(setSourceSystems).catch(() => setSourceSystems([]));
     FusionModulesApi.list().then(setFusionModules).catch(() => setFusionModules([]));
     ConversionsApi.objectTypes().then(setObjectCatalog).catch(() => setObjectCatalog([]));
-    // Load clients and default the picker to the default (bootstrap) tenant so a
-    // one-client shop needs no extra clicks, while multi-client shops can switch.
-    ClientsApi.list()
-      .then((r) => {
-        const cs = r.clients || [];
-        setClients(cs);
-        const def = cs.find((c) => c.is_default) || cs[0];
-        // Deliberately NOT auto-selecting the default client. Pre-filling it is the
-        // same silent guess the server used to make, just moved to the browser: the
-        // analyst clicks Continue and the engagement is filed under whichever tenant
-        // happened to be marked default. One explicit choice, once.
-        void def;
-      })
-      .catch(() => setClients([]));
+    loadClients();
   }, []);
+
+  // Re-fetchable, so a client created on the Clients page in another tab appears
+  // here without reloading the wizard and losing what is already typed. The list is
+  // NOT pre-selected: pre-filling the default tenant is the same silent guess the
+  // server used to make, just moved into the browser.
+  const loadClients = () =>
+    ClientsApi.list()
+      .then((r) => setClients(r.clients || []))
+      .catch(() => setClients([]));
 
   // When the source flips, reset auth_type and the metadata/credential
   // sub-forms to a sensible default for that source so old field values
@@ -312,8 +302,7 @@ export const SetupWizard: React.FC = () => {
     // are read back under, so it cannot be inferred later. Guessing it silently is
     // what produced "I changed the mapping in one project and it did not reach the
     // other, same client and source".
-    if (step === 1) return Boolean(details.name.trim()) && Boolean(
-      details.client_id === "__new__" ? newClientName.trim() : details.client_id);
+    if (step === 1) return Boolean(details.name.trim()) && Boolean(details.client_id);
     if (step === 2) return Boolean(sourceCode);
     if (step === 3) {
       // File mode: no DB connection form — allow Continue once any in-flight
@@ -334,7 +323,7 @@ export const SetupWizard: React.FC = () => {
     // Step 4 (Scope) is optional — zero modules is OK; the engagement
     // can be planned without auto-creating conversions.
     return true;
-  }, [step, details, newClientName, sourceCode, conn, isFileMode, fileItems]);
+  }, [step, details, sourceCode, conn, isFileMode, fileItems]);
 
   const submit = async () => {
     setError(null);
@@ -347,9 +336,7 @@ export const SetupWizard: React.FC = () => {
       } = {
         name: details.name,
         client: details.client || undefined,
-        client_id: details.client_id === "__new__" ? undefined : details.client_id,
-        new_client_name: details.client_id === "__new__"
-          ? newClientName.trim() : undefined,
+        client_id: details.client_id,
         target_environment: details.target_environment || undefined,
         description: details.description || undefined,
         go_live_date: details.go_live_date || undefined,
@@ -466,7 +453,7 @@ export const SetupWizard: React.FC = () => {
 
       {step === 1 && (
         <Step1Details details={details} setDetails={setDetails} clients={clients}
-          newClientName={newClientName} setNewClientName={setNewClientName} />
+          reloadClients={loadClients} />
       )}
       {step === 2 && (
         <Step2Source
@@ -695,9 +682,8 @@ const Step1Details: React.FC<{
   details: EngagementDetails;
   setDetails: (d: EngagementDetails) => void;
   clients: ClientSummary[];
-  newClientName: string;
-  setNewClientName: (v: string) => void;
-}> = ({ details, setDetails, clients, newClientName, setNewClientName }) => (
+  reloadClients: () => void;
+}> = ({ details, setDetails, clients, reloadClients }) => (
   <Card>
     <CardBody>
       <SectionTitle icon={<Building2 className="h-4 w-4" />}>Engagement details</SectionTitle>
@@ -724,17 +710,23 @@ const Step1Details: React.FC<{
                 {c.name}{c.is_default ? " (default)" : ""}
               </option>
             ))}
-            <option value="__new__">+ Add a new client…</option>
           </select>
-          {details.client_id === "__new__" && (
-            <input
-              className="input mt-2"
-              autoFocus
-              placeholder="New client name, e.g. NextPower"
-              value={newClientName}
-              onChange={(e) => setNewClientName(e.target.value)}
-            />
-          )}
+          <p className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-ink-muted">
+            {/* A LINK, not a text box. Typing a name is how "NextPower" and
+                "Nextpower" become two tenants a week apart, and since every rule an
+                analyst saves is stored against the client, two tenants means two
+                half-libraries that can never see each other. Picking from the real
+                list makes that impossible to do by accident. New tab on purpose: a
+                half-filled wizard is not worth losing. */}
+            <a href="/clients" target="_blank" rel="noreferrer"
+               className="font-semibold text-brand-dark underline">
+              Add a new client
+            </a>
+            <button type="button" onClick={reloadClients}
+               className="text-brand-dark underline">
+              refresh list
+            </button>
+          </p>
           <p className="mt-1 text-[11px] text-ink-muted">
             Required. Everything this engagement learns — column mappings, defaults,
             suppressions — is stored against this client and applied to its other

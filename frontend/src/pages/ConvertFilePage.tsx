@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { UploadCloud, Sparkles, ArrowRight, Check, GraduationCap, Loader2, X, Plus, Layers, Boxes, CheckCircle2 } from "lucide-react";
-import { ConversionsApi, DatasetsApi, FbdiApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
+import { ClientsApi, ConversionsApi, DatasetsApi, FbdiApi, FusionModulesApi, ProjectsApi, SourceSystemsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, PageTitle, Pill,
 } from "@/components/ui/Primitives";
@@ -72,7 +72,13 @@ export const ConvertFilePage: React.FC = () => {
   const [selectedModules, setSelectedModules] = useState<string[]>([]);
   const toggleModule = (code: string) =>
     setSelectedModules((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
-  const [engForm, setEngForm] = useState({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
+  // client_id, not a typed name. A free-text box is how "NextPower" and "Nextpower"
+  // become two tenants a week apart, and everything an analyst decides is stored
+  // against the client — so two tenants means two half-libraries that can never see
+  // each other. Picking from the real list makes that impossible to do by accident.
+  const [engForm, setEngForm] = useState({ name: "", client_id: "", source_system: "", target_environment: "FBDI File download" });
+  const [clients, setClients] = useState<{ id: string; name: string; is_default?: boolean }[]>([]);
+  const [clientsErr, setClientsErr] = useState(false);
 
   useEffect(() => {
     ProjectsApi.list().then((ps) => { setProjects(ps); if (ps[0]) setProjectId(ps[0].id); }).catch(() => {});
@@ -80,7 +86,16 @@ export const ConvertFilePage: React.FC = () => {
     FbdiApi.list().then(setTemplates).catch(() => setTemplates([]));
     ConversionsApi.objectTypes().then(setObjectCatalog).catch(() => setObjectCatalog([]));
     FusionModulesApi.list().then(setFusionModules).catch(() => setFusionModules([]));
+    loadClients();
   }, []);
+
+  // Re-fetched rather than cached, so a client created on the Clients page in another
+  // tab appears here without a reload — the "create one, come back, it is not in the
+  // list" loop is exactly what pushes people back to typing a name.
+  const loadClients = () =>
+    ClientsApi.list()
+      .then((r) => { setClients(r.clients || []); setClientsErr(false); })
+      .catch(() => setClientsErr(true));
 
   // Resolve a file's detected target (via its chosen template's business object)
   // to a fan-out object type, and toggle individual steps on/off.
@@ -137,13 +152,13 @@ export const ConvertFilePage: React.FC = () => {
     // free-text client name, so it is sent as new_client_name: the server matches an
     // existing tenant case-insensitively and only creates one when there is no match,
     // which is exactly "select or add new" through a single box.
-    if (!engForm.name.trim() || !engForm.client.trim()) return;
+    if (!engForm.name.trim() || !engForm.client_id) return;
     setSavingEng(true); setError(null);
     try {
       const created: any = await ProjectsApi.create({
         name: engForm.name.trim(),
-        client: engForm.client.trim() || undefined,
-        new_client_name: engForm.client.trim(),
+        client_id: engForm.client_id,
+        client: clients.find((c) => c.id === engForm.client_id)?.name,
         source_system: engForm.source_system || undefined,
         target_environment: engForm.target_environment || undefined,
         status: "planning",
@@ -151,7 +166,7 @@ export const ConvertFilePage: React.FC = () => {
       setProjects((prev) => [created, ...prev]);
       setProjectId(String(created.id));
       setShowNewEng(false);
-      setEngForm({ name: "", client: "", source_system: "", target_environment: "FBDI File download" });
+      setEngForm({ name: "", client_id: "", source_system: "", target_environment: "FBDI File download" });
     } catch (e: any) {
       setError(e?.response?.data?.detail || "Could not create engagement.");
     } finally {
@@ -697,14 +712,38 @@ export const ConvertFilePage: React.FC = () => {
                 <label className="label">
                   Client <span className="text-danger">*</span>
                 </label>
-                <input
-                  className="input" value={engForm.client}
-                  onChange={(e) => setEngForm({ ...engForm, client: e.target.value })}
-                  placeholder="e.g. Phoenix Corp"
-                />
-                <p className="mt-1 text-[11px] text-ink-muted">
-                  Existing client names are matched; a new name creates the client.
-                  Every mapping rule this engagement learns is stored against it.
+                <select
+                  className="input"
+                  value={engForm.client_id}
+                  onChange={(e) => setEngForm({ ...engForm, client_id: e.target.value })}
+                >
+                  <option value="">
+                    {clientsErr ? "Could not load clients" : "Select a client…"}
+                  </option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{c.is_default ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-ink-muted">
+                  <span>
+                    Every mapping rule this engagement learns is stored against this
+                    client and applied to its other projects.
+                  </span>
+                  {/* Opens in a new tab on purpose: a half-filled engagement form is
+                      not worth losing to go and add a client. Refresh brings the new
+                      one into the list without touching what is already typed. */}
+                  <a
+                    href="/clients" target="_blank" rel="noreferrer"
+                    className="font-semibold text-brand-dark underline"
+                  >
+                    Add a new client
+                  </a>
+                  <button type="button" onClick={loadClients}
+                    className="text-brand-dark underline">
+                    refresh list
+                  </button>
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -728,7 +767,8 @@ export const ConvertFilePage: React.FC = () => {
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setShowNewEng(false)} disabled={savingEng}>Cancel</Button>
-              <Button onClick={createEngagement} loading={savingEng} disabled={!engForm.name.trim()}>
+              <Button onClick={createEngagement} loading={savingEng}
+                disabled={!engForm.name.trim() || !engForm.client_id}>
                 <Check className="h-4 w-4" /> Create engagement
               </Button>
             </div>

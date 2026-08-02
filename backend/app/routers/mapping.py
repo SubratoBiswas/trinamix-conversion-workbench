@@ -359,10 +359,47 @@ async def source_columns(conversion_id: str, _: User = Depends(get_current_user)
                 "pii_category": getattr(p, "pii_category", None),
             })
 
+    # TARGET FIELDS AS INPUTS. CW 31-Jul: "Cannot apply transformation logic where
+    # the value of a target field (Party Number) depends on the value of another
+    # target field."
+    #
+    # The ENGINE has been able to do this since _RowWithTargets: a rule's row context
+    # falls back to the target columns already computed, so `row.get("Party Type")`
+    # resolves. What was missing is the other half — this endpoint feeds the rule
+    # author's column picker, and it only ever returned SOURCE columns, so there was
+    # no way to NAME a target field in a rule. A capability that exists and cannot be
+    # reached is the same as one that does not exist, and it is worse to diagnose.
+    #
+    # They are returned as a separate, clearly-marked group rather than mixed in, and
+    # a source column of the same name always wins the lookup at runtime, so nothing
+    # that resolves today changes.
+    target_fields: list[dict[str, Any]] = []
+    if conv.template_id:
+        from app.models.fbdi import FBDIField, FBDISheet
+        _sheets = {sh.id: sh.sheet_name for sh in await FBDISheet.find(
+            FBDISheet.template_id == conv.template_id).to_list()}
+        _src_names = {(c.get("column_name") or "").strip().lower() for c in columns}
+        for f in await FBDIField.find(FBDIField.template_id == conv.template_id).to_list():
+            nm = (f.field_name or "").strip()
+            if not nm or nm.lower() in _src_names:
+                continue          # a real source column of that name wins anyway
+            target_fields.append({
+                "column_name": nm,
+                "position": getattr(f, "position", None),
+                "sheet": _sheets.get(getattr(f, "sheet_id", None)),
+                "origin": "target",
+            })
+        target_fields.sort(key=lambda x: (x["sheet"] or "", x["position"] or 0))
+
     return {
         "source_type": "ebs" if is_ebs else "dataset",
         "table": getattr(conv, "ebs_table_hint", None) if is_ebs else None,
         "columns": columns,
+        # Usable as rule inputs, with one caveat the UI should state: a target field
+        # is only readable by a rule that runs AFTER it, and fields are computed in
+        # template sequence — which is the order Oracle's own templates put
+        # dependencies in (Party Type is column 4, Party Number column 5).
+        "target_fields": target_fields,
         "debug": debug,
     }
 

@@ -18,6 +18,7 @@ async def init_db() -> None:
     from app.models.user import User
     from app.models.client import Client
     from app.models.project import Project
+    from app.models.sequence import SequenceAllocation
     from app.models.conversion import Conversion
     from app.models.dataset import Dataset, DatasetColumnProfile
     from app.models.fbdi import (
@@ -55,6 +56,12 @@ async def init_db() -> None:
             FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
             GoldStandard,
             MappingSuggestion, LearnedMapping, MappingProposal, CandidateVerdict,
+            # Registered so its UNIQUE index is actually BUILT. A number that
+            # must never be issued twice depends on that index existing, and a
+            # model Beanie never initialises has no indexes at all — the
+            # allocator would then rely on a read-then-write with nothing
+            # underneath it to stop a race.
+            SequenceAllocation,
             DataQualityRule,
             TransformationRule, Crosswalk,
             ConvertedOutput, Workflow,

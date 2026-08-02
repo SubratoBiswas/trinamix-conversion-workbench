@@ -182,3 +182,33 @@ if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()
     print("\nall target-field rule checks passed")
+
+# ── the OTHER half: you have to be able to NAME a target field ──────────────
+def test_the_column_picker_offers_target_fields_too():
+    """CW 31-Jul: "Cannot apply transformation logic where the value of a target
+    field (Party Number) depends on the value of another target field."
+
+    The ENGINE has been able to do this since _RowWithTargets — a rule's row context
+    falls back to the target columns already computed. What was missing is the half
+    the analyst touches: /source-columns feeds the rule author's picker and returned
+    SOURCE columns only, so there was no way to name a target field in a rule. A
+    capability that exists and cannot be reached is indistinguishable from one that
+    does not, and harder to diagnose, because the code review says it works.
+    """
+    from pathlib import Path as _P
+    src = (_P(__file__).resolve().parent.parent / "app" / "routers"
+           / "mapping.py").read_text(encoding="utf-8")
+    i = src.index('@router.get("/conversions/{conversion_id}/source-columns")')
+    j = src.index("@router.", i + 10)
+    body = src[i:j]
+    check("the endpoint returns a target_fields group",
+          '"target_fields": target_fields' in body,
+          "the picker still cannot see any target field")
+    check("built from the conversion's own template",
+          "FBDIField.find(FBDIField.template_id == conv.template_id)" in body)
+    check("a real source column of the same name is not shadowed",
+          "nm.lower() in _src_names" in body,
+          "a target field could mask a source column of the same name")
+    check("and they are marked as targets, not mixed in silently",
+          '"origin": "target"' in body)
+
