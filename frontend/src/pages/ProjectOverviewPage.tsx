@@ -204,6 +204,11 @@ export const ProjectOverviewPage: React.FC = () => {
     /(employee|worker|hcm|hdl|position|job|location)/i.test(
       String(c?.target_object || c?.template_name || c?.name || ""));
 
+  // Whole-project verdict, for the BULK controls. Only when EVERY conversion is an
+  // HCM object — a mixed project keeps the neutral FBDI wording rather than
+  // mislabelling the other half.
+  const allHdl = (conversions?.length ?? 0) > 0 && (conversions ?? []).every(isHdl);
+
   const downloadAllFbdi = async (fmt: "csv" | "template" = "csv") => {
     setDlAll(true);
     const objName = (c: Conversion) =>
@@ -279,7 +284,9 @@ export const ProjectOverviewPage: React.FC = () => {
       const failed = (results || []).filter((r) => !r.ready);
       flash(failed.length
         ? `Bundle downloaded. ${failed.length} interface(s) had issues: ${failed.map((f) => f.object).join(", ")}.`
-        : `${fmt === "template" ? "FBDI Excel templates" : "FBDI CSV bundle"} generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
+        : `${_allHdl
+              ? (fmt === "template" ? "HDL templates" : "HDL .dat bundle")
+              : (fmt === "template" ? "FBDI Excel templates" : "FBDI CSV bundle")} generated and downloaded (${nObjs} merged interface file${nObjs === 1 ? "" : "s"}).`);
       refresh();
       loadRefStandards();
     } catch (e: any) {
@@ -469,12 +476,12 @@ export const ProjectOverviewPage: React.FC = () => {
             </Button>
             <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("csv")}>
               <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
-              {dlAll ? (dlStatus ?? "Working…") : "Download all CSV"}
+              {dlAll ? (dlStatus ?? "Working…") : allHdl ? "Download all DAT" : "Download all CSV"}
             </Button>
             <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("template")}
               title="Merge each interface's sources and download the filled-in Oracle FBDI Excel templates (.xlsm)">
               <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
-              {dlAll ? (dlStatus ?? "Working…") : "Download all (FBDI Excel)"}
+              {dlAll ? (dlStatus ?? "Working…") : allHdl ? "Download all (HDL templates)" : "Download all (FBDI Excel)"}
             </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
@@ -638,7 +645,7 @@ export const ProjectOverviewPage: React.FC = () => {
                   title="Same pipeline, but write each interface's merged data INTO the real Oracle FBDI Excel template (POZ_SUPPLIERS_INT, EGP_STRUCTURES_INTERFACE, …) and download the filled templates as one .zip."
                 >
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
-                  {dlAll ? (dlStatus ?? "Working…") : "FBDI Excel templates (.zip)"}
+                  {dlAll ? (dlStatus ?? "Working…") : allHdl ? "HDL templates (.zip)" : "FBDI Excel templates (.zip)"}
                 </button>
                 {!fileBased && (
                   <button
@@ -677,8 +684,7 @@ export const ProjectOverviewPage: React.FC = () => {
                 <div className="mb-2 flex items-center justify-between">
                   <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
                     <RefreshCw className="h-3.5 w-3.5 animate-spin text-brand" />
-                    Generating {conversions?.length && conversions.every((c) => isHdl(c))
-                      ? "HDL bundle" : "FBDI bundle"} — {done}/{genProg.length} done{failed ? ` · ${failed} failed` : ""}
+                    Generating {allHdl ? "HDL bundle" : "FBDI bundle"} — {done}/{genProg.length} done{failed ? ` · ${failed} failed` : ""}
                   </span>
                   <span className="font-mono tabular-nums text-ink-muted">{dlStatus ?? `${pctDone}%`}</span>
                 </div>
