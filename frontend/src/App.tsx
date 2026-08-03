@@ -41,6 +41,7 @@ import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
 import { ClientsPage } from "@/pages/ClientsPage";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const token = useAuth((s) => s.token);
@@ -52,10 +53,14 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 const App: React.FC = () => {
   const hydrate = useAuth((s) => s.hydrate);
   useEffect(() => { hydrate(); }, [hydrate]);
+  // Keyed on the path so navigating away from a page that threw clears the
+  // error. Without this one broken route holds the whole app until a reload.
+  const { pathname } = useLocation();
 
   return (
     <>
     <GlobalActivityBar />
+    <ErrorBoundary where={pathname} resetKey={pathname}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
 
@@ -122,6 +127,7 @@ const App: React.FC = () => {
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </ErrorBoundary>
     </>
   );
 };

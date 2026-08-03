@@ -1,208 +1,53 @@
-One dated store, keyed (client, source system, target field)
+Error boundary: a page that throws says what broke
 
-Agreed with the analyst, 02-Aug-2026. Mappings, learnings and user inputs are
-stored in one place with a date, with respect to client and source; whichever is
-latest by date is how the mapping happens; and the same store serves existing
-projects and future ones.
+Output Preview went white. The console carried `Minified React error #310` and a
+stack of one-letter names; the page itself said nothing at all.
 
-There were two stores. LearnedMapping was dated and client+source scoped;
-MappingSuggestion held per-conversion rows, and those rows were what generation
-actually read. The library was COPIED into them. Every "the screen says one thing
-and the file says another" report in the last week was those two disagreeing, and
-no amount of fan-out fixing closes it, because the copying IS the problem.
+React unmounts the entire tree when a render throws and nothing catches it, and
+this app had no error boundary anywhere -- the CODEBASE_GUIDE flags exactly this
+("there is no error boundary in the frontend, so an unknown type used to unmount
+the whole page silently"). So every render bug in the app had the same symptom: a
+blank screen, indistinguishable from a failed build, a failed deploy, or a 404
+from the static host. All three were considered before the real cause, because
+nothing on screen told them apart. A white page is the least informative failure
+a UI can have and it is entirely avoidable.
 
-WHAT THE STORE IS
+  components/ErrorBoundary.tsx -- catches the throw, names the component nearest
+  it from React's componentStack, translates React's numbered production errors
+  into a sentence someone can act on, keeps the rest of the app usable, and puts
+  the whole report behind one "Copy details" button so a bug report contains the
+  stack rather than the word "blank". The full stack still goes to the console.
 
-  services/mapping_store.py holds the whole rule.
+  Wrapped around <Routes> in App.tsx and keyed on the pathname, so navigating
+  away from a broken page clears the error -- without that, one bad route holds
+  the app until a manual reload.
 
-  - Every statement about how a field should be mapped is a dated entry, keyed
-    (client_id, source_erp, target_field). No object scope, no project scope, no
-    per-conversion override. An edit is the client's newest statement about that
-    field and it applies everywhere.
-  - Four decisions: source_column, default_value, suppress, rule.
-  - The mapping workbook, the gold standard, a captured learning, the steer box,
-    a grid edit and a custom rule all write entries of the same shape.
-  - Newest wins. captured_from / captured_by are recorded so a human can trace a
-    decision; nothing reads them to pick a winner.
-  - effective_date is when the INSTRUCTION was given, and it never moves on a
-    read. A bundled file that never said when it was written carries no date at
-    all rather than today's: a seed re-running on every boot and stamping itself
-    `now` would out-rank every instruction ever given, which is what captured_at
-    used to do on every redeploy.
+  A class, deliberately: componentDidCatch and getDerivedStateFromError exist
+  only on classes, and a test says so, because someone will try to convert it.
 
-PRECEDENCE TIERS REMOVED
+WHAT IT WILL TELL US
 
-  Each of these competed with the date, and they disagreed with each other:
+  #310 is "rendered more hooks than during the previous render" -- a hook running
+  conditionally, or after an early return that only happens on the first render
+  while data is still loading. The component was not identifiable from the
+  minified build. With this in place the page names it on sight.
 
-  - suppression-loses-to-mapping, a hand-written rule in the apply pass
-  - _candidate_order, the strong-transform ranking
-  - a second, separate date ordering for constant defaults
-  - object-key spelling widening ($in over five spellings of one object)
-  - "> " in the propagation vs ">=" in the blank/rule corrections, which
-    disagreed about an exact tie
-  - _eligible, which had NO date test at all, so a human approval was permanently
-    immune: an analyst correction made in June out-ranked the mapping workbook
-    they handed over in August, and nothing on screen said why
+  Not caused by the dated-store or report change: the only hook added anywhere
+  was one useState in ProjectOverviewPage, in the top-level hook block with no
+  component-level return before it, on a different page.
 
-  There is one ordering now, in one function, with a tie-break that is only
-  reached when two entries bear the same instant.
+ALSO OUTSTANDING, NOT CODE
 
-ONE WRITER
-
-  Eleven seeder sites, the workbook import, apply-proposal, the gold learner, the
-  steer box, manual-map, the AI-default cache and auto-capture all record through
-  mapping_store.record_decision. tests/test_one_dated_store_writes.py walks the
-  AST of every module and fails if anything else constructs a mapping-decision
-  learning. Three exceptions remain and each is asserted to be a kind that is NOT
-  a mapping decision: crosswalk is one row per source VALUE, file_signature
-  identifies an uploaded file, and the Learning Centre's own "add" button is a
-  person creating a row by hand.
-
-  The six-call-sites problem — one object-scoped fan-out fixed three times in
-  three different call sites because there was no single place to fix it — is
-  what this whole change exists to end, so "there is only one writer" is asserted
-  rather than assumed.
-
-BACKFILL
-
-  services/mapping_store_backfill.py. Every human-decided MappingSuggestion
-  becomes an entry carrying its EXISTING approved_at, never today's; every
-  undated library row takes effective_date from its captured_at, once. Runs at
-  startup after the seeders, and on demand at
-  POST /api/learned-mappings/backfill-dated-store.
-
-  Idempotent, and it must be possible to run it twice: a run with nothing to do
-  writes nothing, and no date ever moves. It lands before writes are routed
-  through the store, or existing projects silently lose their history.
-
-READS
-
-  Generation resolves through the store before building the file, and writes only
-  the rows whose content actually changes.
-
-  The pass used to be SKIPPED for objects with more than 300 fields — the
-  19-sheet Customer and Item loads — on the grounds that re-applying was what made
-  generation hang. That made the biggest objects the ones most likely to ship
-  against a stale copy. It now reads the store once and writes only what changes,
-  so the gate is gone.
-
-  MappingSuggestion carries `derived` and `derived_from`: the row is a VIEW of the
-  store, and derived_from names the entry it came from, so "why does this say
-  that" is answerable from the row. A row a person edits stops being derived and
-  becomes a dated entry in its own right.
-
-WHAT THIS CHANGES IN THE SHIPPED DATA
-
-  Measured against the JSON in backend/app/data/, not estimated: 675 seeded
-  entries; 67 target-field names are claimed by more than one object; for 41 of
-  them the objects disagree about the answer, and those now resolve to one winner.
-  Affected names include Address Line 1/2/3, City, Country, Postal Code, State,
-  Phone, Email, Fax, Account Name, Account Number, Payment Terms, Payment Method,
-  First/Middle/Last Name and Supplier Name.
-
-  What limits it: the apply pass only writes a decision whose source column
-  actually exists in that conversion's extract, so a Supplier entry naming
-  `address_1` is skipped on a Customer extract that has `addr1` rather than
-  writing a column that is not in the file.
-
-  Sheet scope (sheets / exclude_sheets) is kept as an applicability predicate on
-  an entry. It is not a tier competing with the date — it is part of what the
-  analyst said ("id maps to Party Original System Reference, but not on
-  HZ_IMP_CLASSIFICS_T" is one instruction, not two ranked ones). Among the entries
-  that apply to a sheet, the newest still wins outright.
-
-NOT IN THIS CHANGE
-
-  Step 5 of docs/ONE_DATED_STORE.md — deleting apply_learned_to_conversion,
-  propagate_learning_to_open_conversions and the fan-out plumbing. They still run;
-  they now populate the view from the store instead of implementing their own
-  precedence.
-
-  The plan's final check — regenerate Supplier, Customer and Employee and diff
-  against the 02-Aug bundles — still to run. Expect any difference to fall on the
-  41 fields above.
+  The static site has no SPA rewrite. render.yaml carries the rule but is
+  attached to services named trinamix-backend / trinamix-frontend, while the live
+  sites are tx-conversion-workbench and trinamix-conversion-workbench, created by
+  hand -- so any deep link or refresh returns 404 with a blank body. Fix in the
+  Render dashboard: Redirects/Rewrites -> source /*, destination /index.html,
+  action Rewrite.
 
 TESTS
 
-  843 passing, 13 skipped, 0 failing. 747 before.
-
-  New: tests/test_one_dated_store.py (the resolver, against a table of competing
-  entries, pure), tests/test_one_dated_store_writes.py (one writer, and a backfill
-  that can be run twice), tests/test_one_dated_store_reads.py (generation resolves
-  through the store; the rows are a view).
-
-  Twelve existing seam tests moved to the new address rather than being weakened —
-  each still asserts the same guarantee, at the one place that now holds it.
-
-
----------------------------------------------------------------------------
-
-Output report: what the tool did to the input file
-
-A button beside the bundle downloads that produces one .xlsx describing the run
-that made those files. It answers the question that follows a bundle download:
-the analyst has the FBDI files, and now has to be able to say how they were
-produced.
-
-  services/conversion_report_service.py — pure openpyxl builder, takes dicts,
-  returns bytes, unit-testable against hand-built input. Same palette and
-  weights as mapping_export_service so a client receiving both does not get two
-  different-looking documents.
-
-  GET /api/conversions/project/{id}/conversion-report — collects and streams it.
-  Frontend: OutputApi.conversionReport, buttons in both places the bundle can be
-  pulled from on the Project Overview page.
-
-SEVEN SHEETS
-
-  Summary          per object: rows in, rows out, merged away, columns mapped,
-                   values cleansed, validation counts, required short, and the
-                   output file — plus a "how to read this" block, because a
-                   number nobody can interpret is not a report
-  Mappings         every target field, what fed it, the layer that decided it,
-                   and the AUTHORITY behind it: the dated entry from the store,
-                   or the person and the date if they edited it
-  Cleansing        one line per rule per field, with a real before/after from
-                   this run. A count alone is not reviewable — "1,422 values
-                   changed" could be right or catastrophic; "  ACME  -> ACME"
-                   can be judged
-  Duplicates       what went in against what came out, the natural key used, and
-                   how many analyst decisions were recorded
-  Validation       issue, field, rows affected, what it means, suggested fix
-  Required fields  failed / partial / not owned, per interface sheet
-  Run log          per artifact: when, from what, and anything that went wrong
-                   while building it — a step that failed shipped the file
-                   anyway, and that used to live only in a server log
-
-IT REPORTS THE RUN, NOT A RECOMPUTATION
-
-  Every figure comes from the artifact the bundle actually contains: the
-  dq_report persisted on ConvertedOutput, the mapping rows as they stand, the
-  row counts of the file on disk. It does not re-run cleansing, validation or
-  duplicate detection.
-
-  Recomputing would produce a document that quietly disagrees with the files it
-  describes the moment anything has moved, and "the screen says one thing and
-  the file says another" is the failure this codebase pays for most often. A
-  test asserts the collector calls none of find_duplicate_clusters,
-  apply_cleansing or validate_frame, and none of generate_output_artifact or
-  generate_merged — pressing the button describes the files you already have
-  rather than quietly building different ones.
-
-  Where a figure cannot be sourced from the run it is a dash, not a zero. Zero
-  merged and "the run cannot account for the difference" are different facts,
-  and printing one as the other is a lie the reader cannot detect.
-
-  A section that found nothing still gets a sheet saying so. An absent sheet and
-  a section that ran and found nothing look identical otherwise, and that
-  ambiguity is how "the tool never ran that check" gets read as "there was
-  nothing to find".
-
-  One object failing does not lose the report — the failure is written INTO the
-  Run log, because a missing section reads as nothing found.
-
-TESTS
-
-  872 passing, 13 skipped, 0 failing.
-  New: tests/test_conversion_report.py — 29 tests, pure, builds workbooks in
-  memory and reads them back.
+  882 passing, 13 skipped, 0 failing.
+  New: tests/test_error_boundary.py -- source seams, matching the other frontend
+  assertions in this suite, since the frontend has no test runner and a guarantee
+  nothing checks is one that quietly goes away.
