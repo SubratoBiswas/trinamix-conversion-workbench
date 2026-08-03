@@ -294,7 +294,13 @@ async def reparse_template(template_id: str, _: User = Depends(get_current_user)
         await FBDIField(template_id=tpl.id, sheet_id=sheet_id, **f).insert()
     req_count = sum(1 for f in parsed["fields"] if f.get("required"))
     await tpl.set({
-        "status": "parsed", "updated_at": datetime.utcnow() if parsed["fields"] else "manual",
+        # The conditional belongs to STATUS, not to updated_at. A blind
+        # find-and-replace that inserted updated_at mid-expression turned
+        # `"status": "parsed" if fields else "manual"` into a always-parsed status
+        # and an updated_at of the string "manual" — a reparse that found no fields
+        # would have reported success and written a date field that is not a date.
+        "status": "parsed" if parsed["fields"] else "manual",
+        "updated_at": datetime.utcnow(),
         "required_field_count": req_count,
     })
     return await _detail_payload(tpl)
