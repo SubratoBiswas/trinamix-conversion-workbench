@@ -56,10 +56,21 @@ async def _run_generation(conversion_id: str, fmt: str,
         await c.set({"output_status": "ready", "output_error": None,
                      "updated_at": datetime.utcnow()})
     except Exception as exc:  # noqa: BLE001
+        # THE TYPE AND THE PLACE, not just str(exc). Supplier Site failed with
+        # output_error "0" — which is str(KeyError(0)) and says nothing about where.
+        # A bare message is enough to prove something broke and never enough to fix
+        # it, and this is a background worker, so there is no response body and no
+        # request log to fall back on: whatever is recorded here IS the diagnosis.
+        import traceback
+        _tb = traceback.extract_tb(exc.__traceback__)
+        _where = " <- ".join(
+            f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno} {f.name}" for f in _tb[-4:])
+        _msg = f"{type(exc).__name__}: {exc} | at {_where}"
+        log.exception("generation failed for %s", conversion_id)
         try:
             c = await Conversion.get(PydanticObjectId(conversion_id))
             if c:
-                await c.set({"output_status": "failed", "output_error": str(exc)[:500]})
+                await c.set({"output_status": "failed", "output_error": _msg[:900]})
         except Exception:
             pass
 
