@@ -126,6 +126,21 @@ export const OutputPreviewPage: React.FC = () => {
   const [colRules, setColRules] = useState<ColumnRulesReport | null>(null);
   const [colRulesBusy, setColRulesBusy] = useState(false);
   const [colRulesError, setColRulesError] = useState<string | null>(null);
+  // These two live here, with every other hook, and NOT down beside the
+  // fix-finding handler that uses them.
+  //
+  // They were declared after `if (!project) return <PageLoader />`, so the first
+  // render — project still loading — ran two fewer hooks than the second. React
+  // counts hooks by call order and throws when the count changes:
+  // "Rendered more hooks than during the previous render" (minified #310). It
+  // took the whole page down every time, and with no error boundary the symptom
+  // was a blank white screen with nothing on it to act on.
+  //
+  // Every hook in this component belongs above that early return. There is no
+  // exception to that rule, which is why these are grouped with their siblings
+  // rather than left next to the code that reads them.
+  const [fixBusy, setFixBusy] = useState<string | null>(null);
+  const [fixNote, setFixNote] = useState<string | null>(null);
 
   const setBusyKey = (key: string, on: boolean) =>
     setBusy(prev => ({ ...prev, [key]: on }));
@@ -1070,9 +1085,6 @@ export const OutputPreviewPage: React.FC = () => {
   const AUTO_FIXABLE = new Set([
     "date_format", "max_length", "numeric", "scale", "do_not_populate",
   ]);
-
-  const [fixBusy, setFixBusy] = useState<string | null>(null);
-  const [fixNote, setFixNote] = useState<string | null>(null);
 
   const fixFinding = async (f: ColumnRuleFinding) => {
     if (!id) return;

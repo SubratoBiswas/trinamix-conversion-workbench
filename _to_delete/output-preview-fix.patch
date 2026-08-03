@@ -1,0 +1,503 @@
+diff --git a/backend/tests/test_error_boundary.py b/backend/tests/test_error_boundary.py
+new file mode 100644
+index 0000000..a18969c
+--- /dev/null
++++ b/backend/tests/test_error_boundary.py
+@@ -0,0 +1,102 @@
++"""A page that throws must say what broke, not go white.
++
++React unmounts the whole tree when a render throws and nothing catches it, so
++this app's failure mode for any render bug was a blank screen: no message, no
++component name, nothing to act on. The console carried `Minified React error
++#310` and a stack of one-letter names — not something an analyst can report, and
++not much faster for a developer either.
++
++That cost real time on Output Preview: the first explanations considered were a
++broken build, a failed deploy and a 404 from the static host, and the screen
++looked identical under every one of them. A white page is the least informative
++failure a UI can have.
++
++These are source seams, in the same style as the other frontend assertions in
++this suite — the frontend has no test runner, and a guarantee nothing checks is
++one that quietly goes away.
++"""
++import re
++from pathlib import Path
++
++_FRONTEND = Path(__file__).resolve().parent.parent.parent / "frontend" / "src"
++
++
++def _read(*parts):
++    return _FRONTEND.joinpath(*parts).read_text(encoding="utf-8")
++
++
++def test_the_error_boundary_exists():
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "class ErrorBoundary" in src
++
++
++def test_it_is_a_class_because_there_is_no_hook_for_this():
++    """`componentDidCatch` and `getDerivedStateFromError` exist only on classes.
++    Someone will try to convert this to a function component one day."""
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "static getDerivedStateFromError" in src
++    assert "componentDidCatch" in src
++
++
++def test_every_route_is_wrapped_by_it():
++    """One boundary above the router, so no page can white-screen the app."""
++    app = _read("App.tsx")
++    assert "<ErrorBoundary" in app
++    assert app.index("<ErrorBoundary") < app.index("<Routes>")
++    assert app.index("</Routes>") < app.index("</ErrorBoundary>")
++
++
++def test_navigating_away_from_a_broken_page_recovers():
++    """Otherwise one bad route holds the whole app hostage until a reload."""
++    app = _read("App.tsx")
++    assert "resetKey={pathname}" in app
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "componentDidUpdate" in src
++    assert "prev.resetKey !== this.props.resetKey" in src
++
++
++def test_it_names_the_component_that_threw():
++    """The single most useful thing in the report, and the thing a minified
++    stack of one-letter names does not give you."""
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "componentStack" in src
++    assert "function culprit" in src
++
++
++def test_it_translates_reacts_numbered_production_errors():
++    """"#310" is not actionable. "A hook is running conditionally, or sits after
++    an early return" is."""
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "Minified React error #" in src
++    for code in ("300", "310", "321"):
++        assert f'"{code}"' in src, f"React error {code} has no plain-English form"
++
++
++def test_310_is_explained_because_it_is_the_one_that_bit():
++    src = _read("components", "ErrorBoundary.tsx")
++    meaning = re.search(r'"310":\s*(.+?)(?=\n\s*"\d{3}"|\n\};)', src, re.S)
++    assert meaning, "no explanation for #310"
++    text = meaning.group(1).lower()
++    assert "hook" in text and ("early return" in text or "conditionally" in text)
++
++
++def test_the_details_can_be_copied_in_one_click():
++    """So a bug report contains the stack rather than the word "blank"."""
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "clipboard" in src
++    assert "Copy details" in src
++
++
++def test_the_stack_still_reaches_the_console():
++    """The panel deliberately does not dump a wall of stack into the page, so
++    the full detail has to remain reachable from devtools."""
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "console.error" in src
++    assert "[ErrorBoundary]" in src
++
++
++def test_it_tells_the_user_nothing_was_lost():
++    """A blank screen reads as "the tool ate my work". It did not."""
++    src = _read("components", "ErrorBoundary.tsx")
++    assert "rest of the app still works" in src
++    assert "has been changed or lost" in src
+diff --git a/backend/tests/test_hook_order.py b/backend/tests/test_hook_order.py
+new file mode 100644
+index 0000000..337b3ba
+--- /dev/null
++++ b/backend/tests/test_hook_order.py
+@@ -0,0 +1,129 @@
++"""No React hook may sit below a component's early return.
++
++Output Preview went blank on every load. `OutputPreviewPage` declared
++``useState`` for `fixBusy`/`fixNote` roughly 470 lines below
++``if (!project) return <PageLoader />``, so the first render — project still
++loading — ran two fewer hooks than the second. React counts hooks by call order
++and throws when the count changes between renders: "Rendered more hooks than
++during the previous render", shipped as minified error #310. It took the entire
++page down, and with no error boundary the symptom was a white screen.
++
++The bug is invisible by eye in a 1,600-line component: the hook looks perfectly
++ordinary sitting next to the handler that uses it, and the early return is
++hundreds of lines away. It is trivial to reintroduce for exactly that reason,
++and the next person to add a piece of state next to its handler will do it
++again. So it is checked mechanically.
++
++Pure: stdlib only, reads the shipped frontend source. The frontend has no test
++runner, which is why this lives here alongside the other frontend seams.
++"""
++import re
++from pathlib import Path
++
++_FRONTEND = Path(__file__).resolve().parent.parent.parent / "frontend" / "src"
++
++_HOOK = re.compile(r'\b(useState|useEffect|useMemo|useCallback|useRef|useReducer|'
++                   r'useLayoutEffect|useContext|useTransition|useDeferredValue)\s*\(')
++# A return at exactly two spaces of indent is the component's own — anything
++# deeper belongs to a nested function or a callback and is not an early exit
++# from the component.
++_TOP_RETURN = re.compile(r'^  (?:if\s*\(.*\)\s*)?return\b')
++# Where a new component starts, which resets the "have we returned yet" state.
++_COMPONENT = re.compile(r'^(?:export\s+)?(?:const|function)\s+[A-Z_]\w*')
++
++
++def _violations(path: Path):
++    """(line, text) for every hook that follows a top-level return in its own
++    component."""
++    out, returned_at = [], None
++    for n, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
++        if _COMPONENT.match(line):
++            returned_at = None                    # a new component, a clean slate
++        if _TOP_RETURN.match(line) and returned_at is None:
++            returned_at = n
++        indent = len(line) - len(line.lstrip())
++        if returned_at and indent == 2 and _HOOK.search(line):
++            out.append((returned_at, n, line.strip()))
++    return out
++
++
++def _pages():
++    return sorted(p for p in _FRONTEND.rglob("*.tsx"))
++
++
++def test_no_hook_sits_below_an_early_return():
++    """The whole rule, mechanically. A hook below an early return means one
++    render path calls fewer hooks than another, and React takes the page down."""
++    bad = {}
++    for p in _pages():
++        v = _violations(p)
++        if v:
++            bad[str(p.relative_to(_FRONTEND))] = v
++    assert not bad, "hooks declared after a component-level return:\n" + "\n".join(
++        f"  {f}: return at line {r}, hook at line {n} -> {t}"
++        for f, vs in bad.items() for r, n, t in vs)
++
++
++def test_output_preview_keeps_its_hooks_together():
++    """The specific regression, pinned. Every hook in this component is above
++    `if (!project) return <PageLoader />`."""
++    src = (_FRONTEND / "pages" / "OutputPreviewPage.tsx").read_text(encoding="utf-8")
++    lines = src.split("\n")
++    # The CODE line, not the comment above the hooks that quotes it.
++    guard = next(i for i, l in enumerate(lines, 1)
++                 if l.strip().startswith("if (!project) return <PageLoader />"))
++    late = [(i, l.strip()) for i, l in enumerate(lines, 1)
++            if i > guard and (len(l) - len(l.lstrip())) == 2 and _HOOK.search(l)]
++    assert not late, f"hooks below the guard at line {guard}: {late}"
++
++
++def test_the_two_that_caused_it_are_with_their_siblings():
++    lines = (_FRONTEND / "pages" / "OutputPreviewPage.tsx") \
++        .read_text(encoding="utf-8").split("\n")
++
++    def line_of(prefix):
++        return next(i for i, l in enumerate(lines, 1)
++                    if l.strip().startswith(prefix))
++
++    guard = line_of("if (!project) return <PageLoader />")
++    assert line_of("const [fixBusy") < guard
++    assert line_of("const [colRulesError") < line_of("const [fixBusy")
++
++
++def test_the_detector_would_catch_it_coming_back():
++    """A guard nothing can trip is not a guard. This proves the check fires on
++    the exact shape that shipped."""
++    import tempfile
++    broken = (
++        "export const Thing: React.FC = () => {\n"
++        "  const [a, setA] = useState(0);\n"
++        "  if (!a) return <Loader />;\n"
++        "  const [b, setB] = useState(1);\n"
++        "  return <div />;\n"
++        "};\n"
++    )
++    with tempfile.TemporaryDirectory() as d:
++        f = Path(d) / "Broken.tsx"
++        f.write_text(broken, encoding="utf-8")
++        found = _violations(f)
++    assert found, "the detector does not catch a hook after an early return"
++    assert found[0][1] == 4
++
++
++def test_the_detector_does_not_flag_a_return_inside_a_callback():
++    """A `return` inside a nested function is not an early exit from the
++    component, and flagging it would make this test noise everyone ignores."""
++    import tempfile
++    fine = (
++        "export const Thing: React.FC = () => {\n"
++        "  const load = async () => {\n"
++        "    if (!id) return;\n"
++        "  };\n"
++        "  const [b, setB] = useState(1);\n"
++        "  return <div />;\n"
++        "};\n"
++    )
++    with tempfile.TemporaryDirectory() as d:
++        f = Path(d) / "Fine.tsx"
++        f.write_text(fine, encoding="utf-8")
++        assert not _violations(f)
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 1910035..03454d2 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -41,6 +41,7 @@ import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
+ import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
+ import { ApprovalsPage } from "@/pages/ApprovalsPage";
+ import { ClientsPage } from "@/pages/ClientsPage";
++import { ErrorBoundary } from "@/components/ErrorBoundary";
+ 
+ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+   const token = useAuth((s) => s.token);
+@@ -52,10 +53,14 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
+ const App: React.FC = () => {
+   const hydrate = useAuth((s) => s.hydrate);
+   useEffect(() => { hydrate(); }, [hydrate]);
++  // Keyed on the path so navigating away from a page that threw clears the
++  // error. Without this one broken route holds the whole app until a reload.
++  const { pathname } = useLocation();
+ 
+   return (
+     <>
+     <GlobalActivityBar />
++    <ErrorBoundary where={pathname} resetKey={pathname}>
+     <Routes>
+       <Route path="/login" element={<LoginPage />} />
+ 
+@@ -122,6 +127,7 @@ const App: React.FC = () => {
+ 
+       <Route path="*" element={<Navigate to="/" replace />} />
+     </Routes>
++    </ErrorBoundary>
+     </>
+   );
+ };
+diff --git a/frontend/src/components/ErrorBoundary.tsx b/frontend/src/components/ErrorBoundary.tsx
+new file mode 100644
+index 0000000..c473751
+--- /dev/null
++++ b/frontend/src/components/ErrorBoundary.tsx
+@@ -0,0 +1,183 @@
++import React from "react";
++import { AlertTriangle, RefreshCw, Copy, ChevronDown } from "lucide-react";
++
++/**
++ * A page that throws while rendering shows what broke, instead of nothing.
++ *
++ * There was no error boundary anywhere in this app, and React's behaviour
++ * without one is to unmount the entire tree — so a single bad render produced a
++ * white screen with no message, no component name and nothing in the UI to act
++ * on. The console carried a minified code (`Minified React error #310`) and a
++ * stack of one-letter names, which is not something an analyst can report and
++ * not something a developer can act on quickly either.
++ *
++ * That cost real time: Output Preview went blank and the first three
++ * explanations considered — a broken build, a failed deploy, a 404 from the
++ * static host — were all wrong, because the screen looked identical in every
++ * one of those cases. A white page is the least informative failure a UI can
++ * have, and it is entirely avoidable.
++ *
++ * So: catch it, name the component, keep the rest of the app usable, and make
++ * the details copyable in one click so a bug report contains the stack rather
++ * than the word "blank".
++ *
++ * Deliberately a class. Error boundaries have no hook equivalent —
++ * `componentDidCatch` and `getDerivedStateFromError` exist only on classes, and
++ * that is still true in React 18.
++ */
++
++type Props = {
++  children: React.ReactNode;
++  /** Shown in the panel and in the copied report, e.g. the route that failed. */
++  where?: string;
++  /** Reset when this changes — so navigating away from a broken page recovers. */
++  resetKey?: string;
++};
++
++type State = { error: Error | null; info: React.ErrorInfo | null; open: boolean };
++
++/** The component nearest the throw. The first frame of React's component stack
++ *  looks like "\n    at OutputPreviewPage (http://…)", and that name is the
++ *  single most useful thing in the whole report. */
++function culprit(info: React.ErrorInfo | null): string | null {
++  const stack = info?.componentStack ?? "";
++  const m = /^\s*(?:in|at)\s+([A-Za-z0-9_$.]+)/m.exec(stack);
++  return m ? m[1] : null;
++}
++
++/** React ships production errors as a numbered code. Decoding the handful this
++ *  app can realistically hit turns "#310" into a sentence someone can act on. */
++const REACT_CODES: Record<string, string> = {
++  "300": "Rendered fewer hooks than expected — usually a hook placed after an "
++       + "early return, so one render runs fewer hooks than the last.",
++  "310": "Rendered more hooks than during the previous render — a hook is "
++       + "running conditionally, or sits after an early return that only "
++       + "happens on the first render (typically while data is still loading).",
++  "321": "A hook was called outside a component, or two copies of React are "
++       + "loaded.",
++  "425": "Server and client rendered different content.",
++};
++
++function decode(error: Error | null): string | null {
++  const m = /Minified React error #(\d+)/.exec(error?.message ?? "");
++  return m ? (REACT_CODES[m[1]] ?? null) : null;
++}
++
++export class ErrorBoundary extends React.Component<Props, State> {
++  state: State = { error: null, info: null, open: false };
++
++  static getDerivedStateFromError(error: Error): Partial<State> {
++    return { error };
++  }
++
++  componentDidCatch(error: Error, info: React.ErrorInfo) {
++    this.setState({ info });
++    // Keep the un-minified detail somewhere reachable from the console, since
++    // the panel deliberately does not dump a wall of stack into the page.
++    // eslint-disable-next-line no-console
++    console.error("[ErrorBoundary]", this.props.where ?? "", error, info.componentStack);
++  }
++
++  componentDidUpdate(prev: Props) {
++    // Navigating to another page must clear the error, or one broken route
++    // holds the whole app hostage until a manual reload.
++    if (prev.resetKey !== this.props.resetKey && this.state.error) {
++      this.setState({ error: null, info: null, open: false });
++    }
++  }
++
++  private report() {
++    const { error, info } = this.state;
++    return [
++      `Page: ${this.props.where ?? window.location.pathname}`,
++      `Component: ${culprit(info) ?? "unknown"}`,
++      `Error: ${error?.message ?? ""}`,
++      decode(error) ? `Meaning: ${decode(error)}` : "",
++      "",
++      "Component stack:",
++      (info?.componentStack ?? "").trim(),
++      "",
++      "JS stack:",
++      (error?.stack ?? "").trim(),
++    ].filter(Boolean).join("\n");
++  }
++
++  render() {
++    const { error, info, open } = this.state;
++    if (!error) return this.props.children;
++
++    const who = culprit(info);
++    const meaning = decode(error);
++
++    return (
++      <div className="p-6">
++        <div className="mx-auto max-w-3xl rounded-lg border border-rose-200 bg-rose-50 p-5">
++          <div className="flex items-start gap-3">
++            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
++            <div className="min-w-0 flex-1">
++              <h2 className="text-sm font-semibold text-rose-900">
++                This section failed to render
++              </h2>
++              <p className="mt-1 text-sm text-rose-800">
++                The rest of the app still works — use the menu to carry on. Nothing
++                you were looking at has been changed or lost.
++              </p>
++
++              <dl className="mt-3 space-y-1 text-xs text-rose-900">
++                {who && (
++                  <div className="flex gap-2">
++                    <dt className="w-20 shrink-0 font-semibold">Component</dt>
++                    <dd className="font-mono">{who}</dd>
++                  </div>
++                )}
++                <div className="flex gap-2">
++                  <dt className="w-20 shrink-0 font-semibold">Error</dt>
++                  <dd className="font-mono break-all">{error.message}</dd>
++                </div>
++                {meaning && (
++                  <div className="flex gap-2">
++                    <dt className="w-20 shrink-0 font-semibold">Meaning</dt>
++                    <dd>{meaning}</dd>
++                  </div>
++                )}
++              </dl>
++
++              <div className="mt-4 flex flex-wrap items-center gap-2">
++                <button
++                  onClick={() => window.location.reload()}
++                  className="inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
++                >
++                  <RefreshCw className="h-3.5 w-3.5" /> Reload the page
++                </button>
++                <button
++                  onClick={() => navigator.clipboard?.writeText(this.report())}
++                  className="inline-flex items-center gap-1.5 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100"
++                  title="Copy the component, the error and both stacks — paste this into a bug report."
++                >
++                  <Copy className="h-3.5 w-3.5" /> Copy details
++                </button>
++                <button
++                  onClick={() => this.setState({ open: !open })}
++                  className="inline-flex items-center gap-1 text-xs font-semibold text-rose-700 hover:underline"
++                >
++                  <ChevronDown
++                    className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`}
++                  />
++                  {open ? "Hide" : "Show"} technical detail
++                </button>
++              </div>
++
++              {open && (
++                <pre className="mt-3 max-h-72 overflow-auto rounded border border-rose-200 bg-white p-3 text-[11px] leading-relaxed text-rose-900">
++                  {this.report()}
++                </pre>
++              )}
++            </div>
++          </div>
++        </div>
++      </div>
++    );
++  }
++}
++
++export default ErrorBoundary;
+diff --git a/frontend/src/pages/OutputPreviewPage.tsx b/frontend/src/pages/OutputPreviewPage.tsx
+index 103ac0f..c220933 100644
+--- a/frontend/src/pages/OutputPreviewPage.tsx
++++ b/frontend/src/pages/OutputPreviewPage.tsx
+@@ -126,6 +126,21 @@ export const OutputPreviewPage: React.FC = () => {
+   const [colRules, setColRules] = useState<ColumnRulesReport | null>(null);
+   const [colRulesBusy, setColRulesBusy] = useState(false);
+   const [colRulesError, setColRulesError] = useState<string | null>(null);
++  // These two live here, with every other hook, and NOT down beside the
++  // fix-finding handler that uses them.
++  //
++  // They were declared after `if (!project) return <PageLoader />`, so the first
++  // render — project still loading — ran two fewer hooks than the second. React
++  // counts hooks by call order and throws when the count changes:
++  // "Rendered more hooks than during the previous render" (minified #310). It
++  // took the whole page down every time, and with no error boundary the symptom
++  // was a blank white screen with nothing on it to act on.
++  //
++  // Every hook in this component belongs above that early return. There is no
++  // exception to that rule, which is why these are grouped with their siblings
++  // rather than left next to the code that reads them.
++  const [fixBusy, setFixBusy] = useState<string | null>(null);
++  const [fixNote, setFixNote] = useState<string | null>(null);
+ 
+   const setBusyKey = (key: string, on: boolean) =>
+     setBusy(prev => ({ ...prev, [key]: on }));
+@@ -1071,9 +1086,6 @@ export const OutputPreviewPage: React.FC = () => {
+     "date_format", "max_length", "numeric", "scale", "do_not_populate",
+   ]);
+ 
+-  const [fixBusy, setFixBusy] = useState<string | null>(null);
+-  const [fixNote, setFixNote] = useState<string | null>(null);
+-
+   const fixFinding = async (f: ColumnRuleFinding) => {
+     if (!id) return;
+     const key = `${f.sheet}|${f.field}|${f.rule}`;

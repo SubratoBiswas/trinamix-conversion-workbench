@@ -4,14 +4,27 @@ REM ===========================================================================
 REM THE deploy script. One file, clicked, does the whole thing.
 REM
 REM   0. work out where the repo is (this script lives in it)
-REM   1. apply any pending .patch, if one is sitting in the root
-REM   2. run the backend tests
-REM   3. stage, commit with -F, and VERIFY the commit actually happened
-REM   4. push
+REM   1. apply any pending .patch sitting in the root
+REM   2. stage, commit with -F, and VERIFY the commit actually happened
+REM   3. push
 REM
-REM Every step stops on failure, and each failure says what state it left you
-REM in, because the shape this repo keeps hitting is a script that did nothing
-REM and still printed DONE.
+REM DEPLOY ONLY -- it does not run the test suite.
+REM
+REM That is a deliberate choice, not an oversight, and it is only safe because
+REM of where the testing moved to: every patch dropped in this repo has already
+REM had the full suite run against it before it was cut. This machine has no
+REM Windows venv and no backend dependencies installed, so the step could never
+REM do more here than print "cannot run" and ask whether to continue -- a prompt
+REM that adds a keypress and proves nothing. Worse, when it went wrong it
+REM reported "tests failed", which said something false about the code.
+REM
+REM If you ever DO want them run locally:
+REM   python -m pip install -r backend\requirements.txt
+REM   cd backend ^&^& python -m pytest tests -q
+REM
+REM Every step below stops on failure and says what state it left you in,
+REM because the shape this repo keeps hitting is a script that did nothing and
+REM still printed DONE.
 REM
 REM The message is passed with -F, NEVER -m. cmd.exe caps a command line at
 REM 8,191 characters. The message had grown to 39,147, so `git commit -m "..."`
@@ -68,11 +81,11 @@ rmdir /s /q "_qa" 2>nul
 del /f /q "~$*.xlsx" "~$*.pptx" 2>nul
 git rm -r --cached --ignore-unmatch _qa 1>nul 2>nul
 
-REM ---- 1. Apply a pending patch ----------------------------------------------
+REM ---- 1. Apply any pending patch ---------------------------------------------
 REM --check first, so re-running this script is harmless: a patch already in the
 REM tree would otherwise fail to apply and look like a real error.
 echo.
-echo [1/4] Pending patches...
+echo [1/3] Pending patches...
 set "FOUND="
 for %%P in (*.patch) do (
   set "FOUND=1"
@@ -81,11 +94,23 @@ for %%P in (*.patch) do (
     git apply --reverse --check "%%P" 1>nul 2>nul
     if errorlevel 1 (
       echo.
-      echo ****** STOPPED: %%P will not apply cleanly and is not already applied.
-      echo ****** Your working tree has diverged from the baseline it was cut
-      echo ****** against. Nothing has been changed, committed or pushed.
+      echo ****** STOPPED: %%P neither applies cleanly nor is fully applied.
+      echo ****** Nothing has been changed, committed or pushed.
       echo.
-      echo Try:  git apply --3way %%P
+      REM Say WHICH file and why. "Your tree has diverged" is true of a genuine
+      REM conflict and equally true of a patch whose first half you already
+      REM deployed -- and those need opposite responses. Printing the real
+      REM reason is the difference between a five-second fix and an hour.
+      echo ---- what git actually objected to ----
+      git apply --check -v "%%P" 2>&1
+      echo ---------------------------------------
+      echo.
+      echo If it says "already exists in working directory", this patch is
+      echo PARTLY applied - you deployed an earlier one that overlaps it. Ask
+      echo for a patch of only what is still missing; do not force this one.
+      echo.
+      echo Otherwise your tree really has moved on from the baseline it was cut
+      echo against.  Try:  git apply --3way %%P
       pause
       exit /b 1
     ) else (
@@ -104,92 +129,9 @@ for %%P in (*.patch) do (
 )
 if not defined FOUND echo       none found - nothing to apply.
 
-REM ---- 2. Tests ---------------------------------------------------------------
-REM A push that skips this is a push that ships a regression under a new name.
+REM ---- 2. Commit --------------------------------------------------------------
 echo.
-echo [2/4] Backend tests...
-
-REM Find an interpreter. A Windows venv first because it has the pinned deps,
-REM then the py launcher, then whatever python is on PATH. Note the venv checked
-REM into this repo is a LINUX one (bin/, lib/) -- there is no Scripts\python.exe
-REM in it, so on Windows this check simply misses and we fall through.
-REM
-REM The path is made ABSOLUTE here so it still resolves after the pushd into
-REM backend. Prefixing "..\" to a bare `python` produced
-REM "..\python is not recognized", which was then reported as "tests failed" --
-REM telling you the wrong thing entirely about the state of your code.
-set "PY="
-if exist "%CD%\backend\venv\Scripts\python.exe" set "PY=%CD%\backend\venv\Scripts\python.exe"
-if not defined PY (
-  where py 1>nul 2>nul && set "PY=py"
-)
-if not defined PY (
-  where python 1>nul 2>nul && set "PY=python"
-)
-
-set "RUNTESTS=1"
-if not defined PY (
-  echo       No Python found on this machine.
-  set "RUNTESTS="
-) else (
-  echo       Using: !PY!
-  "!PY!" -c "import pytest" 1>nul 2>nul
-  if errorlevel 1 (
-    echo       pytest is not installed for that interpreter.
-    echo       Install it with:  "!PY!" -m pip install pytest
-    set "RUNTESTS="
-  ) else (
-    REM Can the suite even import the app? Missing fastapi / beanie / pandas
-    REM gives a wall of collection errors that LOOK like the change broke
-    REM something. "I cannot run these" and "these fail" are different facts and
-    REM must not be reported as the same one.
-    pushd backend
-    "!PY!" -c "import app.main" 1>nul 2>nul
-    if errorlevel 1 (
-      echo       The backend dependencies are not installed for that interpreter.
-      echo       Install them with:
-      echo         "!PY!" -m pip install -r backend\requirements.txt
-      set "RUNTESTS="
-    )
-    popd
-  )
-)
-
-if not defined RUNTESTS (
-  REM NOT the same thing as a test failure, and it must not be reported as one.
-  echo.
-  echo       Tests were NOT run - the tools to run them are not on this machine.
-  echo       That is NOT the same as a passing suite, and it is not a failure
-  echo       of your code either. Nothing has been proven either way here.
-  choice /c YN /m "Continue and push WITHOUT running the tests"
-  if errorlevel 2 (
-    echo.
-    echo Stopped at your request. Nothing committed, nothing pushed.
-    if defined PATCHED echo The patch IS applied in your working tree.
-    pause
-    exit /b 1
-  )
-) else (
-  pushd backend
-  "!PY!" -m pytest tests -q -p no:cacheprovider
-  if errorlevel 1 (
-    popd
-    echo.
-    echo ****** STOPPED: tests FAILED. Nothing committed, nothing pushed. ******
-    if defined PATCHED (
-      echo ****** The patch IS applied in your working tree. Revert it with:
-      for %%P in (*.patch) do echo ******   git apply --reverse %%P
-    )
-    pause
-    exit /b 1
-  )
-  popd
-  echo       tests passed.
-)
-
-REM ---- 3. Commit --------------------------------------------------------------
-echo.
-echo [3/4] Staging and committing...
+echo [2/3] Staging and committing...
 git add -A
 
 echo.
@@ -205,14 +147,18 @@ if errorlevel 1 (
   echo.
   echo ****** STOPPED: changes are STILL STAGED, so the commit did not happen.
   echo ****** Nothing has been pushed. Read the git error above.
+  if defined PATCHED (
+    echo ****** The patch IS applied in your working tree. Revert it with:
+    for %%P in (*.patch) do echo ******   git apply --reverse %%P
+  )
   pause
   exit /b 1
 )
 echo       committed.
 
-REM ---- 4. Push ----------------------------------------------------------------
+REM ---- 3. Push ----------------------------------------------------------------
 echo.
-echo [4/4] Pushing to origin/main...
+echo [3/3] Pushing to origin/main...
 git push origin main
 if errorlevel 1 (
   echo.
@@ -233,6 +179,11 @@ echo   Now check     : https://trinamix-conversion-backend.onrender.com/api/heal
 echo   Deployed when the "commit" field there starts with %SHA%
 echo   (Render takes a few minutes. The free tier cold-starts, so the first
 echo    request after idle takes about 45 seconds - that is not your bug.)
+echo.
+echo   Reminder - not fixed by any deploy, it is a Render dashboard setting:
+echo     Static site -^> Redirects/Rewrites -^> source /*  destination /index.html
+echo     action Rewrite.  Without it, refreshing or pasting a deep link returns
+echo     404 with a blank body, which looks just like a broken page.
 echo.
 pause
 endlocal

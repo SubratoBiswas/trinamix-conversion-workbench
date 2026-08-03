@@ -1,53 +1,56 @@
-Error boundary: a page that throws says what broke
+Fix the hook order that blanked Output Preview
 
-Output Preview went white. The console carried `Minified React error #310` and a
-stack of one-letter names; the page itself said nothing at all.
+OutputPreviewPage declared
 
-React unmounts the entire tree when a render throws and nothing catches it, and
-this app had no error boundary anywhere -- the CODEBASE_GUIDE flags exactly this
-("there is no error boundary in the frontend, so an unknown type used to unmount
-the whole page silently"). So every render bug in the app had the same symptom: a
-blank screen, indistinguishable from a failed build, a failed deploy, or a 404
-from the static host. All three were considered before the real cause, because
-nothing on screen told them apart. A white page is the least informative failure
-a UI can have and it is entirely avoidable.
+  const [fixBusy, setFixBusy] = useState<string | null>(null);
+  const [fixNote, setFixNote] = useState<string | null>(null);
 
-  components/ErrorBoundary.tsx -- catches the throw, names the component nearest
-  it from React's componentStack, translates React's numbered production errors
-  into a sentence someone can act on, keeps the rest of the app usable, and puts
-  the whole report behind one "Copy details" button so a bug report contains the
-  stack rather than the word "blank". The full stack still goes to the console.
+roughly 470 lines BELOW
 
-  Wrapped around <Routes> in App.tsx and keyed on the pathname, so navigating
-  away from a broken page clears the error -- without that, one bad route holds
-  the app until a manual reload.
+  if (!project) return <PageLoader />;
 
-  A class, deliberately: componentDidCatch and getDerivedStateFromError exist
-  only on classes, and a test says so, because someone will try to convert it.
+So the first render -- project still loading -- ran two fewer hooks than the
+second. React counts hooks by call order and throws the moment the count
+changes: "Rendered more hooks than during the previous render", shipped as
+minified error #310. It took the whole page down on every single load, and
+before the error boundary landed the symptom was a blank white screen with
+nothing on it to act on.
 
-WHAT IT WILL TELL US
+Both hooks now sit with the rest of the component's state, above the guard.
+They had been placed next to the handler that reads them, which is why nobody
+saw it: the hook looks entirely ordinary there, and the early return is hundreds
+of lines away in a 1,600-line component.
 
-  #310 is "rendered more hooks than during the previous render" -- a hook running
-  conditionally, or after an early return that only happens on the first render
-  while data is still loading. The component was not identifiable from the
-  minified build. With this in place the page names it on sight.
+THE RULE, CHECKED MECHANICALLY
 
-  Not caused by the dated-store or report change: the only hook added anywhere
-  was one useState in ProjectOverviewPage, in the top-level hook block with no
-  component-level return before it, on a different page.
+  tests/test_hook_order.py walks every .tsx file and fails on any hook declared
+  below a component-level return. It reads two-space indentation as the
+  component's own scope, so a `return` inside a callback is correctly ignored --
+  a check that cries wolf is one people learn to skip. Two of its cases feed it
+  a known-broken and a known-good component, because a guard nothing can trip is
+  not a guard.
 
-ALSO OUTSTANDING, NOT CODE
+  It passes across the whole frontend: Output Preview was the only violation.
 
-  The static site has no SPA rewrite. render.yaml carries the rule but is
-  attached to services named trinamix-backend / trinamix-frontend, while the live
-  sites are tx-conversion-workbench and trinamix-conversion-workbench, created by
-  hand -- so any deep link or refresh returns 404 with a blank body. Fix in the
-  Render dashboard: Redirects/Rewrites -> source /*, destination /index.html,
-  action Rewrite.
+DEPLOY SCRIPT
+
+  launch_git.bat no longer runs the test suite -- every patch has the full suite
+  run against it before it is cut, and this machine has no Windows venv or
+  backend dependencies, so the step could only ever print "cannot run" and ask
+  for a keypress. When it misfired it said "tests failed", which was false about
+  the code.
+
+  A patch that will not apply now prints what git actually objected to. "Your
+  tree has diverged" is equally true of a real conflict and of a patch whose
+  first half you already deployed, and those need opposite responses -- the
+  previous message sent the reader the wrong way.
 
 TESTS
 
-  882 passing, 13 skipped, 0 failing.
-  New: tests/test_error_boundary.py -- source seams, matching the other frontend
-  assertions in this suite, since the frontend has no test runner and a guarantee
-  nothing checks is one that quietly goes away.
+  887 passing, 13 skipped, 0 failing.
+
+STILL OUTSTANDING, NOT CODE
+
+  The static site has no SPA rewrite, so a refresh or a pasted deep link returns
+  404 with a blank body. Render dashboard -> Redirects/Rewrites -> source /*,
+  destination /index.html, action Rewrite.
