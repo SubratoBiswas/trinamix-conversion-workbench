@@ -170,6 +170,42 @@ async def get_dataset(dataset_id: str, _: User = Depends(get_current_user)):
     return _ds_out(ds, columns)
 
 
+@router.get("/{dataset_id}/download")
+async def download_dataset(
+    dataset_id: str,
+    _: User = Depends(get_current_user),
+):
+    """The source file exactly as it was uploaded.
+
+    There was no way to get it back. Everything downloadable was output-side —
+    the FBDI bundle, the run report, the mapping export — so when the tool and the
+    file disagreed, the one thing that settles it was the one thing you could not
+    open. The live case: an Item Import conversion showing 0 converted rows whose
+    dataset card read "0 rows · 165 cols", where the whole question is what the
+    uploaded workbook actually contains.
+
+    Served from GridFS when the ephemeral disk has been wiped by a redeploy, which
+    is the normal state of a dataset uploaded more than a deploy ago — the same
+    rehydration generation uses, so this cannot show a file the conversion is not
+    reading.
+    """
+    from fastapi.responses import FileResponse
+    from app.services.dataset_file_store import materialize_dataset_file
+
+    ds = await Dataset.get(PydanticObjectId(dataset_id))
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    path = await materialize_dataset_file(ds)
+    if path is None:
+        raise HTTPException(
+            404, "The uploaded bytes for this dataset are no longer stored — "
+                 "re-upload the file to make it downloadable again.")
+    return FileResponse(
+        str(path),
+        filename=ds.file_name or f"{ds.name or 'dataset'}.{ds.file_type or 'dat'}",
+        media_type="application/octet-stream")
+
+
 @router.get("/{dataset_id}/preview", response_model=DatasetPreviewOut)
 async def preview_dataset(dataset_id: str, limit: int = 50, _: User = Depends(get_current_user)):
     ds = await Dataset.get(PydanticObjectId(dataset_id))

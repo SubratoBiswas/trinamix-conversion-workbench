@@ -24,6 +24,18 @@ from typing import Any
 
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _FILE = _DATA / "supplier_strategy_defaults.json"
+# Later analyst documents, in the ``action: blank|constant|rule`` shape. They are
+# overlays for the same reason the corrections file is: a learning reaches the
+# MAPPINGS, and a mapping is not what the control-default pass and the sequence
+# pass read — Batch ID kept shipping 900001 through a perfectly good suppression
+# learning until it was enforced here too.
+#
+# ``derive`` rows in these files are column mappings, not overlays, and are
+# deliberately skipped: discovery stays with mapping, this is the guarantee.
+_EXTRA_FILES = (
+    "supplier_corrections_30jul.json",
+    "customer_mapping_03aug.json",
+)
 _cache: dict | None = None
 _blank_cache: dict | None = None
 # Directives an analyst marked ``applies_to_all_sheets``. Keyed by the normalised
@@ -90,7 +102,7 @@ def _load() -> dict:
     # THIS blank set. A suppress_field learning reaches the mappings; it does not reach
     # the control-default pass, so a field with no mapping row at all — which is exactly
     # what an unmapped Batch ID is — was refilled every time.
-    for extra in ("supplier_corrections_30jul.json",):
+    for extra in _EXTRA_FILES:
         try:
             more = json.loads((_DATA / extra).read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
@@ -99,6 +111,15 @@ def _load() -> dict:
         for r in (more.get("rules") or []):
             a = (r.get("action") or "").strip()
             _all = bool(r.get(_all_sheets_note()))
+            # A row the analyst narrowed to particular INTERFACE SHEETS cannot be
+            # honoured here. This overlay is keyed by object and looks a field up
+            # by name alone — one Customer conversion is one object name for all
+            # 19 sheets — so applying "Insert Update Indicator = I, profiles sheet
+            # only" would put an I on all nineteen. Those rows are left to the
+            # store, which does resolve per sheet. Skipping is the honest half of
+            # the guarantee: over-applying a scoped instruction is not enforcement.
+            if r.get("sheets") or r.get("exclude_sheets"):
+                continue
             if a == "blank":
                 rules.append({"target_object": r.get("target_object"),
                               "target_field": r.get("target_field"), "suppress": True,

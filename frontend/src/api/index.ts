@@ -75,6 +75,24 @@ export const ClientsApi = {
 export const DatasetsApi = {
   list: () => api.get<Dataset[]>("/datasets").then(r => r.data),
   get: (id: string) => api.get<DatasetDetail>(`/datasets/${id}`).then(r => r.data),
+  /** The source file exactly as uploaded. There was no way to get it back —
+   *  everything downloadable was output-side — so when the tool and the file
+   *  disagreed, the one thing that settles it could not be opened. */
+  download: async (id: string, filename = "source-file") => {
+    const response = await api.get(`/datasets/${id}/download`, {
+      responseType: "blob", timeout: 300000 });
+    const cd = (response.headers?.["content-disposition"] as string) || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const serverName = m ? decodeURIComponent(m[1].replace(/"/g, "").trim()) : "";
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = serverName || filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
   delete: (id: string, cascade = false) =>
     api.delete<{ deleted: boolean; id: string; conversions_deleted?: number }>(
       `/datasets/${id}${cascade ? "?cascade=true" : ""}`
@@ -799,9 +817,17 @@ export const OutputApi = {
       params: {
         threshold: opts?.threshold ?? 0.86,
         use_ai: opts?.useAi ?? false,
-        // The scan caps what it RETURNS while cluster_count reports the true
-        // total; at the server default of 100 a 343-cluster scan hid 243 groups.
-        max_clusters: opts?.maxClusters ?? 100,
+        // THE WHOLE LIST, by default. The scan caps what it RETURNS while
+        // cluster_count reports the true total, and at 100 a 342-cluster scan hid
+        // 242 groups — which the panel then reported as "0 undecided". Worse, the
+        // bulk actions could only ever reach what had been sent, so "Merge all
+        // high-confidence" merged all of the visible third and none of the rest
+        // while saying "all".
+        //
+        // Asking for everything is cheap: the scanner computes every cluster and
+        // then SLICES, so the cap saved no work, only payload — 342 groups over
+        // 831 records is a small response. The panel paginates the rendering.
+        max_clusters: opts?.maxClusters ?? 2000,
       },
       timeout: 120000,
     }).then(r => r.data),
@@ -942,6 +968,28 @@ export const OutputApi = {
    *
    *  Built from what the RUN recorded, not from a fresh recalculation, so the
    *  report and the files it describes cannot drift apart. */
+  /** Every suspected duplicate group as an .xlsx, with the conflicting strong
+   *  identifiers called out. Not the screen's hundred — this file exists BECAUSE
+   *  the panel truncates, so it defaults to all of them. */
+  duplicateSuspectsExport: async (conversionId: string,
+                                  filename = "duplicate_suspects.xlsx") => {
+    const response = await api.get(
+      `/conversions/${conversionId}/duplicate-suspects-export`,
+      { responseType: "blob", timeout: 180000 });
+    const cd = (response.headers?.["content-disposition"] as string) || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const serverName = m ? decodeURIComponent(m[1].replace(/"/g, "").trim()) : "";
+    const type = (response.headers?.["content-type"] as string) || "";
+    const url = window.URL.createObjectURL(
+      new Blob([response.data], type ? { type } : undefined));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = serverName || filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
   conversionReport: async (projectId: string, filename = "conversion_report.xlsx") => {
     const response = await api.get(`/conversions/project/${projectId}/conversion-report`, {
       responseType: "blob",

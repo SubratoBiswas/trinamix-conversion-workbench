@@ -266,6 +266,20 @@ async def duplicate_candidates(
     names (what the exact-key de-dup can't catch). Deterministic clustering; set
     ``use_ai=true`` to have the model adjudicate borderline clusters."""
     c = await _require_conversion(conversion_id)
+    return await _scan_duplicates(c, threshold=threshold, use_ai=use_ai,
+                                  max_rows=max_rows, max_clusters=max_clusters)
+
+
+async def _scan_duplicates(c, *, threshold: float, use_ai: bool, max_rows: int,
+                           max_clusters: int) -> dict:
+    """The scan itself, shared by the panel and the spreadsheet export.
+
+    Extracted rather than re-derived. The export exists to show the groups the
+    panel truncates, so an export that scanned even slightly differently would be
+    answering a different question from the screen it is meant to complete — and
+    §9.15 and the strategy overlay are this codebase's standing lesson that a
+    second copy of a rule drifts from the first.
+    """
     from app.services.output_service import (build_merged_frame_for_object,
                                              build_converted_dataframe)
     from app.services.entity_resolution import (find_duplicate_clusters,
@@ -310,6 +324,43 @@ async def duplicate_candidates(
         0, int(result.get("cluster_count") or 0) - len(result["clusters"]))
     result["max_clusters"] = max_clusters
     return result
+
+
+@output_router.get("/{conversion_id}/duplicate-suspects-export")
+async def duplicate_suspects_export(
+    conversion_id: str,
+    threshold: float = Query(0.86, ge=0.5, le=1.0),
+    max_rows: int = Query(8000, ge=100, le=50000),
+    # EVERY group by default, not the screen's hundred. This file exists because
+    # the panel truncates: exporting the same truncated slice would reproduce the
+    # problem in a second format.
+    max_clusters: int = Query(2000, ge=10, le=2000),
+    _: User = Depends(get_current_user),
+):
+    """Every suspected duplicate group as an .xlsx, with the conflicting strong
+    identifiers called out.
+
+    342 groups over 831 records is not a list anyone reviews by scrolling, and the
+    question actually asked of it — which groups disagree on a tax id, a D-U-N-S
+    or a supplier number, and are therefore probably not one entity — is a filter
+    and a sort. Deterministic only: AI adjudication is a decision aid on screen and
+    has no place silently baked into a file someone will act on.
+    """
+    c = await _require_conversion(conversion_id)
+    result = await _scan_duplicates(c, threshold=threshold, use_ai=False,
+                                    max_rows=max_rows, max_clusters=max_clusters)
+    from app.services import duplicate_export_service as des
+    data = des.build_workbook(
+        title=str(getattr(c, "name", "") or c.target_object or "Conversion"),
+        generated_at=f"{datetime.utcnow():%d %b %Y %H:%M} UTC",
+        result=result)
+    filename = _safe_name(
+        f"{c.target_object or 'conversion'}_duplicate_suspects_"
+        f"{datetime.utcnow():%d%b%Y}.xlsx")
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 async def _conversion_client_id(c):

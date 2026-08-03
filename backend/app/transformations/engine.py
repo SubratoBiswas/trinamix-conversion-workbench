@@ -81,7 +81,86 @@ _COMPARISON_OPS = {
 }
 
 
+def _resolve_column(spec: Any, row: Any) -> Any:
+    """The first of ``spec``'s candidate spellings this row actually has.
+
+    A rule column may be written as one name or as a LIST of candidate spellings.
+    The reason is in customer_rules_nextpower.json: rules are dictated in prose
+    ("entityid + _ + internalid") and the extract's real headers are whatever the
+    legacy system exported, so a single guessed spelling binds to nothing and
+    fails silently in a file that looks correct. Naming several costs nothing.
+
+    Returns the name to read, or None when the row has none of them — in which
+    case the caller reads a blank, which is the same thing an absent column has
+    always meant here. Preference order is the order written: a spelling the row
+    HAS but leaves blank still beats one it does not have at all, so a genuinely
+    empty cell is not silently replaced by a different column's value.
+    """
+    if not isinstance(spec, (list, tuple)):
+        return spec
+    names = [c for c in spec if str(c or "").strip()]
+    if row is None:
+        return names[0] if names else None
+    present = [c for c in names if c in row]
+    for c in present:
+        if not _is_blank(row.get(c)):
+            return c
+    return present[0] if present else (names[0] if names else None)
+
+
+def _branch_holds(br: dict, value: Any, row: Any) -> bool:
+    """Does one CASE_WHEN / SUFFIX_WHEN branch fire?
+
+    Two shapes. A plain branch names one column, one op and one value. A branch
+    carrying ``all`` is a CONJUNCTION of those — every clause must hold — which
+    the analyst's Party Type rule needs and the single-clause form cannot say:
+    "if organization name is blank AND a person name is not blank". Written as
+    three separate branches instead, the first one to match wins and the
+    organization-name test is never reached.
+    """
+    clauses = br.get("all")
+    if isinstance(clauses, (list, tuple)) and clauses:
+        return all(_branch_holds(c, value, row) for c in clauses)
+    clauses = br.get("any")
+    if isinstance(clauses, (list, tuple)) and clauses:
+        return any(_branch_holds(c, value, row) for c in clauses)
+    cmp = _COMPARISON_OPS.get((br.get("op") or "eq").lower())
+    if not cmp:
+        return False
+    col = _resolve_column(br.get("if_column"), row)
+    left = row.get(col) if (col and row is not None) else value
+    try:
+        return bool(cmp(left, br.get("value")))
+    except Exception:                                           # noqa: BLE001
+        return False
+
+
 def apply_rule(
+    rule_type: str,
+    config: dict[str, Any],
+    value: Any,
+    row: dict[str, Any] | None = None,
+    ctx: dict[str, Any] | None = None,
+) -> Any:
+    """One rule, plus any rules chained after it in ``config["then"]``.
+
+    The chain exists because THE STORE HOLDS ONE RULE PER FIELD. That is the
+    point of the one dated store — a field has a single live answer, so "newest
+    wins" is decidable — but an analyst's single sentence is not always a single
+    rule type: "concatenate entityid and internalid, and add _B on a billing row"
+    is one instruction that needs a CONCAT and then a SUFFIX_WHEN. Split across
+    two entries the store could keep only one of them, and the field would ship
+    half its key. Chained inside one config, one entry carries the whole sentence.
+    """
+    out = _apply_one_rule(rule_type, config, value, row=row, ctx=ctx)
+    for nxt in ((config or {}).get("then") or []):
+        if isinstance(nxt, dict) and nxt.get("rule_type"):
+            out = apply_rule(nxt["rule_type"], nxt.get("config") or {}, out,
+                             row=row, ctx=ctx)
+    return out
+
+
+def _apply_one_rule(
     rule_type: str,
     config: dict[str, Any],
     value: Any,
@@ -245,7 +324,7 @@ def apply_rule(
         cols = cfg.get("columns", [])
         if not row:
             return value
-        parts = [_to_str(row.get(c, "")) for c in cols]
+        parts = [_to_str(row.get(_resolve_column(c, row), "")) for c in cols]
         # A CONCAT whose every input is missing must not emit the separator alone.
         # Supplier Site was configured as CONCAT("Country Code", "-", "City"); neither
         # column exists in the NetSuite extract, so all 8,561 rows shipped the literal
@@ -278,7 +357,7 @@ def apply_rule(
         cols = cfg.get("columns", [])
         if row is not None:
             for c in cols:
-                v = row.get(c)
+                v = row.get(_resolve_column(c, row))
                 if not _is_blank(v):
                     return v
         if not _is_blank(value):
@@ -361,19 +440,8 @@ def apply_rule(
         branches = cfg.get("branches", []) or []
         default = cfg.get("default", value)
         for br in branches:
-            op = (br.get("op") or "eq").lower()
-            cmp = _COMPARISON_OPS.get(op)
-            if not cmp:
-                continue
-            col = br.get("if_column")
-            left = (
-                row.get(col) if (col and row is not None) else value
-            )
-            try:
-                if cmp(left, br.get("value")):
-                    return br.get("then", default)
-            except Exception:
-                continue
+            if _branch_holds(br, value, row):
+                return br.get("then", default)
         return default
 
     if rt == "MAP_BOOLEAN":
@@ -503,17 +571,9 @@ def apply_rule(
             return value
         suf = _to_str(cfg.get("default_suffix", ""))
         for br in (cfg.get("branches") or []):
-            cmp = _COMPARISON_OPS.get((br.get("op") or "eq").lower())
-            if not cmp:
-                continue
-            col = br.get("if_column")
-            left = row.get(col) if (col and row is not None) else value
-            try:
-                if cmp(left, br.get("value")):
-                    suf = _to_str(br.get("suffix", ""))
-                    break
-            except Exception:                                   # noqa: BLE001
-                continue
+            if _branch_holds(br, value, row):
+                suf = _to_str(br.get("suffix", ""))
+                break
         if not suf:
             return s
         # Idempotent: generation can run twice over the same frame, and a key that
@@ -637,24 +697,51 @@ def apply_rule(
         if cfg.get("preserve_source", True) and not _is_blank(value):
             # A real source key always beats a manufactured one.
             return value
+        # ``key_column`` — "unique sequence ON THE BASIS OF entityid" (analyst,
+        # 03-Aug). Without it the number comes from the row index, so a customer
+        # with five addresses gets five different party numbers and the eighteen
+        # other Customer sheets that reference the party stop agreeing with the
+        # one that defines it. With it, every row carrying the same key gets the
+        # same number, and the count is of DISTINCT keys rather than of rows.
+        #
+        # The index is built once over the whole extract and handed in through
+        # ctx, the same way SELF_LOOKUP's is, because it cannot be computed from
+        # one row and a per-chunk index would number the same customer twice.
         idx = int(ctx.get("row_index", 0) or 0)
+        key_spec = cfg.get("key_column")
+        if key_spec:
+            col = _resolve_column(key_spec, row)
+            kv = _to_str(row.get(col)).strip() if (col and row is not None) else ""
+            table = (ctx.get("sequence_index") or {}).get(
+                re.sub(r"[^a-z0-9]", "", str(col or "").lower())) or {}
+            ordinal = table.get(kv)
+            if ordinal is None and kv.endswith(".0"):
+                ordinal = table.get(kv[:-2])
+            if ordinal is not None:
+                idx = int(ordinal)
+            elif table and not kv:
+                # The extract HAS the key column and this row's cell is empty.
+                # Falling through to the row index would hand this row a number
+                # that belongs to whichever customer happens to sit at that
+                # position, so leave it blank and let the required-field report
+                # show the gap as the data problem it is.
+                #
+                # Only when the index exists. A key column the extract does not
+                # carry at all is a misconfigured rule, not a per-row data gap,
+                # and blanking the whole column over it would destroy a value
+                # something upstream had already computed. There the rule falls
+                # back to the row index — what it did before key_column existed.
+                return ""
         n = int(cfg.get("start", 1) or 1) + idx
         prefix = _to_str(cfg.get("prefix", ""))
         width = int(cfg.get("width", 6) or 6)
         suffix = ""
         variant = cfg.get("variant") or {}
-        if variant:
-            cmp = _COMPARISON_OPS.get((variant.get("op") or "eq").lower())
-            col = variant.get("if_column")
-            left = row.get(col) if (col and row is not None) else value
-            try:
-                if cmp and cmp(left, variant.get("value")):
-                    if variant.get("width"):
-                        width = int(variant["width"])
-                    suffix = _to_str(variant.get("suffix", "")).replace(
-                        "{n}", str(variant.get("counter", 1)))
-            except Exception:                                   # noqa: BLE001
-                pass
+        if variant and _branch_holds(variant, value, row):
+            if variant.get("width"):
+                width = int(variant["width"])
+            suffix = _to_str(variant.get("suffix", "")).replace(
+                "{n}", str(variant.get("counter", 1)))
         return f"{prefix}{n:0{width}d}{suffix}"
 
     if rt == "PHONE_PART":

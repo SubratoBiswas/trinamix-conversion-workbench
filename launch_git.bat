@@ -1,5 +1,36 @@
 @echo off
 setlocal enabledelayedexpansion
+
+REM ===========================================================================
+REM RUN FROM A COPY. This is not defensive tidiness -- it is required now that
+REM this script is delivered as a patch and therefore PATCHES ITSELF.
+REM
+REM cmd.exe does not load a batch file into memory. It reads one command, seeks
+REM back to a stored BYTE OFFSET, and reads the next. Rewrite the file while it
+REM is running -- which is exactly what `git apply` on a patch touching this file
+REM does -- and the next seek lands in the middle of a line. The remainder
+REM executes as garbage: a syntax error, or worse, half a command. Any script
+REM that can modify itself has to be running from somewhere else by then.
+REM
+REM So: copy to %TEMP%, re-run from there, and pass the real repo directory
+REM through, because %~dp0 inside the copy points at %TEMP%.
+REM ===========================================================================
+if /i "%~1"=="__FROMCOPY__" goto :main
+set "SELFCOPY=%TEMP%\launch_git_run.bat"
+copy /y "%~f0" "!SELFCOPY!" 1>nul 2>nul
+if not exist "!SELFCOPY!" (
+  echo ****** STOPPED: could not copy this script to %TEMP%.
+  echo        It must run from a copy -- a deploy that patches this file would
+  echo        otherwise rewrite it mid-run and execute the remainder as garbage.
+  pause
+  exit /b 1
+)
+call "!SELFCOPY!" __FROMCOPY__ "%~dp0"
+set "RC=!ERRORLEVEL!"
+del /f /q "!SELFCOPY!" 1>nul 2>nul
+exit /b !RC!
+
+:main
 REM ===========================================================================
 REM THE deploy script. One file, clicked, does the whole thing.
 REM
@@ -37,7 +68,9 @@ REM ===========================================================================
 REM ---- 0. Locate the repo -----------------------------------------------------
 REM Its own folder, not a hard-coded path: this file is tracked, so a path baked
 REM into it is a trap for whoever clones the repo somewhere else.
-cd /d "%~dp0"
+REM The repo, handed over by the launcher above -- NOT %~dp0, which inside the
+REM temp copy is %TEMP%.
+cd /d "%~2"
 if not exist ".git" (
   echo ****** STOPPED: no .git here, so this is not the repo root. ******
   echo        Looked in: %CD%
@@ -47,6 +80,57 @@ if not exist ".git" (
 
 set "MSG=COMMIT_MSG.txt"
 set "PATCHED="
+
+REM ===========================================================================
+REM MANIFEST - the patches THIS deploy expects, in the order they apply.
+REM
+REM Rewritten every time a deploy is prepared. It is here rather than in a
+REM covering note because a note is a thing you have to have read: the script
+REM checks the set is complete before it touches anything, so a patch that never
+REM made it out of the download folder stops the deploy instead of shipping half
+REM of it. Half a deploy is the worst outcome available -- it commits, it pushes,
+REM it builds green, and the change you were deploying is not in it.
+REM
+REM ONE FILE. Earlier deploys handed over a numbered series, which meant seven
+REM downloads and seven chances to miss one -- and missing one is exactly the
+REM partial deploy this check exists to stop. Everything for a deploy is squashed
+REM into deploy.patch now, so the set is complete or it is absent, with nothing
+REM in between. An already-applied patch is skipped, so re-running is safe, and an
+REM old numbered patch left in the folder is reported rather than applied.
+REM ===========================================================================
+set "EXPECT=deploy.patch"
+
+echo Checking the deploy set...
+set "MISSING="
+for %%E in (%EXPECT%) do (
+  if not exist "%%E" (
+    if defined MISSING (set "MISSING=!MISSING! %%E") else (set "MISSING=%%E")
+  )
+)
+if defined MISSING (
+  echo.
+  echo ****** STOPPED: this deploy is incomplete. Nothing has been changed.
+  echo.
+  echo   Missing from %CD%:
+  for %%M in (!MISSING!) do echo     - %%M
+  echo.
+  echo   Every file listed above has to be in this folder. Deploying a partial
+  echo   set commits, pushes and builds green with your change not in it, which
+  echo   is far harder to notice than a script that refused to start.
+  echo.
+  pause
+  exit /b 1
+)
+echo       every patch this deploy expects is present.
+
+REM A .patch left over from an earlier deploy is not an error -- it will be
+REM recognised as already applied and skipped -- but it should be SAID, because
+REM an unexpected file is also what a wrongly-named new patch looks like.
+for /f "delims=" %%P in ('dir /b /o:n *.patch 2^>nul') do (
+  echo %EXPECT% | find "%%P" 1>nul 2>nul
+  if errorlevel 1 echo       note: %%P is not part of this deploy - expect it to be skipped.
+)
+
 
 REM NO PAGER. `git diff --cached --name-only` on a long list opens `less`, which
 REM stops the script dead at a `:` prompt with no explanation -- it looks exactly
@@ -93,16 +177,42 @@ REM being a trailing CR. It reads as a diverged tree and is nothing of the sort.
 REM The flag treats the CR as the whitespace it is.
 echo.
 echo [1/3] Pending patches...
+
+REM ORDER MATTERS, so the order is FORCED.
+REM
+REM `for %%P in (*.patch)` walks the directory in whatever order the filesystem
+REM hands back. On NTFS that is usually alphabetical and it is not promised to
+REM be. Patches are cut in sequence and later ones are built on earlier ones --
+REM 02 touches files 01 has already changed -- so a run that applied 02 first
+REM would fail with "error: while searching for:" against a tree that is
+REM perfectly fine, and read as a diverged repo. `dir /b /o:n` sorts by name,
+REM which is why the patches are numbered 01, 02, 03 ...
 set "FOUND="
-for %%P in (*.patch) do (
+for /f "delims=" %%P in ('dir /b /o:n *.patch 2^>nul') do (
   set "FOUND=1"
+  echo       found: %%P
+)
+if not defined FOUND (
+  echo       none found - nothing to apply.
+) else (
+  echo       applying in the order listed above.
+  echo.
+)
+
+for /f "delims=" %%P in ('dir /b /o:n *.patch 2^>nul') do (
   git apply --check --ignore-whitespace "%%P" 1>nul 2>nul
   if errorlevel 1 (
     git apply --reverse --check --ignore-whitespace "%%P" 1>nul 2>nul
     if errorlevel 1 (
       echo.
       echo ****** STOPPED: %%P neither applies cleanly nor is fully applied.
-      echo ****** Nothing has been changed, committed or pushed.
+      if defined PATCHED (
+        echo ****** Earlier patches in this run ARE applied to your working tree:
+        echo ******   !PATCHED!
+        echo ****** Nothing has been committed or pushed.
+      ) else (
+        echo ****** Nothing has been changed, committed or pushed.
+      )
       echo.
       REM Say WHICH file and why. "Your tree has diverged" is true of a genuine
       REM conflict and equally true of a patch whose first half you already
@@ -131,14 +241,33 @@ for %%P in (*.patch) do (
       exit /b 1
     )
     echo       %%P - applied.
-    set "PATCHED=1"
+    REM Name the ones this run actually touched. The old version printed a
+    REM revert line for EVERY .patch in the folder, including the ones it had
+    REM skipped as already-applied -- and reverting one of those undoes a change
+    REM that is already live.
+    if defined PATCHED (set "PATCHED=!PATCHED! %%P") else (set "PATCHED=%%P")
   )
 )
-if not defined FOUND echo       none found - nothing to apply.
 
 REM ---- 2. Commit --------------------------------------------------------------
 echo.
 echo [2/3] Staging and committing...
+
+REM WHERE WE STARTED. Everything below compares against this.
+REM
+REM The old verify asked "is anything STILL STAGED?" and treated a clean index as
+REM success. But a run with no patches in the folder also leaves a clean index --
+REM there was nothing to stage in the first place -- so "committed nothing because
+REM there was nothing to commit" and "committed successfully" printed the SAME
+REM thing, and the script went on to report DONE and a pushed commit for a deploy
+REM that never happened. Observed: a run that skipped one already-applied patch,
+REM said "nothing to commit, working tree clean", said "Everything up-to-date",
+REM and then said "DONE - committed and pushed".
+REM
+REM That is the exact shape this script exists to prevent, and it was in the
+REM script. A moved HEAD is the only honest proof.
+for /f %%i in ('git rev-parse HEAD 2^>nul') do set "BEFORE=%%i"
+
 git add -A
 
 echo.
@@ -147,21 +276,45 @@ git --no-pager diff --cached --name-only
 echo --------------------------------
 
 git --no-pager commit -F "%MSG%"
-REM VERIFY. If anything is still staged the commit did not happen, and pushing
-REM now would report "Everything up-to-date" and read as success.
+
+REM VERIFY, on the only evidence that cannot lie: did HEAD move?
+for /f %%i in ('git rev-parse HEAD 2^>nul') do set "AFTER=%%i"
+if "!BEFORE!"=="!AFTER!" (
+  echo.
+  echo ****** STOPPED: NOTHING WAS DEPLOYED. No commit was created.
+  echo.
+  echo   The working tree had no changes to commit. Almost always this means the
+  echo   patch files for this deploy are not in this folder:
+  echo.
+  for %%E in (%EXPECT%) do echo     - %%E
+  echo.
+  echo   Put every one of them here, beside this script, and run it again.
+  echo   ^(A patch that is already applied is skipped, so re-running is safe.^)
+  echo.
+  echo   Nothing has been pushed. This is deliberately NOT reported as success:
+  echo   an earlier version of this script printed "DONE - committed and pushed"
+  echo   on a run exactly like this one, and the deploy silently never happened.
+  echo.
+  pause
+  exit /b 1
+)
+
+REM Belt and braces: anything still staged means the commit itself failed.
 git --no-pager diff --cached --quiet
 if errorlevel 1 (
   echo.
   echo ****** STOPPED: changes are STILL STAGED, so the commit did not happen.
   echo ****** Nothing has been pushed. Read the git error above.
   if defined PATCHED (
-    echo ****** The patch IS applied in your working tree. Revert it with:
-    for %%P in (*.patch) do echo ******   git apply --reverse --ignore-whitespace %%P
+    echo ****** These patches ARE applied in your working tree:
+    echo ******   !PATCHED!
+    echo ****** Revert them ^(newest first^) with:
+    echo ******   git apply --reverse --ignore-whitespace ^<name^>
   )
   pause
   exit /b 1
 )
-echo       committed.
+echo       committed - HEAD moved from !BEFORE:~0,7! to !AFTER:~0,7!.
 
 REM ---- 3. Push ----------------------------------------------------------------
 echo.
@@ -181,6 +334,7 @@ REM building, wait and refresh.
 for /f %%i in ('git rev-parse --short HEAD') do set SHA=%%i
 echo.
 echo ====== DONE - committed and pushed ======
+if defined PATCHED echo   Patches applied: !PATCHED!
 echo   Pushed commit : %SHA%
 echo   Now check     : https://trinamix-conversion-backend.onrender.com/api/health
 echo   Deployed when the "commit" field there starts with %SHA%

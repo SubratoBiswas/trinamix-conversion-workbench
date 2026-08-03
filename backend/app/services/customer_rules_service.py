@@ -49,15 +49,55 @@ def _n(s: Any) -> str:
     return _NORM.sub("", str(s or "").lower())
 
 
+_LATER = _FILE.parent / "customer_mapping_03aug.json"
+
+
+def superseded_fields() -> set[str]:
+    """Target fields a LATER Customer document has since spoken about.
+
+    The 03-Aug documents rewrote seven of these nine rules — Party Type gained the
+    organization-name test it never had, Party Number is now sequenced on entityid,
+    the site-use suffix and BILL_TO/SHIP_TO now read which SHEET the row came from
+    rather than the Default Billing / Default Shipping flags.
+
+    Without this, pressing "apply the authored Customer rules" would write the
+    superseded July version onto the conversion as a fresh TransformationRule
+    stamped with today — and a conversion rule newer than the document is exactly
+    what `_conversion_rule_wins` protects, so the older instruction would beat the
+    newer one and there would be nothing on screen to say why. The button would
+    read as "apply the analyst's rules" and quietly undo them.
+
+    Derived from the later file rather than from a hand-kept list, so the two
+    cannot drift apart on the next document.
+    """
+    try:
+        doc = json.loads(_LATER.read_text(encoding="utf-8"))
+    except Exception:                                           # noqa: BLE001
+        return set()
+    return {_field_key(r.get("target_field")) for r in (doc.get("rules") or [])
+            if r.get("action") == "rule" and r.get("target_field")}
+
+
+def _field_key(name) -> str:
+    """Normalised field name, with the one abbreviation these files disagree on
+    expanded. CW #19 was filed as "Account Site Purpose SSR"; the analyst's own
+    document writes it out as "Account Site Purpose Source System Reference".
+    They are one field, and matched as two the superseded rule survives."""
+    return _n(name).replace("ssr", "sourcesystemreference")
+
+
 def load_rules() -> list[dict]:
-    """The authored rules, ordered so a dependent rule runs after its input."""
+    """The authored rules, ordered so a dependent rule runs after its input, and
+    minus any the later document has replaced."""
     try:
         doc = json.loads(_FILE.read_text(encoding="utf-8"))
     except Exception as exc:                                    # noqa: BLE001
         log.warning("customer_rules_nextpower.json unreadable: %s", exc)
         return []
+    gone = superseded_fields()
     rules = [r for r in (doc.get("rules") or [])
-             if r.get("target_field") and r.get("rule_type")]
+             if r.get("target_field") and r.get("rule_type")
+             and _field_key(r.get("target_field")) not in gone]
     rules.sort(key=lambda r: (_ORDER.index(r["rule_type"])
                               if r["rule_type"] in _ORDER else len(_ORDER)))
     return rules

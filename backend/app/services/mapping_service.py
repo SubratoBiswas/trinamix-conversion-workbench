@@ -735,7 +735,19 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
         ).to_list()
     }
 
+    # One update for every field that moved and one insert for every field that
+    # is new — two round trips, not one per field. The mapping run over a 19-sheet
+    # Customer template touches well over a thousand rows, and sent individually
+    # the cost is the LATENCY of each hop rather than the work: unnoticeable when
+    # the app and the cluster share a region, and minutes when they do not.
+    # Reported by the analysts working from India as the tool being slow; nothing
+    # in the code distinguishes the fast case from the slow one, which is why it
+    # read as intermittent.
+    from app.services.bulk_write import BulkPatcher
+
     saved: list[MappingSuggestion] = []
+    bulk = BulkPatcher()
+    fresh: list[MappingSuggestion] = []
     for s in ai_results:
         tfid = PydanticObjectId(str(s.target_field_id))
         m = existing.get(tfid)
@@ -743,7 +755,7 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
             saved.append(m)
             continue
         if m:
-            await m.set({
+            bulk.set(m, {
                 "source_column": s.source_column, "confidence": s.confidence,
                 "reason": s.reason, "suggested_transformation": s.suggested_transformation,
                 "review_required": 1 if s.review_required else 0,
@@ -756,8 +768,22 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
                 reason=s.reason, suggested_transformation=s.suggested_transformation,
                 review_required=1 if s.review_required else 0, status="suggested",
             )
-            await m.insert()
+            fresh.append(m)
         saved.append(m)
+    await bulk.flush()
+    if fresh:
+        # insert_many assigns each document its id, so `saved` — which already
+        # holds these objects — carries usable ids afterwards. Without that the
+        # apply-learnings pass below would queue updates against None.
+        await MappingSuggestion.insert_many(fresh)
+        _new_ids = {d["target_field_id"]: d["_id"] for d in
+                    await MappingSuggestion.get_motor_collection().find(
+                        {"conversion_id": conversion.id,
+                         "target_field_id": {"$in": [m.target_field_id for m in fresh]}},
+                        {"_id": 1, "target_field_id": 1}).to_list(length=None)}
+        for m in fresh:
+            if m.id is None:
+                m.id = _new_ids.get(m.target_field_id)
 
     await conversion.set({"status": "mapping_suggested", "updated_at": datetime.utcnow()})
     from app.services.learning_service import apply_learned_to_conversion

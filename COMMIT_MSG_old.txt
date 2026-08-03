@@ -1,0 +1,60 @@
+Drop Third_Party_Pay_Relationships from the Supplier Site workbook
+
+Analyst, 03-Aug: the generated 03_Supplier_Site workbook carried a
+Third_Party_Pay_Relationships worksheet tab. It does not belong there. Third
+Party Pay Relationships is its OWN interface -- supplier_fbdi_file_names.json
+maps `thirdpartypayrelationships -> PozSupThirdPartyInt` -- so it ships as its
+own file, not as a tab inside Supplier Site.
+
+SHIPPED AND INERT, AGAIN
+
+  The instruction was already in the data and read by nothing.
+  supplier_strategy_defaults.json has carried
+
+    "blank_sheets": { "sheets": ["Third_Party_Pay_Relationships"],
+      "status": "CAPTURED - NOT yet enforced. output_service._sheet_carries_data()
+                 ... has no explicit always-blank list." }
+
+  since it was captured -- with a status field admitting nobody read it. That is
+  the failure CODEBASE_GUIDE 7.1 names as the dominant one in this repo.
+
+  Note the ask is STRONGER than the captured note, which assumed headers-only.
+  An empty tab still reads as an interface someone is expected to fill.
+
+THE CHANGE
+
+  strategy_overlay.sheets_to_drop()  -- reads `blank_sheets` from every
+    *_strategy_defaults.json. Normalised, so Third_Party_Pay_Relationships,
+    "third party pay relationships" and ThirdPartyPayRelationships are one sheet.
+    The sheet name is NOT hardcoded here; a test asserts that, or the analyst's
+    list goes back out of the loop.
+
+  template_fill_service.fill_template(..., drop_sheets=)  -- REMOVES the
+    worksheet from the workbook rather than leaving it empty. Removal happens
+    first, so nothing downstream can write into a sheet on its way out, and the
+    last remaining sheet is never removed: openpyxl cannot represent a workbook
+    with none, and a file that will not open is worse than one carrying a tab too
+    many.
+
+  output_service._strategy_sheets_to_drop()  -- the caller. A strategy file that
+    cannot be read costs the drop, not the output.
+
+TESTS
+
+  tests/test_dropped_sheets.py -- 12 tests. Per 7.1 they assert the DATA drives
+  it and the CALLER calls it, not merely that the function works: the JSON still
+  names the sheet, the reader does not hardcode it, and generation passes the
+  list to the filler.
+
+  The workbook-level tests build a clean workbook rather than using the real
+  Supplier Site template: that template is the one whose stylesheet carries an
+  out-of-spec font family, so a FILLED copy cannot be reopened by openpyxl at all
+  -- which is why the existing template tests use Supplier Import. A canary test
+  checks the real template still has the tab, and skips where openpyxl refuses
+  the file rather than failing the suite.
+
+  911 passing, 14 skipped, 0 failing.
+
+NOT VERIFIED AGAINST A REAL GENERATED BUNDLE
+
+  Regenerate Supplier and confirm 03_Supplier_Site opens without the tab.

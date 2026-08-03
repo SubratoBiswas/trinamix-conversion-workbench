@@ -41,10 +41,33 @@ def check(name, cond, detail=""):
     raise AssertionError(f"{name} {detail}".strip())
 
 
+def _authored():
+    """Every rule the 30-Jul instruction authored, superseded or not.
+
+    Read from the shipped JSON rather than from ``load_rules()``, which now FILTERS
+    — on 03-Aug the analyst rewrote seven of these nine, and ``load_rules`` stopped
+    handing those out so the "apply the authored rules" button cannot re-install a
+    superseded version over the newer one.
+
+    The tests below still belong here and still assert the file, unweakened: what
+    the 30-Jul instruction said, and that the engine can run it, are facts that did
+    not stop being true. What CHANGED is which of them a conversion gets, and that
+    is asserted directly in ``test_only_the_rules_that_survived_are_handed_out``
+    below and in test_customer_mapping_03aug.py, which covers the 03-Aug
+    replacement for each one.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    doc = _json.loads((_Path(__file__).resolve().parent.parent / "app" / "data"
+                       / "customer_rules_nextpower.json").read_text(encoding="utf-8"))
+    return [r for r in (doc.get("rules") or [])
+            if r.get("target_field") and r.get("rule_type")]
+
+
 def rule(cw, target=None):
     """The authored rule for a CW row, straight from the shipped JSON — so these
-    assertions test what will actually run, not a copy of it."""
-    for r in load_rules():
+    assertions test what was actually written, not a copy of it."""
+    for r in _authored():
         if r.get("cw") == cw and (target is None or r["target_field"] == target):
             return r
     raise AssertionError(f"no authored rule for CW #{cw} {target or ''}")
@@ -56,22 +79,41 @@ def run(r, value, row=None, ctx=None):
 
 # ── The JSON itself ─────────────────────────────────────────────────────────
 def test_all_nine_rows_are_authored():
-    got = sorted({r["cw"] for r in load_rules()})
+    got = sorted({r["cw"] for r in _authored()})
     check("CW 15-24 covered", got == [15, 16, 17, 18, 19, 20, 22, 23, 24], f"got {got}")
-    check("ten bindings (CW #19 covers two fields)", len(load_rules()) == 10,
-          f"got {len(load_rules())}")
+    check("ten bindings (CW #19 covers two fields)", len(_authored()) == 10,
+          f"got {len(_authored())}")
+
+
+def test_only_the_rules_that_survived_03aug_are_handed_out():
+    """What a conversion actually gets. On 03-Aug the analyst rewrote seven of the
+    nine — Party Type gained the organization-name test it never had, Party Number
+    is sequenced on entityid, the site-use suffix and BILL_TO/SHIP_TO read which
+    SHEET the row came from rather than the Default Billing / Default Shipping
+    flags. Handing the July version out now would write it onto the conversion
+    stamped with today, and a conversion rule newer than the document wins — so the
+    button labelled "apply the analyst's rules" would quietly undo them.
+
+    CW #18 survives: the new document does not mention Primary Indicator, and
+    superseding is per field, not wholesale."""
+    got = sorted({r["cw"] for r in load_rules()})
+    check("only what has not been rewritten", got == [18], f"got {got}")
+    check("one binding left", len(load_rules()) == 1, f"got {len(load_rules())}")
 
 
 def test_every_rule_type_is_registered():
     """An unregistered rule_type is accepted at save and then silently does nothing."""
-    for r in load_rules():
+    for r in _authored():
         check(f"{r['rule_type']} registered", r["rule_type"] in RULE_TYPES)
 
 
 def test_party_number_runs_after_party_type():
     """CW #23 reads Party Type, which CW #22 derives. Wrong order and every row takes
     the ORGANIZATION branch — a plausible-looking key that is wrong for every person."""
-    order = [r["cw"] for r in load_rules()]
+    from app.services.customer_rules_service import _ORDER
+    order = [r["cw"] for r in sorted(
+        _authored(), key=lambda r: (_ORDER.index(r["rule_type"])
+                                    if r["rule_type"] in _ORDER else len(_ORDER)))]
     check("22 before 23", order.index(22) < order.index(23), f"got {order}")
 
 
@@ -216,7 +258,7 @@ def test_a_blank_value_gets_no_suffix():
 
 
 def test_both_suffix_fields_are_authored():
-    fields = {r["target_field"] for r in load_rules() if r["cw"] == 19}
+    fields = {r["target_field"] for r in _authored() if r["cw"] == 19}
     check("both named in the row",
           fields == {"Account Site Purpose SSR",
                      "Original System Party Site Use Reference"}, f"got {fields}")

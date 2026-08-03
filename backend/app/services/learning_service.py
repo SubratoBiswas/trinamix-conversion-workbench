@@ -1001,6 +1001,29 @@ async def apply_rule_corrections(
     return {"fields": list(results.values()), "conversions_scanned": scanned}
 
 
+def _rule_columns_present(lm, src_index: dict) -> set[str]:
+    """Which of the columns this stored rule reads does the extract actually have?
+
+    Empty means the rule cannot produce anything here — either it names nothing or
+    it names only columns this file does not carry — and applying it would put an
+    approved-looking mapping on a field that ships blank.
+
+    A rule that reads no source column at all but derives from a TARGET one (the
+    Party Number sequence reads Party Type) still counts, because its key column
+    is declared in the config and is checked the same way.
+    """
+    try:
+        from app.services.output_service import _rule_referenced_columns
+    except Exception:                                           # noqa: BLE001
+        return set()
+    cols = _rule_referenced_columns(
+        [{"rule_type": lm.rule_type, "config": lm.rule_config or {}}])
+    return {c for c in cols if _normalize(c) in src_index}
+
+
+from app.services.bulk_write import BulkPatcher                      # noqa: E402
+
+
 async def apply_learned_to_conversion(
     conversion: Conversion, mappings: Iterable[MappingSuggestion], force: bool = False,
 ) -> int:
@@ -1103,8 +1126,28 @@ async def apply_learned_to_conversion(
     auto_count = 0
     now = datetime.utcnow()
 
-    async def _write(m, patch: dict) -> bool:
-        """Write only what actually changes.
+    # ── Every write in this pass goes out in ONE round trip ──────────────────
+    #
+    # This function writes one document per target field, and a 19-sheet Customer
+    # conversion has well over a thousand of them. Sent one at a time, the cost is
+    # the LATENCY, not the work: at 2ms to the database that is a couple of
+    # seconds nobody notices, and at 250ms — an app and a cluster in different
+    # regions, or an analyst on a slow link to a cold instance — it is four
+    # minutes for exactly the same code.
+    #
+    # That is why the slowness reads as random: the same click is instant for one
+    # person and a timeout for another, and the profiler on the fast machine
+    # shows nothing wrong. Reported by the analysts working from India.
+    #
+    # The "only write what changed" rule below is UNCHANGED and still matters —
+    # it is what keeps the queue short on a re-generate that resolves to what is
+    # already stored. Batching does not replace it; it removes the cost of the
+    # writes that do have to happen.
+    bulk = BulkPatcher()
+    counters: dict = {}
+
+    def _write(m, patch: dict) -> bool:
+        """Queue only what actually changes.
 
         A generate that resolves to exactly what the row already says should not
         touch the row at all — this is what let the resolve pass run on a
@@ -1112,13 +1155,17 @@ async def apply_learned_to_conversion(
         generation hang, and it is why the pass no longer has to be skipped
         there. Skipping it was the reason a heavy object could ship without ever
         consulting the library.
+
+        No longer a coroutine: it applies the patch in memory immediately and
+        puts it on the wire at the end. Callers still `await` it — awaiting a
+        bool is a no-op — so this could not silently change a call site.
         """
         changed = {k: v for k, v in patch.items()
                    if k not in ("approved_at", "updated_at", "derived_at")
                    and getattr(m, k, None) != v}
         if not changed:
             return False
-        await m.set(patch)
+        bulk.set(m, patch)
         return True
 
     # What the store says about every field on this conversion, resolved once.
@@ -1139,26 +1186,50 @@ async def apply_learned_to_conversion(
         tgt_name = fields_map.get(m.target_field_id)
         for lm in [entry.row]:
             actual_src = src_index.get(_normalize(entry.value))
-            if not actual_src:
-                # The winning decision names a column this extract does not have.
-                # Writing it would point the row at nothing and the column would
-                # ship empty with the screen still reading "approved".
+            # A rule that reads OTHER columns needs no source column of its own.
+            #
+            # This is the seam that made every multi-column rule in the store
+            # inert. The check below is right for a plain column mapping — naming
+            # a column the extract does not have would point the row at nothing
+            # and the screen would still read "approved" — but it was applied to
+            # rules too, and a CONCAT, COALESCE, CASE_WHEN or SEQUENCE has no
+            # single source column to name. Their stored `original_value` is the
+            # literal "(rule)", which is in no extract, so EVERY one of them hit
+            # this `continue` and never reached the mapping. The rules were
+            # written, dated, visible in the Learning Centre, and did nothing —
+            # the shipped-and-inert shape this codebase keeps repeating.
+            #
+            # A rule earns its way through by naming at least one column the
+            # extract actually has, which is the same evidence the column-mapping
+            # branch demands, asked of the rule's own config.
+            rule_cols = _rule_columns_present(lm, src_index) if lm.rule_type else set()
+            if not actual_src and not rule_cols:
                 continue
             update = {
-                "source_column": actual_src, "confidence": 1.0,
+                "confidence": 1.0,
                 "review_required": 0, "status": "approved",
                 "approved_by": "learning-engine", "approved_at": now,
                 "reason": f'Auto-applied from learning library (captured from "{lm.captured_from}")',
                 "derived": True, "derived_at": now,
                 "derived_from": entry.captured_from,
             }
+            if actual_src:
+                update["source_column"] = actual_src
+            elif rule_cols:
+                # Leave whatever column the row already has. Nulling it here would
+                # throw away a person's binding to satisfy a rule that never
+                # needed the field to have one.
+                update["reason"] = (
+                    f'Derived by a stored rule ({lm.rule_type}) reading '
+                    f'{", ".join(sorted(rule_cols)[:4])} '
+                    f'(captured from "{lm.captured_from}")')
             if lm.rule_type:
                 update["suggested_transformation"] = {
                     "rule_type": lm.rule_type, "config": lm.rule_config or {},
                     "description": "Re-applied from learned rule",
                 }
-            if await _write(m, update):
-                await lm.set({"records_auto_fixed": (lm.records_auto_fixed or 0) + 1})
+            if _write(m, update):
+                counters[lm.id] = counters.get(lm.id, 0) + 1
                 auto_count += 1
             break
 
@@ -1171,7 +1242,7 @@ async def apply_learned_to_conversion(
             continue
         if not _eligible(m, entry):
             continue
-        if await _write(m, {
+        if _write(m, {
             "source_column": None, "default_value": None, "status": "not_applicable",
             "review_required": 0, "approved_by": "learning-engine",
             "approved_at": now,
@@ -1217,7 +1288,7 @@ async def apply_learned_to_conversion(
                 continue
             if (_normalize(tgt_name), _normalize(m.source_column)) in allowed_pairs:
                 continue
-            await m.set({
+            bulk.set(m, {
                 "source_column": None, "status": "not_applicable",
                 "review_required": 0, "approved_by": "learning-engine",
                 "approved_at": now,
@@ -1250,7 +1321,7 @@ async def apply_learned_to_conversion(
         val = entry.value
         if val in (None, ""):
             continue
-        if await _write(m, {
+        if _write(m, {
             "source_column": None, "default_value": val,
             "confidence": 0.96, "review_required": 0, "status": "approved",
             "approved_by": "learning-engine", "approved_at": now,
@@ -1260,9 +1331,15 @@ async def apply_learned_to_conversion(
             "derived_from": entry.captured_from,
         }):
             if entry.row is not None:
-                await entry.row.set(
-                    {"records_auto_fixed": (entry.row.records_auto_fixed or 0) + 1})
+                counters[entry.row.id] = counters.get(entry.row.id, 0) + 1
             auto_count += 1
+
+    # One write for every mapping row, one for every counter. Two round trips for
+    # a pass that used to make one per field.
+    await bulk.flush()
+    if counters:
+        from app.services.bulk_write import bulk_increment
+        await bulk_increment(LearnedMapping, counters, "records_auto_fixed")
     return auto_count
 
 

@@ -65,11 +65,35 @@ def test_the_resolve_pass_reads_the_store_once():
 
 def test_the_resolve_pass_writes_only_what_changes():
     """A generate that resolves to what the rows already say should not touch
-    them — that is what lets the pass run everywhere instead of being skipped."""
+    them — that is what lets the pass run everywhere instead of being skipped.
+
+    The rule is unchanged; only the delivery moved. `_write` is no longer a
+    coroutine because it now queues the patch rather than sending it, so the
+    signature assertion moved with it — the guarantee under test is "nothing is
+    written unless it changed", and that is the `if not changed` line."""
     body = _apply_body()
-    assert "async def _write(m, patch: dict) -> bool:" in body
+    assert "def _write(m, patch: dict) -> bool:" in body
     assert "if not changed:" in body
     assert "await m.set(update)" not in body
+
+
+def test_the_resolve_pass_sends_its_writes_in_one_round_trip():
+    """WHY THE TOOL WAS SLOW FROM INDIA, and it is not the work.
+
+    This pass writes one document per target field — well over a thousand on a
+    19-sheet Customer conversion. Sent one at a time the cost is LATENCY, not
+    computation: at 2ms to the database that is a couple of seconds nobody
+    notices, and at 250ms it is four minutes for exactly the same code. Which is
+    why it read as random — the same click was instant on one desk and a timeout
+    on another, and the profiler on the fast machine showed nothing wrong."""
+    body = _apply_body()
+    assert "bulk = BulkPatcher()" in body
+    assert "bulk.set(m, patch)" in body
+    assert "await bulk.flush()" in body
+    # And no per-document write survived in the pass.
+    assert "await m.set(" not in body, "a per-row round trip is still in there"
+    assert "await lm.set(" not in body
+    assert "await entry.row.set(" not in body
 
 
 def test_the_query_is_not_scoped_by_object():

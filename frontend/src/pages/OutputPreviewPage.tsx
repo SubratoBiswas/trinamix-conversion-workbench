@@ -46,6 +46,10 @@ const DUP_TONE: Record<DuplicateVerdict, "brand" | "success" | "danger" | "info"
 };
 const NEEDS_SURVIVOR: DuplicateVerdict[] = ["merge", "keep_survivor"];
 const HIGH_CONFIDENCE = 0.95;
+/** Groups requested per scan — the duplicate-candidates endpoint's own ceiling. */
+const DUPE_LIMIT = 2000;
+/** Groups rendered per page. */
+const DUPE_PAGE_SIZE = 25;
 const SEVERITY_ORDER = ["critical", "error", "warning", "info"];
 
 /** A cleansing finding key can repeat across issue rows — collapse to one card. */
@@ -93,6 +97,12 @@ export const OutputPreviewPage: React.FC = () => {
   const [dupLoading, setDupLoading] = useState(false);
   const [dupAi, setDupAi] = useState(false);
   const [dupError, setDupError] = useState<string | null>(null);
+  const [dupExportBusy, setDupExportBusy] = useState(false);
+  // Rendering is paged; the LIST is not. Everything that counts, decides or
+  // merges reads `dupes.clusters` — the whole list — and only the rows on screen
+  // come from the page. Mounting 342 group tables at once is what the old cap was
+  // really protecting against, and it protected against it by hiding the data.
+  const [dupPage, setDupPage] = useState(0);
   // Cleansing findings + the counters the generation gate warns on (cheap, load on mount).
   const [review, setReview] = useState<ReviewBundle | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -168,12 +178,18 @@ export const OutputPreviewPage: React.FC = () => {
       return next;
     });
 
-  const loadDupes = async (useAi = false) => {
+  const loadDupes = async (useAi = false, maxClusters = DUPE_LIMIT) => {
     if (!pid) return;
     setDupLoading(true);
     setDupError(null);
     try {
-      setDupes(await OutputApi.duplicateCandidates(pid, { useAi }));
+      // EVERY group, not the first hundred. The panel used to ask for 100 and then
+      // tell the analyst to "raise the limit to review them all" with no control
+      // that raised it — and worse than the missing control, every counter and
+      // every bulk action silently covered that visible third, so "Merge all
+      // high-confidence · 100" merged 100 of 342 while saying "all".
+      setDupPage(0);
+      setDupes(await OutputApi.duplicateCandidates(pid, { useAi, maxClusters }));
     } catch (e) {
       setDupes(null);
       setDupError(
@@ -404,9 +420,25 @@ export const OutputPreviewPage: React.FC = () => {
     } finally { setBusyKey(cl.cluster_key, false); }
   };
 
+  // EVERY undecided high-confidence group, across the whole list — never the
+  // page. This is the bug the paging must not reintroduce: the button reads
+  // "Merge all high-confidence · N" and N has to be N of everything, or the word
+  // "all" is false and the analyst has no way to tell.
   const highConfidenceTargets = useMemo(
     () => (dupes?.clusters ?? []).filter(c => c.confidence >= HIGH_CONFIDENCE && !c.decision),
     [dupes],
+  );
+
+  const dupPageCount = Math.max(
+    1, Math.ceil((dupes?.clusters.length ?? 0) / DUPE_PAGE_SIZE));
+  // Clamped rather than trusted: clearing decisions or a re-scan can shorten the
+  // list under a page number that was valid a moment ago, and an out-of-range
+  // page renders as an empty panel that looks like a failed load.
+  const dupPageSafe = Math.min(dupPage, dupPageCount - 1);
+  const dupPageClusters = useMemo(
+    () => (dupes?.clusters ?? []).slice(dupPageSafe * DUPE_PAGE_SIZE,
+                                        dupPageSafe * DUPE_PAGE_SIZE + DUPE_PAGE_SIZE),
+    [dupes, dupPageSafe],
   );
 
   const mergeHighConfidence = async (targets: DuplicateCluster[]) => {
@@ -635,6 +667,31 @@ export const OutputPreviewPage: React.FC = () => {
         title="No converted output yet"
         description="Approve at least one mapping then click Re-generate."
       /></CardBody>
+    ) : d.rows.length === 0 ? (
+      // ZERO ROWS WITH COLUMNS used to fall through to the table below, which
+      // then rendered a header row over an empty body: a blank panel, identical
+      // to a failed load, to a page still working, and to a conversion that
+      // genuinely produced nothing. The backend now names which one it is,
+      // because each has a different fix and none of them is guessable from a
+      // blank screen.
+      <CardBody>
+        <EmptyState
+          title={d.empty_reason?.headline ?? "The conversion produced no rows."}
+          description={d.empty_reason?.detail
+            ?? "The columns below come from the Oracle template. Check the source "
+            + "file and the Lineage tab for what each field is bound to."}
+        />
+        <div className="mt-3 rounded-lg border border-line bg-canvas px-3 py-2 text-[11px] text-muted">
+          <strong className="text-ink">Source</strong> {(d.source_rows ?? 0).toLocaleString()} record(s)
+          {" · "}
+          <strong className="text-ink">Converted</strong> {(d.converted_rows ?? 0).toLocaleString()}
+          {typeof d.preview_limit === "number" && d.preview_limit > 0 && (
+            <> {" · "}this preview converts the first {d.preview_limit} row(s) only</>
+          )}
+          {" · "}
+          <strong className="text-ink">{d.columns.length}</strong> target column(s) built
+        </div>
+      </CardBody>
     ) : (
       <div className="overflow-x-auto">
         <table className="table-shell">
@@ -980,12 +1037,17 @@ export const OutputPreviewPage: React.FC = () => {
           {/* The scanner returns at most `max_clusters`; `cluster_count` is the true
               total. Without this the decided/undecided pills describe only the
               visible slice and the list looks complete when it is not. */}
+          {/* Every group is requested now, so this only fires past the endpoint's
+              own ceiling. It stays because a truncated review list that reads as a
+              complete one is the failure this whole panel was corrected for, and
+              that is still true at 2,001 groups. */}
           {(dupes.hidden_count ?? 0) > 0 && (
             <div className="mb-3 rounded-lg border border-line bg-warning-subtle px-3 py-2 text-[11px] text-warning">
-              Showing the {dupes.returned_count ?? dupes.clusters.length} highest-confidence
-              groups. <strong>{dupes.hidden_count} more are not listed</strong> and cannot be
-              decided here — the counters above cover the visible groups only. Raise the
-              limit to review them all.
+              This scan found <strong>{dupes.cluster_count} groups</strong>, more than the{" "}
+              {DUPE_LIMIT} a single scan returns. <strong>{dupes.hidden_count} are not
+              listed</strong>, so every count and every bulk action below covers the{" "}
+              {dupes.returned_count ?? dupes.clusters.length} that are. Deciding these and
+              re-scanning brings the next batch in.
             </div>
           )}
 
@@ -1012,7 +1074,14 @@ export const OutputPreviewPage: React.FC = () => {
                   <div className="space-y-2 text-sm text-ink-muted">
                     <p className="text-ink">
                       {plural(highConfidenceTargets.length, "undecided group")} at {Math.round(HIGH_CONFIDENCE * 100)}% match or
-                      above will be merged into a golden record.
+                      above will be merged into a golden record — across all{" "}
+                      {dupes?.clusters.length ?? 0} groups, not just the page on screen.
+                    </p>
+                    <p>
+                      Merging keeps ONE value per column, so where the records of a group
+                      disagree on a supplier number, a tax registration or a D-U-N-S, every
+                      value but the survivor&rsquo;s is gone from the output. Groups flagged
+                      with conflicting IDs are the ones where that costs the most.
                     </p>
                     <p>
                       Groups where you nominated a survivor keep that record as the base; the rest
@@ -1026,6 +1095,19 @@ export const OutputPreviewPage: React.FC = () => {
             >
               <Wand2 className="h-4 w-4" /> Merge all high-confidence (≥{Math.round(HIGH_CONFIDENCE * 100)}%)
               {highConfidenceTargets.length > 0 && ` · ${highConfidenceTargets.length}`}
+            </Button>
+            <Button
+              variant="secondary"
+              loading={dupExportBusy}
+              onClick={async () => {
+                if (!pid) return;
+                setDupExportBusy(true);
+                try { await OutputApi.duplicateSuspectsExport(pid); }
+                catch (e) { setDupError(`Couldn't export the groups. (${errText(e)})`); }
+                finally { setDupExportBusy(false); }
+              }}
+            >
+              <Download className="h-4 w-4" /> Download every group
             </Button>
             <Button
               variant="ghost"
@@ -1053,7 +1135,41 @@ export const OutputPreviewPage: React.FC = () => {
             {bulkError && <span className="text-[11px] font-medium text-danger">{bulkError}</span>}
           </div>
 
-          <div className="space-y-3">{dupes.clusters.map(renderCluster)}</div>
+          {dupPageCount > 1 && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-canvas px-3 py-2 text-[11px] text-muted">
+              <span>
+                Groups <strong className="text-ink">
+                  {dupPageSafe * DUPE_PAGE_SIZE + 1}–
+                  {Math.min((dupPageSafe + 1) * DUPE_PAGE_SIZE, dupes.clusters.length)}
+                </strong> of <strong className="text-ink">{dupes.clusters.length}</strong>,
+                highest match first. Every count and every bulk action above covers
+                all {dupes.clusters.length} — not this page.
+              </span>
+              <span className="flex items-center gap-2">
+                <Button variant="ghost" disabled={dupPageSafe === 0}
+                        onClick={() => setDupPage(0)}>First</Button>
+                <Button variant="ghost" disabled={dupPageSafe === 0}
+                        onClick={() => setDupPage(p => Math.max(0, p - 1))}>Previous</Button>
+                <span className="px-1 text-ink">Page {dupPageSafe + 1} of {dupPageCount}</span>
+                <Button variant="ghost" disabled={dupPageSafe >= dupPageCount - 1}
+                        onClick={() => setDupPage(p => Math.min(dupPageCount - 1, p + 1))}>Next</Button>
+                <Button variant="ghost" disabled={dupPageSafe >= dupPageCount - 1}
+                        onClick={() => setDupPage(dupPageCount - 1)}>Last</Button>
+              </span>
+            </div>
+          )}
+
+          <div className="space-y-3">{dupPageClusters.map(renderCluster)}</div>
+
+          {dupPageCount > 1 && (
+            <div className="mt-3 flex items-center justify-center gap-2 text-[11px] text-muted">
+              <Button variant="ghost" disabled={dupPageSafe === 0}
+                      onClick={() => setDupPage(p => Math.max(0, p - 1))}>Previous</Button>
+              <span className="px-1 text-ink">Page {dupPageSafe + 1} of {dupPageCount}</span>
+              <Button variant="ghost" disabled={dupPageSafe >= dupPageCount - 1}
+                      onClick={() => setDupPage(p => Math.min(dupPageCount - 1, p + 1))}>Next</Button>
+            </div>
+          )}
         </>
       )}
     </CardBody>

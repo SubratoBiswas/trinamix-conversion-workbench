@@ -43,6 +43,17 @@ class OutputPreviewOut(BaseModel):
     rows: list[dict[str, Any]]
     total_rows: int
     lineage: dict[str, dict[str, Any]]  # target_col -> {source_column, transformations}
+    # The two counts kept apart. `total_rows` is the best estimate of the finished
+    # file; these say what it was estimated FROM, because a preview converts only
+    # `preview_limit` rows and the two numbers diverge exactly when something has
+    # gone wrong — which is when anybody reads them.
+    source_rows: int = 0
+    converted_rows: int = 0
+    preview_limit: int = 0
+    # Why the frame is empty. Present ONLY when it is: zero rows with columns
+    # renders as a header over an empty body, and a blank panel cannot be told
+    # apart from a failed load. {cause, headline, detail}.
+    empty_reason: dict[str, Any] | None = None
 
 
 class LoadErrorOut(ApiOut):

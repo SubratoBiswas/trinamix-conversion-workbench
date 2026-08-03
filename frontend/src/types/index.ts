@@ -689,7 +689,24 @@ export interface ConvertedOutput {
 export interface OutputPreview {
   columns: string[];
   rows: Record<string, any>[];
+  /** Best estimate of the finished file's size. A preview converts only
+   *  `preview_limit` rows, so it is the SOURCE total where the conversion
+   *  produced rows, and 0 where it produced none — it can no longer report rows
+   *  the conversion did not make. */
   total_rows: number;
+  /** Records across every bound source dataset. */
+  source_rows?: number;
+  /** Rows the preview's own bounded conversion produced. */
+  converted_rows?: number;
+  preview_limit?: number;
+  /** Present ONLY when the conversion produced no rows. Zero rows WITH columns
+   *  renders as a table header over an empty body, which cannot be told apart
+   *  from a failed load or a page still working — so the reason is named. */
+  empty_reason?: {
+    cause: "nothing_mapped" | "excluded_by_decision" | "source_has_no_rows" | "none_survived";
+    headline: string;
+    detail: string;
+  } | null;
   lineage: Record<string, { source_column: string | null; default_value?: string | null; rules: any[]; status: string; confidence: number }>;
 }
 

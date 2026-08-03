@@ -92,9 +92,67 @@ def test_an_analyst_rule_runs_on_a_not_applicable_mapping():
 
 def test_a_field_with_nothing_at_all_is_still_skipped():
     """The guard has to keep working: no source, no rule, no default, no overlay
-    means the field genuinely has nothing to write."""
-    out = _run([M(1, status="not_applicable")], {})
-    check("no column", "Party Type" not in out.columns, f"got {list(out.columns)}")
+    means the field genuinely has nothing to write.
+
+    Deliberately NOT "Party Type". The analyst's 03-Aug document gives Party Type a
+    rule for every Customer conversion, so the overlay now has something to say
+    about it and the field is no longer one nobody has spoken about — which is the
+    whole condition this test is checking. Asserting the old answer here would have
+    meant deleting the analyst's instruction to keep a test green. So the test
+    moved to a field the overlay is silent on, and the two other cases below pin
+    down that the overlay is what makes the difference.
+    """
+    fields = {9: F(9, "Account Comments", 1)}
+    out, _ = _transform_frame(SRC, [M(9, status="not_applicable")], fields, {},
+                              {"firstname"}, "Customer")
+    check("no column", "Account Comments" not in out.columns, f"got {list(out.columns)}")
+
+
+def test_a_field_the_analyst_HAS_spoken_about_is_written_even_with_no_mapping():
+    """The other half, and the point of the 03-Aug change: Party Type has no source
+    column, no default and no conversion rule, and it must still come out — because
+    the document says what it is."""
+    fields = {1: F(1, "Party Type", 1)}
+    out, _ = _transform_frame(SRC, [M(1, status="not_applicable")], fields, {},
+                              {"firstname", "companyname"}, "Customer")
+    check("the column exists", "Party Type" in out.columns, f"got {list(out.columns)}")
+    check("and it is not blank", all(str(v).strip() for v in out["Party Type"]),
+          f"got {list(out['Party Type'])}")
+
+
+def test_the_overlay_does_not_overwrite_a_newer_rule_on_the_conversion():
+    """"Whichever is latest" has to be answerable for RULES, not just constants.
+
+    Before the Customer document, every overlay rule simply ran on top of whatever
+    the pipeline produced — safe while only Supplier had them, because no supplier
+    conversion carried its own rule for those fields. Customer conversions carry
+    rules for exactly these field names, including the CW rules seeded onto
+    existing projects in July, so the two now have to be ranked.
+    """
+    from datetime import datetime
+    newer = dict(PARTY_TYPE_RULE, as_of=datetime(2027, 1, 1))
+    out = _run([M(1, status="not_applicable")], {1: [newer]})
+    check("the conversion's newer rule stands", list(out["Party Type"]) ==
+          ["PERSON", "ORGANIZATION", "PERSON", "ORGANIZATION"],
+          f"got {list(out['Party Type'])}")
+
+    # A row where the two rules genuinely disagree: a COMPANY that also carries a
+    # contact's first name. CW #22 tested first/last name alone and called it a
+    # PERSON; the 03-Aug rule requires the organization name to be blank first.
+    # This row is why the analyst rewrote it.
+    both = pd.DataFrame({"firstname": ["Ann"], "companyname": ["Acme Steel"]})
+    older = dict(PARTY_TYPE_RULE, as_of=datetime(2026, 7, 1))
+    out, _ = _transform_frame(both, [M(1, status="not_applicable")], FIELDS,
+                              {1: [older]}, {"firstname", "companyname"}, "Customer")
+    check("an older one is superseded by the document",
+          list(out["Party Type"]) == ["ORGANIZATION"],
+          f"got {list(out['Party Type'])} — CW #22 would say PERSON here")
+
+    newer2 = dict(PARTY_TYPE_RULE, as_of=datetime(2027, 1, 1))
+    out, _ = _transform_frame(both, [M(1, status="not_applicable")], FIELDS,
+                              {1: [newer2]}, {"firstname", "companyname"}, "Customer")
+    check("and a newer one still wins on the same row",
+          list(out["Party Type"]) == ["PERSON"], f"got {list(out['Party Type'])}")
 
 
 def test_a_rule_can_read_another_target_field():
@@ -174,8 +232,10 @@ def test_the_chunk_loop_passes_the_offset():
     a chunked run only happens above 20,000 rows — well past any unit test."""
     out = (_ROOT / "app" / "services" / "output_service.py").read_text(encoding="utf-8")
     check("chunked calls pass their start row",
-          "_self_idx, _city_idx, _city_case, start)" in out)
+          "_self_idx, _city_idx, _city_case, start," in out)
     check("and the signature takes it", "city_case: dict | None = None, row_offset: int = 0," in out)
+    check("and the whole-frame call still starts at nought",
+          "_obj_name_for_overlay, _self_idx, _city_idx, _city_case, 0," in out)
 
 
 if __name__ == "__main__":

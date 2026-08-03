@@ -897,3 +897,137 @@ async def seed_supplier_strategy_defaults() -> dict:
             "analyst_suppressions": a_sup, "analyst_rules": a_rule,
             "analyst_skipped": a_skip,
             "open_items": doc.get("open_items", [])}
+
+
+# ── The 03-Aug Customer documents ────────────────────────────────────────────
+
+_CUSTOMER_03AUG = _DATA / "customer_mapping_03aug.json"
+
+
+async def seed_customer_mapping_03aug() -> dict:
+    """The two Customer documents of 03-Aug-2026, as dated entries in the one store.
+
+    "NXT Customer Field Mapping 1.xlsx" carries the source→target columns (26 of
+    its 243 rows are coloured Mapped); "customer_mapping.txt" carries the
+    transformation rules and the constant defaults. They are one instruction given
+    on one day, so they are one file here and one date.
+
+    THERE IS NO FAN-OUT, AND THAT IS THE POINT. The analyst asked for these to
+    "apply automatically to all existing projects and future projects". Under the
+    one dated store that is not something a seeder does — it is what the store IS.
+    Every entry is keyed (client, source system, target field) and carries
+    effective_date 2026-08-03; every conversion, old or new, resolves against the
+    same rows at generate time. Copying them onto today's conversions would create
+    exactly the per-project forks the store was built to end, and would reach no
+    project created tomorrow.
+
+    Four kinds of statement, one writer:
+      * ``derive``   → a column mapping
+      * ``constant`` → a default value
+      * ``blank``    → a suppression
+      * ``rule``     → a transformation rule, config and all
+
+    SCOPE. Every row is scoped to the 19 sheets of the Fusion Customer Import
+    interface (``_sheets``), narrowed further where the analyst narrowed it. That
+    is not a precedence tier — the sheet list is part of what the document says, it
+    is a document about the Customer interface. It is also load-bearing: measured
+    against the shipped JSON, 14 of these 53 target fields are also claimed by the
+    supplier, HCM or catalog documents, and these being the newest statements in
+    the store, an unscoped "Payment Terms = IMMEDIATE" would have become the answer
+    for Supplier Site too.
+
+    Idempotent, honours tombstones, and re-runnable: ``record_decision`` compares
+    dates, so a redeploy re-stating 03-Aug over an analyst's later edit changes
+    nothing.
+    """
+    import json as _json
+    if not _CUSTOMER_03AUG.exists():
+        return {"seeded": 0, "note": "customer_mapping_03aug.json not found"}
+    try:
+        doc = _json.loads(_CUSTOMER_03AUG.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+
+    nid = await _nextpower_client_id()
+    eff = _effective_date_of(doc)
+    label = doc.get("_label") or "NXT Customer mapping (03-Aug-2026)"
+    doc_sheets = list(doc.get("_sheets") or [])
+    erp = "netsuite"
+
+    _ACTIONS = {
+        "derive": mapping_store.SOURCE_COLUMN,
+        "constant": mapping_store.DEFAULT_VALUE,
+        "blank": mapping_store.SUPPRESS,
+        "rule": mapping_store.RULE,
+    }
+    counts = {"column_mapping": 0, "default_value": 0, "suppress": 0, "rule": 0}
+    retired = skipped = 0
+
+    for r in doc.get("rules") or []:
+        decision = _ACTIONS.get((r.get("action") or "").strip())
+        tgt = (r.get("target_field") or "").strip()
+        if not decision or not tgt:
+            skipped += 1
+            continue
+        # A row narrows the document's scope or inherits it whole; it never widens
+        # it. `record_decision` UNIONS sheet lists with whatever the stored row
+        # already carries, so an exclusion an earlier document put on this field
+        # survives being restated here — which is why the three keys CW_Issues 2
+        # scoped on 29-Jul name their exclusions again rather than trusting that.
+        sheets = list(r.get("sheets") or doc_sheets)
+        value = (r.get("source_column") or "").strip() or None
+        if decision == mapping_store.DEFAULT_VALUE:
+            value = r.get("value")
+        elif decision == mapping_store.RULE and not value:
+            # A CONCAT/CASE_WHEN/SEQUENCE has no single source column. "(rule)" is
+            # the spelling `rule_authoring_service` already uses for this, and
+            # `apply_learned_to_conversion` now lets a rule through on the columns
+            # its CONFIG names rather than on this one.
+            value = "(rule)"
+        row = await mapping_store.record_decision(
+            decision=decision, target_field=tgt, value=value,
+            client_id=nid, source_erp=erp, effective_date=eff,
+            captured_from=label, captured_by=None,
+            rule_type=r.get("rule_type"),
+            rule_config={**(r.get("rule_config") or {}),
+                         "note": r.get("note") or ""},
+            target_object=r.get("target_object") or "Customer",
+            sheets=sheets, exclude_sheets=list(r.get("exclude_sheets") or []),
+        )
+        if row is None:
+            retired += 1        # the analyst retired this — do not resurrect
+            continue
+        counts[mapping_store.DECISION_TO_KIND[decision]] += 1
+
+    excluded = 0
+    for x in doc.get("exclude_source_columns") or []:
+        col = (x.get("source_column") or "").strip()
+        if not col:
+            continue
+        row = await mapping_store.record_source_exclusion(
+            target_object="Customer", source_column=col, captured_from=label,
+            client_id=nid, source_erp=erp,
+        )
+        if row is not None:
+            excluded += 1
+
+    out = {**counts, "retired": retired, "skipped": skipped,
+           "excluded_source_columns": excluded,
+           "effective_date": doc.get("_effective_date"),
+           "open_questions": len(doc.get("_open_questions") or [])}
+    logger.info("customer 03-Aug mapping seed: %s", out)
+    return out
+
+
+def customer_03aug_open_questions() -> list[str]:
+    """What the analyst still has to confirm about the 03-Aug documents.
+
+    Surfaced rather than buried in a comment: two of these change what the
+    generated file contains, and the file looks equally plausible either way.
+    """
+    import json as _json
+    try:
+        return list(_json.loads(_CUSTOMER_03AUG.read_text(encoding="utf-8"))
+                    .get("_open_questions") or [])
+    except Exception:  # noqa: BLE001
+        return []

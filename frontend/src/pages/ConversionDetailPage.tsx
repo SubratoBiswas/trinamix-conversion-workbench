@@ -336,6 +336,20 @@ export const ConversionDetailPage: React.FC = () => {
                           {dataset.row_count.toLocaleString()} × {dataset.column_count}
                         </span>
                       </Link>
+                      {/* The source file, back out of the tool. Everything
+                          downloadable was output-side, so when the tool and the
+                          file disagreed — "0 rows x 165 cols" on a card whose
+                          conversion produced nothing — the one thing that settles
+                          it was the one thing nobody could open. */}
+                      <button
+                        type="button"
+                        className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-canvas hover:text-ink"
+                        title="Download the source file exactly as it was uploaded"
+                        onClick={() => void DatasetsApi.download(
+                          String(dataset.id), dataset.file_name || dataset.name)}
+                      >
+                        ↓ Download
+                      </button>
                       <label className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-canvas hover:text-ink" title="Replace dataset">
                         <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleDatasetUpload} />
                         ↩ Replace

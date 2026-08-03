@@ -68,6 +68,36 @@ def _is_attribute_column(name: str | None) -> bool:
     return bool(_ATTR_RE.match(n.replace(" ", "_")))
 
 
+def _flat_cols(spec) -> list:
+    """A rule column may be one name or a LIST of candidate spellings. Both have
+    to survive source pruning: a list that reaches the frame as a single unhashable
+    entry declares nothing, and the rule then reads blanks off a pruned frame."""
+    if spec is None:
+        return []
+    if isinstance(spec, (list, tuple)):
+        out = []
+        for c in spec:
+            out.extend(_flat_cols(c))
+        return out
+    return [spec] if str(spec).strip() else []
+
+
+def _branch_columns(branches) -> set[str]:
+    """Every column a branch list reads, including nested ``all`` / ``any``
+    conjunctions. A conjunction's columns are named nowhere else, so leaving them
+    undeclared prunes them out and every clause reads blank — which for Party
+    Type means the organization-name test always passes and every row is PERSON."""
+    cols: set[str] = set()
+    for br in branches or []:
+        if not isinstance(br, dict):
+            continue
+        for key in ("all", "any"):
+            if isinstance(br.get(key), (list, tuple)):
+                cols |= _branch_columns(br[key])
+        cols.update(_flat_cols(br.get("if_column")))
+    return cols
+
+
 def _rule_referenced_columns(rules: list[dict]) -> set[str]:
     """Source columns a rule reads OTHER than the cell's own mapped column —
     CASE_WHEN/CONDITIONAL ``if_column`` and CONCAT/COALESCE ``columns``. These must
@@ -83,14 +113,17 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
         # empty on 8,561 rows, one layer over.
         if r.get("source_column"):
             cols.add(r["source_column"])
+        # A chained rule (config["then"]) reads its own columns and is invisible
+        # to a walk that only looks at the top level.
+        for _nxt in (cfg.get("then") or []):
+            if isinstance(_nxt, dict) and _nxt.get("rule_type"):
+                cols |= _rule_referenced_columns([_nxt])
         if rt in ("CONCAT", "COALESCE"):
-            cols.update(c for c in (cfg.get("columns") or []) if c)
+            cols.update(_flat_cols(cfg.get("columns")))
         elif rt == "CONDITIONAL" and cfg.get("if_column"):
-            cols.add(cfg["if_column"])
-        elif rt == "CASE_WHEN":
-            for br in cfg.get("branches") or []:
-                if br.get("if_column"):
-                    cols.add(br["if_column"])
+            cols.update(_flat_cols(cfg["if_column"]))
+        elif rt in ("CASE_WHEN", "SUFFIX_WHEN"):
+            cols |= _branch_columns(cfg.get("branches"))
         elif rt == "CITY_COUNTRY_KEY":
             for spec in (cfg.get("country_column"), cfg.get("city_column")):
                 for c in (spec if isinstance(spec, (list, tuple)) else [spec]):
@@ -108,9 +141,43 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
             # it is a target — the frame simply has no such column — and is the
             # difference between working and silently defaulting when it is not.
             _v = cfg.get("variant") or {}
-            if _v.get("if_column"):
-                cols.add(_v["if_column"])
+            cols |= _branch_columns([_v]) if _v else set()
+            # "unique sequence on the basis of entityid" — the key column is a
+            # SOURCE column the field does not own, so it is pruned unless declared.
+            cols.update(_flat_cols(cfg.get("key_column")))
     return cols
+
+
+def _conversion_rule_wins(rules: list[dict] | None, directive_asof) -> bool:
+    """Does this conversion's OWN rule for the field outrank the overlay's?
+
+    The overlay is a guarantee for fields nobody has spoken about on this
+    conversion, not a licence to overwrite someone who has. It began as
+    supplier-only, where no conversion carried its own rules for the fields it
+    covers, so a rule directive simply always ran. It now carries the analyst's
+    03-Aug Customer rules — Party Type, Party Number, the site-use keys — and
+    those are field names a Customer conversion very often DOES have its own rule
+    for, including the CW rules seeded onto existing projects in July.
+
+    So they are ranked the way everything else here is ranked: whichever is
+    latest. A conversion rule written after the document supersedes it; one
+    written before it does not. A conversion rule that cannot be placed in time
+    is left alone — the same safe default as ``_person_is_newer``, which does not
+    let an undated directive overrule a human. In practice every stored
+    ``TransformationRule`` carries ``created_at``, so the undated case is a
+    hand-built config, not a real one.
+    """
+    if not rules:
+        return False
+    if directive_asof is None:
+        # The document does not say when it was written, so it cannot be shown to
+        # be newer than anything. Previous behaviour for undated files.
+        return True
+    for r in rules:
+        when = r.get("as_of")
+        if when is None or when >= directive_asof:
+            return True
+    return False
 
 
 def _self_lookup_configs(pipelines: dict, target_object: str | None) -> list[dict]:
@@ -126,6 +193,70 @@ def _self_lookup_configs(pipelines: dict, target_object: str | None) -> list[dic
     except Exception:                                           # noqa: BLE001
         pass
     return out
+
+
+def _sequence_key_configs(pipelines: dict, target_object: str | None) -> list[dict]:
+    """Every SEQUENCE config carrying a ``key_column``, from both rule sources."""
+    out: list[dict] = []
+    for _rules in (pipelines or {}).values():
+        for r in _rules or []:
+            cfg = r.get("config") or {}
+            if (r.get("rule_type") or "").upper() == "SEQUENCE" and cfg.get("key_column"):
+                out.append(cfg)
+    try:
+        from app.services.strategy_overlay import rule_configs_of_type
+        out.extend(c for c in rule_configs_of_type(target_object, "SEQUENCE")
+                   if c.get("key_column"))
+    except Exception:                                           # noqa: BLE001
+        pass
+    return out
+
+
+def _build_sequence_index(src: pd.DataFrame, configs: list[dict]) -> dict:
+    """``{normalised key column: {key value: 0-based ordinal}}`` over the WHOLE extract.
+
+    Analyst, 03-Aug: "Party Number: unique sequence — ON THE BASIS OF entityid."
+    SEQUENCE numbered by row index instead, so a customer with five address rows
+    took five different party numbers, and the eighteen Customer sheets that
+    reference the party disagreed with the one that defines it.
+
+    Built once on the full frame for the same reason ``_build_self_index`` is: the
+    other rows carrying a key are usually in a different chunk, and a per-chunk
+    index would restart the numbering every 20,000 rows. Ordinals follow FIRST
+    APPEARANCE, not sort order, so re-running over the same extract produces the
+    same numbers — a party key that renumbers on every regenerate is worse than
+    no key at all.
+    """
+    if src is None or not configs or not len(src.columns):
+        return {}
+    by_norm: dict[str, str] = {}
+    for c in src.columns:
+        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
+
+    index: dict[str, dict[str, int]] = {}
+    for cfg in configs:
+        spec = cfg.get("key_column")
+        names = spec if isinstance(spec, (list, tuple)) else [spec]
+        for name in names:
+            key = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+            if not key or key in index:
+                continue
+            col = by_norm.get(key)
+            if col is None:
+                continue
+            seen: dict[str, int] = {}
+            for v in src[col].tolist():
+                kv = "" if v is None else str(v).strip()
+                if not kv or kv.lower() in ("nan", "none"):
+                    continue
+                if kv not in seen:
+                    seen[kv] = len(seen)
+                # NetSuite writes an id as "123" in one column and "123.0" in
+                # another once pandas has seen a blank in it, so index both.
+                if kv.endswith(".0"):
+                    seen.setdefault(kv[:-2], seen[kv])
+            index[key] = seen
+    return index
 
 
 def _build_city_country_index(src: pd.DataFrame, configs: list[dict]) -> dict:
@@ -383,6 +514,7 @@ def _transform_frame(
     context_cols: set[str] | None = None, target_object: str | None = None,
     self_index: dict | None = None, city_country: dict | None = None,
     city_case: dict | None = None, row_offset: int = 0,
+    sequence_index: dict | None = None, source_label: str = "",
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -398,7 +530,7 @@ def _transform_frame(
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
     _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {},
-                 "city_case": city_case or {}}
+                 "city_case": city_case or {}, "sequence_index": sequence_index or {}}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -411,6 +543,38 @@ def _transform_frame(
     _norm_col_lookup = {_norm_hdr(c): c for c in src.columns}
     col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
     records: list[dict] | None = None
+
+    def _records() -> list[dict]:
+        """The per-row context, built once and shared by both rule paths.
+
+        It used to be built in two places — inside the pipeline branch and again
+        inside the overlay branch — and only one of them added the pseudo-column
+        below, so an overlay rule reading it saw nothing on a conversion that had
+        no rules of its own. Which is every Customer conversion the 03-Aug
+        document is meant to reach.
+
+        ``__source_sheet`` — WHICH SOURCE the row came from. Analyst, 03-Aug:
+        Party Site Use Type is "BILL_TO if addr 1, 2, 3 is taken from the sheet
+        Customer_Billing_Address and SHIP_TO if taken from
+        Customer_Shipping_Address", and the _B / _S suffix on the site-use keys is
+        the same test. That is a fact about the FILE, not about any cell in the
+        row, so the rule could not be written at all before this: the earlier
+        version read the Default Billing / Default Shipping flags instead, which
+        mark the DEFAULT address rather than the sheet, so a customer's second
+        billing address was neither.
+
+        A pseudo-column rather than a real one: it never reaches the output frame,
+        and it cannot collide with a source column because no extract has a header
+        beginning "__".
+        """
+        nonlocal records
+        if records is None:
+            records = (src[ctx_all].to_dict("records") if ctx_all
+                       else src.to_dict("records"))
+            if source_label:
+                for _rec in records:
+                    _rec["__source_sheet"] = source_label
+        return records
     for m in sorted_mappings:
         tgt = fields_by_id.get(m.target_field_id)
         if not tgt:
@@ -496,8 +660,7 @@ def _transform_frame(
             # rule result, so an intentional blank is never clobbered by a stray
             # constant default (which was turning a Delivery Channel/Method
             # CASE_WHEN into a constant "EMAIL" whenever source_column was null).
-            if records is None:
-                records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
+            records = _records()
             src_vals = (col_cache[m.source_column] if has_src
                         else (src[_rule_src].tolist() if _rule_src else None))
             # row_index is the GLOBAL row number. It was never passed here at all —
@@ -583,9 +746,8 @@ def _transform_frame(
                 col_values = ([v if str(v).strip() else cv for v in col_values]
                               if (_ov.get("fill_blank_only") or _explicit)
                               else [cv] * n_rows)
-            elif "rule" in _ov:
-                if records is None:
-                    records = src[ctx_all].to_dict("records") if ctx_all else src.to_dict("records")
+            elif "rule" in _ov and not _conversion_rule_wins(rules, _asof):
+                records = _records()
                 col_values = [apply_pipeline([_ov["rule"]], col_values[i],
                                              row=_RowWithTargets(records[i], out_cols, i),
                                              ctx={**_rule_ctx, "row_index": row_offset + i})
@@ -711,8 +873,16 @@ async def build_converted_dataframe(
                 # an empty string, so a VALUE_MAP on Address Name <- City evaluated
                 # against "" on every row and returned its default. Shipped, visible in
                 # the UI, and inert.
+                # `as_of` — when THIS conversion's rule was written. Needed since
+                # the write-time overlay started carrying rules for Customer as
+                # well as Supplier: without a date the two cannot be ranked, and
+                # the overlay would run on top of a rule the analyst typed in the
+                # UI five minutes ago. "Whichever is latest" is the analyst's own
+                # precedence rule and it has to be answerable for rules too, not
+                # only for constants and suppressions.
                 {"rule_type": r.rule_type, "config": r.rule_config or {},
-                 "source_column": r.source_column}
+                 "source_column": r.source_column,
+                 "as_of": getattr(r, "created_at", None)}
             )
 
     # Extra per-row context columns for rule evaluation: suggested-transform refs
@@ -756,9 +926,16 @@ async def build_converted_dataframe(
     except Exception:  # noqa: BLE001 — never fail generation over the overlay
         log.exception("could not collect strategy-overlay source columns")
 
-    async def _convert_source(src: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    async def _convert_source(src: pd.DataFrame,
+                              label: str = "") -> tuple[pd.DataFrame, dict]:
         """Prune to the mapped/referenced columns, then chunk-transform ONE source
-        frame into the target field-keyed output frame."""
+        frame into the target field-keyed output frame.
+
+        ``label`` names WHERE this frame came from — the dataset's own name, which
+        for a workbook sheet extracted on upload is "<file> — <sheet>". It reaches
+        the rules as the pseudo-column ``__source_sheet``, which is how BILL_TO /
+        SHIP_TO and the _B / _S key suffixes are decided.
+        """
         try:
             if needed_src and len(src.columns) > len(needed_src) + 4:
                 keep = [c for c in src.columns if c in needed_src]
@@ -773,18 +950,22 @@ async def build_converted_dataframe(
         _ccfg = _city_country_configs(pipelines, _obj_name_for_overlay)
         _city_idx = _build_city_country_index(src, _ccfg)
         _city_case = _build_city_case_index(src, _ccfg)
+        _seq_idx = _build_sequence_index(
+            src, _sequence_key_configs(pipelines, _obj_name_for_overlay))
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
                 _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx, _city_idx, _city_case)
+                _obj_name_for_overlay, _self_idx, _city_idx, _city_case, 0,
+                _seq_idx, label)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
             chunk = src.iloc[start:start + _TRANSFORM_CHUNK_ROWS]
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
-                _obj_name_for_overlay, _self_idx, _city_idx, _city_case, start)
+                _obj_name_for_overlay, _self_idx, _city_idx, _city_case, start,
+                _seq_idx, label)
             parts.append(odf)
             if not lin0:
                 lin0 = lin
@@ -803,7 +984,9 @@ async def build_converted_dataframe(
                     raise ValueError("Dataset source file not found; please re-upload the dataset")
                 continue  # skip an unreadable secondary source rather than fail the merge
             src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
-            odf, lin = await _convert_source(src)
+            odf, lin = await _convert_source(
+                src, str(getattr(dataset, "name", "") or
+                         getattr(dataset, "file_name", "") or ""))
             frames.append(odf)
             if collect_frames is not None:
                 # Keep the source's own column list: sheet routing decides which
@@ -2229,13 +2412,99 @@ async def get_output_preview(conversion: Conversion, limit: int = 50) -> dict[st
             head = _mask_supplier_emails(head.copy())
     except Exception:  # noqa: BLE001 — preview must never fail on a cosmetic mask
         pass
-    total = int(len(df))
-    if conversion.dataset_id:
-        ds = await Dataset.get(conversion.dataset_id)
-        if ds and ds.row_count:
-            total = int(ds.row_count)  # true dataset size, not the capped preview
-    return {"columns": list(head.columns.astype(str)), "rows": head.fillna("").to_dict(orient="records"),
-            "total_rows": total, "lineage": lineage}
+    converted = int(len(df))
+    # The SOURCE total, across every bound dataset. This used to read
+    # `conversion.dataset_id` alone — the singular, legacy field — so a
+    # multi-source conversion fell through to the length of a 50-row preview and
+    # the badge reported 50. And on the conversions where it DID resolve, it
+    # reported the source count under a label reading "Converted Data", which is
+    # a different question: the two agree on a healthy 1:1 conversion and diverge
+    # exactly when something has gone wrong, which is when anybody looks.
+    source_rows = 0
+    for _did in (conversion.source_dataset_ids or []):
+        _ds = await Dataset.get(_did)
+        if _ds and _ds.row_count:
+            source_rows += int(_ds.row_count)
+
+    # `total_rows` stays the best available estimate of the finished file — the
+    # preview only converts `limit` rows, so its own length is not it — but it can
+    # no longer claim rows the conversion did not produce.
+    total = source_rows if (converted and source_rows) else converted
+    out = {"columns": list(head.columns.astype(str)),
+           "rows": head.fillna("").to_dict(orient="records"),
+           "total_rows": total, "source_rows": source_rows,
+           "converted_rows": converted, "preview_limit": int(limit),
+           "lineage": lineage}
+    if converted == 0:
+        out["empty_reason"] = await _why_no_rows(conversion, df, source_rows)
+    return out
+
+
+async def _why_no_rows(conversion: Conversion, df, source_rows: int) -> dict:
+    """Why the converted frame came out empty. ``{cause, headline, detail}``.
+
+    Zero rows WITH columns rendered as a table header over an empty body — a
+    blank panel with nothing on it, which is indistinguishable from a failed
+    load, a page that has not finished, and a conversion that produced nothing.
+    The distinct causes are few and each has a different fix, so the screen has to
+    name which one it is rather than leave the analyst to guess. This is the same
+    correction the duplicate panel needed ("no duplicates" vs "never compared")
+    and the cleansing tab needed ("none found" vs "never run").
+
+    Derived, never guessed: every branch below is read from the conversion, and
+    the last one deliberately admits it does not know rather than inventing a
+    cause that sounds plausible.
+    """
+    if not len(df.columns):
+        return {
+            "cause": "nothing_mapped",
+            "headline": "No target column is mapped yet.",
+            "detail": "Approve at least one mapping in Mapping Review, then "
+                      "re-generate. Until a target field has a source column, a "
+                      "default or a rule, there is nothing to write.",
+        }
+
+    # A decision the analyst recorded can legitimately remove every row. That is
+    # not a fault, and it must not be reported as one.
+    try:
+        from app.services.decision_service import load_decisions
+        decisions = await load_decisions(conversion.id)
+    except Exception:                                           # noqa: BLE001
+        decisions = []
+    excluded = [d for d in decisions if (d.get("verdict") or "") == "exclude"]
+    if excluded and source_rows and len(df.columns):
+        covered = sum(len(d.get("member_keys") or []) for d in excluded)
+        if covered >= source_rows:
+            return {
+                "cause": "excluded_by_decision",
+                "headline": f"Every record is covered by an Exclude decision "
+                            f"({len(excluded)} group(s), {covered} record(s)).",
+                "detail": "This is a decision that was recorded, not a fault. "
+                          "Clear it on the Duplicate suspects tab to bring the "
+                          "records back.",
+            }
+
+    if source_rows == 0:
+        return {
+            "cause": "source_has_no_rows",
+            "headline": "The source file has no data rows.",
+            "detail": "The columns below come from the Oracle template, not from "
+                      "the extract. Check the uploaded file — a sheet with only a "
+                      "header, or the wrong sheet chosen at upload, both look "
+                      "exactly like this.",
+        }
+
+    return {
+        "cause": "none_survived",
+        "headline": f"The source has {source_rows:,} record(s) and none of them "
+                    f"reached the output.",
+        "detail": "The mapping produced columns but no rows, so the extract was "
+                  "read and then emptied — most often a decision on the Duplicate "
+                  "suspects or Cleansing tab, or a source file whose real header "
+                  "row sits below a title block, so the rows above it were taken "
+                  "as the header. Check Lineage for which source column each field "
+                  "is bound to.",
+    }
 
 
 async def preload_report(conversion: Conversion, sample_rows: int = 3000) -> dict[str, Any]:

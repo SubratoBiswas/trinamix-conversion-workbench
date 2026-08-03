@@ -223,6 +223,21 @@ async def _run_seeds_background() -> None:
         log.exception("item do-not-map seed failed")
 
     try:
+        # The two Customer documents of 03-Aug: the field-mapping workbook's green
+        # rows plus customer_mapping.txt's transformation rules and defaults.
+        # Seeded AFTER seed_customer_field_mappings and seed_customer_sheet_scope,
+        # and dated 2026-08-03, so it wins every earlier Customer statement it
+        # contradicts and loses to anything said since. There is no fan-out to
+        # existing projects: every conversion resolves against the store at
+        # generate time, which is what makes "apply to all projects, past and
+        # future" a property of the store rather than a job.
+        from app.services.catalog_seed_service import seed_customer_mapping_03aug
+        r = await seed_customer_mapping_03aug()
+        log.info("startup seed — customer mapping 03-Aug: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer 03-Aug mapping seed failed")
+
+    try:
         # Mine allowed_values / lookup_type out of the descriptions of templates
         # that were parsed before the LOV parser existed. Cheap (no file IO) and
         # idempotent, so it's safe to run on every boot.
