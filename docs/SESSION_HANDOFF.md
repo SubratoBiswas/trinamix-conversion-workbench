@@ -1709,6 +1709,38 @@ failed, so the suite cannot pass by luck.
 **Not verified against live data.** Re-scan Supplier Import and confirm the four
 Roytek rows now cluster.
 
+### 13.1a Drop Third_Party_Pay_Relationships from the Supplier Site workbook (NEXT)
+
+Analyst, 03-Aug: the generated `03_Supplier_Site` filled-template workbook
+carries a worksheet tab `Third_Party_Pay_Relationships`. It must not be there.
+Third Party Pay Relationships is its OWN interface — `supplier_fbdi_file_names
+.json` maps `thirdpartypayrelationships -> PozSupThirdPartyInt` — so it belongs
+in its own file, not as a tab inside Supplier Site.
+
+Already captured as data and read by nothing — the "shipped and inert" pattern
+(CODEBASE_GUIDE §7.1). `app/data/supplier_strategy_defaults.json`:
+
+    "blank_sheets": { "sheets": ["Third_Party_Pay_Relationships"],
+      "status": "CAPTURED - NOT yet enforced. output_service._sheet_carries_data()
+                 decides headers-only per sheet from whether any field is mapped;
+                 it has no explicit always-blank list." }
+
+Note the ask is STRONGER than the captured note, which assumed headers-only:
+remove the tab entirely from the Supplier Site workbook.
+
+Where to change it:
+* `strategy_overlay` — expose `blank_sheets` (a `sheets_to_drop(object)` reader),
+  so the list is honoured rather than decorative.
+* `output_service.py:1889 _sheet_carries_data` / the template branch around
+  `:1969-2099` — an explicit always-drop list, checked BEFORE the
+  is-anything-mapped heuristic, so an accidental auto-map cannot resurrect it.
+* `template_fill_service.fill_template` — needs to delete the worksheet from the
+  openpyxl workbook, not merely leave it empty.
+
+Test: assert the generated Supplier Site workbook's sheet names do NOT include
+`Third_Party_Pay_Relationships`, and — per §7.1 — assert the DATA list is what
+drives it, so the mechanism cannot go inert again.
+
 ### 13.2 Item Import shows 0 converted rows
 
 "Syteline source → Item Import": Converted Data badge `0`, headers render, no
