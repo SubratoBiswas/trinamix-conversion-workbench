@@ -1,0 +1,21 @@
+{
+  "_source": "Customer_Import_FBDI_Sequence_Mapping_V2 3.xlsx",
+  "_effective_date": "2026-08-03",
+  "names": {
+    "hzimppartiest": "HzImpPartiesT",
+    "hzimppartysitest": "HzImpPartySitesT",
+    "hzimppartysiteusest": "HzImpPartySiteUsesT",
+    "hzimpaccountst": "HzImpAccountsT",
+    "hzimpacctsitest": "HzImpAcctSitesT",
+    "hzimpacctsiteusest": "HzImpAcctSiteUsesT",
+    "hzimpacctcontactst": "HzImpAcctContactsT",
+    "hzimpcontactptst": "HzImpContactPtsT",
+    "hzimpcontactroles": "HzImpContactRoles",
+    "hzimpcontactst": "HzImpContactsT",
+    "hzimplocationst": "HzImpLocationsT",
+    "hzimprelshipst": "HzImpRelshipsT",
+    "hzimproleresp": "HzImpRoleResp",
+    "hzimppersonlang": "HzImpPersonLang",
+    "racustomerprofilesintall": "RaCustomerProfilesIntAll"
+  }
+}

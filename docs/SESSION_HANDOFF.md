@@ -1741,6 +1741,89 @@ Test: assert the generated Supplier Site workbook's sheet names do NOT include
 `Third_Party_Pay_Relationships`, and — per §7.1 — assert the DATA list is what
 drives it, so the mechanism cannot go inert again.
 
+### 13.1b Customer: keep only the 15 interfaces from the V2.3 sequence doc (NEXT)
+
+Analyst, 03-Aug, `Customer_Import_FBDI_Sequence_Mapping_V2 3.xlsx`. Customer
+output must be restricted to exactly the 15 interfaces below, in this order, with
+these CSV file names.
+
+**Already extracted and verified** — `docs/incoming/customer_fbdi_column_order_V2.json`
+and `docs/incoming/customer_fbdi_file_names.json`. NOT yet wired to anything.
+
+Each interface sheet in the workbook is transposed: column A is the FBDI
+(worksheet) header, column C the CSV header, columns B/D sample values. Both
+orders are captured. `END` appears as the last CSV entry — the loader's record
+terminator — and is deliberately NOT stored; `supplier_fbdi_layout` appends it.
+
+Verification already done on the extraction:
+* 15 sheets, 996 columns, **zero** count mismatches against the workbook's own
+  Summary field counts.
+* csv_order differs from fbdi_order on exactly **three** sheets —
+  HZ_IMP_ACCTSITES_T, HZ_IMP_ACCTSITEUSES_T, RA_CUSTOMER_PROFILES_INT_ALL —
+  which independently matches CODEBASE_GUIDE §5.7 ("they differ on three of the
+  fifteen Customer interfaces"). Strong evidence the parse is correct.
+
+| # | Sheet | CSV file | Fields |
+|---|---|---|---|
+| 1 | HZ_IMP_PARTIES_T | HzImpPartiesT | 49 |
+| 2 | HZ_IMP_PARTYSITES_T | HzImpPartySitesT | 48 |
+| 3 | HZ_IMP_PARTYSITEUSES_T | HzImpPartySiteUsesT | 43 |
+| 4 | HZ_IMP_ACCOUNTS_T | HzImpAccountsT | 84 |
+| 5 | HZ_IMP_ACCTSITES_T | HzImpAcctSitesT | 89 |
+| 6 | HZ_IMP_ACCTSITEUSES_T | HzImpAcctSiteUsesT | 45 |
+| 7 | HZ_IMP_ACCTCONTACTS_T | HzImpAcctContactsT | 68 |
+| 8 | HZ_IMP_CONTACTPTS_T | HzImpContactPtsT | 79 |
+| 9 | HZ_IMP_CONTACTROLES | HzImpContactRoles | 67 |
+| 10 | HZ_IMP_CONTACTS_T | HzImpContactsT | 66 |
+| 11 | HZ_IMP_LOCATIONS_T | HzImpLocationsT | 87 |
+| 12 | HZ_IMP_RELSHIPS_T | HzImpRelshipsT | 69 |
+| 13 | HZ_IMP_ROLERESP | HzImpRoleResp | 64 |
+| 14 | HZ_IMP_PERSONLANG | HzImpPersonLang | 6 |
+| 15 | RA_CUSTOMER_PROFILES_INT_ALL | RaCustomerProfilesIntAll | 132 |
+
+Still to do:
+
+1. **Replace** `app/data/customer_fbdi_column_order.json` with the extracted
+   file (keep the old one in `_arch/`). It carries `_effective_date: 2026-08-03`,
+   so under the one dated store it wins on its own merits.
+2. **Restrict Customer to these 15 sheets.** A keep-list is the mirror of the
+   drop-list added in §12 — `strategy_overlay.sheets_to_drop()` and
+   `fill_template(drop_sheets=)` already exist; add `sheets_to_keep(object)` and
+   have generation drop any Customer sheet not on the list. Applies to the CSV
+   bundle as well as the filled workbook.
+3. **Seed the file names** into the CSV-naming path, as
+   `supplier_fbdi_file_names.json` is for Supplier.
+4. **Learnings — SEED NOTHING FROM THIS DOCUMENT. Analyst confirmed, 03-Aug.**
+
+   Asked whether to learn value mappings from it, the analyst said "just column
+   mapping no value mapping". Correct on values — columns B/D are FBDI-vs-CSV
+   FORMAT examples (`300000007588550`, `DNB`), not crosswalk pairs.
+
+   But the document cannot yield column mappings either, and this was verified
+   rather than assumed: all 15 sheets carry exactly four columns —
+   `FBDI(Oracle) | Values(FBDI Fmt) | CSV Fmt | Values(CSV Fmt)` — and BOTH
+   header columns are target-side. There is no source-system column anywhere in
+   the workbook. A `column_mapping` learning needs a source column; there is
+   none to read.
+
+   What the two header columns actually express — that Oracle's FBDI spelling
+   and the CSV spelling are the same field in the same position — is the COLUMN
+   ORDER, already captured in `customer_fbdi_column_order_V2.json`. Seeding it a
+   second time as learnings would put the same fact in two stores that can
+   disagree, which is what §12.1 exists to stop.
+
+   Customer's real source→target mappings live in
+   `app/data/customer_field_mappings.json` (the NetSuite→Customer doc) and are
+   untouched by this.
+5. Tests: the 15 sheet names and their field counts come from the JSON, not from
+   code; a generated Customer bundle contains exactly 15 files with exactly these
+   names; the three sheets whose csv_order differs are asserted by measured
+   index, per §5.7.
+
+**Danger.** The CSVs are headerless, so position is the only thing carrying
+meaning — a file in the wrong order has the same column count and looks perfectly
+well formed. Do not ship item 1 without item 5.
+
 ### 13.2 Item Import shows 0 converted rows
 
 "Syteline source → Item Import": Converted Data badge `0`, headers render, no

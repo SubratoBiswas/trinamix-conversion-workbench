@@ -1,64 +1,60 @@
-Duplicate scoring: an identical name is a duplicate; a different key is not a defence
+Drop Third_Party_Pay_Relationships from the Supplier Site workbook
 
-Four NextPower supplier rows read
+Analyst, 03-Aug: the generated 03_Supplier_Site workbook carried a
+Third_Party_Pay_Relationships worksheet tab. It does not belong there. Third
+Party Pay Relationships is its OWN interface -- supplier_fbdi_file_names.json
+maps `thirdpartypayrelationships -> PozSupThirdPartyInt` -- so it ships as its
+own file, not as a tab inside Supplier Site.
 
-  1416     Nanjing Roytek & 3X Motion Technologies Co., LTD
-  3567106  Nanjing Roytek & 3X Motion Technologies Co., LTD
-  3567111  Nanjing Roytek & 3X Motion Technologies Co., LTD
-  3792588  Nanjing Roytek & 3X Motion Technologies Co., LTD
+SHIPPED AND INERT, AGAIN
 
-Byte-identical names. Duplicate suspects reported "Scanned 3813 records -- no
-near-duplicate entities above the match threshold."
+  The instruction was already in the data and read by nothing.
+  supplier_strategy_defaults.json has carried
 
-CAUSE
+    "blank_sheets": { "sheets": ["Third_Party_Pay_Relationships"],
+      "status": "CAPTURED - NOT yet enforced. output_service._sheet_carries_data()
+                 ... has no explicit always-blank list." }
 
-  _pair_score was a weighted average over every identity field non-blank in BOTH
-  rows. The name scored 1.0. The supplier NUMBER, a strong id that differed,
-  scored 0.0 and KEPT ITS WEIGHT IN THE DENOMINATOR. So a perfect name match was
-  averaged down to roughly 0.5/0.8 = 0.63 against a 0.86 threshold, and the pair
-  was discarded.
+  since it was captured -- with a status field admitting nobody read it. That is
+  the failure CODEBASE_GUIDE 7.1 names as the dominant one in this repo.
 
-  Two rows carrying different supplier numbers is the definition of the duplicate
-  this function exists to find -- the same company entered twice under two keys.
-  The scorer was treating the very thing that makes it a duplicate as proof that
-  it was not one.
+  Note the ask is STRONGER than the captured note, which assumed headers-only.
+  An empty tab still reads as an interface someone is expected to fill.
 
-FIX -- services/entity_resolution.py
+THE CHANGE
 
-  1. An exact normalised-name match short-circuits to confidence 1.0. Legal
-     suffixes and punctuation are normalised away first, so "ACME  Inc " and
-     "acme, inc." still match, and a blank name never matches another blank name.
+  strategy_overlay.sheets_to_drop()  -- reads `blank_sheets` from every
+    *_strategy_defaults.json. Normalised, so Third_Party_Pay_Relationships,
+    "third party pay relationships" and ThirdPartyPayRelationships are one sheet.
+    The sheet name is NOT hardcoded here; a test asserts that, or the analyst's
+    list goes back out of the loop.
 
-  2. A strong id (taxid / number) that DISAGREES now ABSTAINS -- it leaves both
-     the numerator and the denominator -- instead of voting against. One that
-     AGREES still counts fully, as strong positive evidence. Fuzzy fields are
-     unchanged and still contribute in both directions: a name that half matches
-     really is weaker evidence, unlike a key that simply differs.
+  template_fill_service.fill_template(..., drop_sheets=)  -- REMOVES the
+    worksheet from the workbook rather than leaving it empty. Removal happens
+    first, so nothing downstream can write into a sheet on its way out, and the
+    last remaining sheet is never removed: openpyxl cannot represent a workbook
+    with none, and a file that will not open is worse than one carrying a tab too
+    many.
 
-  3. Corroborating evidence is still collected on a short-circuit, so the UI
-     keeps listing which fields matched.
-
-  Trade accepted: a few more false pairs on genuinely different companies with
-  near-identical names. A suspect is dismissed in one click; a missed duplicate
-  ships to Oracle and creates a second supplier record.
+  output_service._strategy_sheets_to_drop()  -- the caller. A strategy file that
+    cannot be read costs the drop, not the output.
 
 TESTS
 
-  tests/test_duplicate_scoring.py -- 13 tests, pure, no database. Includes the
-  four Roytek rows verbatim, both directions of the abstain rule, and the cases
-  that must still NOT cluster (different companies, blank-vs-blank names).
+  tests/test_dropped_sheets.py -- 12 tests. Per 7.1 they assert the DATA drives
+  it and the CALLER calls it, not merely that the function works: the JSON still
+  names the sheet, the reader does not hardcode it, and generation passes the
+  list to the filler.
 
-  One test reconstructs the OLD formula and asserts it would have failed this
-  data -- so the suite cannot pass by luck or drift onto a different defect.
+  The workbook-level tests build a clean workbook rather than using the real
+  Supplier Site template: that template is the one whose stylesheet carries an
+  out-of-spec font family, so a FILLED copy cannot be reopened by openpyxl at all
+  -- which is why the existing template tests use Supplier Import. A canary test
+  checks the real template still has the tab, and skips where openpyxl refuses
+  the file rather than failing the suite.
 
-  900 passing, 13 skipped, 0 failing.
+  911 passing, 14 skipped, 0 failing.
 
-NOT VERIFIED AGAINST LIVE DATA
+NOT VERIFIED AGAINST A REAL GENERATED BUNDLE
 
-  Re-scan Supplier Import after deploy and confirm the four Roytek rows cluster.
-
-ALSO
-
-  docs/SESSION_HANDOFF.md gains section 12 (this session's four changes) and
-  section 13 (open items, with the two live ones: Item Import showing 0 converted
-  rows, and the missing SPA rewrite on the Render static site).
+  Regenerate Supplier and confirm 03_Supplier_Site opens without the tab.

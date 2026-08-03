@@ -81,11 +81,18 @@ def _clean_cell(val):
     return None if s.strip() == "" else val
 
 
-def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame"]) -> bytes:
+def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame"],
+                  drop_sheets: "set[str] | None" = None) -> bytes:
     """Open the Oracle template at ``src_path`` and write each sheet's frame into
     the matching worksheet, clearing the shipped sample rows first. Sheets absent
     from ``frames_by_sheet`` (e.g. the Instructions sheet) are left untouched.
-    Returns the populated workbook bytes (.xlsm preserved with macros)."""
+    Returns the populated workbook bytes (.xlsm preserved with macros).
+
+    ``drop_sheets`` are REMOVED from the workbook rather than left empty. An empty
+    tab still reads as an interface the analyst is expected to fill, and Oracle
+    templates carry sheets belonging to other interfaces entirely — Supplier Site
+    ships a Third_Party_Pay_Relationships tab that has its own FBDI file. Leaving
+    it blank was not enough; the analyst asked for it gone."""
     src_path = Path(src_path)
     keep_vba = src_path.suffix.lower() == ".xlsm"
     # Tolerant open — Oracle ships at least one template (Supplier Site) whose
@@ -96,6 +103,11 @@ def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame
     from app.parsers.xlsx_repair import load_workbook_tolerant
     wb = load_workbook_tolerant(src_path, keep_vba=keep_vba)
     try:
+        # Remove first, so nothing below can write into a sheet on its way out.
+        for _ws_name in list(wb.sheetnames):
+            if _norm(_ws_name) in (drop_sheets or set()):
+                if len(wb.sheetnames) > 1:      # never leave a workbook with none
+                    del wb[_ws_name]
         by_norm_sheet = { _norm(name): name for name in frames_by_sheet }
         for ws_name in wb.sheetnames:
             if ws_name.lower().startswith("instruction"):

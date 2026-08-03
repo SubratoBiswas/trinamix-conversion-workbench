@@ -1,0 +1,318 @@
+diff --git a/backend/app/services/output_service.py b/backend/app/services/output_service.py
+index 6a9258a..68cc011 100644
+--- a/backend/app/services/output_service.py
++++ b/backend/app/services/output_service.py
+@@ -1369,6 +1369,20 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
+     return df
+ 
+ 
++def _strategy_sheets_to_drop() -> set:
++    """Interface sheets that must not appear in a generated workbook at all.
++
++    Never blocks generation: a strategy file that cannot be read costs the drop,
++    not the output.
++    """
++    try:
++        from app.services.strategy_overlay import sheets_to_drop
++        return sheets_to_drop()
++    except Exception:                                           # noqa: BLE001
++        log.exception("could not read the drop-sheet list")
++        return set()
++
++
+ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
+                                    include_header: bool | None = None,
+                                    merged_df: "pd.DataFrame | None" = None) -> ConvertedOutput:
+@@ -1980,7 +1994,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
+                 _only = sheets_with_fields[0].sheet_name if sheets_with_fields else obj_name
+                 frames[_only] = fdf
+                 total_rows, total_cols = len(fdf), len(fdf.columns)
+-            _data = fill_template(_template_src_path, frames)
++            # Sheets the analyst has ruled out of this workbook entirely — see
++            # strategy_overlay.sheets_to_drop. Passed here rather than filtered
++            # out of `frames`, because the tab exists in Oracle's template
++            # whether or not we have a frame for it, so dropping the frame alone
++            # would still leave the tab.
++            _data = fill_template(_template_src_path, frames,
++                                  drop_sheets=_strategy_sheets_to_drop())
+             _stem = Path(_template_src_path).stem
+             name = f"{_stem}.xlsm" if _template_src_path.lower().endswith(".xlsm") else f"{_stem}.xlsx"
+             path = out_dir / name
+diff --git a/backend/app/services/strategy_overlay.py b/backend/app/services/strategy_overlay.py
+index 42df107..2b31d2c 100644
+--- a/backend/app/services/strategy_overlay.py
++++ b/backend/app/services/strategy_overlay.py
+@@ -301,3 +301,34 @@ def apply_frame_rules(df, target_object: str | None):
+         b = df[other].astype(str).str.strip().str.casefold()
+         df.loc[(a == b) & (a != ""), tgt] = ""
+     return df
++
++
++def sheets_to_drop() -> set[str]:
++    """Interface sheets that must not appear in a generated workbook at all.
++
++    Analyst, 03-Aug: the Supplier Site workbook was shipping a
++    `Third_Party_Pay_Relationships` tab. That is its own interface —
++    `supplier_fbdi_file_names.json` maps it to `PozSupThirdPartyInt` — so it
++    belongs in its own file, not as a tab inside Supplier Site.
++
++    The list has been sitting in `supplier_strategy_defaults.json` under
++    `blank_sheets` since it was captured, read by nothing, with its own status
++    field admitting as much. This is the reader that makes it real; the shape of
++    defect the guide calls "shipped and inert" is data that says something and
++    code that never asks.
++
++    Normalised names, so `Third_Party_Pay_Relationships`,
++    `third party pay relationships` and `ThirdPartyPayRelationships` are one
++    sheet.
++    """
++    import json as _json
++    out: set[str] = set()
++    for path in _DATA.glob("*_strategy_defaults.json"):
++        try:
++            doc = _json.loads(path.read_text(encoding="utf-8"))
++        except Exception:                                       # noqa: BLE001
++            continue
++        for name in ((doc.get("blank_sheets") or {}).get("sheets") or []):
++            if str(name).strip():
++                out.add(_n(name))
++    return out
+diff --git a/backend/app/services/template_fill_service.py b/backend/app/services/template_fill_service.py
+index df9a8ca..d5f7375 100644
+--- a/backend/app/services/template_fill_service.py
++++ b/backend/app/services/template_fill_service.py
+@@ -81,11 +81,18 @@ def _clean_cell(val):
+     return None if s.strip() == "" else val
+ 
+ 
+-def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame"]) -> bytes:
++def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame"],
++                  drop_sheets: "set[str] | None" = None) -> bytes:
+     """Open the Oracle template at ``src_path`` and write each sheet's frame into
+     the matching worksheet, clearing the shipped sample rows first. Sheets absent
+     from ``frames_by_sheet`` (e.g. the Instructions sheet) are left untouched.
+-    Returns the populated workbook bytes (.xlsm preserved with macros)."""
++    Returns the populated workbook bytes (.xlsm preserved with macros).
++
++    ``drop_sheets`` are REMOVED from the workbook rather than left empty. An empty
++    tab still reads as an interface the analyst is expected to fill, and Oracle
++    templates carry sheets belonging to other interfaces entirely — Supplier Site
++    ships a Third_Party_Pay_Relationships tab that has its own FBDI file. Leaving
++    it blank was not enough; the analyst asked for it gone."""
+     src_path = Path(src_path)
+     keep_vba = src_path.suffix.lower() == ".xlsm"
+     # Tolerant open — Oracle ships at least one template (Supplier Site) whose
+@@ -96,6 +103,11 @@ def fill_template(src_path: str | Path, frames_by_sheet: dict[str, "pd.DataFrame
+     from app.parsers.xlsx_repair import load_workbook_tolerant
+     wb = load_workbook_tolerant(src_path, keep_vba=keep_vba)
+     try:
++        # Remove first, so nothing below can write into a sheet on its way out.
++        for _ws_name in list(wb.sheetnames):
++            if _norm(_ws_name) in (drop_sheets or set()):
++                if len(wb.sheetnames) > 1:      # never leave a workbook with none
++                    del wb[_ws_name]
+         by_norm_sheet = { _norm(name): name for name in frames_by_sheet }
+         for ws_name in wb.sheetnames:
+             if ws_name.lower().startswith("instruction"):
+diff --git a/backend/tests/test_dropped_sheets.py b/backend/tests/test_dropped_sheets.py
+new file mode 100644
+index 0000000..3ad9666
+--- /dev/null
++++ b/backend/tests/test_dropped_sheets.py
+@@ -0,0 +1,196 @@
++"""A sheet the analyst ruled out must not appear in the workbook at all.
++
++Analyst, 03-Aug: the generated `03_Supplier_Site` workbook carried a
++`Third_Party_Pay_Relationships` tab. That is its own interface —
++`supplier_fbdi_file_names.json` maps `thirdpartypayrelationships` to
++`PozSupThirdPartyInt` — so it belongs in its own file, not as a tab inside
++Supplier Site.
++
++The list had been sitting in `supplier_strategy_defaults.json` under
++`blank_sheets` since it was captured, with a status field admitting it was read
++by nothing. That is the failure this codebase repeats most (CODEBASE_GUIDE
++§7.1): a capability that lands, passes its tests against hand-made inputs, and
++never meets real data. So the tests here assert the DATA drives it and that the
++CALLER actually calls it — not merely that the function works.
++
++Pure: reads the shipped JSON and the shipped source, plus one real Oracle
++template through openpyxl.
++"""
++import json
++from pathlib import Path
++
++import pytest
++
++from app.services import strategy_overlay as so
++
++_BACKEND = Path(__file__).resolve().parent.parent
++_DATA = _BACKEND / "app" / "data"
++_TEMPLATES = _DATA / "fbdi_templates"
++
++TARGET = "Third_Party_Pay_Relationships"
++
++
++# ── The data says it ─────────────────────────────────────────────────────────
++
++def test_the_analyst_list_still_names_the_sheet():
++    doc = json.loads((_DATA / "supplier_strategy_defaults.json")
++                     .read_text(encoding="utf-8"))
++    sheets = (doc.get("blank_sheets") or {}).get("sheets") or []
++    assert TARGET in sheets
++
++
++# ── The code reads it ────────────────────────────────────────────────────────
++
++def test_the_overlay_returns_it():
++    assert so._n(TARGET) in so.sheets_to_drop()
++
++
++def test_it_is_matched_however_it_is_spelled():
++    """Oracle and the analyst's docs disagree on separators; they are one sheet."""
++    drop = so.sheets_to_drop()
++    for spelling in (TARGET, "third party pay relationships",
++                     "ThirdPartyPayRelationships", "THIRD_PARTY_PAY_RELATIONSHIPS"):
++        assert so._n(spelling) in drop
++
++
++def test_the_list_comes_from_the_json_not_from_code():
++    """A hardcoded sheet name would put the analyst's list back out of the loop."""
++    src = (_BACKEND / "app" / "services" / "strategy_overlay.py") \
++        .read_text(encoding="utf-8")
++    body = src.split("def sheets_to_drop(")[1]
++    assert "blank_sheets" in body
++    assert TARGET not in body.split('"""')[2], "the sheet name is hardcoded in the reader"
++
++
++# ── The caller calls it ──────────────────────────────────────────────────────
++
++def test_generation_passes_the_drop_list_to_the_template_filler():
++    """The seam. A drop list nothing passes is the inert-feature pattern again."""
++    src = (_BACKEND / "app" / "services" / "output_service.py") \
++        .read_text(encoding="utf-8")
++    assert "drop_sheets=_strategy_sheets_to_drop()" in src
++
++
++def test_the_filler_removes_the_sheet_rather_than_blanking_it():
++    src = (_BACKEND / "app" / "services" / "template_fill_service.py") \
++        .read_text(encoding="utf-8")
++    body = src.split("def fill_template(")[1]
++    assert "del wb[_ws_name]" in body
++    assert "drop_sheets" in body.split("\n")[0] or "drop_sheets" in body[:400]
++
++
++def test_a_failure_to_read_the_list_does_not_block_generation():
++    src = (_BACKEND / "app" / "services" / "output_service.py") \
++        .read_text(encoding="utf-8")
++    body = src.split("def _strategy_sheets_to_drop(")[1].split("\ndef ")[0]
++    assert "return set()" in body and "log.exception" in body
++
++
++# ── Against the real Oracle template ─────────────────────────────────────────
++
++SITE = _TEMPLATES / "3_SupplierSite_POZ_SUPPLIER_SITES_INT.xlsm"
++
++
++def _sheets(path):
++    from app.parsers.xlsx_repair import load_workbook_tolerant
++    return {so._n(n) for n in load_workbook_tolerant(path, keep_vba=True).sheetnames}
++
++
++def _reopen(data: bytes):
++    """Reopen generated bytes through the TOLERANT loader.
++
++    It repairs the file on disk — this is the template whose stylesheet carries
++    an out-of-spec font family that plain openpyxl refuses outright — so the
++    bytes have to land somewhere before they can be read back.
++    """
++    import tempfile
++    with tempfile.TemporaryDirectory() as d:
++        f = Path(d) / "out.xlsm"
++        f.write_bytes(data)
++        from app.parsers.xlsx_repair import load_workbook_tolerant
++        wb = load_workbook_tolerant(f, keep_vba=True)
++        return type("W", (), {"sheetnames": list(wb.sheetnames)})()
++
++
++@pytest.mark.skipif(not SITE.exists(), reason="Supplier Site template not present")
++def test_the_real_supplier_site_template_actually_has_this_tab():
++    """A canary: if Oracle ever drops the tab, this whole change is dead code.
++
++    Skipped where openpyxl cannot open the template at all — this is the one
++    with the out-of-spec stylesheet, and the installed openpyxl refuses it on
++    some versions. A canary that cannot be read is not a failure of the change.
++    """
++    try:
++        names = _sheets(SITE)
++    except Exception as exc:                                    # noqa: BLE001
++        pytest.skip(f"openpyxl cannot open this template here: {exc}")
++    assert so._n(TARGET) in names, "the tab is gone from the template upstream"
++
++
++def _workbook_with(tabs, tmp):
++    """A clean workbook carrying the named tabs.
++
++    Deliberately NOT the real Supplier Site template: that is the one whose
++    stylesheet carries an out-of-spec font family, so a FILLED copy cannot be
++    reopened by openpyxl at all — the reason the existing template tests use
++    Supplier Import. The removal logic is template-agnostic, so it is exercised
++    on a workbook that can be read back.
++    """
++    from openpyxl import Workbook
++    wb = Workbook()
++    wb.remove(wb.active)
++    for t in tabs:
++        wb.create_sheet(t)
++    path = tmp / "template.xlsx"
++    wb.save(path)
++    return path
++
++
++def test_the_named_tab_is_removed_from_the_workbook(tmp_path):
++    import io
++    import openpyxl
++    from app.services.template_fill_service import fill_template
++
++    src = _workbook_with(["POZ_SUPPLIER_SITES_INT", TARGET, "Instructions"], tmp_path)
++    out = openpyxl.load_workbook(
++        io.BytesIO(fill_template(src, {}, drop_sheets=so.sheets_to_drop())))
++    assert so._n(TARGET) not in {so._n(n) for n in out.sheetnames}
++
++
++def test_the_other_sheets_survive(tmp_path):
++    """Dropping one tab must not cost the interface its own sheets."""
++    import io
++    import openpyxl
++    from app.services.template_fill_service import fill_template
++
++    tabs = ["POZ_SUPPLIER_SITES_INT", TARGET, "Instructions"]
++    src = _workbook_with(tabs, tmp_path)
++    out = openpyxl.load_workbook(
++        io.BytesIO(fill_template(src, {}, drop_sheets=so.sheets_to_drop())))
++    assert {so._n(n) for n in out.sheetnames} == \
++           {so._n(t) for t in tabs} - {so._n(TARGET)}
++
++
++def test_no_drop_list_leaves_a_workbook_untouched(tmp_path):
++    """The default must be inert — passing nothing removes nothing."""
++    import io
++    import openpyxl
++    from app.services.template_fill_service import fill_template
++
++    tabs = ["POZ_SUPPLIER_SITES_INT", TARGET]
++    src = _workbook_with(tabs, tmp_path)
++    out = openpyxl.load_workbook(io.BytesIO(fill_template(src, {})))
++    assert {so._n(n) for n in out.sheetnames} == {so._n(t) for t in tabs}
++
++
++def test_the_last_sheet_is_never_removed(tmp_path):
++    """openpyxl cannot represent a workbook with no worksheets, and a file that
++    will not open is worse than one carrying a tab too many."""
++    import io
++    import openpyxl
++    from app.services.template_fill_service import fill_template
++
++    src = _workbook_with([TARGET], tmp_path)
++    out = openpyxl.load_workbook(io.BytesIO(fill_template(src, {},
++                                                          drop_sheets=so.sheets_to_drop())))
++    assert len(out.sheetnames) == 1

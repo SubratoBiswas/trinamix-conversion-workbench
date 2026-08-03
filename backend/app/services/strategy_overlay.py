@@ -301,3 +301,34 @@ def apply_frame_rules(df, target_object: str | None):
         b = df[other].astype(str).str.strip().str.casefold()
         df.loc[(a == b) & (a != ""), tgt] = ""
     return df
+
+
+def sheets_to_drop() -> set[str]:
+    """Interface sheets that must not appear in a generated workbook at all.
+
+    Analyst, 03-Aug: the Supplier Site workbook was shipping a
+    `Third_Party_Pay_Relationships` tab. That is its own interface —
+    `supplier_fbdi_file_names.json` maps it to `PozSupThirdPartyInt` — so it
+    belongs in its own file, not as a tab inside Supplier Site.
+
+    The list has been sitting in `supplier_strategy_defaults.json` under
+    `blank_sheets` since it was captured, read by nothing, with its own status
+    field admitting as much. This is the reader that makes it real; the shape of
+    defect the guide calls "shipped and inert" is data that says something and
+    code that never asks.
+
+    Normalised names, so `Third_Party_Pay_Relationships`,
+    `third party pay relationships` and `ThirdPartyPayRelationships` are one
+    sheet.
+    """
+    import json as _json
+    out: set[str] = set()
+    for path in _DATA.glob("*_strategy_defaults.json"):
+        try:
+            doc = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            continue
+        for name in ((doc.get("blank_sheets") or {}).get("sheets") or []):
+            if str(name).strip():
+                out.add(_n(name))
+    return out

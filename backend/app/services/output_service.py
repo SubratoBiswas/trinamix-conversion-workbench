@@ -1369,6 +1369,20 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
     return df
 
 
+def _strategy_sheets_to_drop() -> set:
+    """Interface sheets that must not appear in a generated workbook at all.
+
+    Never blocks generation: a strategy file that cannot be read costs the drop,
+    not the output.
+    """
+    try:
+        from app.services.strategy_overlay import sheets_to_drop
+        return sheets_to_drop()
+    except Exception:                                           # noqa: BLE001
+        log.exception("could not read the drop-sheet list")
+        return set()
+
+
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                                    include_header: bool | None = None,
                                    merged_df: "pd.DataFrame | None" = None) -> ConvertedOutput:
@@ -1980,7 +1994,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 _only = sheets_with_fields[0].sheet_name if sheets_with_fields else obj_name
                 frames[_only] = fdf
                 total_rows, total_cols = len(fdf), len(fdf.columns)
-            _data = fill_template(_template_src_path, frames)
+            # Sheets the analyst has ruled out of this workbook entirely — see
+            # strategy_overlay.sheets_to_drop. Passed here rather than filtered
+            # out of `frames`, because the tab exists in Oracle's template
+            # whether or not we have a frame for it, so dropping the frame alone
+            # would still leave the tab.
+            _data = fill_template(_template_src_path, frames,
+                                  drop_sheets=_strategy_sheets_to_drop())
             _stem = Path(_template_src_path).stem
             name = f"{_stem}.xlsm" if _template_src_path.lower().endswith(".xlsm") else f"{_stem}.xlsx"
             path = out_dir / name
