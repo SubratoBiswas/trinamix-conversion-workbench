@@ -344,6 +344,36 @@ class _RowWithTargets:
     def __contains__(self, key):
         return key in self._src or key in self._tgt
 
+    # ITERATION, which a dict has and this did not — and its absence was not a
+    # missing convenience, it was a crash.
+    #
+    # A rule that asks "which of these column names does this row have?" writes
+    # `{norm(k): k for k in row}`. With no __iter__, Python falls back to the LEGACY
+    # sequence protocol: it calls row[0], row[1], … until IndexError. __getitem__
+    # raised KeyError(0) instead, so the loop blew up on its first step — and because
+    # generation runs in a background worker, it surfaced as a conversion that simply
+    # never produced output. Supplier Site and Supplier Site Assignment both use the
+    # site-key rule that iterates the row, which is exactly why those two of six sat
+    # at "mapping_suggested" while the other four generated.
+    #
+    # Source keys first, then any TARGET column the source does not already have, so
+    # iteration order matches what get() resolves: a source column of the same name
+    # wins, and nothing is yielded twice.
+    def __iter__(self):
+        seen = set()
+        for k in self._src:
+            seen.add(k)
+            yield k
+        for k in self._tgt:
+            if k not in seen:
+                yield k
+
+    def keys(self):
+        return list(self)
+
+    def __len__(self):
+        return sum(1 for _ in self)
+
 
 _MISSING = object()
 
