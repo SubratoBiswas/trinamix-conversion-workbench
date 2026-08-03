@@ -266,9 +266,15 @@ def _eligible_src():
 
 def test_force_no_longer_overrides_every_approved_mapping():
     body = _eligible_src()
-    check("the approver is checked", "approved_by" in body, f"got:\n{body}")
-    check("and only the engine's own approvals are eligible",
-          "learning-engine" in body, f"got:\n{body}")
+    check("the approver is checked",
+          "decided_by_a_person" in body or "approved_by" in body, f"got:\n{body}")
+    check("and their word stands only while it is the later one",
+          "approved_at" in body and "effective_date" in body, f"got:\n{body}")
+    check("and a row the engine wrote is refreshed rather than defended",
+          "decided_by_a_person" in body, f"got:\n{body}")
+    store = (_BACKEND / "app" / "services" / "mapping_store.py").read_text(encoding="utf-8")
+    check("the engine's own marker is what tells the two apart",
+          'ENGINE = "learning-engine"' in store)
 
 
 def test_a_suggested_mapping_is_still_eligible():

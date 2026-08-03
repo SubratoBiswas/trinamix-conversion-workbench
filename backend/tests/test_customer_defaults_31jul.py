@@ -280,7 +280,10 @@ def test_capturing_a_default_still_works_when_the_sheet_is_unknown():
     captured — unscoped, exactly as before — rather than lost."""
     lrn = (_ROOT / "app" / "services" / "learning_service.py").read_text(encoding="utf-8")
     check("sheet lookup cannot raise", "except Exception:  # noqa: BLE001 — scope is a refinement" in lrn)
-    check("and None means unscoped", "sheets=list(sheets) if sheets is not None else []" in lrn)
+    store = (_ROOT / "app" / "services" / "mapping_store.py").read_text(encoding="utf-8")
+    check("and no sheet means unscoped", "sheets=list(sheets or [])" in store)
+    check("which the store reads as every sheet",
+          "if not only and not never:" in store)
 
 
 if __name__ == "__main__":
@@ -301,7 +304,8 @@ def test_setting_one_default_on_a_second_sheet_does_not_unset_the_first():
     regenerate-and-read cycle to notice.
     """
     import asyncio
-    from app.services import learning_service as ls
+    import app.models.learned as learned_model
+    from app.services import mapping_store
 
     rows = []
 
@@ -330,24 +334,24 @@ def test_setting_one_default_on_a_second_sheet_does_not_unset_the_first():
             return self.r
 
         @classmethod
-        def find(cls, _q, include_deleted=False):
+        def find(cls, *_q, include_deleted=False):
             class _Q:
                 async def to_list(_s):
                     return list(rows)
             return _Q()
 
-    _real, ls.LearnedMapping = ls.LearnedMapping, _LM
+    _real, learned_model.LearnedMapping = learned_model.LearnedMapping, _LM
     try:
         async def _go():
             for sheet in ("HZ_IMP_CONTACTS_T", "HZ_IMP_RELSHIPS_T"):
-                await ls._upsert(
+                await mapping_store.record_learning(
                     kind="example_default", category="Default Value",
                     original_value="(default)", resolved_value="CONTACT",
                     target_object="Customer", target_field="Role Type",
                     captured_from="ui", captured_by="analyst", sheets=[sheet])
         asyncio.run(_go())
     finally:
-        ls.LearnedMapping = _real
+        learned_model.LearnedMapping = _real
 
     check("it is still ONE learning, not two competing ones", len(rows) == 1,
           f"got {len(rows)}")

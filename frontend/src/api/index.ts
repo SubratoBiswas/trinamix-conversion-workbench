@@ -932,6 +932,33 @@ export const OutputApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+  /** The run report for a whole project bundle, as an .xlsx.
+   *
+   *  Answers the question that follows the bundle download: the analyst has the
+   *  FBDI files, and now needs to be able to say what the tool did to the raw
+   *  extract to produce them — which columns were mapped and on whose authority,
+   *  what was cleansed, what merged away as duplicate, what validation found,
+   *  and which required fields are still short.
+   *
+   *  Built from what the RUN recorded, not from a fresh recalculation, so the
+   *  report and the files it describes cannot drift apart. */
+  conversionReport: async (projectId: string, filename = "conversion_report.xlsx") => {
+    const response = await api.get(`/conversions/project/${projectId}/conversion-report`, {
+      responseType: "blob",
+    });
+    const cd = (response.headers?.["content-disposition"] as string) || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const serverName = m ? decodeURIComponent(m[1].replace(/"/g, "").trim()) : "";
+    const type = (response.headers?.["content-type"] as string) || "";
+    const url = window.URL.createObjectURL(new Blob([response.data], type ? { type } : undefined));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = serverName || filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
   /** Download every interface's MERGED FBDI file as one zip — one merged,
    *  de-duplicated, cleansed, validated file per interface (not one per source).
    *  Generates all merged files in the BACKGROUND first (so wide multi-source

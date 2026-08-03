@@ -182,22 +182,33 @@ def test_get_is_never_used_on_this_model():
 
 
 def test_the_interactive_save_path_can_see_tombstones():
-    """The specific regression. _upsert is what runs when the analyst approves a
-    mapping, adds a fixed value or saves a rule — every interactive write."""
-    sites = [s for s in _call_sites() if s[1] == "_upsert"]
-    check("_upsert queries the library", sites, "call site vanished")
+    """The specific regression, at its new address.
+
+    Approving a mapping, adding a fixed value, saving a rule, uploading a
+    workbook, typing a steer — every one of them now records through
+    ``mapping_store.record_decision``, which finds the rows it is about to write
+    over with ``find_rows_for_key``. So there is one place this guarantee has to
+    hold, instead of six that each had to remember."""
+    sites = [s for s in _call_sites() if s[1] == "find_rows_for_key"]
+    check("the store queries the library", sites, "call site vanished")
     for f, fn, ln, inc, _m in sites:
         check(f"{f}:{ln} passes include_deleted", inc,
               "without it the tombstone is invisible and a deleted learning is "
               "re-inserted as a duplicate on the next approve")
+    src = (_APP / "services" / "mapping_store.py").read_text(encoding="utf-8")
+    body = src.split("async def record_decision(")[1].split("\nasync def ")[0]
+    check("the writer asks for retired rows too", "include_deleted=True" in body,
+          "record_decision must see the tombstone it is about to step over")
 
 
 def test_the_auto_capture_path_can_see_tombstones_too():
-    """_upsert_learned was fixed earlier for the same reason. Pinned so a later edit
-    cannot quietly drop it."""
-    sites = [s for s in _call_sites() if s[1] == "_upsert_learned"]
-    check("call site present", sites)
-    check("passes include_deleted", all(s[3] for s in sites))
+    """Auto-capture after Generate Output goes through the same writer, so it
+    inherits the same guarantee rather than repeating it."""
+    src = (_APP / "services" / "learning_service.py").read_text(encoding="utf-8")
+    body = src.split("async def _upsert_learned(")[1].split("\nasync def ")[0]
+    check("auto-capture records through the store", "_upsert(" in body)
+    check("and does not query the library itself",
+          "LearnedMapping.find" not in body)
 
 
 def test_every_allowed_exception_still_exists():

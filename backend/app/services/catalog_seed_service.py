@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 
 from app.models.learned import LearnedMapping
+from app.services import mapping_store
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,8 @@ _ITEM_DONOTMAP = _DATA / "item_donotmap_columns.json"
 
 
 async def _seed_catalog_file(path: Path, captured_from: str, *,
-                             is_global: bool = False, client_id=None) -> dict:
+                             is_global: bool = False, client_id=None,
+                             effective_date=None) -> dict:
     """Seed source→FBDI rows as reusable learnings. ``is_global`` marks
     client-agnostic public-schema rows (apply to every client); otherwise the rows
     are scoped to ``client_id`` (the analyst docs are one client's source data)."""
@@ -105,54 +107,33 @@ async def _seed_catalog_file(path: Path, captured_from: str, *,
             "source_column": src_field, "source_label": r.get("source_label"),
             "fbdi_sheet": r.get("fbdi_sheet"), "confidence": r.get("confidence"),
         })
-        # UPSERT-with-upgrade (scope-agnostic): find every prior row that maps this
-        # source→target for this object, regardless of scope. Earlier seed runs may
-        # have written a PLAIN row (no rule_type) or a wrongly-scoped copy that then
-        # BLOCKS this seed's correct CASE_WHEN/PHONE_PART/is_global version. So we
-        # heal in place: upgrade the first match to the seed's rule + scope, and
-        # delete the rest as duplicates. Makes reseed self-correcting + de-duping.
-        matches = await LearnedMapping.find(
-            LearnedMapping.kind == "column_mapping",
-            LearnedMapping.target_object == tgt_obj,
-            LearnedMapping.target_field == tgt_field,
-            LearnedMapping.original_value == src_field,
-            include_deleted=True,
-        ).to_list()
-        # The user retired this learning — a reseed on the next restart must not
-        # bring it back (QA issue #5). include_deleted above is what lets us SEE
-        # the tombstone; without it the find returns nothing and we'd re-insert.
-        if matches and all(getattr(m, "is_deleted", False) for m in matches):
-            retired += 1
-            continue
-        matches = [m for m in matches if not getattr(m, "is_deleted", False)]
-        if matches:
-            keep = matches[0]
-            upd: dict = {}
-            if rule_type and keep.rule_type != rule_type:
-                upd["rule_type"] = rule_type
-                upd["rule_config"] = rule_config
-            if is_global and not keep.is_global:
-                upd["is_global"] = True
-                upd["client_id"] = None
-            elif client_id is not None and keep.client_id != client_id and not keep.is_global:
-                upd["client_id"] = client_id
-            if upd:
-                await keep.set(upd)
-                updated += 1
-            else:
-                skipped += 1
-            for extra in matches[1:]:
-                await extra.delete()
-                deduped += 1
-            continue
-        await LearnedMapping(
+        # One more dated entry. The upsert-with-upgrade and de-dupe dance that
+        # used to live here existed because one decision could be stored under
+        # several object spellings and several scopes at once and they then
+        # competed. There is one key now, so there is one row to update, and the
+        # store already refuses to resurrect a decision the analyst retired or to
+        # walk a later one backwards.
+        _cid = None if is_global else client_id
+        _before = await mapping_store.find_rows_for_key(
+            target_field=tgt_field, client_id=_cid,
+            source_erp=r.get("source_system"))
+        _existed = any(getattr(x, "kind", None) == "column_mapping"
+                       and not getattr(x, "is_deleted", False) for x in _before)
+        row = await mapping_store.record_learning(
             kind="column_mapping", category="Column Mapping Alias",
             original_value=src_field, resolved_value=tgt_field,
             target_object=tgt_obj, target_field=tgt_field,
-            client_id=client_id, is_global=is_global,
-            rule_type=rule_type, rule_config=rule_config,
+            client_id=_cid, rule_type=rule_type, rule_config=rule_config,
             source_erp=r.get("source_system"), captured_from=captured_from,
-        ).insert()
+            captured_by=None, effective_date=effective_date,
+            undated=effective_date is None,
+        )
+        if row is None:
+            retired += 1
+            continue
+        if _existed:
+            updated += 1
+            continue
         seeded += 1
 
     if seeded or updated or deduped or skipped or retired or superseded:
@@ -236,28 +217,14 @@ async def seed_item_donotmap_columns() -> dict:
     seeded = kept = 0
     for col in cols:
         col = col.strip()
-        existing = await LearnedMapping.find(
-            LearnedMapping.kind == "ignore_source",
-            LearnedMapping.target_object == obj,
-            LearnedMapping.original_value == col,
-            include_deleted=True,
-        ).first_or_none()
-        if existing and getattr(existing, "is_deleted", False):
-            kept += 1          # retired by the user — do not resurrect (issue #5)
-            continue
-        if existing:
-            if existing.client_id != nid and not existing.is_global:
-                await existing.set({"client_id": nid})
-            kept += 1
-            continue
-        await LearnedMapping(
-            kind="ignore_source", category="Do Not Map Source",
-            original_value=col, resolved_value="",
-            target_object=obj, target_field=None,
-            client_id=nid, is_global=False,
-            source_erp=doc.get("source_system"),
+        row = await mapping_store.record_source_exclusion(
+            target_object=obj, source_column=col,
             captured_from="NXT item over-map feedback (NetSuite do-not-map list)",
-        ).insert()
+            client_id=nid, source_erp=doc.get("source_system"),
+        )
+        if row is None:
+            kept += 1          # retired by the analyst — do not resurrect
+            continue
         seeded += 1
     logger.info("item do-not-map: seeded %d, kept %d (of %d cols)", seeded, kept, len(cols))
     return {"seeded": seeded, "kept": kept, "total": len(cols), "target_object": obj}
@@ -286,27 +253,16 @@ async def seed_supplier_default_values() -> dict:
         tgt_field = (r.get("target_field") or "").strip()
         if const is None or not (tgt_obj and tgt_field):
             continue
-        existing = await LearnedMapping.find(
-            LearnedMapping.kind == "example_default",
-            LearnedMapping.target_object == tgt_obj,
-            LearnedMapping.target_field == tgt_field,
-            include_deleted=True,
-        ).first_or_none()
-        if existing and getattr(existing, "is_deleted", False):
-            kept += 1          # retired by the user — do not resurrect (issue #5)
-            continue
-        if existing:
-            if existing.resolved_value != str(const) or (existing.client_id != nid and not existing.is_global):
-                await existing.set({"resolved_value": str(const), "client_id": nid})
-            kept += 1
-            continue
-        await LearnedMapping(
+        row = await mapping_store.record_learning(
             kind="example_default", category="Default Value",
             original_value="(constant)", resolved_value=str(const),
             target_object=tgt_obj, target_field=tgt_field,
-            client_id=nid, is_global=False,
-            captured_from="NXT supplier analyst default",
-        ).insert()
+            client_id=nid, captured_from="NXT supplier analyst default",
+            captured_by=None, undated=True,
+        )
+        if row is None:
+            kept += 1          # retired by the analyst — do not resurrect
+            continue
         seeded += 1
     logger.info("supplier default values: seeded %d, kept %d", seeded, kept)
     return {"seeded": seeded, "kept": kept, "total": len(rows)}
@@ -341,32 +297,16 @@ async def seed_bom_field_mappings() -> dict:
         tgt_field = (r.get("target_field") or "").strip()
         if const is None or not (tgt_obj and tgt_field):
             continue
-        existing = await LearnedMapping.find(
-            LearnedMapping.kind == "example_default",
-            LearnedMapping.target_object == tgt_obj,
-            LearnedMapping.target_field == tgt_field,
-            include_deleted=True,
-        ).first_or_none()
-        if existing and getattr(existing, "is_deleted", False):
-            const_kept += 1    # retired by the user — do not resurrect (issue #5)
-            continue
-        if existing:
-            upd = {}
-            if existing.resolved_value != str(const):
-                upd["resolved_value"] = str(const)
-            if existing.client_id != nid and not existing.is_global:
-                upd["client_id"] = nid
-            if upd:
-                await existing.set(upd)
-            const_kept += 1
-            continue
-        await LearnedMapping(
+        row = await mapping_store.record_learning(
             kind="example_default", category="Default Value",
             original_value="(constant)", resolved_value=str(const),
             target_object=tgt_obj, target_field=tgt_field,
-            client_id=nid, is_global=False,
-            captured_from="NXT BOM field mapping doc",
-        ).insert()
+            client_id=nid, captured_from="NXT BOM field mapping doc",
+            captured_by=None, undated=True,
+        )
+        if row is None:
+            const_kept += 1    # retired by the analyst — do not resurrect
+            continue
         const_seeded += 1
     res["constants_seeded"] = const_seeded
     res["constants_kept"] = const_kept
@@ -444,30 +384,23 @@ async def seed_supplier_corrections_30jul() -> dict:
               LearnedMapping.client_id == nid]
         if kind == "column_mapping":
             _q.append(LearnedMapping.captured_from == src)
-        existing = await LearnedMapping.find_one(*_q, include_deleted=True)
-        if existing and getattr(existing, "is_deleted", False):
-            retired += 1
-            continue
-        payload = {
-            "effective_date": _effective_date_of(doc),
-            "resolved_value": resolved,
-            "rule_type": r.get("rule_type") or ("suppress" if action == "blank" else None),
-            "rule_config": r.get("rule_config") or {"note": r.get("note", "")},
-            "captured_from": src, "captured_at": _dt.utcnow(),
-        }
-        if existing:
-            await existing.set(payload)
-            updated += 1
-            continue
-        await LearnedMapping(
-            kind=kind, category=("Left blank on purpose" if action == "blank"
-                                 else "Default Value" if action == "constant"
-                                 else "Column Mapping Alias"),
+        row = await mapping_store.record_learning(
+            kind=kind,
+            category=("Left blank on purpose" if action == "blank"
+                      else "Default Value" if action == "constant"
+                      else "Column Mapping Alias"),
             original_value=("(blank)" if action == "blank"
                             else "(constant)" if action == "constant" else fld),
-            target_object=obj, target_field=fld,
-            client_id=nid, is_global=False, **payload,
-        ).insert()
+            resolved_value=resolved,
+            target_object=obj, target_field=fld, client_id=nid,
+            rule_type=r.get("rule_type") or ("suppress" if action == "blank" else None),
+            rule_config=r.get("rule_config") or {"note": r.get("note", "")},
+            captured_from=src, captured_by=None,
+            effective_date=_effective_date_of(doc),
+        )
+        if row is None:
+            retired += 1
+            continue
         seeded += 1
 
     # A blank correction has to CHANGE the library and the mappings, not just be
@@ -612,30 +545,26 @@ async def seed_hcm_source_mapping() -> dict:
 
     async def _put(kind, field, original, resolved, comps, extra):
         nonlocal seeded, updated, retired
-        existing = await LearnedMapping.find_one(
-            LearnedMapping.kind == kind,
-            LearnedMapping.target_object == OBJ,
-            LearnedMapping.target_field == field,
-            LearnedMapping.original_value == original,
-            LearnedMapping.client_id == nid,
-            include_deleted=True,
+        _before = await mapping_store.find_rows_for_key(
+            target_field=field, client_id=nid, source_erp="workday")
+        _existed = any(getattr(x, "kind", None) == kind
+                       and not getattr(x, "is_deleted", False) for x in _before)
+        row = await mapping_store.record_learning(
+            kind=kind,
+            category=("Column Mapping Alias" if kind == "column_mapping"
+                      else "Default Value"),
+            original_value=original, resolved_value=resolved,
+            target_object=OBJ, target_field=field, client_id=nid,
+            rule_config=extra, sheets=list(comps or []),
+            source_erp="workday", captured_from=src, captured_by=None,
+            effective_date=eff,
         )
-        if existing and getattr(existing, "is_deleted", False):
+        if row is None:
             retired += 1
             return
-        payload = {"resolved_value": resolved, "sheets": list(comps or []),
-                   "effective_date": eff, "source_erp": "workday",
-                   "captured_from": src, "rule_config": extra}
-        if existing:
-            await existing.set(payload)
+        if _existed:
             updated += 1
             return
-        await LearnedMapping(
-            kind=kind,
-            category="Column Mapping Alias" if kind == "column_mapping" else "Default Value",
-            original_value=original, target_object=OBJ, target_field=field,
-            client_id=nid, is_global=False, **payload,
-        ).insert()
         seeded += 1
 
     # A green row whose Oracle field exists on no HDL component is recorded for the
@@ -718,32 +647,16 @@ async def seed_customer_sheet_scope() -> dict:
             continue
         scope = {"sheets": list(m.get("sheets") or []),
                  "exclude_sheets": list(m.get("exclude_sheets") or [])}
-        existing = await LearnedMapping.find_one(
-            LearnedMapping.kind == "column_mapping",
-            LearnedMapping.target_object == "Customer",
-            LearnedMapping.target_field == tgt,
-            LearnedMapping.original_value == col,
-            LearnedMapping.client_id == nid,
-            include_deleted=True,
-        )
-        if existing and getattr(existing, "is_deleted", False):
-            retired += 1
-            continue
-        if existing:
-            await existing.set({**scope, "effective_date": eff, "captured_from": src,
-                                "rule_config": {**(existing.rule_config or {}),
-                                                "issue": m.get("issue"),
-                                                "note": m.get("note") or ""}})
-            updated += 1
-            continue
-        await LearnedMapping(
+        row = await mapping_store.record_learning(
             kind="column_mapping", category="Column Mapping Alias",
             original_value=col, resolved_value=tgt,
-            target_object="Customer", target_field=tgt,
-            client_id=nid, is_global=False, effective_date=eff,
+            target_object="Customer", target_field=tgt, client_id=nid,
             rule_config={"issue": m.get("issue"), "note": m.get("note") or ""},
-            captured_from=src, **scope,
-        ).insert()
+            captured_from=src, captured_by=None, effective_date=eff, **scope,
+        )
+        if row is None:
+            retired += 1
+            continue
         seeded += 1
 
     sup_seeded = sup_updated = 0
@@ -753,29 +666,17 @@ async def seed_customer_sheet_scope() -> dict:
             continue
         scope = {"sheets": list(sp.get("sheets") or []),
                  "exclude_sheets": list(sp.get("exclude_sheets") or [])}
-        existing = await LearnedMapping.find_one(
-            LearnedMapping.kind == "suppress_field",
-            LearnedMapping.target_object == "Customer",
-            LearnedMapping.target_field == tgt,
-            LearnedMapping.client_id == nid,
-            include_deleted=True,
-        )
-        if existing and getattr(existing, "is_deleted", False):
-            retired += 1
-            continue
-        if existing:
-            await existing.set({**scope, "effective_date": eff, "captured_from": src})
-            sup_updated += 1
-            continue
-        await LearnedMapping(
+        row = await mapping_store.record_learning(
             kind="suppress_field", category="Left blank on purpose",
             original_value="(blank)", resolved_value="",
-            target_object="Customer", target_field=tgt,
+            target_object="Customer", target_field=tgt, client_id=nid,
             rule_type="suppress",
             rule_config={"issue": sp.get("issue"), "note": sp.get("note") or ""},
-            client_id=nid, is_global=False, effective_date=eff,
-            captured_from=src, **scope,
-        ).insert()
+            captured_from=src, captured_by=None, effective_date=eff, **scope,
+        )
+        if row is None:
+            retired += 1
+            continue
         sup_seeded += 1
 
     logger.info("customer sheet scope: %d mappings seeded, %d updated; "
@@ -873,23 +774,23 @@ async def seed_supplier_source_mapping() -> dict:
                 LearnedMapping.source_erp == m.get("source_erp"),
                 LearnedMapping.captured_from == superseded,
             )
-        payload = {
-            "original_value": col, "resolved_value": tgt,
-            "rule_config": {"oracle_page": m.get("sheet") or "", "note": m.get("note") or "",
-                            "workbook_column_name": m.get("workbook_column_name") or "",
-                            "bound_by": m.get("bound_by") or ""},
-            "captured_from": src_label, "effective_date": _eff,
-        }
+        row = await mapping_store.record_learning(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=col, resolved_value=tgt,
+            target_object="Supplier", target_field=tgt, client_id=nid,
+            rule_config={"oracle_page": m.get("sheet") or "",
+                         "note": m.get("note") or "",
+                         "workbook_column_name": m.get("workbook_column_name") or "",
+                         "bound_by": m.get("bound_by") or ""},
+            source_erp=m.get("source_erp"), captured_from=src_label,
+            captured_by=None, effective_date=_eff,
+        )
+        if row is None:
+            retired += 1
+            continue
         if prior is not None:
-            await prior.set(payload)
             rebound += 1
             continue
-        await LearnedMapping(
-            kind="column_mapping", category="Column Mapping Alias",
-            target_object="Supplier", target_field=tgt,
-            client_id=nid, is_global=False, source_erp=m.get("source_erp"),
-            **payload,
-        ).insert()
         seeded += 1
     return {"edition": path.name, "seeded": seeded, "rebound_from_previous_edition": rebound,
             "already_present": kept, "left_retired": retired,
@@ -898,6 +799,16 @@ async def seed_supplier_source_mapping() -> dict:
 
 
 _SUPPLIER_STRATEGY = _DATA / "supplier_strategy_defaults.json"
+
+
+def _eff_strategy(doc: dict):
+    """The date the strategy document itself carries.
+
+    Without it these rows would be stamped with the boot time and the 13-Jul
+    strategy would out-rank the 30-Jul corrections after every redeploy — which
+    is the precedence inversion this whole change exists to end.
+    """
+    return _effective_date_of(doc)
 
 
 async def seed_supplier_strategy_defaults() -> dict:
@@ -932,30 +843,17 @@ async def seed_supplier_strategy_defaults() -> dict:
         if const is None:
             derived += 1        # derive rules (city / BU-city) are mappings, not constants
             continue
-        existing = await LearnedMapping.find(
-            LearnedMapping.kind == "example_default",
-            LearnedMapping.target_object == tgt_obj,
-            LearnedMapping.target_field == tgt_field,
-            include_deleted=True,
-        ).first_or_none()
-        if existing and getattr(existing, "is_deleted", False):
-            retired += 1
-            continue
-        if existing:
-            if existing.resolved_value != str(const):
-                await existing.set({"resolved_value": str(const), "client_id": nid,
-                                    "captured_from": src})
-            kept += 1
-            continue
-        await LearnedMapping(
+        row = await mapping_store.record_learning(
             kind="example_default", category="Default Value",
             original_value="(constant)", resolved_value=str(const),
-            target_object=tgt_obj, target_field=tgt_field,
-            client_id=nid, is_global=False,
+            target_object=tgt_obj, target_field=tgt_field, client_id=nid,
             rule_config={"condition": r.get("condition", ""),
                          "fill_blank_only": bool(r.get("fill_blank_only"))},
-            captured_from=src,
-        ).insert()
+            captured_from=src, captured_by=None, effective_date=_eff_strategy(doc),
+        )
+        if row is None:
+            retired += 1
+            continue
         seeded += 1
     # Analyst refinements captured in live review: blank-on-purpose fields and
     # row-aware rules (e.g. Alternate Name blanked when it duplicates Supplier
@@ -976,25 +874,16 @@ async def seed_supplier_strategy_defaults() -> dict:
         else:
             a_skip += 1        # constants already covered above, or not implementable yet
             continue
-        existing = await LearnedMapping.find(
-            LearnedMapping.kind == kind,
-            LearnedMapping.target_object == tgt_obj,
-            LearnedMapping.target_field == tgt_field,
-            include_deleted=True,
-        ).first_or_none()
-        if existing and getattr(existing, "is_deleted", False):
-            retired += 1
-            continue
-        if existing:
-            kept += 1
-            continue
-        await LearnedMapping(
+        row = await mapping_store.record_learning(
             kind=kind, category=cat, original_value=orig, resolved_value=res,
             target_object=tgt_obj, target_field=tgt_field,
-            rule_type=rtype, rule_config=rcfg,
-            client_id=nid, is_global=False,
+            rule_type=rtype, rule_config=rcfg, client_id=nid,
             captured_from=(doc.get("analyst_rules", {}) or {}).get("_source", src),
-        ).insert()
+            captured_by=None, effective_date=_eff_strategy(doc),
+        )
+        if row is None:
+            retired += 1
+            continue
         if kind == "suppress_field":
             a_sup += 1
         else:

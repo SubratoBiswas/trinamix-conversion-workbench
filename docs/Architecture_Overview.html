@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trinamix Conversion Workbench — Architecture Overview</title>
+<style>
+  :root{
+    --ink:#1a2233; --muted:#5b6craft; --muted:#5b6677; --line:#dfe4ec;
+    --bg:#f6f8fb; --card:#ffffff;
+    --a:#3b5bdb; --a-soft:#eef2ff;
+    --b:#0b7285; --b-soft:#e6f4f6;
+    --c:#5f3dc4; --c-soft:#f1edfc;
+    --d:#2b8a3e; --d-soft:#e9f6ec;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:40px 28px 56px;background:var(--bg);
+       font-family:"Segoe UI",Inter,Arial,Helvetica,sans-serif;color:var(--ink)}
+  .wrap{max-width:1180px;margin:0 auto}
+  header{margin-bottom:28px}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.2px}
+  .sub{color:var(--muted);font-size:14px;margin:0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:26px 24px 22px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;flex-wrap:wrap;gap:18px;margin-top:22px;
+          padding-top:18px;border-top:1px solid var(--line)}
+  .lg{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+  .sw{width:11px;height:11px;border-radius:3px;flex:none}
+  footer{margin-top:22px;color:var(--muted);font-size:12px;line-height:1.6}
+  .note{margin-top:16px;font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Trinamix Conversion Workbench</h1>
+    <p class="sub">Legacy&nbsp;ERP&nbsp;→&nbsp;Oracle&nbsp;Fusion&nbsp;Cloud data conversion · architecture overview</p>
+  </header>
+
+  <div class="card">
+  <svg viewBox="0 0 1120 560" role="img"
+       aria-label="Architecture overview: source extracts flow through ingest, mapping, validation and generation to produce Oracle load files, supported by a shared knowledge layer and governance.">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#98a2b3"/>
+      </marker>
+      <style>
+        .box{rx:11;ry:11;stroke-width:1.4}
+        .t{font:600 13.5px "Segoe UI",Arial;fill:#1a2233}
+        .t2{font:600 12px "Segoe UI",Arial;fill:#1a2233}
+        .s{font:400 11.5px "Segoe UI",Arial;fill:#5b6677}
+        .band{font:700 11px "Segoe UI",Arial;letter-spacing:.9px}
+        .flow{stroke:#98a2b3;stroke-width:1.5;fill:none;marker-end:url(#ar)}
+        .dash{stroke:#b6c0d0;stroke-width:1.3;fill:none;stroke-dasharray:4 4}
+      </style>
+    </defs>
+
+    <!-- ── sources ── -->
+    <text x="30" y="30" class="band" fill="#5b6677">SOURCES</text>
+    <rect x="30" y="44" width="150" height="128" class="box" fill="#fff" stroke="#dfe4ec"/>
+    <text x="46" y="70" class="t">Legacy systems</text>
+    <text x="46" y="92" class="s">NetSuite · SyteLine</text>
+    <text x="46" y="110" class="s">Oracle EBS · Workday</text>
+    <text x="46" y="128" class="s">Other ERP / PLM</text>
+    <text x="46" y="152" class="s">File extracts or</text>
+    <text x="46" y="166" class="s">direct connection</text>
+
+    <!-- ── pipeline band ── -->
+    <text x="222" y="30" class="band" fill="#3b5bdb">CONVERSION PIPELINE</text>
+    <rect x="212" y="44" width="640" height="128" rx="13" fill="#fbfcfe" stroke="#e6eaf2"/>
+
+    <g>
+      <rect x="228" y="62" width="140" height="92" class="box" fill="var(--a-soft)" stroke="#c7d2fe"/>
+      <text x="248" y="90" class="t">Ingest &amp; profile</text>
+      <text x="248" y="112" class="s">Read extracts,</text>
+      <text x="248" y="128" class="s">detect source system</text>
+      <text x="248" y="144" class="s">and target object</text>
+    </g>
+    <g>
+      <rect x="388" y="62" width="140" height="92" class="box" fill="var(--a-soft)" stroke="#c7d2fe"/>
+      <text x="408" y="90" class="t">Map</text>
+      <text x="408" y="112" class="s">Propose field</text>
+      <text x="408" y="128" class="s">mappings, defaults</text>
+      <text x="408" y="144" class="s">and transformations</text>
+    </g>
+    <g>
+      <rect x="548" y="62" width="140" height="92" class="box" fill="var(--a-soft)" stroke="#c7d2fe"/>
+      <text x="566" y="90" class="t2">Cleanse &amp; validate</text>
+      <text x="568" y="112" class="s">Quality checks,</text>
+      <text x="568" y="128" class="s">coded values,</text>
+      <text x="568" y="144" class="s">required fields</text>
+    </g>
+    <g>
+      <rect x="708" y="62" width="128" height="92" class="box" fill="var(--a-soft)" stroke="#c7d2fe"/>
+      <text x="728" y="90" class="t">Generate</text>
+      <text x="728" y="112" class="s">Build load files</text>
+      <text x="728" y="128" class="s">in Oracle's</text>
+      <text x="728" y="144" class="s">required layout</text>
+    </g>
+
+    <path class="flow" d="M180 108 H222"/>
+    <path class="flow" d="M368 108 H382"/>
+    <path class="flow" d="M528 108 H542"/>
+    <path class="flow" d="M688 108 H702"/>
+    <path class="flow" d="M852 108 H894"/>
+
+    <!-- ── outputs ── -->
+    <text x="900" y="30" class="band" fill="#2b8a3e">OUTPUT</text>
+    <rect x="900" y="44" width="190" height="128" class="box" fill="var(--d-soft)" stroke="#bfe3c8"/>
+    <text x="918" y="70" class="t">Oracle Fusion loads</text>
+    <text x="918" y="94" class="s">FBDI bundles (CSV)</text>
+    <text x="918" y="112" class="s">Filled FBDI templates</text>
+    <text x="918" y="130" class="s">HCM Data Loader files</text>
+    <text x="918" y="154" class="s">Sequenced by load order</text>
+
+    <!-- ── review ── -->
+    <text x="222" y="222" class="band" fill="#0b7285">ANALYST REVIEW</text>
+    <rect x="212" y="236" width="640" height="86" class="box" fill="var(--b-soft)" stroke="#bcdfe5"/>
+    <text x="232" y="264" class="t">Review, correct and approve — in plain language or field by field</text>
+    <text x="232" y="288" class="s">Every mapping, default and rule is visible, editable and attributable. Corrections are captured</text>
+    <text x="232" y="306" class="s">as reusable decisions rather than one-off edits.</text>
+
+    <path class="dash" d="M458 236 V172"/>
+    <path class="dash" d="M618 236 V172"/>
+    <path class="dash" d="M772 236 V172"/>
+
+    <!-- ── knowledge ── -->
+    <text x="222" y="372" class="band" fill="#5f3dc4">KNOWLEDGE LAYER</text>
+    <rect x="212" y="386" width="640" height="112" class="box" fill="var(--c-soft)" stroke="#d6cbf5"/>
+    <text x="232" y="414" class="t">Client conversion knowledge</text>
+    <text x="232" y="438" class="s">Approved mappings, standards, reference examples and transformation rules — retained per client</text>
+    <text x="232" y="456" class="s">and per source system, so each decision is made once and reused across every conversion,</text>
+    <text x="232" y="474" class="s">current and future. The most recent decision always governs.</text>
+
+    <path class="dash" d="M532 386 V322"/>
+    <path class="dash" d="M700 322 V386"/>
+    <text x="742" y="356" class="s">decisions in · guidance out</text>
+
+    <!-- ── AI assist ── -->
+    <rect x="30" y="236" width="150" height="86" class="box" fill="#fff" stroke="#dfe4ec"/>
+    <text x="46" y="264" class="t">AI assistance</text>
+    <text x="46" y="286" class="s">Suggests and explains;</text>
+    <text x="46" y="304" class="s">never the final word</text>
+    <path class="dash" d="M180 278 H212"/>
+
+    <!-- ── governance ── -->
+    <rect x="900" y="236" width="190" height="262" class="box" fill="#fff" stroke="#dfe4ec"/>
+    <text x="918" y="264" class="t">Governance</text>
+    <text x="918" y="288" class="s">Client separation</text>
+    <text x="918" y="308" class="s">Audit trail: who, what,</text>
+    <text x="918" y="326" class="s">when, and why</text>
+    <text x="918" y="350" class="s">Approval workflow</text>
+    <text x="918" y="374" class="s">Load readiness checks</text>
+    <text x="918" y="398" class="s">Run history and</text>
+    <text x="918" y="416" class="s">error traceback</text>
+    <text x="918" y="446" class="s">Repeatable: re-running</text>
+    <text x="918" y="464" class="s">gives the same result</text>
+    <path class="dash" d="M894 300 H852"/>
+    <path class="dash" d="M894 440 H852"/>
+
+    <!-- ── loop ── -->
+    <path class="flow" d="M772 322 V300 M772 300 H500" transform="translate(0,0)" opacity="0"/>
+    <text x="232" y="530" class="s">Iterative: extracts are re-loaded and files regenerated as often as needed — each pass starts from the knowledge already captured.</text>
+  </svg>
+
+  <div class="legend">
+    <div class="lg"><span class="sw" style="background:#eef2ff;border:1px solid #c7d2fe"></span>Conversion pipeline</div>
+    <div class="lg"><span class="sw" style="background:#e6f4f6;border:1px solid #bcdfe5"></span>Analyst review</div>
+    <div class="lg"><span class="sw" style="background:#f1edfc;border:1px solid #d6cbf5"></span>Knowledge layer</div>
+    <div class="lg"><span class="sw" style="background:#e9f6ec;border:1px solid #bfe3c8"></span>Oracle load output</div>
+    <div class="lg"><span class="sw" style="background:#fff;border:1px solid #dfe4ec"></span>Supporting capability</div>
+  </div>
+  </div>
+
+  <p class="note">Conceptual overview. Component boundaries are indicative and do not
+  represent deployment topology, data model or internal design.</p>
+
+  <footer>
+    Trinamix Conversion Workbench · Confidential — for client discussion only.<br>
+    © Trinamix. All rights reserved.
+  </footer>
+</div>
+</body>
+</html>

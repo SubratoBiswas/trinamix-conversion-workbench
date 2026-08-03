@@ -26,6 +26,12 @@ class MappingOut(ApiOut):
     comment: Optional[str] = None
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
+    # This row is a VIEW of the one dated store, not a decision in its own right.
+    # Declared here because response_model strips whatever it does not name, and a
+    # field the screen never receives is a field the analyst cannot be shown —
+    # which is how mapping_sync came to be silently dropped.
+    derived: bool = False
+    derived_from: Optional[str] = None
     sample_source_values: list[Any] = []
     sample_converted_values: list[Any] = []
 

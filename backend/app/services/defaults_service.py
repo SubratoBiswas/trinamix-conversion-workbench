@@ -311,20 +311,18 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
                  "target_field": c["label"]},
                 include_deleted=True,
             )
-            # A retired default must stay retired — don't let the AI cache
-            # re-create it on the next run (QA issue #5).
+            # A retired default must stay retired — an inference is an automatic
+            # path, so it does not revive one, and it cannot walk a later
+            # decision backwards either: the store refuses an older statement.
             if not exists:
-                await LearnedMapping(
-                    kind="example_default",
-                    category="Default Value",
-                    original_value="(ai)",
-                    resolved_value=v,
-                    target_object=target_object,
-                    target_field=c["label"],
-                    rule_type="default",
-                    rule_config={"default_value": v},
-                    captured_from="ai-inference",
-                ).insert()
+                from app.services.mapping_store import record_learning
+                await record_learning(
+                    kind="example_default", category="Default Value",
+                    original_value="(ai)", resolved_value=v,
+                    target_object=target_object, target_field=c["label"],
+                    rule_type="default", rule_config={"default_value": v},
+                    captured_from="ai-inference", captured_by=None,
+                )
 
     # Returned so the UI can say "kept blank" rather than silently showing nothing —
     # an absent default and a deliberately blanked field look identical otherwise,

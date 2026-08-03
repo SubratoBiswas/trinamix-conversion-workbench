@@ -127,35 +127,56 @@ def _inserting_functions():
 
 def test_the_six_paths_that_resurrected_deleted_learnings_are_guarded():
     """Named individually, because "the audit passes" is what was true while all six
-    were broken."""
+    were broken.
+
+    Four of the six no longer construct a learning at all: manual-map save, the
+    workbook import, apply-proposal and prompt steering record through
+    ``mapping_store.record_decision``, which looks for the tombstone once, in one
+    place, for all of them. Asserting each of them still queries the library by
+    hand would now be asserting the duplication this change removed — so the
+    claim here is the one that actually matters: each path still exists, and each
+    reaches the writer that can see a tombstone."""
     seen = {(f, fn): ok for f, fn, ok in _inserting_functions()}
-    for f, fn in (("routers/manual_map.py", "save"),
-                  ("services/mapping_ingest_service.py", "apply_proposal"),
-                  ("services/value_mapping_service.py", "accept_value_map"),
-                  ("services/mapping_import_service.py", "import_mapping_file"),
-                  ("services/steering_service.py", "_learn"),
+    for f, fn in (("services/value_mapping_service.py", "accept_value_map"),
                   ("routers/datasets.py", "classify_learn")):
         check(f"{f}:{fn}() still exists", (f, fn) in seen, f"not found — renamed?")
         check(f"{f}:{fn}() can see a tombstone", seen[(f, fn)])
+    for f, fn in (("routers/manual_map.py", "save"),
+                  ("services/mapping_ingest_service.py", "apply_proposal"),
+                  ("services/mapping_import_service.py", "import_mapping_file"),
+                  ("services/steering_service.py", "_learn")):
+        body = (_ROOT / "app" / f).read_text(encoding="utf-8")
+        check(f"{f}:{fn}() still exists", f"def {fn}(" in body, "renamed?")
+        check(f"{f}:{fn}() records through the store",
+              "record_learning" in body or "record_decision" in body)
+    store = (_ROOT / "app" / "services" / "mapping_store.py").read_text(encoding="utf-8")
+    check("and the store looks for the tombstone", "include_deleted=True" in store)
 
 
 def test_an_automatic_path_respects_a_tombstone_and_a_human_one_revives():
-    """The distinction the original rule drew. classify-learn runs by itself on
-    upload, so it must never undo a deletion. Typing a mapping, accepting a value
-    map, importing a workbook or writing a prompt are the analyst acting, so they
-    revive — IN PLACE, so there is one row rather than a ghost pair."""
+    """The distinction the original rule drew, and it survives the move.
+
+    classify-learn runs by itself on upload, so it must never undo a deletion.
+    Typing a mapping, accepting a value map, importing a workbook or writing a
+    prompt are the analyst acting, so they revive — IN PLACE, so there is one row
+    rather than a ghost pair. The four that record through the store say so by
+    passing ``revive=True``; the store is what refuses when they do not."""
     ds = (_ROOT / "app" / "routers" / "datasets.py").read_text(encoding="utf-8")
     check("classify-learn refuses to re-learn a retired signature",
           "not re-learned" in ds and "this file signature was retired" in ds)
-    for rel, needle in (
-        ("routers/manual_map.py", '"is_deleted": False, "deleted_at": None'),
-        ("services/value_mapping_service.py", '"is_deleted": False'),
-        ("services/mapping_import_service.py", '"is_deleted": False'),
-        ("services/steering_service.py", '"is_deleted": False'),
-        ("services/mapping_ingest_service.py", '"is_deleted": False'),
-    ):
+    check("value-map accept revives in place",
+          '"is_deleted": False' in (_ROOT / "app" / "services"
+                                    / "value_mapping_service.py").read_text(encoding="utf-8"))
+    for rel in ("routers/manual_map.py",
+                "services/mapping_import_service.py",
+                "services/steering_service.py",
+                "services/mapping_ingest_service.py"):
         body = (_ROOT / "app" / rel).read_text(encoding="utf-8")
-        check(f"{rel} revives in place", needle in body)
+        check(f"{rel} asks to revive", "revive=True" in body)
+    store = (_ROOT / "app" / "services" / "mapping_store.py").read_text(encoding="utf-8")
+    check("the store revives in place rather than inserting a twin",
+          '"is_deleted": False, "deleted_at": None' in store)
+    check("and refuses when nobody asked", "if action == SKIP_RETIRED" in store)
 
 
 def test_clearing_a_manual_mapping_tombstones_instead_of_hard_deleting():

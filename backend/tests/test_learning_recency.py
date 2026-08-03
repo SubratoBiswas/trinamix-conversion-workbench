@@ -101,8 +101,15 @@ def test_the_model_and_seeders_carry_the_date():
     seed = (root / "app" / "services" / "catalog_seed_service.py").read_text(encoding="utf-8")
     check("the seeder reads the file date", "_effective_date_of(doc)" in seed)
     svc = (root / "app" / "services" / "learning_service.py").read_text(encoding="utf-8")
-    check("candidates are ordered by it", "_candidate_order(lm, _STRONG_TRANSFORMS)" in svc)
-    check("and the defaults pass too", "sorted(defaults, key=_effective_of, reverse=True)" in svc)
+    store = (root / "app" / "services" / "mapping_store.py").read_text(encoding="utf-8")
+    check("candidates are ordered by it",
+          "datetime.max - (entry.effective_date or datetime.min)" in store)
+    check("and the date leads the ordering",
+          store.index("datetime.max - (entry.effective_date")
+          < store.index("exact_client,\n        exact_source,"))
+    check("and the defaults pass reads the same winner, not its own ordering",
+          "entry.decision != mapping_store.DEFAULT_VALUE" in svc
+          and "sorted(defaults, key=_effective_of" not in svc)
 
 
 if __name__ == "__main__":

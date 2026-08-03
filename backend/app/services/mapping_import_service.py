@@ -187,45 +187,30 @@ async def import_mapping_file(
         note = cell(row, i_note) or None
         sheet = cell(row, i_sheet) or None
 
-        # include_deleted=True: a retired row is invisible to a plain find_one, so
-        # re-importing a workbook re-created every learning the analyst had deleted
-        # since the last import. CW #5.
-        existing = await LearnedMapping.find_one(
-            LearnedMapping.kind == "column_mapping",
-            LearnedMapping.target_object == obj,
-            LearnedMapping.target_field == tgt,
-            LearnedMapping.original_value == src,
-            include_deleted=True,
+        cfg = {"source_column": src, "fbdi_sheet": sheet, "note": note,
+               "confidence": 0.95}
+        # One more dated entry, written the way every other one is. Uploading the
+        # workbook is an explicit user action, so a retired decision is revived
+        # in place rather than duplicated beside its tombstone.
+        from app.services.mapping_store import record_learning
+        from app.services import mapping_store
+        existed = bool([r for r in await mapping_store.find_rows_for_key(
+            target_field=tgt, client_id=None, source_erp=sys)
+            if getattr(r, "kind", None) == "column_mapping"])
+        written = await record_learning(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=src, resolved_value=tgt,
+            target_object=obj, target_field=tgt,
+            rule_type=None, rule_config=cfg,
+            captured_from="mapping workbook", captured_by=user_email,
+            source_erp=sys, revive=True,
         )
-        _revive = bool(existing is not None and getattr(existing, "is_deleted", False))
-        cfg = {"source_column": src, "fbdi_sheet": sheet, "note": note, "confidence": 0.95}
-        if existing:
-            # Refresh metadata but keep it as one rule — re-importing a corrected
-            # sheet should update, not duplicate.
-            # Uploading the workbook is an explicit user action, so a retired row
-            # is revived IN PLACE rather than duplicated beside its tombstone.
-            await existing.set({
-                "resolved_value": tgt, "rule_config": cfg,
-                "source_erp": sys, "captured_from": "mapping workbook",
-                **({"is_deleted": False, "deleted_at": None, "deleted_by": None}
-                   if _revive else {}),
-            })
+        if written is None:
+            skipped += 1
+            continue
+        if existed:
             updated += 1
             continue
-
-        await LearnedMapping(
-            kind="column_mapping",
-            category="Column Mapping Alias",
-            original_value=src,
-            resolved_value=tgt,
-            target_object=obj,
-            target_field=tgt,
-            rule_type=None,
-            rule_config=cfg,
-            source_erp=sys,
-            captured_from="mapping workbook",
-            captured_by=user_email,
-        ).insert()
         imported += 1
 
     by_object: dict[str, int] = {}

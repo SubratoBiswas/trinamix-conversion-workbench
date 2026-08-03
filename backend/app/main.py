@@ -232,6 +232,18 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("lov backfill failed")
 
+    try:
+        # THE ONE DATED STORE — carry every decision made before it existed into
+        # it, so existing projects keep their history. Runs LAST, after the
+        # seeders, so a decision an analyst made in the grid is compared against a
+        # library that is already up to date. Idempotent, and it re-stamps nothing:
+        # a run with nothing to do writes nothing.
+        from app.services.mapping_store_backfill import backfill
+        r = await backfill()
+        log.info("startup seed — one dated store backfill: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("one dated store backfill failed")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

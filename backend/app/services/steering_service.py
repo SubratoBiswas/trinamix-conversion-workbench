@@ -32,7 +32,8 @@ def _norm(s: str) -> str:
 
 
 async def _learn(business_object, target_field, *, kind, original, resolved,
-                 rule_type=None, client_id=None, objects=None):
+                 rule_type=None, client_id=None, objects=None,
+                 source_erp=None, captured_by=None):
     """Store a steering directive as a reusable, CLIENT-SCOPED learned rule so it
     applies to future conversions of the same object for this client (and never
     leaks to another client).
@@ -56,35 +57,22 @@ async def _learn(business_object, target_field, *, kind, original, resolved,
     if not target_field:
         return None
     from app.services.learning_service import CLIENT_RULE
-    primary = None
-    for obj in [CLIENT_RULE]:
-        # include_deleted=True: a retired steering rule is invisible to a plain
-        # find_one, so the next prompt re-created it as a duplicate. CW #5.
-        existing = await LearnedMapping.find_one(
-            LearnedMapping.kind == kind,
-            LearnedMapping.target_object == obj,
-            LearnedMapping.target_field == target_field,
-            LearnedMapping.client_id == client_id,
-            include_deleted=True,
-        )
-        doc = {
-            "kind": kind, "category": "Steering (prompt)",
-            "original_value": str(original), "resolved_value": str(resolved),
-            "target_object": obj, "target_field": target_field,
-            "rule_type": rule_type, "client_id": client_id, "is_global": False,
-            "captured_from": "prompt", "captured_at": datetime.utcnow(),
-        }
-        if existing:
-            # Typing the directive is an explicit user action, so it revives in place.
-            if getattr(existing, "is_deleted", False):
-                doc = {**doc, "is_deleted": False,
-                       "deleted_at": None, "deleted_by": None}
-            await existing.set(doc)
-            row = existing
-        else:
-            row = await LearnedMapping(**doc).insert()
-        if primary is None:
-            primary = row
+    from app.services.mapping_store import record_learning
+    # One more dated entry, written the same way every other one is. Typing the
+    # directive is an explicit user action, so it revives a retired decision in
+    # place rather than inserting a second row beside it.
+    #
+    # It is keyed by source system now, which it was not: a NetSuite steer and a
+    # SyteLine steer used to collide on one row, so steering one project silently
+    # rewrote the other's mapping.
+    primary = await record_learning(
+        kind=kind, category="Steering (prompt)",
+        original_value=str(original), resolved_value=str(resolved),
+        target_object=CLIENT_RULE, target_field=target_field,
+        rule_type=rule_type, rule_config=None,
+        captured_from="prompt", captured_by=captured_by,
+        client_id=client_id, source_erp=source_erp, revive=True,
+    )
     # The row that was actually written. The fan-out used to go and LOOK FOR IT
     # again with find_one(kind, object, field) — no client filter, no source filter,
     # no ordering — and a field can carry several learnings: the seeded workbook row,
@@ -169,14 +157,18 @@ async def _upsert(conversion, field, *, source_column, default_value, reason,
     else:
         await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
     # Persist as a reusable client-scoped rule.
+    from app.services.learning_service import source_erp_for_conversion
+    _src = await source_erp_for_conversion(conversion)
     if source_column:
         return await _learn(business_object, field.field_name, kind="column_mapping",
                             original=source_column, resolved=field.field_name,
-                            client_id=client_id, objects=objects)
+                            client_id=client_id, objects=objects,
+                            source_erp=_src, captured_by=actor)
     if default_value is not None:
         return await _learn(business_object, field.field_name, kind="example_default",
                             original="(default)", resolved=default_value,
-                            rule_type="default", client_id=client_id, objects=objects)
+                            rule_type="default", client_id=client_id, objects=objects,
+                            source_erp=_src, captured_by=actor)
     return None
 
 
@@ -199,9 +191,12 @@ async def _suppress(conversion, field, business_object, client_id=None, actor=No
         await existing.set(payload)
     else:
         await MappingSuggestion(conversion_id=conversion.id, target_field_id=field.id, **payload).insert()
+    from app.services.learning_service import source_erp_for_conversion
     return await _learn(business_object, field.field_name, kind="suppress_field",
                         original="(blank)", resolved="", rule_type="suppress",
-                        client_id=client_id, objects=objects)
+                        client_id=client_id, objects=objects,
+                        source_erp=await source_erp_for_conversion(conversion),
+                        captured_by=actor)
 
 
 async def _ai_parse_directives(lines: list[str], field_names: list[str],

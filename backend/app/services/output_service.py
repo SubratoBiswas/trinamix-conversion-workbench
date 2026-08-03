@@ -1409,33 +1409,38 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     ).count() if conversion.template_id else 0
     _heavy = _field_count > 300
 
-    # Force-apply the object's stored gold reference standard BEFORE building the
-    # output, so the file reflects the learned mappings/defaults/suppressions even
-    # if the conversion was mapped before gold was on file (fixes "gold saved but
-    # not applied"). Skipped for heavy multi-sheet objects: their mappings already
-    # carry the applied gold (it's applied at map time), and re-applying it here is
-    # what made generation hang — the persisted mappings are the source of truth.
+    # RESOLVE THROUGH THE ONE DATED STORE before building the output, so the file
+    # reflects the latest decision about every field rather than whatever happened
+    # to be copied onto these rows earlier.
+    #
+    # This used to be skipped for heavy multi-sheet objects, on the grounds that
+    # their rows already carried the library and re-applying it was what made
+    # generation hang. Both halves of that have gone: the rows are a VIEW, so
+    # "they already carry it" is only true until someone says something newer, and
+    # the pass now reads the store once and writes only the rows that actually
+    # change — so a 19-sheet Customer load costs one query rather than hundreds.
+    # Skipping it meant the biggest objects were the ones most likely to ship
+    # against a stale copy, which is the wrong way round.
     _learning_error: str | None = None
     _applied_learnings = 0
-    if not _heavy:
-        try:
-            from app.services.learning_service import apply_learned_to_conversion
-            _pre_maps = await MappingSuggestion.find(
-                MappingSuggestion.conversion_id == conversion.id
-            ).to_list()
-            _applied_learnings = await apply_learned_to_conversion(
-                conversion, _pre_maps, force=True)
-        except Exception as _al_exc:  # noqa: BLE001
-            # Never block generation on the learning pass — but never hide it either.
-            # A bare `pass` here meant that if applying the library threw, the file was
-            # generated with NO learnings applied and nothing anywhere said so: the
-            # analyst's approved mappings simply did not reach the output, which reads
-            # exactly like "approvals are not being saved". Same shape as the
-            # required-field section that silently reported zero for weeks.
-            _learning_error = f"{type(_al_exc).__name__}: {_al_exc}"[:300]
-            log.exception("apply_learned_to_conversion failed for conversion %s — the "
-                          "output was generated WITHOUT the learning library",
-                          conversion.id)
+    try:
+        from app.services.learning_service import apply_learned_to_conversion
+        _pre_maps = await MappingSuggestion.find(
+            MappingSuggestion.conversion_id == conversion.id
+        ).to_list()
+        _applied_learnings = await apply_learned_to_conversion(
+            conversion, _pre_maps, force=True)
+    except Exception as _al_exc:  # noqa: BLE001
+        # Never block generation on the learning pass — but never hide it either.
+        # A bare `pass` here meant that if applying the library threw, the file was
+        # generated with NO learnings applied and nothing anywhere said so: the
+        # analyst's approved mappings simply did not reach the output, which reads
+        # exactly like "approvals are not being saved". Same shape as the
+        # required-field section that silently reported zero for weeks.
+        _learning_error = f"{type(_al_exc).__name__}: {_al_exc}"[:300]
+        log.exception("apply_learned_to_conversion failed for conversion %s — the "
+                      "output was generated WITHOUT the learning library",
+                      conversion.id)
     # Per-source frames, kept UNMERGED so each Oracle interface sheet can be fed by
     # the source sheet that actually supplies it. Only populated when the conversion
     # is bound to more than one source (e.g. a Customer + Address workbook).

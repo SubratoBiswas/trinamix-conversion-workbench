@@ -596,6 +596,249 @@ async def column_rules(
     return out
 
 
+async def _report_rows_for_conversion(c: Conversion) -> dict:
+    """Everything the run report says about one conversion.
+
+    Reads what the RUN produced — the dq_report persisted on the artifact, the
+    mapping rows as they stand, the row counts of the file on disk — rather than
+    recomputing cleansing or validation now. A report that recomputes disagrees
+    with the files it describes the moment anything has moved, and "the screen
+    says one thing and the file says another" is the failure this codebase pays
+    for most often.
+    """
+    from app.models.dataset import Dataset
+    from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate
+    from app.models.mapping import MappingSuggestion
+    from app.models.row_decision import RowDecision
+    from app.services import mapping_report_service as mr
+    from app.models.transformation import TransformationRule
+
+    obj = c.target_object or c.name or "(unnamed)"
+    template = await FBDITemplate.get(c.template_id) if c.template_id else None
+    fields = (await FBDIField.find(FBDIField.template_id == template.id).to_list()
+              if template else [])
+    sheet_names: dict = {}
+    if template:
+        try:
+            sheet_names = {sh.id: sh.sheet_name for sh in await FBDISheet.find(
+                FBDISheet.template_id == template.id).to_list()}
+        except Exception:                                       # noqa: BLE001
+            sheet_names = {}
+    maps = await MappingSuggestion.find(
+        MappingSuggestion.conversion_id == c.id).to_list()
+    rules = await TransformationRule.find(
+        TransformationRule.conversion_id == c.id).to_list()
+    latest = await ConvertedOutput.find(
+        ConvertedOutput.conversion_id == c.id).sort("-generated_at").first_or_none()
+    dq = (latest.dq_report if latest else None) or {}
+
+    eff = {}
+    try:
+        from app.services.defaults_service import compute_effective_defaults
+        eff = (await compute_effective_defaults(c, use_ai=False) or {}).get("defaults", {})
+    except Exception:                                           # noqa: BLE001
+        eff = {}
+
+    rule_ids = {str(r.target_field_id) for r in rules
+                if getattr(r, "target_field_id", None) is not None}
+    by_field = {str(m.target_field_id): m for m in maps}
+
+    # ── Mappings ─────────────────────────────────────────────────────────────
+    mapping_rows = []
+    for f in fields:
+        m = by_field.get(str(f.id))
+        layer = mr.classify_layer(
+            {"target_field_id": f.id,
+             "source_column": getattr(m, "source_column", None),
+             "reason": getattr(m, "reason", None),
+             "status": getattr(m, "status", None),
+             "confidence": getattr(m, "confidence", None),
+             "default_value": getattr(m, "default_value", None),
+             "suggested_transformation": getattr(m, "suggested_transformation", None)}
+            if m else None,
+            {"id": f.id, "field_name": f.field_name, "required": bool(f.required)},
+            eff, str(f.id) in rule_ids)
+        transform = (getattr(m, "suggested_transformation", None) or {}) if m else {}
+        # Where the decision came from. `derived_from` names the dated entry in
+        # the store; a row a person edited is not derived and carries their name
+        # instead, because that edit IS the authority.
+        if m is not None and getattr(m, "derived", False):
+            authority = getattr(m, "derived_from", None) or "the mapping store"
+        elif m is not None and getattr(m, "approved_by", None):
+            authority = f"{m.approved_by}"
+            if getattr(m, "approved_at", None):
+                authority += f" on {m.approved_at:%d-%b-%Y}"
+        else:
+            authority = ""
+        mapping_rows.append({
+            "object": obj,
+            "sheet": sheet_names.get(getattr(f, "sheet_id", None)) or "",
+            "target_field": f.field_name,
+            "source_column": getattr(m, "source_column", None) if m else None,
+            "default_value": getattr(m, "default_value", None) if m else None,
+            "rule_type": transform.get("rule_type") if isinstance(transform, dict) else None,
+            "layer": layer,
+            "layer_label": mr.LAYER_LABEL.get(layer, layer),
+            "authority": authority,
+            "status": getattr(m, "status", None) if m else "",
+            "confidence": getattr(m, "confidence", None) if m else None,
+            "required": bool(f.required),
+        })
+    mapped = sum(1 for r in mapping_rows
+                 if r["layer"] not in ("unmapped", "suppressed"))
+
+    # ── Cleansing, straight off the artifact ─────────────────────────────────
+    cleansing_rows = []
+    for fix in (dq.get("cleansing_fixes") or []):
+        ex = (fix.get("examples") or [{}])[0]
+        cleansing_rows.append({
+            "object": obj, "field": fix.get("field"), "rule": fix.get("rule"),
+            "label": fix.get("label"), "count": fix.get("count"),
+            "before": ex.get("before"), "after": ex.get("after"),
+        })
+
+    # ── Validation, the findings the run recorded ────────────────────────────
+    validation_rows = [{"object": obj, **{k: i.get(k) for k in
+                        ("severity", "issue_type", "field_name",
+                         "impacted_count", "message", "suggested_fix")}}
+                       for i in (dq.get("top_issues") or [])]
+
+    # ── Duplicates: what went in against what came out ───────────────────────
+    sources, src_total = [], 0
+    for did in c.source_dataset_ids:
+        ds = await Dataset.get(did)
+        if ds:
+            src_total += int(ds.row_count or 0)
+            sources.append(ds.name)
+    out_rows = int(latest.row_count) if latest else None
+    removed = ((src_total - out_rows)
+               if (out_rows is not None and src_total) else None)
+    try:
+        decisions = await RowDecision.find(
+            RowDecision.conversion_id == c.id, RowDecision.scope == "duplicate").count()
+    except Exception:                                           # noqa: BLE001
+        decisions = None
+    from app.services.learning_service import REFERENCE_KEY_FIELDS
+    key = ", ".join(REFERENCE_KEY_FIELDS.get(str(c.target_object or ""), [])[:2])
+    duplicate_row = {
+        "object": obj, "sources": ", ".join(sources) or "—",
+        "source_rows": src_total or None, "output_rows": out_rows,
+        "merged_or_deduped": removed, "key": key or "full row match",
+        "decisions": decisions,
+    }
+
+    # ── Required fields ──────────────────────────────────────────────────────
+    required_rows, required_failed = [], 0
+    req_problem = None
+    try:
+        req = await run_required_check(str(c.id))
+        for f in (req.get("failures") or []):
+            required_rows.append({"object": obj, "sheet": f.get("sheet"),
+                                  "field": f.get("field"), "status": "failed",
+                                  "detail": "Required, and blank on every row."})
+        for f in (req.get("partials") or []):
+            required_rows.append({"object": obj, "sheet": f.get("sheet"),
+                                  "field": f.get("field"), "status": "partial",
+                                  "detail": "Required, and blank on some rows."})
+        for f in (req.get("not_owned") or []):
+            required_rows.append({"object": obj, "sheet": f.get("sheet"),
+                                  "field": f.get("field"), "status": "not owned",
+                                  "detail": "Curated for a sheet this conversion "
+                                            "does not produce, so nothing was checked."})
+        required_failed = int(req.get("failed_count") or 0)
+    except Exception as _rq:                                    # noqa: BLE001
+        # Reported, never swallowed. A silent clean pass and a total failure of
+        # this section used to look identical.
+        req_problem = f"required-field check failed: {type(_rq).__name__}: {_rq}"[:200]
+        log.exception("required check failed for conversion %s in report", c.id)
+
+    # ── Run log ──────────────────────────────────────────────────────────────
+    problem = " · ".join(x for x in (dq.get("learning_error"), dq.get("dq_error"),
+                                     req_problem) if x)
+    run_row = {
+        "object": obj,
+        "output_file": (latest.output_file_name if latest else None),
+        "generated_at": (latest.generated_at if latest else None),
+        "rows": (latest.row_count if latest else None),
+        "columns": (latest.column_count if latest else None),
+        "learnings_applied": dq.get("learnings_applied"),
+        "state": (latest.status if latest else "not generated"),
+        "problem": problem,
+    }
+
+    summary_row = {
+        "object": obj, "source_rows": src_total or None, "output_rows": out_rows,
+        "merged_or_deduped": removed, "mapped": mapped,
+        "total_fields": len(mapping_rows),
+        "cleansing_fix_count": dq.get("cleansing_fix_count"),
+        "error_count": dq.get("error_count"), "warning_count": dq.get("warning_count"),
+        "required_failed": required_failed, "blocked": dq.get("blocked"),
+        "output_file": (latest.output_file_name if latest else None),
+        "load_order": int(getattr(c, "planned_load_order", 100) or 100),
+    }
+    return {"summary": summary_row, "mappings": mapping_rows,
+            "cleansing": cleansing_rows, "duplicates": [duplicate_row],
+            "validation": validation_rows, "required": required_rows,
+            "run_log": [run_row]}
+
+
+@output_router.get("/project/{project_id}/conversion-report")
+async def project_conversion_report(
+    project_id: str,
+    _: User = Depends(get_current_user),
+):
+    """The run report for the whole bundle, as an .xlsx.
+
+    Sits beside the bundle download because it answers the question that follows
+    it: the analyst has the FBDI files, and now needs to be able to say what the
+    tool did to the raw extract to produce them — which columns were mapped and
+    on whose authority, what was cleansed, what merged away as duplicate, what
+    validation found, and which required fields are still short.
+    """
+    import asyncio
+
+    from app.models.project import Project
+    from app.services import conversion_report_service as crs
+
+    project = await Project.get(PydanticObjectId(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+    convs = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)).to_list()
+    convs.sort(key=lambda c: (int(getattr(c, "planned_load_order", 100) or 100),
+                              str(c.target_object or c.name or "")))
+
+    parts = {k: [] for k in ("summary", "mappings", "cleansing", "duplicates",
+                             "validation", "required", "run_log")}
+    for c in convs:
+        try:
+            one = await _report_rows_for_conversion(c)
+        except Exception as exc:                                # noqa: BLE001
+            # One object failing must not cost the whole report — but it must
+            # appear IN the report, or a missing section reads as "nothing found".
+            log.exception("report section failed for conversion %s", c.id)
+            parts["run_log"].append({
+                "object": c.target_object or c.name, "state": "report failed",
+                "problem": f"{type(exc).__name__}: {exc}"[:300]})
+            continue
+        for k, v in one.items():
+            parts[k].extend(v if isinstance(v, list) else [v])
+
+    title = f"{project.name} — what the tool did"
+    data = await asyncio.to_thread(
+        crs.build_workbook, title=title, generated_at=datetime.utcnow(),
+        objects=parts["summary"], mappings=parts["mappings"],
+        cleansing=parts["cleansing"], duplicates=parts["duplicates"],
+        validation=parts["validation"], required=parts["required"],
+        run_log=parts["run_log"])
+    filename = _safe_name(
+        f"{project.name}_conversion_report_{datetime.utcnow():%d%b%Y}.xlsx")
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @output_router.get("/{conversion_id}/mapping-report")
 async def mapping_report(
     conversion_id: str,

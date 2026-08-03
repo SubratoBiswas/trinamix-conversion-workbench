@@ -367,10 +367,6 @@ async def save(payload: dict, user: User = Depends(get_current_user)):
                                     "deleted_by": user.email})
                 cleared += 1
             continue
-        # Typing a mapping HERE is the explicit user action that revives a retired
-        # learning, and it revives IN PLACE so there is one row rather than a pair.
-        _revived = bool(existing is not None and getattr(existing, "is_deleted", False))
-
         # MANY sources -> ONE destination. A comma-separated source means the field is
         # built from several legacy columns, i.e. a CONCAT. Store the join rule with all
         # columns; original_value is the FIRST column so the output gate that checks the
@@ -385,25 +381,23 @@ async def save(payload: dict, user: User = Depends(get_current_user)):
         else:
             src = parts[0] if parts else src
             cfg = {"source_column": src, "confidence": "High"}
+        # One more dated entry. Typing a mapping HERE is the explicit user action
+        # that revives a retired decision, and it revives IN PLACE so there is one
+        # row rather than a pair.
+        from app.services.mapping_store import record_learning
+        written = await record_learning(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=src, resolved_value=tgt,
+            target_object=target_object, target_field=tgt,
+            rule_type=rule_type, rule_config=cfg,
+            client_id=cid, source_erp=source_system,
+            captured_from=captured, captured_by=user.email, revive=True,
+        )
+        if written is None:
+            continue
         if existing is not None:
-            await existing.set({
-                "original_value": src, "rule_type": rule_type, "rule_config": cfg,
-                "source_erp": source_system, "captured_from": captured,
-                "captured_by": user.email,
-                **({"client_id": cid} if cid is not None else {}),
-                **({"is_deleted": False, "deleted_at": None, "deleted_by": None}
-                   if _revived else {}),
-            })
             updated += 1
         else:
-            await LearnedMapping(
-                kind="column_mapping", category="Column Mapping Alias",
-                original_value=src, resolved_value=tgt,
-                target_object=target_object, target_field=tgt,
-                rule_type=rule_type, rule_config=cfg,
-                client_id=cid, is_global=cid is None,
-                source_erp=source_system, captured_from=captured, captured_by=user.email,
-            ).insert()
             saved += 1
 
     # Push onto existing conversions of this object for the client, so a manual map

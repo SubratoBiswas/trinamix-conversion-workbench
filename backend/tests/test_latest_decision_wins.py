@@ -67,6 +67,7 @@ _SRC = {p.name: p.read_text(encoding="utf-8")
         for p in [(_ROOT / "app" / "routers" / "mapping.py"),
                   (_ROOT / "app" / "routers" / "learned.py"),
                   (_ROOT / "app" / "services" / "learning_service.py"),
+                  (_ROOT / "app" / "services" / "mapping_store.py"),
                   (_ROOT / "app" / "services" / "defaults_service.py")]}
 
 
@@ -97,21 +98,33 @@ def test_the_result_of_propagating_is_reported_rather_than_swallowed():
 
 # ── 2. one answer per field ─────────────────────────────────────────────────
 def test_editing_a_mapping_updates_the_learning_instead_of_forking_it():
-    s = _SRC["learning_service.py"]
-    check("single-answer kinds are named",
-          '_SINGLE_ANSWER = {"column_mapping", "example_default", "suppress_field",' in s)
-    check("rule_type is out of their key",
-          'if not _single:\n        query["rule_type"] = rule_type' in s)
-    check("and the changed parts are written back",
-          'patch.update({"original_value": original_value,' in s)
+    """One field, one answer.
+
+    The row used to be found by a key that included rule_type, so changing the
+    source column or adding a transform matched nothing and INSERTED a second
+    learning while the old one stayed live and competing. "I updated the mapping"
+    reliably produced two rules and a coin toss. The key is now
+    (client, source system, target field) and the row is updated in place."""
+    s = _SRC["mapping_store.py"]
+    check("the key is client, source and field",
+          "async def find_rows_for_key(*, target_field: str, client_id: Any = None,\n"
+          "                            source_erp: str | None = None," in s)
+    check("rule_type is not part of it",
+          "rule_type" not in s.split("async def find_rows_for_key(")[1]
+                              .split("\nasync def ")[0])
+    check("an existing row is updated rather than forked",
+          "if action in (UPDATE, REFRESH):" in s and "await row.set(patch)" in s)
 
 
 def test_a_crosswalk_is_still_one_row_per_value():
-    """Collapsing those would destroy the map — a crosswalk is per source VALUE."""
-    s = _SRC["learning_service.py"]
-    check("crosswalk is not a single-answer kind",
-          '"crosswalk"' not in s[s.index("_SINGLE_ANSWER = {"):
-                                 s.index("_single = kind in _SINGLE_ANSWER")])
+    """Collapsing those would destroy the map — a crosswalk is per source VALUE,
+    not a statement about how a target field maps, so it is not in the store."""
+    s = _SRC["mapping_store.py"]
+    check("crosswalk is not one of the four decisions",
+          '"crosswalk"' not in s[s.index("KIND_TO_DECISION: dict[str, str] = {"):
+                                 s.index("DECISION_TO_KIND")])
+    check("and the store refuses to record one",
+          'raise ValueError(f"not a mapping decision: {decision!r}")' in s)
 
 
 # ── 3. the later decision wins, whoever made it ─────────────────────────────
@@ -150,9 +163,25 @@ def test_the_date_used_is_the_one_the_instruction_was_given():
 
 
 def test_an_interactive_capture_is_dated_now():
-    s = _SRC["learning_service.py"]
-    check("new rows carry an effective date", "effective_date=datetime.utcnow()," in s)
-    check("and an update re-dates them", '"effective_date": datetime.utcnow()' in s)
+    """Typed into the UI, so now IS when the instruction was given."""
+    s = _SRC["mapping_store.py"]
+    check("an undated write is stamped now",
+          "when = None if (undated and effective_date is None) else "
+          "(effective_date or now)" in s)
+    check("new rows carry it", "effective_date=when," in s)
+    check("and an update re-dates them", 'patch["effective_date"] = when' in s)
+
+
+def test_a_bundled_file_that_never_said_when_is_not_stamped_with_today():
+    """The other half of the same rule, and the one that bit hardest: a seed
+    re-running on every boot and stamping itself `now` would out-rank every
+    instruction the analyst has ever given, on every redeploy."""
+    s = _SRC["mapping_store.py"]
+    check("an undated statement stays undated", "undated: bool = False" in s)
+    check("it may only refresh what it wrote itself",
+          'if captured_from and getattr(row, "captured_from", None) == captured_from:' in s)
+    check("and a refresh leaves the stored date alone",
+          "# REFRESH deliberately leaves the stored date alone" in s)
 
 
 # ── 4. removal is a decision too ────────────────────────────────────────────

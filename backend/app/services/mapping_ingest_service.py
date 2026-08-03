@@ -468,35 +468,18 @@ async def apply_proposal(proposal: MappingProposal, *, applied_by: str = "") -> 
             "source_column": src, "fbdi_sheet": r.fbdi_sheet,
             "confidence": "High", "notes": r.notes,
         }
-        # Document.get() delegates to find_one, and LearnedMapping.find injects
-        # {'is_deleted': {'$ne': True}} — so get() cannot see a tombstone. A row the
-        # analyst had retired came back as None here, and the insert below created a
-        # duplicate beside its own tombstone. CW #5, and this is the path that runs
-        # on approve/override in Mapping Review, i.e. the one they hit every day.
-        existing = None
-        if r.existing_learning_id:
-            existing = await LearnedMapping.find_one(
-                LearnedMapping.id == r.existing_learning_id, include_deleted=True)
-        if existing is not None:
-            # Applying a proposal is an explicit user action, so a retired row is
-            # revived IN PLACE rather than duplicated.
-            _rev = ({"is_deleted": False, "deleted_at": None, "deleted_by": None}
-                    if getattr(existing, "is_deleted", False) else {})
-            await existing.set({
-                "original_value": src, "rule_type": r.rule_type,
-                "rule_config": cfg, "source_erp": r.source_system,
-                "captured_from": captured, "captured_by": applied_by, **_rev,
-            })
-        else:
-            await LearnedMapping(
-                kind="column_mapping", category="Column Mapping Alias",
-                original_value=src, resolved_value=r.target_field,
-                target_object=r.target_object, target_field=r.target_field,
-                rule_type=r.rule_type, rule_config=cfg,
-                client_id=proposal.client_id, is_global=proposal.client_id is None,
-                source_erp=r.source_system,
-                captured_from=captured, captured_by=applied_by,
-            ).insert()
+        # One more dated entry. Applying a proposal is an explicit user action,
+        # so a decision the analyst retired is revived in place rather than
+        # duplicated beside its own tombstone.
+        from app.services.mapping_store import record_learning
+        await record_learning(
+            kind="column_mapping", category="Column Mapping Alias",
+            original_value=src, resolved_value=r.target_field,
+            target_object=r.target_object, target_field=r.target_field,
+            rule_type=r.rule_type, rule_config=cfg,
+            client_id=proposal.client_id, source_erp=r.source_system,
+            captured_from=captured, captured_by=applied_by, revive=True,
+        )
         written += 1
         objects.add(r.target_object)
 

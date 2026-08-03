@@ -614,6 +614,14 @@ export interface MappingSuggestion {
   requires_dual_approval?: number;
   second_approver_email?: string | null;
   second_approved_at?: string | null;
+  /**
+   * This row is a VIEW of the one dated store, not a decision in its own right.
+   * `derived_from` names the entry it came from, so "why does this say that" is
+   * answerable on screen. A row the analyst edited is not derived: that edit is
+   * itself a dated entry in the store, and it competes on date like every other.
+   */
+  derived?: boolean;
+  derived_from?: string | null;
   // Cross-source Mapping Knowledge Bank provenance. When kb_source is set,
   // the row was pre-filled from a prior project on the same source ERP.
   // The Mapping Review UI shows a "🧠 from {Source} KB" badge and counts

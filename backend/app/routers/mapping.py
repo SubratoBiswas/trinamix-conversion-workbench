@@ -424,6 +424,10 @@ async def update_mapping(
     if _is_decision:
         data["approved_by"] = user.email
         data["approved_at"] = datetime.utcnow()
+        # A person just said something. This row is no longer a view of the store —
+        # it is a statement in its own right, carrying its own date, and it goes
+        # into the store beside every other one.
+        data["derived"] = False
     await m.set(data)
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
@@ -545,7 +549,8 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
     if not m:
         raise HTTPException(404, "Mapping not found")
     conv = await Conversion.get(m.conversion_id)
-    _blank = {"status": "not_applicable", "source_column": None,
+    _blank = {"derived": False,
+              "status": "not_applicable", "source_column": None,
               "default_value": None, "review_required": 0,
               "approved_by": user.email, "approved_at": datetime.utcnow()}
     await m.set(_blank)
@@ -628,7 +633,8 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
     m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
-    await m.set({"status": "approved", "approved_by": user.email, "approved_at": datetime.utcnow()})
+    await m.set({"status": "approved", "approved_by": user.email,
+                 "approved_at": datetime.utcnow(), "derived": False})
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
     if m.source_column or (m.default_value and str(m.default_value).strip()):

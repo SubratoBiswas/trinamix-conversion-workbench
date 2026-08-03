@@ -8,6 +8,7 @@ import {
   ArrowLeft, Plus, Building2, Calendar, Network, Layers,
   Database, FileSpreadsheet, AlertCircle, CheckCircle2, Clock,
   PlayCircle, ArrowRight, Activity, Wand2, GitBranch, RefreshCw, Zap, Trash2, Download, FolderDown, Upload,
+  ClipboardList,
 } from "lucide-react";
 import { ConversionsApi, DatasetsApi, DependencyApi, FbdiApi, FusionModulesApi, LearningApi, MappingApi, OutputApi, ProjectsApi } from "@/api";
 import type { ReferenceStandard } from "@/api";
@@ -171,6 +172,23 @@ export const ProjectOverviewPage: React.FC = () => {
     } catch (e: any) {
       flash(e?.message || "Approve this conversion's mapping first, then download the filled template.");
     } finally { setDlT(null); }
+  };
+  // The run report: what the tool did to the raw extract to produce the bundle.
+  // Deliberately NOT gated on a generate — it reports what the LAST run recorded,
+  // so pressing it after a download describes the files you just got rather than
+  // silently regenerating them and describing something else.
+  const [dlReport, setDlReport] = useState(false);
+  const downloadReport = async () => {
+    setDlReport(true);
+    try {
+      await OutputApi.conversionReport(
+        pid,
+        `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_conversion_report.xlsx`,
+      );
+      flash("Report downloaded — mappings, cleansing, duplicates, validation and required fields for every object.");
+    } catch (e: any) {
+      flash(e?.message || "Couldn't build the report. Generate at least one object first.");
+    } finally { setDlReport(false); }
   };
   // Generate + download every bound conversion's FBDI file for this engagement
   // as one zip (named/ordered by the supplier load sequence).
@@ -483,6 +501,11 @@ export const ProjectOverviewPage: React.FC = () => {
               <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
               {dlAll ? (dlStatus ?? "Working…") : allHdl ? "Download all (HDL templates)" : "Download all (FBDI Excel)"}
             </Button>
+            <Button variant="secondary" disabled={dlReport} onClick={downloadReport}
+              title="An Excel report of what the tool did to the raw extract: every column mapping and who decided it, every cleansing rule that fired with before/after examples, what merged away as duplicate, what validation found, and any required field still short. Built from what the last run recorded, so it agrees with the files you downloaded.">
+              <ClipboardList className={cn("h-4 w-4", dlReport && "animate-pulse")} />
+              {dlReport ? "Building report…" : "Output report"}
+            </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
             </Button>
@@ -637,6 +660,19 @@ export const ProjectOverviewPage: React.FC = () => {
                 >
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
                   {dlAll ? (dlStatus ?? "Working…") : "Generate all & download (.zip)"}
+                </button>
+                {/* What the tool DID to the input file. Sits with the bundle
+                    buttons because it answers the question that follows one:
+                    the analyst has the FBDI files, and now has to be able to say
+                    how they were produced. */}
+                <button
+                  onClick={downloadReport}
+                  disabled={dlReport}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  title="Download an Excel report of what the tool did to the raw extract: every column mapping and who decided it, every cleansing rule that fired with before/after examples, what merged away as duplicate, what validation found, and any required field still short. Built from what the last run recorded, so it agrees with the files you just downloaded."
+                >
+                  <ClipboardList className={cn("h-3 w-3", dlReport && "animate-pulse")} />
+                  {dlReport ? "Building report…" : "Output report (.xlsx)"}
                 </button>
                 <button
                   onClick={() => downloadAllFbdi("template")}

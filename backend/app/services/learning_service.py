@@ -14,10 +14,10 @@ from app.models.fbdi import FBDIField, FBDITemplate
 from app.models.learned import LearnedMapping
 from app.models.mapping import MappingSuggestion
 from app.models.transformation import TransformationRule
+from app.services import mapping_store
 
 logger = logging.getLogger(__name__)
 
-_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
 REFERENCE_KEY_FIELDS: dict[str, list[str]] = {
     "Item":     ["InventoryItemNumber", "Inventory Item Name", "Item Number", "ItemNumber"],
@@ -27,10 +27,10 @@ REFERENCE_KEY_FIELDS: dict[str, list[str]] = {
 }
 
 
-def _normalize(name: str | None) -> str:
-    if not name:
-        return ""
-    return _NORMALIZE_RE.sub("", name.lower())
+# One definition of the key form of a name, shared with the store. Two layers
+# normalising the same string slightly differently is how a decision comes to be
+# stored under a key nobody asks for.
+_normalize = mapping_store.normalise_field
 
 
 def _is_master_key_field(target_object: str | None, target_field: str | None) -> bool:
@@ -94,34 +94,13 @@ async def source_erp_for_conversion(conversion) -> str | None:
     return None
 
 
-def sheet_allowed(learning, sheet_name: str | None) -> bool:
-    """May this learning touch this interface sheet?
-
-    Oracle repeats a field name across sheets — Customer has 19 — and learnings
-    are keyed by name, so one approval reached all of them. That is right for
-    ``id -> Party Original System Reference`` and wrong for the same field on
-    HZ_IMP_CLASSIFICS_T, and wrong for Receipt Method on the banks sheet where it
-    must stay blank.
-
-    Empty lists mean every sheet: that is the behaviour every existing row was
-    captured under, so turning this on changes nothing until someone narrows a
-    learning deliberately. Exclusion wins over inclusion — a sheet named in both
-    is excluded, because a person listing it under "never" is stating the
-    stronger intent.
-    """
-    only = [s for s in (getattr(learning, "sheets", None) or []) if str(s).strip()]
-    never = [s for s in (getattr(learning, "exclude_sheets", None) or []) if str(s).strip()]
-    if not only and not never:
-        return True
-    name = _normalize(sheet_name)
-    if not name:
-        # Unknown sheet: allow when the learning only EXCLUDES (nothing says this
-        # is the excluded one), refuse when it names an allow-list it cannot be
-        # shown to be part of.
-        return not only
-    if any(_normalize(s) == name for s in never):
-        return False
-    return not only or any(_normalize(s) == name for s in only)
+# May a decision touch this interface sheet? One definition, in the store.
+#
+# Not a precedence scope — it does not create a tier that competes with the
+# date. It is part of what the analyst SAID: Oracle repeats a field name across
+# sheets (Customer has 19), and "id maps to Party Original System Reference, but
+# not on HZ_IMP_CLASSIFICS_T" is one instruction, not two ranked ones.
+sheet_allowed = mapping_store.sheet_allowed
 
 
 def source_scope(source_erp: str | None) -> dict:
@@ -146,51 +125,27 @@ def source_scope(source_erp: str | None) -> dict:
 async def _upsert_learned(kind, business_object, field_name, *, original, resolved,
                           rule_type=None, rule_config=None, captured_from="auto-capture",
                           client_id=None, source_erp=None):
-    """Upsert one reusable object-level learned rule. Never downgrades a rule
-    captured from a gold example / prompt / accepted crosswalk with an
-    auto-captured one (human/gold signals outrank auto-capture).
+    """Auto-capture after Generate Output. One more dated entry, nothing special.
 
-    Captured learnings are CLIENT-SCOPED (is_global=False, client_id set) — they
-    encode one client's source data, so they must not leak to other clients. The
-    existing-row lookup is keyed by client too, so two clients keep independent
-    rules for the same object/field.
-
-    It is keyed by SOURCE SYSTEM as well: NetSuite's Item mapping is not
-    SyteLine's, so without this the second capture overwrites the first and both
-    conversions then inherit whichever was written last."""
+    It used to refuse to "downgrade" a rule captured from a gold example, a
+    prompt or an accepted crosswalk, on the grounds that those signals outranked
+    it. That was authorship deciding precedence. It is now the date, like
+    everything else: a decision made after the gold example is simply the later
+    statement, and one made before it loses on its own merits — the store's
+    "an older statement never overwrites a newer one" rule does the whole job.
+    """
     if not business_object or not field_name:
         return False
-    existing = await LearnedMapping.find_one(
-        LearnedMapping.kind == kind,
-        LearnedMapping.target_object == business_object,
-        LearnedMapping.target_field == field_name,
-        LearnedMapping.client_id == client_id,
-        LearnedMapping.source_erp == source_erp,
-        include_deleted=True,
+    row = await _upsert(
+        kind=kind,
+        category=_category_for(rule_type) if kind == "column_mapping" else kind,
+        original_value=str(original), resolved_value=str(resolved),
+        target_object=business_object, target_field=field_name,
+        rule_type=rule_type, rule_config=rule_config,
+        captured_from=captured_from, captured_by=None,
+        client_id=client_id, source_erp=source_erp,
     )
-    # Retired by the user — auto-capture after Generate Output must not bring it
-    # back (QA issue #5). include_deleted above is what makes the tombstone
-    # visible here; without it we would insert a fresh duplicate.
-    if existing and getattr(existing, "is_deleted", False):
-        return False
-    if existing and existing.captured_from in ("gold example", "prompt", "value-map-accept") \
-            and captured_from == "auto-capture":
-        return False
-    category = _category_for(rule_type) if kind == "column_mapping" else kind
-    doc = {
-        "kind": kind, "category": category,
-        "original_value": str(original), "resolved_value": str(resolved),
-        "target_object": business_object, "target_field": field_name,
-        "rule_type": rule_type, "rule_config": rule_config or {},
-        "client_id": client_id, "is_global": False,
-        "source_erp": source_erp,
-        "captured_from": captured_from, "captured_at": datetime.utcnow(),
-    }
-    if existing:
-        await existing.set(doc)
-    else:
-        await LearnedMapping(**doc).insert()
-    return True
+    return row is not None
 
 
 async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
@@ -270,123 +225,10 @@ def _category_for(rule_type: str | None) -> str:
     return "Column Mapping Alias"
 
 
-async def _upsert(*, kind, category, original_value, resolved_value,
-                  target_object=None, target_field=None, rule_type=None,
-                  rule_config=None, project_id=None, captured_from, captured_by,
-                  client_id=None, source_erp=None, sheets=None,
-                  revive: bool = False) -> LearnedMapping | None:
-    """Insert or update a learning.
-
-    ``revive=False`` (the default) honours the tombstone from QA issue #5: if the
-    user deleted this learning, an automatic path — auto-capture after Generate,
-    a startup seed, an approve/override — must NOT bring it back. Only an explicit
-    user action passes ``revive=True``. Returns ``None`` when a tombstoned row was
-    left untouched.
-    """
-    # Client-scoped (is_global=False): an interactively captured rule encodes one
-    # client's source data. Dedup is keyed by client too, so clients stay separate.
-    # source_erp is part of the identity: the same target field is fed by a
-    # different column depending on which legacy system the extract came from,
-    # so NetSuite's Item rule and SyteLine's must be two rows, not one.
-    # ONE ANSWER PER FIELD for the kinds that HAVE one answer. The key used to
-    # include rule_type, and the loop below then matched on original_value — so
-    # changing the source column, or adding a transform, matched nothing and INSERTED
-    # a second learning while the old one stayed live and competing. "I updated the
-    # mapping" reliably produced two rules and a coin toss.
-    #
-    # Analyst, 31-Jul: "the last mapping with respect to date should be considered
-    # final". Two live rows for one field cannot express that, so for these kinds the
-    # row is found by (object, field, client, source) alone and UPDATED in place —
-    # source column, transform and all.
-    #
-    # crosswalk and value maps are deliberately excluded: those are one row per source
-    # VALUE, so original_value is part of their identity and collapsing them would
-    # destroy the map.
-    _SINGLE_ANSWER = {"column_mapping", "example_default", "suppress_field",
-                      "reference_standard"}
-    _single = kind in _SINGLE_ANSWER
-    query = {
-        "kind": kind,
-        "target_object": target_object,
-        "target_field": target_field,
-        "client_id": client_id,
-        "source_erp": source_erp,
-    }
-    if not _single:
-        query["rule_type"] = rule_type
-    norm_orig = _normalize(original_value)
-    # include_deleted=True is LOAD-BEARING. LearnedMapping.find injects
-    # {'is_deleted': {'$ne': True}}, so without it a tombstoned row is invisible
-    # here, the is_deleted check below can never fire, the loop finds nothing and
-    # this falls through to INSERT a fresh duplicate — resurrecting the learning the
-    # analyst deleted, on the next approve / default / rule save that touches the
-    # field. Third instance of CW #5, this time on the interactive path.
-    existing = await LearnedMapping.find(query, include_deleted=True).to_list()
-    if _single and existing:
-        # Newest first, so an edit lands on the row the engine would have picked
-        # rather than on whichever happened to be inserted first.
-        existing.sort(key=_effective_of, reverse=True)
-    for lm in existing:
-        if _single or _normalize(lm.original_value) == norm_orig:
-            if getattr(lm, "is_deleted", False) and not revive:
-                # User retired this learning — respect that and do not resurrect.
-                return None
-            patch = {
-                "resolved_value": resolved_value, "rule_config": rule_config or {},
-                "captured_from": captured_from, "captured_by": captured_by,
-                "captured_at": datetime.utcnow(),
-                "project_id": project_id, "client_id": client_id, "is_global": False,
-                "source_erp": source_erp,
-            }
-            if _single:
-                # The changed parts. Without these the row kept its OLD source column
-                # and transform while reporting itself as freshly captured.
-                patch.update({"original_value": original_value,
-                              "rule_type": rule_type,
-                              "effective_date": datetime.utcnow()})
-            if sheets is not None:
-                # UNION, not replace. A default carries the sheet it was set on, and
-                # for the single-answer kinds the row is found by (object, field,
-                # client, source) WITHOUT the sheet — so setting the same default on
-                # a second sheet overwrote sheets=["A"] with sheets=["B"] and silently
-                # un-set the first one.
-                #
-                # Analyst, 31-Jul: "Role Type target field has been set a default
-                # value as CONTACT for both target sheets, however it only reflects
-                # in [one]". Both saves were accepted, both said approved, and the
-                # second quietly cancelled the first — the screen showed two defaults
-                # and the file carried one.
-                #
-                # Union is the safe direction: adding a sheet cannot remove a field
-                # from a sheet the analyst already set it on. NARROWING is done by
-                # pressing Keep blank on the sheet it should not apply to, which
-                # writes a suppression, rather than by re-saving with a shorter list.
-                _prev = [x for x in (getattr(lm, "sheets", None) or []) if x]
-                _seen, _merged = set(), []
-                for _s in [*_prev, *sheets]:
-                    _k = str(_s).strip().lower()
-                    if _s and _k not in _seen:
-                        _seen.add(_k)
-                        _merged.append(_s)
-                patch["sheets"] = _merged
-            if revive and getattr(lm, "is_deleted", False):
-                patch.update({"is_deleted": False, "deleted_at": None, "deleted_by": None})
-            await lm.set(patch)
-            return lm
-    lm = LearnedMapping(
-        kind=kind, category=category, original_value=original_value,
-        resolved_value=resolved_value, target_object=target_object,
-        target_field=target_field, rule_type=rule_type, rule_config=rule_config or {},
-        project_id=project_id, captured_from=captured_from, captured_by=captured_by,
-        client_id=client_id, is_global=False, source_erp=source_erp,
-        sheets=list(sheets) if sheets is not None else [],
-        # An interactively captured decision is effective NOW. Without a date it
-        # falls back to captured_at, which every redeploy re-stamps on seeded rows —
-        # so a startup seed would out-rank the analyst after any restart.
-        effective_date=datetime.utcnow(),
-    )
-    await lm.insert()
-    return lm
+# Record a decision. The store's own adapter, kept under its old name because a
+# lot of callers know it by that name; everything real happens in
+# ``mapping_store.record_learning`` -> ``record_decision``.
+_upsert = mapping_store.record_learning
 
 
 async def bundle_objects_for(conversion) -> list[str]:
@@ -1182,119 +1024,57 @@ async def apply_learned_to_conversion(
     ``approved_by == "learning-engine"`` (the same marker the delete/revert path keys
     on), so anything else in that field is a person, and a person wins.
     """
-    def _eligible(m: MappingSuggestion) -> bool:
+    def _eligible(m: MappingSuggestion, entry=None) -> bool:
+        """May the store's answer be written onto this row?
+
+        A person's decision is not permanently immune — it is the latest one that
+        wins, which is the same rule everywhere else. This gate used to have no
+        date test at all: a human approval blocked the library forever, so an
+        analyst correction made in June out-ranked the mapping workbook they
+        handed over in August, and nothing on screen said why.
+
+        Their word still stands while it is the later one, and an approval with no
+        timestamp counts as older, because it cannot be shown to have come after.
+        """
         if m.status == "suggested":
             return True
-        if not force or m.status != "approved":
+        if not mapping_store.decided_by_a_person(m):
+            # The engine's own copy. Refreshing it from the store is the point.
+            return bool(force) or m.status != "approved"
+        if entry is None:
             return False
-        # Approved by a person → highest precedence, never overwritten.
-        return (getattr(m, "approved_by", None) or "") == "learning-engine"
+        when = getattr(m, "approved_at", None)
+        return not (when is not None and when >= (entry.effective_date or datetime.min))
 
     business_object = await _business_object_for(conversion)
     if not business_object:
         return 0
-    # Tenant scope: only this client's learnings + anything global. Prevents a
-    # future client inheriting NextPower's source-system mappings.
-    from app.services.client_service import client_id_for_conversion, scope_query
-    _scope = await scope_query(await client_id_for_conversion(conversion))
-    # Scope to the legacy system this conversion actually reads from. Without it
-    # a SyteLine Item conversion inherits NetSuite's Item mappings, which point
-    # at columns its extract does not have. `$and` rather than merging keys,
-    # because scope_query already owns `$or` for the client scope and a second
-    # `$or` would overwrite it.
+    # The legacy system this conversion reads FROM. Part of the key: the same
+    # target field is fed by a different column depending on which system the
+    # extract came from, so a SyteLine Item conversion must not inherit
+    # NetSuite's Item mappings and point at columns its extract does not have.
+    from app.services.client_service import client_id_for_conversion
     _src = await source_erp_for_conversion(conversion)
-    _srcq = source_scope(_src)
 
-    # Every spelling this object answers to, not one exact string. This is the LAST
-    # reader still comparing `target_object` with `==`. The Learning Centre and the
-    # defaults layer were both widened to `object_keys_for_object` when it turned out
-    # a learning is WRITTEN under the template's business_object and READ under the
-    # conversion's target_object — but this function is the one that actually puts a
-    # stored mapping onto a row, so an exact match here meant a correction filed as
-    # "Supplier Address" never reached a conversion whose object reads
-    # "Supplier_Address", and nothing on screen said the two were different objects.
-    _obj_keys = (object_keys_with_client_rules(business_object)
-                 or [business_object, CLIENT_RULE])
-
-    def _q(kind: str) -> dict:
-        base = {"kind": kind, "target_object": {"$in": _obj_keys}}
-        if _scope and _srcq:
-            return {**base, "$and": [_scope, _srcq]}
-        return {**base, **_scope, **_srcq}
-
-    learned = await LearnedMapping.find(_q("column_mapping")).to_list()
-    suppressed = await LearnedMapping.find(_q("suppress_field")).to_list()
-    if not learned and not suppressed:
+    # ONE read of the store, and the resolver decides. There used to be a query
+    # per kind, each object-scoped by a $in over every spelling the object answers
+    # to, and then three different orderings on top — a strong-transform sort for
+    # columns, a date sort for defaults, and a hand-written rule that a column
+    # mapping beats a suppression. Those were four precedence tiers competing with
+    # the date, and they disagreed with the three other places that also ranked
+    # these rows. There is one rule now: newest wins, and a suppression is simply
+    # another statement about the same field.
+    _cid = await client_id_for_conversion(conversion)
+    _rows = await LearnedMapping.find(
+        {"kind": {"$in": sorted(mapping_store.DECISION_KINDS)}}).to_list()
+    _entries = mapping_store.entries_of(_rows)
+    if not _entries:
         return 0
-    # An exact source match beats a legacy untagged row for the same target, so
-    # migrating the library does not require touching old rows: the moment a
-    # source-specific learning exists it takes over.
-    if _src:
-        _exact = {lm.target_field for lm in learned if lm.source_erp == _src}
-        learned = [lm for lm in learned
-                   if lm.source_erp == _src or lm.target_field not in _exact]
-    suppressed_targets = {lm.target_field for lm in suppressed if lm.target_field}
-    by_target: dict[str, list[LearnedMapping]] = {}
-    for lm in learned:
-        if lm.target_field:
-            by_target.setdefault(lm.target_field, []).append(lm)
-    # When a field has several candidate mappings, try the ones that carry a real
-    # VALUE TRANSFORM (PHONE_PART, CASE_WHEN, VALUE_MAP, SPLIT…) first. A transform
-    # is a deliberate rule; a plain alias or a gold "direct_map" is just a guessed
-    # column. Without this, a direct_map (e.g. Phone <- "Address Phone", an empty
-    # column) can beat the intended PHONE_PART split of the populated "Phone" column
-    # and blank the output. Ties keep original order.
-    _STRONG_TRANSFORMS = {
-        "PHONE_PART", "CASE_WHEN", "VALUE_MAP", "DATE_FORMAT", "SPLIT", "CONCAT",
-        "COALESCE", "CONDITIONAL", "REGEX_EXTRACT", "REGEX_REPLACE", "SUBSTRING",
-        "PREFIX", "SUFFIX", "ARITHMETIC", "NUMBER_FORMAT", "CROSSWALK_LOOKUP", "PAD",
-        # REPLACE / REMOVE_SPECIAL_CHARS were missing, and that silently cost data:
-        # the analyst rule "Taxpayer ID <- tax_id, strip spaces" sorted BELOW a plain
-        # alias for the same field, so the alias won and the FBDI shipped
-        # "7 5 -2 1 1 0 3 5 7" instead of "75-2110357". A REPLACE is just as
-        # deliberate a rule as a VALUE_MAP — rank it accordingly.
-        "REPLACE", "REMOVE_SPECIAL_CHARS", "MAP_BOOLEAN", "CONDITIONAL_DATE",
-    }
-    for _lst in by_target.values():
-        _lst.sort(key=lambda lm: _candidate_order(lm, _STRONG_TRANSFORMS))
-    # Oracle decorates required/conditional headers with asterisks and stray spaces
-    # ("Supplier Name*", "Address Name *", "*Supplier Number", "**Bank Name"), and the
-    # analyst mapping docs write the plain name ("Supplier Name"). Matching the learned
-    # target_field to the template field_name by EXACT string therefore silently missed
-    # every decorated field — the mapping existed in the library and simply never
-    # applied. Keep exact match first (unambiguous), then fall back to the normalized
-    # name. Ambiguous normalized keys (two different template fields collapsing to the
-    # same key) are dropped from the fallback so we never guess.
-    # MERGE candidates under the normalized key — do not drop on collision.
-    #
-    # An earlier version dropped any normalized key that two different learned
-    # target_fields mapped onto, meaning to be cautious. That was wrong, and it
-    # blanked a REQUIRED field: the library holds both "Supplier Site*" <- city
-    # (PREFIX "BU ") from the analyst doc and "Supplier Site" <- "Address Label"
-    # from an older doc. Both normalize to "suppliersite", so the key was
-    # discarded; exact match then found only the "Address Label" row, whose source
-    # column does not exist in an eBOS extract, and Supplier Site shipped empty.
-    #
-    # A collision here is almost always two SPELLINGS OF THE SAME FIELD, not two
-    # different fields — Oracle's own headers repeat and get decorated differently
-    # across docs. Merging is safe because the loop below already discards any
-    # candidate whose source column is absent from the dataset, and the transform
-    # sort above puts deliberate rules ahead of plain aliases.
-    by_target_norm: dict[str, list[LearnedMapping]] = {}
-    for _tf, _lst in by_target.items():
-        k = _normalize(_tf)
-        if k:
-            by_target_norm.setdefault(k, []).extend(_lst)
-    for _lst in by_target_norm.values():
-        _lst.sort(key=lambda lm: _candidate_order(lm, _STRONG_TRANSFORMS))
-    _suppressed_norm = {_normalize(t) for t in suppressed_targets if _normalize(t)}
-    # Precedence: an explicit source→target mapping (analyst doc / transform /
-    # steering) OUTRANKS an old gold "leave this blank" suppression for the same
-    # field. Without this, a gold file that left e.g. Delivery Method or D-U-N-S
-    # empty would keep suppressing them even after the analyst mapped them. So drop
-    # any suppression whose field also has a column mapping — the mapping wins.
-    suppressed_targets -= set(by_target.keys())
-    _suppressed_norm -= set(by_target_norm.keys())
+
+    def _winner(field_name: str, sheet: str | None):
+        return mapping_store.resolve(_entries, target_field=field_name,
+                                     client_id=_cid, source_erp=_src, sheet=sheet)
+
     src_index: dict[str, str] = {}
     if conversion.dataset_id:
         cols = await DatasetColumnProfile.find(
@@ -1322,57 +1102,85 @@ async def apply_learned_to_conversion(
                                  or sheet_names.get(getattr(f, "sheet_id", None)))
     auto_count = 0
     now = datetime.utcnow()
+
+    async def _write(m, patch: dict) -> bool:
+        """Write only what actually changes.
+
+        A generate that resolves to exactly what the row already says should not
+        touch the row at all — this is what let the resolve pass run on a
+        19-sheet object without the hundreds of round-trips that used to make
+        generation hang, and it is why the pass no longer has to be skipped
+        there. Skipping it was the reason a heavy object could ship without ever
+        consulting the library.
+        """
+        changed = {k: v for k, v in patch.items()
+                   if k not in ("approved_at", "updated_at", "derived_at")
+                   and getattr(m, k, None) != v}
+        if not changed:
+            return False
+        await m.set(patch)
+        return True
+
+    # What the store says about every field on this conversion, resolved once.
+    decisions: dict = {}
     for m in mappings:
-        if not _eligible(m):
+        tgt_name = fields_map.get(m.target_field_id)
+        if tgt_name:
+            decisions[m.target_field_id] = _winner(
+                tgt_name, field_sheet.get(m.target_field_id))
+
+    for m in mappings:
+        entry = decisions.get(m.target_field_id)
+        if entry is None or entry.decision not in (mapping_store.SOURCE_COLUMN,
+                                                   mapping_store.RULE):
+            continue
+        if not _eligible(m, entry):
             continue
         tgt_name = fields_map.get(m.target_field_id)
-        if not tgt_name:
-            continue
-        candidates = by_target.get(tgt_name) or by_target_norm.get(_normalize(tgt_name))
-        if not candidates:
-            continue
-        for lm in candidates:
-            # Respect the learning's sheet scope before anything else — an
-            # excluded sheet must not even be considered a candidate.
-            if not sheet_allowed(lm, field_sheet.get(m.target_field_id)):
-                continue
-            actual_src = src_index.get(_normalize(lm.original_value))
+        for lm in [entry.row]:
+            actual_src = src_index.get(_normalize(entry.value))
             if not actual_src:
+                # The winning decision names a column this extract does not have.
+                # Writing it would point the row at nothing and the column would
+                # ship empty with the screen still reading "approved".
                 continue
             update = {
                 "source_column": actual_src, "confidence": 1.0,
                 "review_required": 0, "status": "approved",
                 "approved_by": "learning-engine", "approved_at": now,
                 "reason": f'Auto-applied from learning library (captured from "{lm.captured_from}")',
+                "derived": True, "derived_at": now,
+                "derived_from": entry.captured_from,
             }
             if lm.rule_type:
                 update["suggested_transformation"] = {
                     "rule_type": lm.rule_type, "config": lm.rule_config or {},
                     "description": "Re-applied from learned rule",
                 }
-            await m.set(update)
-            await lm.set({"records_auto_fixed": (lm.records_auto_fixed or 0) + 1})
-            auto_count += 1
+            if await _write(m, update):
+                await lm.set({"records_auto_fixed": (lm.records_auto_fixed or 0) + 1})
+                auto_count += 1
             break
 
     # Suppression pass — fields the gold example left blank override the AI's
     # aggressive mapping: any still-"suggested" mapping for such a target is set
     # not_applicable so it stays empty at output.
-    if suppressed_targets or _suppressed_norm:
-        for m in mappings:
-            if not _eligible(m):
-                continue
-            tgt_name = fields_map.get(m.target_field_id)
-            if tgt_name and (tgt_name in suppressed_targets
-                             or _normalize(tgt_name) in _suppressed_norm):
-                await m.set({
-                    "source_column": None, "status": "not_applicable",
-                    "review_required": 0, "approved_by": "learning-engine",
-                    "approved_at": now,
-                    "reason": "Suppressed — blank in the uploaded gold example",
-                    "updated_at": now,
-                })
-                auto_count += 1
+    for m in mappings:
+        entry = decisions.get(m.target_field_id)
+        if entry is None or entry.decision != mapping_store.SUPPRESS:
+            continue
+        if not _eligible(m, entry):
+            continue
+        if await _write(m, {
+            "source_column": None, "default_value": None, "status": "not_applicable",
+            "review_required": 0, "approved_by": "learning-engine",
+            "approved_at": now,
+            "reason": f'Kept blank — latest decision (from "{entry.captured_from}")',
+            "updated_at": now,
+            "derived": True, "derived_at": now,
+            "derived_from": entry.captured_from,
+        }):
+            auto_count += 1
 
     # ── Mapping-document-only pass ────────────────────────────────────────────
     # When an analyst mapping document exists for this object, it is AUTHORITATIVE:
@@ -1396,9 +1204,9 @@ async def apply_learned_to_conversion(
     # otherwise the tool would produce nothing at all for it.
     _MIN_DOC_ROWS = 5
     allowed_pairs: set[tuple[str, str]] = set()
-    for lm in learned:
-        if lm.target_field and lm.original_value:
-            allowed_pairs.add((_normalize(lm.target_field), _normalize(lm.original_value)))
+    for e in _entries:
+        if e.decision in (mapping_store.SOURCE_COLUMN, mapping_store.RULE) and e.value:
+            allowed_pairs.add((_normalize(e.target_field), _normalize(e.value)))
     if len(allowed_pairs) >= _MIN_DOC_ROWS:
         dropped = 0
         for m in mappings:
@@ -1417,6 +1225,8 @@ async def apply_learned_to_conversion(
                            "mapping document is authoritative, so unsanctioned "
                            "source columns are left blank rather than guessed."),
                 "updated_at": now,
+                "derived": True, "derived_at": now,
+                "derived_from": "the store's sanctioned source columns",
             })
             dropped += 1
             auto_count += 1
@@ -1428,59 +1238,30 @@ async def apply_learned_to_conversion(
     # (kind="example_default") so a brand-new conversion of this object inherits
     # them WITHOUT the user re-uploading the gold file. Only fills targets that
     # are still "suggested" (i.e. not covered by a learned column mapping above).
-    defaults = await LearnedMapping.find({
-        "kind": "example_default", "target_object": business_object, **_scope
-    }).to_list()
-    if defaults:
-        # Latest instruction wins here too — first-come was letting an older gold
-        # default hold a field the analyst had since re-specified.
-        by_default: dict[str, LearnedMapping] = {}
-        for lm in sorted(defaults, key=_effective_of, reverse=True):
-            if lm.target_field:
-                by_default.setdefault(lm.target_field, lm)
-        # Same asterisk problem as the column pass: a default authored as
-        # "Business Relationship" must still land on the template's
-        # "Business Relationship*". Exact key first, normalized key as fallback.
-        by_default_norm: dict[str, LearnedMapping] = {}
-        _dclash: set[str] = set()
-        for _tf, _lm in by_default.items():
-            k = _normalize(_tf)
-            if not k:
-                continue
-            if k in by_default_norm and by_default_norm[k] is not _lm:
-                _dclash.add(k)
-            by_default_norm.setdefault(k, _lm)
-        for k in _dclash:
-            by_default_norm.pop(k, None)
-        for m in mappings:
-            # A learned constant default is explicit intent to POPULATE the field,
-            # so it also overrides a gold "not_applicable" suppression (not only
-            # still-"suggested" targets) — e.g. an analyst default of Invoice Match
-            # Option = Receipt must land even though the gold example left it blank.
-            # Human "overridden"/"rejected" choices are still respected.
-            if m.status in ("overridden", "rejected"):
-                continue
-            if not (_eligible(m) or m.status == "not_applicable"):
-                continue
-            tgt_name = fields_map.get(m.target_field_id)
-            if not tgt_name:
-                continue
-            lm = by_default.get(tgt_name) or by_default_norm.get(_normalize(tgt_name))
-            if lm is None:
-                continue
-            val = (lm.rule_config or {}).get("default_value")
-            if val in (None, ""):
-                val = lm.resolved_value
-            if val in (None, ""):
-                continue
-            await m.set({
-                "source_column": None, "default_value": val,
-                "confidence": 0.96, "review_required": 0, "status": "approved",
-                "approved_by": "learning-engine", "approved_at": now,
-                "reason": f'Constant default re-applied from learning library (from "{lm.captured_from}")',
-                "updated_at": now,
-            })
-            await lm.set({"records_auto_fixed": (lm.records_auto_fixed or 0) + 1})
+    for m in mappings:
+        entry = decisions.get(m.target_field_id)
+        if entry is None or entry.decision != mapping_store.DEFAULT_VALUE:
+            continue
+        # A constant is explicit intent to POPULATE the field, so it also takes a
+        # field back from an older "keep blank" — that is just the later statement
+        # winning, the same as everywhere else.
+        if not (_eligible(m, entry) or m.status == "not_applicable"):
+            continue
+        val = entry.value
+        if val in (None, ""):
+            continue
+        if await _write(m, {
+            "source_column": None, "default_value": val,
+            "confidence": 0.96, "review_required": 0, "status": "approved",
+            "approved_by": "learning-engine", "approved_at": now,
+            "reason": f'Constant default re-applied from the store (from "{entry.captured_from}")',
+            "updated_at": now,
+            "derived": True, "derived_at": now,
+            "derived_from": entry.captured_from,
+        }):
+            if entry.row is not None:
+                await entry.row.set(
+                    {"records_auto_fixed": (entry.row.records_auto_fixed or 0) + 1})
             auto_count += 1
     return auto_count
 

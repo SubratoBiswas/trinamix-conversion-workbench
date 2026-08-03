@@ -124,7 +124,7 @@ async def _upsert_mapping(conversion, field, *, source_column, default_value, co
 
 
 async def _save_reference_standard(target_object, field, *, source_column, default_value,
-                                   suppress=False, client_id=None):
+                                   suppress=False, client_id=None, source_erp=None):
     """Persist a reusable, OBJECT-LEVEL learned rule so a brand-new conversion of
     the same object auto-applies it on Generate Set — the learning engine's
     ``apply_learned_to_conversion`` re-reads these when auto-mapping.
@@ -147,35 +147,19 @@ async def _save_reference_standard(target_object, field, *, source_column, defau
     else:
         kind, category = "example_default", "Default Value"
         original, resolved, rtype = "(default)", (default_value or ""), "default"
-    existing = await LearnedMapping.find_one(
-        LearnedMapping.kind == kind,
-        LearnedMapping.target_object == target_object,
-        LearnedMapping.target_field == field.field_name,
-        LearnedMapping.client_id == client_id,
-        include_deleted=True,
+    # One more dated entry. Learning from a gold example does not resurrect a
+    # decision the analyst retired — re-uploading the same gold file would
+    # otherwise silently undo every deletion — so this does not pass revive.
+    from app.services.mapping_store import record_learning
+    return await record_learning(
+        kind=kind, category=category,
+        original_value=str(original), resolved_value=str(resolved),
+        target_object=target_object, target_field=field.field_name,
+        rule_type=rtype,
+        rule_config={"source_column": source_column, "default_value": default_value},
+        captured_from="gold example", captured_by=None,
+        client_id=client_id, source_erp=source_erp,
     )
-    # Learning from a gold example must not resurrect a learning the user
-    # retired (QA issue #5) — re-uploading the same gold file would otherwise
-    # silently undo every deletion.
-    if existing and getattr(existing, "is_deleted", False):
-        return
-    doc = {
-        "kind": kind,
-        "category": category,
-        "original_value": str(original),
-        "resolved_value": str(resolved),
-        "target_object": target_object,
-        "target_field": field.field_name,
-        "rule_type": rtype,
-        "rule_config": {"source_column": source_column, "default_value": default_value},
-        "client_id": client_id, "is_global": False,
-        "captured_from": "gold example",
-        "captured_at": datetime.utcnow(),
-    }
-    if existing:
-        await existing.set(doc)
-    else:
-        await LearnedMapping(**doc).insert()
 
 
 async def learn_conversion_from_example(conversion: Conversion, example_path: str | Path) -> dict:

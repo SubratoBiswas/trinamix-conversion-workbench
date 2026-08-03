@@ -607,6 +607,18 @@ async def reseed_customer_sheet_scope(_: User = Depends(get_current_user)):
     return await seed_customer_sheet_scope()
 
 
+@router.post("/backfill-dated-store")
+async def backfill_dated_store(_: User = Depends(get_current_user)):
+    """Carry every decision made before the store existed into it.
+
+    Runs on every boot too. Exposed on demand so "did it land?" does not cost a
+    redeploy. Idempotent — running it twice changes nothing the second time, and
+    it never moves a date that is already set.
+    """
+    from app.services.mapping_store_backfill import backfill
+    return await backfill()
+
+
 @router.post("/backfill-projects")
 async def backfill_project_ids(_: User = Depends(get_current_user)):
     """
