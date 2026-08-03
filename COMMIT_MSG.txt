@@ -1,49 +1,41 @@
-Fix the hook order that blanked Output Preview
+Run both cleansing-tab checks on open, and say when they are working
 
-OutputPreviewPage declared
+The Cleansing tab showed a panel with a heading, a paragraph of explanation, and
+nothing under it. That reads as broken. It was not -- both checks on that tab
+are lazy, because each builds the sheet frames and that is not free -- but a
+silent lazy panel and a failed one look identical, and the analyst has no way to
+tell them apart.
 
-  const [fixBusy, setFixBusy] = useState<string | null>(null);
-  const [fixNote, setFixNote] = useState<string | null>(null);
+  Column rules      already auto-ran on tab open, but rendered NOTHING while it
+                    was working. The button showed its loading glyph, which just
+                    reads as greyed out. So the one panel that was actually
+                    doing something looked the most broken.
 
-roughly 470 lines BELOW
+  Cleansing findings did not auto-run at all. It said "the check hasn't been
+                    run", which was honest, but left the tab's count on 0 and
+                    the panel empty for anyone who never pressed the button.
 
-  if (!project) return <PageLoader />;
+Both now run as soon as the tab is opened, from ONE place -- a single effect
+keyed on the tab, rather than the previous trigger buried in the Tabs onChange
+handler. Once each: reopening the tab does not re-run them, and a failure is not
+retried in a loop. Both buttons stay, for a deliberate re-check.
 
-So the first render -- project still loading -- ran two fewer hooks than the
-second. React counts hooks by call order and throws the moment the count
-changes: "Rendered more hooks than during the previous render", shipped as
-minified error #310. It took the whole page down on every single load, and
-before the error boundary landed the symptom was a blank white screen with
-nothing on it to act on.
+And both now say what they are doing. "Checking every column against the
+template's own header comments..." and "Profiling the source file..." while they
+run; "Not checked yet" if they have not been asked. An empty panel now always
+means something specific.
 
-Both hooks now sit with the rest of the component's state, above the guard.
-They had been placed next to the handler that reads them, which is why nobody
-saw it: the hook looks entirely ordinary there, and the early return is hundreds
-of lines away in a 1,600-line component.
+  The new useState/useEffect/useRef sit in the top hook block with every other
+  hook, above `if (!project) return <PageLoader />`. tests/test_hook_order.py
+  enforces that -- it is the rule whose breach blanked this page in the first
+  place, and the check caught it here before the code shipped.
 
-THE RULE, CHECKED MECHANICALLY
+NOT CHANGED, AND WORTH KNOWING
 
-  tests/test_hook_order.py walks every .tsx file and fails on any hook declared
-  below a component-level return. It reads two-space indentation as the
-  component's own scope, so a `return` inside a callback is correctly ignored --
-  a check that cries wolf is one people learn to skip. Two of its cases feed it
-  a known-broken and a known-good component, because a guard nothing can trip is
-  not a guard.
-
-  It passes across the whole frontend: Output Preview was the only violation.
-
-DEPLOY SCRIPT
-
-  launch_git.bat no longer runs the test suite -- every patch has the full suite
-  run against it before it is cut, and this machine has no Windows venv or
-  backend dependencies, so the step could only ever print "cannot run" and ask
-  for a keypress. When it misfired it said "tests failed", which was false about
-  the code.
-
-  A patch that will not apply now prints what git actually objected to. "Your
-  tree has diverged" is equally true of a real conflict and of a patch whose
-  first half you already deployed, and those need opposite responses -- the
-  previous message sent the reader the wrong way.
+  "Duplicate suspects" on Supplier Address says "child interface -- entity
+  resolution skipped". That is correct and deliberate: a child interface has
+  many rows per entity by nature, so fuzzy resolution would flag every supplier
+  with two sites as a duplicate. The panel already explains itself.
 
 TESTS
 
@@ -51,6 +43,6 @@ TESTS
 
 STILL OUTSTANDING, NOT CODE
 
-  The static site has no SPA rewrite, so a refresh or a pasted deep link returns
-  404 with a blank body. Render dashboard -> Redirects/Rewrites -> source /*,
+  The static site has no SPA rewrite, so refreshing this page still returns 404
+  with a blank body. Render dashboard -> Redirects/Rewrites -> source /*,
   destination /index.html, action Rewrite.

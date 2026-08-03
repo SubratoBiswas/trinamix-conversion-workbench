@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, Copy, Download, FileOutput, FolderDown, RotateCcw, Sparkles, Wand2,
@@ -126,6 +126,23 @@ export const OutputPreviewPage: React.FC = () => {
   const [colRules, setColRules] = useState<ColumnRulesReport | null>(null);
   const [colRulesBusy, setColRulesBusy] = useState(false);
   const [colRulesError, setColRulesError] = useState<string | null>(null);
+
+  // Both checks on this tab are lazy -- each builds the sheet frames, which is
+  // not free -- so neither used to run until a button was pressed. The result
+  // was a panel with a heading and nothing under it, which reads as broken
+  // rather than as "not asked for yet". They now run as soon as the tab is
+  // opened.
+  //
+  // Once each. Reopening the tab does not re-run them, and a failure is not
+  // retried in a loop; the buttons stay for a deliberate re-check.
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (tab !== "cleansing" || autoRan.current) return;
+    autoRan.current = true;
+    if (colRules === null && !colRulesError && !colRulesBusy) void loadColumnRules();
+    if (!profileBusy) void runProfileCleansing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
   // These two live here, with every other hook, and NOT down beside the
   // fix-finding handler that uses them.
   //
@@ -1132,6 +1149,14 @@ export const OutputPreviewPage: React.FC = () => {
         </p>
       )}
 
+      {!colRules && !colRulesError && (
+        <p className="text-[11px] text-ink-muted">
+          {colRulesBusy
+            ? "Checking every column against the template's own header comments…"
+            : "Not checked yet — press Check column rules."}
+        </p>
+      )}
+
       {colRules && (
         <>
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1448,7 +1473,9 @@ export const OutputPreviewPage: React.FC = () => {
         // the check — so "none found" almost always means "never run", and the
         // old empty state said "run validation" without offering a way to.
         <EmptyState
-          title="No cleansing findings — the check hasn't been run"
+          title={profileBusy
+            ? "Profiling the source file…"
+            : "No cleansing findings — the check hasn't been run"}
           description={
             "These are data-quality observations profiled from the source file "
             + "(high nulls, mixed types, odd patterns), separate from the standing "
@@ -1593,8 +1620,7 @@ export const OutputPreviewPage: React.FC = () => {
         <Tabs
           value={tab}
           onChange={(v) => { setTab(v);
-            if (v === "dupes" && dupes === null && !dupError) void loadDupes(false);
-            if (v === "cleansing" && colRules === null && !colRulesError && !colRulesBusy) void loadColumnRules(); }}
+            if (v === "dupes" && dupes === null && !dupError) void loadDupes(false); }}
           items={[
             { value: "data", label: "Converted Data", count: data?.total_rows },
             { value: "lineage", label: "Lineage", count: data ? Object.keys(data.lineage).length : 0 },

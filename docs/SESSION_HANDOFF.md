@@ -1245,3 +1245,298 @@ hangs again, check Render logs for a traceback around `apply_conversion_decision
 * **187 pre-existing TypeScript errors repo-wide** (`npm run lint` = `tsc --noEmit`; `npm run
   build` = `vite build`, which does NOT typecheck). 5 in `api/index.ts` are types imported from
   `@/types` that exist nowhere — fixing them means inventing API contracts.
+
+---
+
+## 11. Continuation session — 2026-07-29 → 2026-08-03
+
+The long one. Sections 11.1–11.4 are the theme; 11.5–11.14 are the individual
+changes; 11.15 is the state of the repo, which needs attention before anything
+else; 11.16 is the agreed next change.
+
+### 11.1 The finding that explains most of the week: recorded and never read
+
+Almost every "the screen says one thing and the file says another" report this
+session resolved to the same shape — a value is **written by one path and read by
+none**, or written into a copy that the reader never consults. Confirmed instances,
+all fixed, all independently reported as different bugs:
+
+| Symptom the analyst saw | Actual cause |
+|---|---|
+| Rule saved, output unchanged | stale flag written by every path, read by none |
+| Mapping edited, other conversion unaffected | `mapping_sync` declared nowhere, so `response_model` silently stripped it |
+| Client rule never applied | a `cconv is not None` guard that could never fire — the resolver substituted the default client id upstream |
+| Generation "just stops", no error | `output_status` / `output_error` recorded on the document, absent from the response schema |
+| Wrong template used | 17 template records claiming one object, none carrying a notion of which was current |
+| Rule reaches 1 conversion of 6 | object-scoped fan-out, fixed in **three separate call sites** because there was no single place to fix it |
+
+**The lesson to carry:** a fix is not done when the value is stored. It is done when
+you have traced the read path to the artifact and seen the value arrive. This is
+§10.1 restated with a week of new evidence, and it is why §11.16 exists.
+
+### 11.2 Client-scoped rules — `CLIENT_RULE` (the analyst's own solution)
+
+The analyst cut through the scoping debate:
+
+> "whatever user is saving or changing in mapping, store it or save it as mapping
+> rule from client perspective (in this case NextPower), so it will correctly
+> propagate through older projects and conversions and newer projects and conversions"
+
+Implemented in `learning_service.py` as a sentinel:
+
+```python
+CLIENT_RULE = None          # target_object is None  ->  belongs to the CLIENT,
+                            # not to one business object
+```
+
+* `object_keys_with_client_rules(obj)` returns `[*object_keys_for_object(obj), CLIENT_RULE]`.
+* `apply_learned_to_conversion._q()` widened from `target_object == obj` to
+  `target_object: {"$in": _obj_keys}` — one change that made every existing
+  conversion see client rules without touching the callers.
+* `record_learning_from_mapping` and `record_learning_from_rule` now write a
+  **single** `target_object=CLIENT_RULE` row instead of one row per object.
+* `propagate_learning_to_open_conversions` skips the business-object filter entirely
+  for client rules, and records a **reason string per skipped conversion**
+  (`fan_skipped`) — previously a rule that reached nothing looked identical to a rule
+  that reached everything.
+
+Covered by `backend/tests/test_global_rule_setter.py` (in-memory Beanie fake, no DB).
+
+### 11.3 Both authoring surfaces write the same kind of row
+
+The analyst named the two places precisely:
+
+> "there are two places to change the rule or mapping using plain text, one is the
+> yellow global location, one is inside custom transformation section for each
+> column mapping"
+
+Both now converge on `CLIENT_RULE`. In `steering_service.py`, `_learn` /
+`_upsert` / `_suppress` **return the row they wrote**, and `touched` carries
+`(kind, field, lm)` so the fan-out operates on that exact row rather than
+re-querying and hoping to find it — the re-query was ambiguous whenever two rules
+touched the same field in one save.
+
+`_upsert` also **unions** the `sheets` list instead of replacing it (CW row 30):
+scoping a rule to a second sheet used to silently unscope it from the first.
+
+### 11.4 Latest-wins precedence, applied to templates as well as learnings
+
+> "Mappings, learnings and user inputs should be stored in the same place with date
+> (with respect to client and source), whichever is latest … and the same will be
+> used for existing projects and future projects"
+
+* `_effective_of(lm)` is the single ordering key; sorts are `(-effective_date, …)`.
+* `FBDITemplate.updated_at` added (`models/fbdi.py`); HDL template resolution sorts
+  candidates by `updated_at`, then by sheet count as a tiebreak.
+* On the deliberate-override question — "what happens when an analyst maps one
+  conversion differently from the client standard" — the analyst was explicit:
+  **"that's fine, the analyst mapping wins as that's the latest mapping as per
+  date."** No per-conversion scope was added, and none should be.
+
+**Trap, already hit once:** `effective_date` must never move on a read. A startup
+seed that finds nothing to do must not re-stamp — `captured_at` did exactly that and
+inverted precedence on every redeploy.
+
+### 11.5 Supplier mapping v3 — the source column is the LAST column
+
+Per Debayon Mallik: the mapping workbook's **"Source Table Column name"** (last
+column) is the real source column, not the friendlier label earlier in the row.
+Seeded from `NXT Supplier Mapping 3.xlsx` + `Tracker_Netsuite_Supplier_5.csv` into
+`backend/app/data/supplier_source_mapping_31jul.json`.
+Tests: `test_supplier_mapping_v3.py`.
+
+### 11.6 Employee / Workday runs on HDL, not FBDI
+
+Employee is **HCM Data Loader**, a different format end to end: pipe-delimited
+`.dat` files with `METADATA` / `MERGE` lines, one zip per object. Delivered:
+
+* `hdl_seed_service.ensure_employee_hdl` **reconciles** instead of skipping when a
+  template already exists; `consolidate_employee_hdl` rebinds conversions to the
+  current template and retires duplicates.
+* `hdl_output_service._as_book` writes one sheet per object for the workbook path.
+* UI wording is source-aware — `isHdl(c)` drives **"HDL download"** vs "FBDI
+  download" and **"DAT files"** vs "CSV" (`ProjectOverviewPage.tsx`).
+* Current template: `backend/app/data/hdl_templates/HDL_Template_Workday_Employee.xlsx`
+  — **6 objects** (Location, Job, Position, Position Hierarchy, and two Worker tabs).
+  Output shipping only 2 tabs was the symptom that led to the consolidation work.
+
+**Reversible action taken:** `consolidate_employee_hdl` retired **17** template
+records, including one named `Employee HDL Template (6 sheets)`. They are tombstoned,
+not deleted — `include_retired=true` brings them back.
+
+### 11.7 Supplier Site and Site Assignment never generated — `_RowWithTargets.__iter__`
+
+Two of six supplier files were **absent from the bundle with no error on any screen**
+for about a week. Cause:
+
+```
+KeyError: 0 | at engine.py:729 apply_pipeline <- engine.py:574 apply_rule
+             <- engine.py:564 _first <- output_service.py:341 __getitem__
+```
+
+`_first` does `{norm(k): k for k in row}`. `_RowWithTargets` defined `get`,
+`__getitem__` and `__contains__` but **not `__iter__`**, so Python fell back to the
+legacy sequence protocol and called `row[0]` — `KeyError(0)` on the first step.
+Fixed with `__iter__` / `keys()` / `__len__`, source columns shadowing targets exactly
+once. Regression test: `test_row_wrapper_iteration.py`.
+
+Two things made it expensive out of proportion to the fix, both worth remembering:
+generation runs in a **background worker**, so it surfaced as "no output" rather than
+an exception; and the wrapper had been verified through `get()` only, which is how the
+*preview* path uses it — so every rule that ITERATES a row was broken from the moment
+it shipped and nothing exercised that.
+
+`operations.py::_run_generation` now records the exception **type plus the last four
+frames** into `output_error`, which is what made this diagnosable at all.
+
+### 11.8 Generated keys are generated once (CW row 23)
+
+> "write a logic in which this should be generated once and next time onwards the
+> same should be repeated, not different number each run"
+
+A positional counter satisfies "unique" and "increments" and is still wrong: the
+extract gets re-sorted and re-uploaded constantly, and each of those renumbers
+everybody — which, for Party Number, means a second load creates **duplicate parties
+instead of updating the first**. So the number is a function of a **natural key**,
+persisted in `SequenceAllocation` (`models/sequence.py`, `services/sequence_service.py`).
+
+Guaranteed by `test_sequence_stability.py`: same run → identical; reordered →
+identical; rows added → existing untouched; rows **removed → the freed number is not
+re-issued** (`MAX(seq)+1`, never `count+1`, because that number is already sitting in
+a loaded Oracle record). People are numbered under their organisation
+(`NXT000001_C1`), so the child counter is per parent.
+
+### 11.9 Client is mandatory on project creation
+
+`client_service.resolve_client_for_project` — required, case-insensitive name dedupe,
+and `explicit_client_id_for_conversion` which returns **`None`** when a conversion is
+untagged rather than silently substituting the default id (that substitution was what
+made the §11.1 client guard unfireable). The create-project form is a **dropdown plus
+a "create new client" link**, not a free-text box. Tests:
+`test_project_requires_client.py`.
+
+### 11.10 Download buttons renamed
+
+"FBDI" → **CSV**, "Excel" → **FBDI Excel**; and for HDL sources, "HDL download" /
+"DAT files" (§11.6).
+
+### 11.11 Production breakage introduced and fixed in-session — read this before editing the frontend
+
+`const isHdl = …` was defined **inside `downloadAllFbdi`** and referenced at component
+render level. Result: `ReferenceError: isHdl is not defined` — **every project page in
+production went blank.** Reported as "not able to open any project".
+
+Why it got through: **`npm run build` is `vite build`, which does not type-check**
+(§10.10 says this too), and `tsc` was run *before* the edit rather than after. Rule for
+the next session: run `npx tsc --noEmit` **after** the last frontend edit, not before.
+
+Also fixed: deep links 404'd on the static site → `frontend/public/_redirects`.
+And `/api/health` now returns the deployed commit (`RENDER_GIT_COMMIT`, `main.py:304`),
+because "is this actually deployed?" cost real time twice.
+
+**Related self-correction:** a blind `sed` on `fbdi.py` broke a conditional —
+`"status": "parsed" if parsed["fields"] else "manual"` became
+`"status": "parsed", "updated_at": datetime.utcnow() if parsed["fields"] else "manual"`.
+Do not `sed` across a ternary.
+
+### 11.12 Client-facing architecture overview (2026-08-03)
+
+`docs/Trinamix_Architecture_Overview.docx` — two pages, landscape. Page 1 is the
+diagram; page 2 is a four-stage table and the two claims (decisions made once;
+runs repeatable).
+
+Written to be **shareable without being replicable**: it names capabilities, never
+construction. No framework, datastore, host, model provider, module, collection or
+endpoint appears in it, and the caption states the boundaries are indicative so the
+boxes cannot be read as a component decomposition. Verified by extracting the text and
+scanning for implementation vocabulary — zero hits. **Re-run that scan after any
+edit.**
+
+Sources: `docs/Architecture_Overview.html` (diagram source of truth) →
+screenshot the `.card` element → `docs/architecture_diagram.png` →
+`node docs/build_architecture_docx.js`.
+
+### 11.13 Test suite
+
+**62 test files, all green** (~2,030 individual checks). Run them with:
+
+```bash
+cd backend && for f in tests/test_*.py; do PYTHONPATH=. python "$f" || echo "FAIL $f"; done
+```
+
+`pandas` is pinned at `/tmp/pin/bin/python` in the sandbox. **Nit:**
+`test_template_fill.py` is the only file without the `sys.path.insert` preamble, so it
+needs `PYTHONPATH=.`; give it the preamble when convenient.
+
+New this session: `test_global_rule_setter.py`, `test_supplier_mapping_v3.py`,
+`test_project_requires_client.py`, `test_sequence_stability.py`,
+`test_template_recency.py`, `test_row_wrapper_iteration.py`,
+`test_latest_decision_wins.py`, `test_tombstone_guards.py`,
+`test_hdl_template_conformance.py`, plus ~25 more.
+
+### 11.14 Live verification performed
+
+Three projects (Supplier, Customer, Employee) were created against the live
+deployment via browser control, using the analyst's real extracts, and the generated
+bundles were checked against the CW_Issues list. Findings fed §11.6 and §11.7.
+
+### 11.15 REPO STATE — do this first
+
+At the close of this session the working tree carried **84 modified files
+(+8,075 / −1,503) and ~60 untracked files**, and `HEAD` was **14 commits ahead of
+`origin/main`**. `git push` from the cloud sandbox fails — no credentials — so the
+push has to happen from the laptop.
+
+Untracked and worth committing: `backend/app/services/template_comments.py`,
+`backend/app/data/{customer_rules_nextpower,customer_sheet_scope,customer_fbdi_column_order,hcm_source_mapping,supplier_corrections_30jul,supplier_source_mapping_30jul}.json`,
+`backend/app/data/hdl_templates/`, all 35 new `backend/tests/test_*.py`,
+`docs/CODEBASE_GUIDE.md`, `docs/ONE_DATED_STORE.md`, `docs/Trinamix_Codebase_Guide.docx`.
+
+Untracked and **should not** be committed: `_arch/`, `_docs_build/` (build scratch,
+rendered page JPEGs), `COMMIT_MSG.txt`, `launch_git.bat.txt`, `STATUS_30Jul.md`,
+`docs/lu105gr309.tmp`, `docs/.~lock.*#` (LibreOffice locks).
+
+### 11.16 THE NEXT CHANGE — one dated store
+
+Specified in full in **`docs/ONE_DATED_STORE.md`**. Agreed with the analyst on
+02-Aug-2026 and committed to as the next piece of work, before anything else.
+
+In one line: **every statement about how a field should be mapped becomes a dated
+entry keyed `(client_id, source_erp, target_field)`; newest wins; per-conversion
+mapping rows become a view regenerated from it.**
+
+Order of work is in that document and matters — resolver first (pure, unit-tested,
+no callers), then backfill, then route all six write paths through one function, then
+reads, and **only then delete the copy paths**. That deletion is the proof it landed.
+Do not merge writes before backfill or existing projects lose their history.
+
+The reason not to re-litigate it is §11.1: today there are two stores — `LearnedMapping`
+(dated, client+source scoped) and `MappingSuggestion` (per-conversion rows, which
+generation actually reads) — and the library is **copied** into the rows. Every
+disagreement between screen and file this week was those two copies diverging. No
+amount of fan-out fixing closes that, because the copying is the defect.
+
+### 11.17 Open items carried forward
+
+**Still open from §10.10** — all of it, unless listed as fixed above. In particular
+the `Address Name` FK disagreement between the Address and Site files remains the
+highest-severity data item, and it is blocked on people, not code.
+
+**New this session:**
+
+* Customer `LEGACY` override — control default still beats the analyst default
+  (CW rows 28/29/34/36).
+* Supplier Site / Site Assignment generation **confirmed fixed in tests, not yet
+  re-confirmed on a live run** after §11.7.
+* Learning Centre: deleted items reappear; a saved custom transformation does not
+  populate the dialog when it is reopened.
+* Rule dialog must **render** the `target_fields` group — the backend half of CW row
+  35 is done (`/source-columns` returns it), the frontend half is not.
+* Sheet-picker editor in Learning Centre (CW row 11) — unlocks rows 12/13/14/25/33.
+* Source-provenance tracking (CW rows 17, 37, 38).
+* A `SEQUENCE` rule type, to wire Party Number to the §11.8 allocator from the rule
+  editor rather than only from code.
+* General (non-HDL) template resolution should order by `updated_at` — only the HDL
+  path does today.
+* Surface decision dates in Mapping Review, so "latest wins" is visible rather than
+  merely true.

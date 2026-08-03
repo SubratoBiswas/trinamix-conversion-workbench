@@ -84,14 +84,21 @@ git rm -r --cached --ignore-unmatch _qa 1>nul 2>nul
 REM ---- 1. Apply any pending patch ---------------------------------------------
 REM --check first, so re-running this script is harmless: a patch already in the
 REM tree would otherwise fail to apply and look like a real error.
+REM
+REM --ignore-whitespace is REQUIRED here, not a nicety. This working tree holds
+REM CRLF line endings; patches are cut on Linux with LF. git apply matches
+REM context byte for byte, so every hunk failed with "error: while searching
+REM for:" against a line that was, to the eye, identical -- the only difference
+REM being a trailing CR. It reads as a diverged tree and is nothing of the sort.
+REM The flag treats the CR as the whitespace it is.
 echo.
 echo [1/3] Pending patches...
 set "FOUND="
 for %%P in (*.patch) do (
   set "FOUND=1"
-  git apply --check "%%P" 1>nul 2>nul
+  git apply --check --ignore-whitespace "%%P" 1>nul 2>nul
   if errorlevel 1 (
-    git apply --reverse --check "%%P" 1>nul 2>nul
+    git apply --reverse --check --ignore-whitespace "%%P" 1>nul 2>nul
     if errorlevel 1 (
       echo.
       echo ****** STOPPED: %%P neither applies cleanly nor is fully applied.
@@ -102,7 +109,7 @@ for %%P in (*.patch) do (
       REM deployed -- and those need opposite responses. Printing the real
       REM reason is the difference between a five-second fix and an hour.
       echo ---- what git actually objected to ----
-      git apply --check -v "%%P" 2>&1
+      git apply --check -v --ignore-whitespace "%%P" 2>&1
       echo ---------------------------------------
       echo.
       echo If it says "already exists in working directory", this patch is
@@ -110,14 +117,14 @@ for %%P in (*.patch) do (
       echo for a patch of only what is still missing; do not force this one.
       echo.
       echo Otherwise your tree really has moved on from the baseline it was cut
-      echo against.  Try:  git apply --3way %%P
+      echo against.  Try:  git apply --3way --ignore-whitespace %%P
       pause
       exit /b 1
     ) else (
       echo       %%P - already applied, skipping.
     )
   ) else (
-    git apply "%%P"
+    git apply --ignore-whitespace "%%P"
     if errorlevel 1 (
       echo ****** STOPPED: git apply failed on %%P. Nothing committed. ******
       pause
@@ -149,7 +156,7 @@ if errorlevel 1 (
   echo ****** Nothing has been pushed. Read the git error above.
   if defined PATCHED (
     echo ****** The patch IS applied in your working tree. Revert it with:
-    for %%P in (*.patch) do echo ******   git apply --reverse %%P
+    for %%P in (*.patch) do echo ******   git apply --reverse --ignore-whitespace %%P
   )
   pause
   exit /b 1
