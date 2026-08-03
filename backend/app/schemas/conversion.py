@@ -51,6 +51,19 @@ class ConversionOut(ApiOut):
     source_type: str = "dataset"
     ebs_table_hint: Optional[str] = None
     output_mode: str = "fusion_load"
+    # WHY A GENERATE PRODUCED NOTHING. _run_generation has always recorded these —
+    # output_status="failed" and the exception text — and response_model silently
+    # dropped both, because they were never declared here. So a generation that threw
+    # and one that was never started looked identical from every screen and every API
+    # consumer: the conversion simply stayed at its previous status with no output and
+    # no explanation.
+    #
+    # That is exactly how Supplier Site and Supplier Site Assignment sat at
+    # "mapping_suggested" while the other four generated — the bulk zip shipped four
+    # files of six and nothing anywhere said the other two had failed, or why. Same
+    # shape as the stale flag that was written by every path and read by none.
+    output_status: Optional[str] = None     # "ready" | "failed"
+    output_error: Optional[str] = None      # the exception, when it failed
     created_by: str
     created_at: datetime
     updated_at: datetime
