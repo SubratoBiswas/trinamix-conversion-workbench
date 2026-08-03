@@ -124,23 +124,73 @@ class _UF:
     def union(self, a, b): self.p[self.find(a)] = self.find(b)
 
 
-def _pair_score(r1: dict, r2: dict, fields: list[dict]) -> tuple[float, dict]:
-    """Weighted similarity across the identity fields present (non-blank) in BOTH
-    rows. STRONG ids contribute their weight only on an exact match; fuzzy fields
-    contribute weight × string-similarity."""
+def _pair_score(r1: dict, r2: dict, fields: list[dict],
+                anchor: Optional[str] = None) -> tuple[float, dict]:
+    """How likely these two rows are the same entity.
+
+    Two rules here are load-bearing, and both exist because the obvious
+    implementation gets this exactly backwards.
+
+    **An identical name is a duplicate, full stop.** Four NextPower supplier rows
+    read "Nanjing Roytek & 3X Motion Technologies Co., LTD" — byte-identical —
+    under supplier numbers 1416, 3567106, 3567111 and 3792588, and the scan
+    reported no duplicates at all. An exact name match short-circuits now.
+
+    **A differing STRONG ID is not evidence of distinctness.** It used to score
+    0.0 and keep its weight in the denominator, so a perfect 1.0 on the name was
+    averaged down — 0.5/0.8 = 0.63 against a 0.86 threshold — and the pair was
+    dropped. But two rows carrying different supplier numbers is the *definition*
+    of the duplicate this function exists to find: the same company entered
+    twice under two keys. The scorer was treating the very thing that makes it a
+    duplicate as proof it was not one.
+
+    So a strong id that AGREES is strong positive evidence and counts fully; one
+    that DISAGREES abstains rather than voting against. Fuzzy fields still
+    contribute weight × similarity in both directions — a name that half matches
+    is genuinely weaker evidence, unlike a key that simply differs.
+
+    The cost is a few more false pairs on genuinely different companies with
+    near-identical names. That is the right trade: a suspect can be dismissed in
+    one click, whereas a missed duplicate ships to Oracle and creates a second
+    supplier record.
+    """
+    ev = {}
+
+    # Exact name match — nothing else can talk us out of it.
+    if anchor:
+        a1, a2 = _norm(r1.get(anchor, "")), _norm(r2.get(anchor, ""))
+        if a1 and a1 == a2:
+            ev[anchor] = 1.0
+            for f in fields:
+                c, kind, w = f["column"], f["kind"], f["weight"]
+                if c == anchor:
+                    continue
+                v1 = str(r1.get(c, "") or "").strip()
+                v2 = str(r2.get(c, "") or "").strip()
+                if not v1 or not v2:
+                    continue
+                s = (1.0 if (_norm_key(v1) and _norm_key(v1) == _norm_key(v2))
+                     else 0.0) if kind in ("taxid", "number") else _str_sim(v1, v2)
+                if s >= 0.5:
+                    ev[c] = round(s, 3)
+            return 1.0, ev
+
     total_w = 0.0
     acc = 0.0
-    ev = {}
     for f in fields:
         c, kind, w = f["column"], f["kind"], f["weight"]
         v1, v2 = str(r1.get(c, "") or "").strip(), str(r2.get(c, "") or "").strip()
         if not v1 or not v2:
             continue
-        total_w += w
         if kind in ("taxid", "number"):
-            s = 1.0 if _norm_key(v1) == _norm_key(v2) and _norm_key(v1) else 0.0
+            agree = bool(_norm_key(v1)) and _norm_key(v1) == _norm_key(v2)
+            if not agree:
+                # Abstain. A different key does not argue the entities apart.
+                continue
+            s = 1.0
         else:
             s = _str_sim(v1, v2)
+        total_w += w
         acc += w * s
         if s >= 0.5:
             ev[c] = round(s, 3)
@@ -229,7 +279,7 @@ def find_duplicate_clusters(
     uf = _UF(n)
     pair_conf: dict[tuple, tuple] = {}
     for i, j in pairs_to_score:
-        score, ev = _pair_score(recs[i], recs[j], fields)
+        score, ev = _pair_score(recs[i], recs[j], fields, anchor)
         if score >= threshold:
             uf.union(i, j)
             pair_conf[(min(i, j), max(i, j))] = (score, ev)

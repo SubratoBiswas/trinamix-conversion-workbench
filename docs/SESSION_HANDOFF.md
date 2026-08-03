@@ -1540,3 +1540,231 @@ highest-severity data item, and it is blocked on people, not code.
   path does today.
 * Surface decision dates in Mapping Review, so "latest wins" is visible rather than
   merely true.
+
+---
+
+## 12. Continuation session — 2026-08-03 (one dated store, run report, Output Preview)
+
+Four changes shipped and deployed (backend commit `b424068c` and later). Test
+suite: **900 passing, 13 skipped, 0 failing** (747 at the start of the session).
+
+### 12.1 The one dated store — `docs/ONE_DATED_STORE.md` steps 1–4
+
+`services/mapping_store.py` is the whole rule.
+
+* Every statement about how a field should be mapped is a dated entry, keyed
+  **`(client_id, source_erp, target_field)`**. No object scope, no project scope,
+  no per-conversion override.
+* Four decisions: `source_column`, `default_value`, `suppress`, `rule`.
+* Workbook, gold, learning capture, steer box, grid edit and custom rule all
+  write through **one function**, `record_decision`.
+  `tests/test_one_dated_store_writes.py` walks the AST of every module and fails
+  if anything else constructs a mapping-decision `LearnedMapping`. Three
+  exceptions remain, each asserted to be a kind that is NOT a mapping decision:
+  `crosswalk` (one row per source VALUE), `file_signature`, and the Learning
+  Centre's own "add" button.
+* **Newest wins.** `captured_from` / `captured_by` are provenance and are read by
+  nothing that picks a winner.
+* `effective_date` never moves on a read. A bundled file with no date carries
+  **no** date rather than today's — a seed stamping itself `now` on every boot
+  would out-rank every instruction ever given, which is what `captured_at` did.
+
+**Six precedence tiers deleted**, each of which competed with the date and
+disagreed with the others: suppression-loses-to-mapping; `_candidate_order`
+(strong-transform ranking); a second date ordering for constant defaults;
+object-key spelling widening (`$in` over five spellings); `>` vs `>=` disagreeing
+on an exact tie between propagation and the blank/rule corrections; and
+`_eligible`, which had **no date test at all**, so a human approval was
+permanently immune.
+
+**Backfill** — `services/mapping_store_backfill.py`. Every human-decided
+`MappingSuggestion` becomes an entry carrying its existing `approved_at`; every
+undated library row takes `effective_date` from `captured_at`, once. Runs at
+startup after the seeders and at `POST /api/learned-mappings/backfill-dated-store`.
+Idempotent; a run with nothing to do writes nothing.
+
+**Reads** — generation resolves through the store before building the file and
+writes only rows whose content actually changes. The `_heavy` gate (objects with
+>300 fields skipped the apply pass entirely) is **gone**: it made the 19-sheet
+Customer and Item loads the most likely to ship against a stale copy.
+`MappingSuggestion` gained `derived` / `derived_from`; a person's edit clears the
+flag and becomes its own dated entry.
+
+**⚠ Behavioural consequence, measured not estimated.** Against the JSON in
+`app/data/`: 675 seeded entries, **67 target-field names claimed by more than one
+object, and 41 where the objects disagree** — those now resolve to one winner.
+Affected names include Address Line 1/2/3, City, Country, Postal Code, State,
+Phone, Email, Fax, Account Name, Account Number, Payment Terms, Payment Method,
+First/Middle/Last Name, Supplier Name. What limits it: the apply pass only writes
+a decision whose source column exists in that conversion's extract, so a Supplier
+entry naming `address_1` is skipped on a Customer extract that has `addr1`.
+**If a merged field is wrong, re-date the losing document** — that is a data
+change, not a code change.
+
+Sheet scope (`sheets` / `exclude_sheets`) is kept as an applicability predicate:
+it is part of what the analyst said, not a tier competing with the date.
+
+### 12.2 Output report — "what the tool did to the input file"
+
+`services/conversion_report_service.py`, a pure openpyxl builder (dicts in, bytes
+out), same palette as `mapping_export_service`.
+`GET /api/conversions/project/{id}/conversion-report` collects and streams it.
+Frontend: `OutputApi.conversionReport`, buttons in **both** places the bundle can
+be pulled from on Project Overview.
+
+Seven sheets: Summary (with a "how to read this" block), Mappings (with the
+**authority** behind each decision), Cleansing (real before/after per rule),
+Duplicates, Validation, Required fields, Run log.
+
+**It reports the run, not a recomputation** — the `dq_report` persisted on
+`ConvertedOutput`, the mapping rows as they stand, the row counts on disk. Tests
+assert the collector calls none of `find_duplicate_clusters`, `apply_cleansing`,
+`validate_frame`, `generate_output_artifact` or `generate_merged`. An unknown
+figure prints a dash, never a zero. A section that found nothing still gets a
+sheet saying so.
+
+### 12.3 Output Preview went blank — React #310
+
+`OutputPreviewPage` declared `useState` for `fixBusy`/`fixNote` ~470 lines
+**below** `if (!project) return <PageLoader />`. First render (project loading)
+ran two fewer hooks than the second; React throws "Rendered more hooks than
+during the previous render". It took the page down on **every** load.
+
+Both hooks moved above the guard. `tests/test_hook_order.py` now walks every
+`.tsx` and fails on any hook below a component-level return; it treats two-space
+indentation as the component's own scope so a `return` inside a callback is
+ignored, and two of its cases feed it a known-broken and known-good component.
+It passes across the whole frontend — Output Preview was the only violation.
+
+**`components/ErrorBoundary.tsx`** now wraps every route. There was none before
+(the CODEBASE_GUIDE flagged this), so the symptom of any render bug was a white
+page — indistinguishable from a failed build, a failed deploy or a static-host
+404, all three of which were investigated before the real cause. It names the
+component from `componentStack`, translates React's numbered production errors
+(#310 → "a hook is running conditionally, or sits after an early return"), resets
+on navigation, and puts component + both stacks behind a "Copy details" button.
+
+### 12.4 Cleansing tab now runs on open
+
+Both checks on that tab are lazy (each builds the sheet frames). Column rules
+already auto-ran but rendered **nothing** while working, so the panel doing the
+most work looked the most broken; cleansing findings did not auto-run at all.
+Both now run on tab open from one effect, once each, and both say what they are
+doing ("Checking every column…", "Profiling the source file…", "Not checked yet").
+
+### 12.5 `launch_git.bat` — deploy only
+
+* **No test step.** Every patch has the suite run against it before it is cut;
+  this machine has no Windows venv or backend deps, so the step could only print
+  "cannot run" — and when it misfired it said "tests failed", which was false.
+* **`--ignore-whitespace` on every `git apply`.** The working tree is CRLF,
+  patches are cut on Linux with LF, and `git apply` matches context byte for
+  byte — so hunks failed against visually identical lines. **This cost most of an
+  afternoon; do not remove the flag.**
+* `GIT_PAGER=cat` + `git --no-pager`. A long `diff --cached --name-only` opened
+  `less` and stopped the script dead at a `:` prompt that looked like completion.
+* Self-locating via `%~dp0`; commit verified before push; a patch that will not
+  apply prints git's actual objection and distinguishes "partly applied" from
+  "diverged".
+
+---
+
+## 13. OPEN ITEMS — start here next session
+
+### 13.1 ~~Duplicate suspects reports nothing~~ — FIXED this session
+
+Reported live on Supplier Import, NextPower: four rows reading
+"Nanjing Roytek & 3X Motion Technologies Co., LTD" — byte-identical — under
+supplier numbers 1416, 3567106, 3567111, 3792588, and the panel said
+*"Scanned 3813 records — no near-duplicate entities above the match threshold."*
+
+**Cause.** `_pair_score` was a weighted average over every identity field
+non-blank in both rows. The name scored 1.0; the supplier NUMBER, a strong id
+that differed, scored 0.0 **and kept its weight in the denominator**. A perfect
+name match was averaged down to ≈0.5/0.8 = 0.63 against a 0.86 threshold and the
+pair was discarded. Two rows under different supplier numbers is the *definition*
+of the duplicate this function exists to find, so the scorer was treating the
+very thing that makes it a duplicate as proof it was not one.
+
+**Fix** (`services/entity_resolution.py`):
+
+1. An exact normalised-name match short-circuits to confidence 1.0. Legal
+   suffixes and punctuation are still normalised away first, so "ACME  Inc " and
+   "acme, inc." match. A blank name never matches another blank name.
+2. A strong id (taxid / number) that DISAGREES now **abstains** — it leaves both
+   numerator and denominator — rather than voting against. One that AGREES still
+   counts fully as positive evidence. Fuzzy fields are unchanged and still
+   contribute in both directions.
+3. Corroborating evidence is still reported on a short-circuit, so the UI keeps
+   listing which fields matched.
+
+Trade accepted: a few more false pairs on genuinely different companies with
+near-identical names. A suspect is dismissed in one click; a missed duplicate
+ships to Oracle and creates a second supplier record.
+
+`tests/test_duplicate_scoring.py` — 13 tests, pure. Includes the four Roytek rows
+verbatim, and a test that reconstructs the OLD formula and asserts it would have
+failed, so the suite cannot pass by luck.
+
+**Not verified against live data.** Re-scan Supplier Import and confirm the four
+Roytek rows now cluster.
+
+### 13.2 Item Import shows 0 converted rows
+
+"Syteline source → Item Import": Converted Data badge `0`, headers render, no
+rows. Lineage 260, Cleansing 0. **Uninvestigated** — the browser call diagnosing
+it timed out. Check whether the source dataset has rows, whether an artifact was
+ever generated, and whether §12.1's 41 merged fields point Item mappings at
+columns absent from a SyteLine extract.
+
+### 13.3 Static site has no SPA rewrite (not code)
+
+`render.yaml` carries the rule but is bound to services named
+`trinamix-backend` / `trinamix-frontend`; the live sites are
+`tx-conversion-workbench` and `trinamix-conversion-workbench`, created by hand,
+so the manifest never governed them. Any refresh or pasted deep link returns
+**404 with a blank body**, which looks exactly like a broken page.
+
+Fix in the Render dashboard → Redirects/Rewrites → source `/*`, destination
+`/index.html`, action **Rewrite**.
+
+### 13.4 `derived` flag under-reports
+
+`apply_learned_to_conversion` only writes when the store's answer differs from
+the row, so a row that already matches never gets `derived=True`. Behaviour is
+right (no needless writes) but the flag lies by omission, and the run report's
+**Authority** column falls back to the approver instead of the dated entry.
+
+### 13.5 Step 5 of `docs/ONE_DATED_STORE.md` — delete the copy paths
+
+`apply_learned_to_conversion`, `propagate_learning_to_open_conversions` and the
+fan-out plumbing still run; they now populate the view from the store instead of
+implementing their own precedence. The doc calls their deletion "the proof the
+change landed". Deliberately deferred — it invalidates ~40 tests.
+
+### 13.6 The plan's own verification, never run
+
+Regenerate Supplier, Customer and Employee and diff against the 02-Aug bundles.
+Needs MongoDB and the bundles. Expect any difference to land on the 41 fields in
+§12.1.
+
+### 13.7 Files touched this session
+
+`services/mapping_store.py` (new), `services/mapping_store_backfill.py` (new),
+`services/conversion_report_service.py` (new), `learning_service.py`,
+`catalog_seed_service.py`, `output_service.py`, `defaults_service.py`,
+`example_learning_service.py`, `mapping_import_service.py`,
+`mapping_ingest_service.py`, `steering_service.py`, `routers/operations.py`,
+`routers/mapping.py`, `routers/learned.py`, `routers/manual_map.py`,
+`models/mapping.py`, `schemas/mapping.py`, `main.py`;
+`frontend/src/components/ErrorBoundary.tsx` (new), `App.tsx`,
+`pages/OutputPreviewPage.tsx`, `pages/ProjectOverviewPage.tsx`, `api/index.ts`,
+`types/index.ts`.
+
+New tests: `test_one_dated_store.py`, `test_one_dated_store_writes.py`,
+`test_one_dated_store_reads.py`, `test_conversion_report.py`,
+`test_error_boundary.py`, `test_hook_order.py`. Twelve existing seam tests moved
+to the new address rather than being weakened.
+
+New endpoints: `POST /api/learned-mappings/backfill-dated-store`,
+`GET /api/conversions/project/{id}/conversion-report`.

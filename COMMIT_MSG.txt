@@ -1,48 +1,64 @@
-Run both cleansing-tab checks on open, and say when they are working
+Duplicate scoring: an identical name is a duplicate; a different key is not a defence
 
-The Cleansing tab showed a panel with a heading, a paragraph of explanation, and
-nothing under it. That reads as broken. It was not -- both checks on that tab
-are lazy, because each builds the sheet frames and that is not free -- but a
-silent lazy panel and a failed one look identical, and the analyst has no way to
-tell them apart.
+Four NextPower supplier rows read
 
-  Column rules      already auto-ran on tab open, but rendered NOTHING while it
-                    was working. The button showed its loading glyph, which just
-                    reads as greyed out. So the one panel that was actually
-                    doing something looked the most broken.
+  1416     Nanjing Roytek & 3X Motion Technologies Co., LTD
+  3567106  Nanjing Roytek & 3X Motion Technologies Co., LTD
+  3567111  Nanjing Roytek & 3X Motion Technologies Co., LTD
+  3792588  Nanjing Roytek & 3X Motion Technologies Co., LTD
 
-  Cleansing findings did not auto-run at all. It said "the check hasn't been
-                    run", which was honest, but left the tab's count on 0 and
-                    the panel empty for anyone who never pressed the button.
+Byte-identical names. Duplicate suspects reported "Scanned 3813 records -- no
+near-duplicate entities above the match threshold."
 
-Both now run as soon as the tab is opened, from ONE place -- a single effect
-keyed on the tab, rather than the previous trigger buried in the Tabs onChange
-handler. Once each: reopening the tab does not re-run them, and a failure is not
-retried in a loop. Both buttons stay, for a deliberate re-check.
+CAUSE
 
-And both now say what they are doing. "Checking every column against the
-template's own header comments..." and "Profiling the source file..." while they
-run; "Not checked yet" if they have not been asked. An empty panel now always
-means something specific.
+  _pair_score was a weighted average over every identity field non-blank in BOTH
+  rows. The name scored 1.0. The supplier NUMBER, a strong id that differed,
+  scored 0.0 and KEPT ITS WEIGHT IN THE DENOMINATOR. So a perfect name match was
+  averaged down to roughly 0.5/0.8 = 0.63 against a 0.86 threshold, and the pair
+  was discarded.
 
-  The new useState/useEffect/useRef sit in the top hook block with every other
-  hook, above `if (!project) return <PageLoader />`. tests/test_hook_order.py
-  enforces that -- it is the rule whose breach blanked this page in the first
-  place, and the check caught it here before the code shipped.
+  Two rows carrying different supplier numbers is the definition of the duplicate
+  this function exists to find -- the same company entered twice under two keys.
+  The scorer was treating the very thing that makes it a duplicate as proof that
+  it was not one.
 
-NOT CHANGED, AND WORTH KNOWING
+FIX -- services/entity_resolution.py
 
-  "Duplicate suspects" on Supplier Address says "child interface -- entity
-  resolution skipped". That is correct and deliberate: a child interface has
-  many rows per entity by nature, so fuzzy resolution would flag every supplier
-  with two sites as a duplicate. The panel already explains itself.
+  1. An exact normalised-name match short-circuits to confidence 1.0. Legal
+     suffixes and punctuation are normalised away first, so "ACME  Inc " and
+     "acme, inc." still match, and a blank name never matches another blank name.
+
+  2. A strong id (taxid / number) that DISAGREES now ABSTAINS -- it leaves both
+     the numerator and the denominator -- instead of voting against. One that
+     AGREES still counts fully, as strong positive evidence. Fuzzy fields are
+     unchanged and still contribute in both directions: a name that half matches
+     really is weaker evidence, unlike a key that simply differs.
+
+  3. Corroborating evidence is still collected on a short-circuit, so the UI
+     keeps listing which fields matched.
+
+  Trade accepted: a few more false pairs on genuinely different companies with
+  near-identical names. A suspect is dismissed in one click; a missed duplicate
+  ships to Oracle and creates a second supplier record.
 
 TESTS
 
-  887 passing, 13 skipped, 0 failing.
+  tests/test_duplicate_scoring.py -- 13 tests, pure, no database. Includes the
+  four Roytek rows verbatim, both directions of the abstain rule, and the cases
+  that must still NOT cluster (different companies, blank-vs-blank names).
 
-STILL OUTSTANDING, NOT CODE
+  One test reconstructs the OLD formula and asserts it would have failed this
+  data -- so the suite cannot pass by luck or drift onto a different defect.
 
-  The static site has no SPA rewrite, so refreshing this page still returns 404
-  with a blank body. Render dashboard -> Redirects/Rewrites -> source /*,
-  destination /index.html, action Rewrite.
+  900 passing, 13 skipped, 0 failing.
+
+NOT VERIFIED AGAINST LIVE DATA
+
+  Re-scan Supplier Import after deploy and confirm the four Roytek rows cluster.
+
+ALSO
+
+  docs/SESSION_HANDOFF.md gains section 12 (this session's four changes) and
+  section 13 (open items, with the two live ones: Item Import showing 0 converted
+  rows, and the missing SPA rewrite on the Render static site).
