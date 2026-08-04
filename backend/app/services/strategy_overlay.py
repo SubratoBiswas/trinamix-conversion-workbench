@@ -32,9 +32,12 @@ _FILE = _DATA / "supplier_strategy_defaults.json"
 #
 # ``derive`` rows in these files are column mappings, not overlays, and are
 # deliberately skipped: discovery stays with mapping, this is the guarantee.
+# Ordered oldest first for readability only — precedence is by _effective_date,
+# never by position. A later file restating a field simply carries a later date.
 _EXTRA_FILES = (
     "supplier_corrections_30jul.json",
     "customer_mapping_03aug.json",
+    "supplier_corrections_04aug.json",
 )
 _cache: dict | None = None
 _blank_cache: dict | None = None

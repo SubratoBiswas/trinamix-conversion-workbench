@@ -1,0 +1,33 @@
+{
+  "_source": "Analyst, 04-Aug-2026, on the NextPower supplier bundle: 'if remittance E-mail value is not blank then delivery method value is EMAIL & if remittance fax is not blank but remittance-email is blank then the delivery method is EMAIL, otherwise blank.' Given twice, verbatim, after the generated FBDI shipped Delivery Method empty on every row.",
+  "_effective_date": "2026-08-04",
+  "_scope": "Client NextPower, the supplier bundle. Registered under 'Supplier' with applies_to_all_sheets, so it reaches Supplier, Supplier Address and Supplier Site — the three objects that carry the column.",
+  "_why_a_new_dated_file": [
+    "The rule was already authored, on 28-Jul and again on 30-Jul, and read correctly. It shipped blank anyway.",
+    "The likeliest cause is a regression introduced on 04-Aug: an overlay rule stopped running when the CONVERSION carries its own rule for the same field that is newer. That guard is right in general — it stops the overlay overwriting a rule an analyst typed five minutes ago — but a rule SEEDED onto a conversion carries the date it was seeded, not the date it was decided. supplier_transform_mappings.json seeds a Delivery Method CASE_WHEN off the Email/Fax TRANSACTION FLAGS, and the 28-Jul note says in as many words that it must be retired or 'the two CASE_WHENs will both target this field'. A stale seeded rule reading columns the extract does not have produces exactly what was reported: blank on every row.",
+    "Re-dating the instruction is the fix the architecture already has for this. Under one dated store the newest statement wins; this is the newest statement. It beats any rule seeded before today without weakening the guard that protects a rule an analyst has just typed."
+  ],
+  "_open_question": "The analyst's sentence assigns EMAIL in BOTH branches — 'if remittance fax is not blank but remittance-email is blank then the delivery method is EMAIL'. It was stated that way twice. Implemented exactly as written. The 28-Jul version of this rule said FAX there; if that is still intended, change the fax branches back to FAX and re-date.",
+  "rules": [
+    {
+      "target_object": "Supplier",
+      "target_field": "Delivery Method",
+      "action": "rule",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Remittance E-Mail", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "Remittance Email", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "Remittance E-mail", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "remittance_email", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "Remittance Fax", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "Remittance fax", "op": "notblank", "then": "EMAIL"},
+          {"if_column": "remittance_fax", "op": "notblank", "then": "EMAIL"}
+        ],
+        "default": ""
+      },
+      "applies_to_all_sheets": true,
+      "note": "E-mail branches are tested first, so a row carrying both still reads from the e-mail column — which is what 'preference to EMAIL' meant on 28-Jul and is unchanged. Every plausible spelling of each column is listed: a branch on a column the extract does not have reads as blank and falls through, so naming several costs nothing and one wrong guess costs the whole rule. The default is blank, never a guessed code."
+    }
+  ]
+}

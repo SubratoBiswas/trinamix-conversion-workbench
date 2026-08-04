@@ -219,10 +219,29 @@ def test_the_newer_all_sheets_rule_beats_an_older_sheet_specific_one():
     from app.services.strategy_overlay import directive_for
     d = directive_for("Supplier Site", "Delivery Method")
     check("a rule resolves", d and "rule" in d, f"got {d}")
-    cols = {b.get("if_column") for b in d["rule"]["config"]["branches"]}
-    check("it is the 30-Jul rule", "Email" in cols and "Fax" in cols, f"got {sorted(cols)}")
-    check("and it is dated 30-Jul", str(d.get("as_of", ""))[:10] == "2026-07-30",
-          f"got {d.get('as_of')}")
+    # The 13-Jul strategy's Supplier Site rule must not be what resolves. It is
+    # the narrow, older one, and letting precision beat recency is the defect
+    # this test was written for.
+    check("the 13-Jul sheet-specific rule is not the winner",
+          str(d.get("as_of", ""))[:10] > "2026-07-13", f"got {d.get('as_of')}")
+    check("the winner is an all-sheets rule reaching Supplier Site",
+          any("emittance" in str(b.get("if_column")) for b in
+              d["rule"]["config"]["branches"]),
+          f"got {[b.get('if_column') for b in d['rule']['config']['branches']]}")
+
+    # The 30-Jul correction still CARRIES the all-sheets rule — that fact is what
+    # this test was originally about, and it is asserted at the source now rather
+    # than through whatever happens to be newest. On 04-Aug the analyst restated
+    # the rule after the column shipped blank, so the resolved winner is that one;
+    # "whichever is latest" is the rule being tested, so a later statement
+    # displacing it is the test passing, not failing.
+    rule = next(r for r in doc()["rules"]
+                if r.get("target_field") == "Delivery Method"
+                and r.get("action") == "rule")
+    cols = {b.get("if_column") for b in rule["rule_config"]["branches"]}
+    check("30-Jul still holds the all-sheets rule", "Email" in cols and "Fax" in cols,
+          f"got {sorted(cols)}")
+    check("and it is marked all-sheets", bool(rule.get("applies_to_all_sheets")))
 
 
 
