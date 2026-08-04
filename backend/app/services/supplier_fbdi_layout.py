@@ -4,10 +4,15 @@ Extracted from ``output_service`` so the analyst-driven column reorder, the END
 record-terminator, and the Oracle zip/CSV file names can be UNIT TESTED without
 importing the Beanie/Mongo/pydantic stack (which isn't importable in CI/sandbox).
 
-Driven by two bundled data files:
+Driven by bundled data files, one per object, because the three objects genuinely
+disagree about the rules and a shared spec would have to lie about one of them:
   data/supplier_fbdi_column_order.json  — per-interface CSV column sequence
                                           (ConvNXP_All.xlsm "Supplier Import" tab)
   data/supplier_fbdi_file_names.json    — zip name + per-sheet CSV names (Tejaswi)
+  data/customer_fbdi_column_order.json  — worksheet order AND CSV order, which
+                                          differ on 3 of 15 interfaces; END appended
+  data/bom_fbdi_column_order.json       — ONE order serving both formats on all 4
+                                          interfaces; NO END terminator
 
 The generator calls these; the reorder is applied to a supplier interface sheet's
 frame, END is appended as the last column on every row, and (in ``output_service``)
@@ -26,10 +31,12 @@ _DATA = Path(__file__).resolve().parent.parent / "data"
 _ORDER_FILE = _DATA / "supplier_fbdi_column_order.json"
 _NAMES_FILE = _DATA / "supplier_fbdi_file_names.json"
 _CUSTOMER_FILE = _DATA / "customer_fbdi_column_order.json"
+_BOM_FILE = _DATA / "bom_fbdi_column_order.json"
 
 _order_cache: dict | None = None
 _names_cache: dict | None = None
 _customer_cache: dict | None = None
+_bom_cache: dict | None = None
 
 
 def customer_layout() -> dict:
@@ -122,6 +129,130 @@ def safe_sheet_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "sheet"
 
 
+def _reorder_to(sdf: "pd.DataFrame", order: list) -> "pd.DataFrame":
+    """Reindex a frame's columns to ``order``, matched on the normalised header.
+
+    The one piece of logic all three object layouts share, kept in one place so the
+    third caller cannot quietly drift from the first two. Columns the spec does not
+    name are kept and appended in their existing relative order: a template that has
+    gained a column still round-trips, because dropping one silently would be a
+    worse failure than the misordering this exists to fix.
+    """
+    by_norm: dict = {}
+    for c in sdf.columns:
+        by_norm.setdefault(norm_hdr(c), c)
+    seen: set = set()
+    ordered: list = []
+    for h in order:
+        c = by_norm.get(norm_hdr(h))
+        if c is not None and c not in seen:
+            ordered.append(c)
+            seen.add(c)
+    for c in sdf.columns:
+        if c not in seen:
+            ordered.append(c)
+            seen.add(c)
+    return sdf[ordered].copy()
+
+
+def bom_layout() -> dict:
+    """The BOM Import layout — column order, Oracle CSV names, and the END flag.
+
+    From ``BOM_Import_FBDI_Sequence_Mapping 1.xlsx``, handed over 04-Aug-2026. Each
+    of the four tabs lists the FBDI worksheet order and the CSV order side by side,
+    and on all four they are identical — compared position by position rather than
+    assumed — so ONE list is correct for both formats. That is the opposite of
+    Customer, where three of fifteen interfaces disagree, and the disagreement is
+    the whole reason each object carries its own spec instead of sharing one.
+
+    A missing or unreadable file disables the reorder rather than raising, matching
+    the other two vocabularies: a spec that cannot be read must never take the
+    deliverable down with it.
+    """
+    global _bom_cache
+    if _bom_cache is None:
+        try:
+            doc = json.loads(_BOM_FILE.read_text(encoding="utf-8"))
+            _bom_cache = {
+                "order": {norm_hdr(k): v for k, v in (doc.get("order") or {}).items()},
+                "csv": {norm_hdr(k): v for k, v in (doc.get("csv_file_names") or {}).items()},
+                "with_end": bool(doc.get("append_end_column", False)),
+            }
+        except Exception:  # noqa: BLE001 — a missing file just disables the reorder
+            _bom_cache = {"order": {}, "csv": {}, "with_end": False}
+    return _bom_cache
+
+
+def bom_col_order() -> dict:
+    """{normalised interface sheet name -> ordered list of headers}."""
+    return bom_layout()["order"]
+
+
+def bom_sheet_order(sheet_name: str) -> list | None:
+    """The column list for one BOM interface, or None if the spec does not name it."""
+    o = bom_col_order().get(norm_hdr(safe_sheet_name(sheet_name)))
+    return list(o) if isinstance(o, list) and o else None
+
+
+def is_bom_sheet(sheet_name: str) -> bool:
+    """Is this one of the four interfaces the BOM spec names?
+
+    The reliable BOM signal. An object NAME cannot be trusted on its own here —
+    'bom' is a substring of ordinary words, and the same object travels under BOM,
+    Bill of Materials and Item Structure depending on who created it.
+    """
+    return bom_sheet_order(sheet_name) is not None
+
+
+def bom_appends_end() -> bool:
+    """Does the BOM package write the END record terminator? The spec says no.
+
+    Kept as DATA rather than a constant because this is the single value most
+    likely to be got wrong by inheritance: the supplier package has always appended
+    END and BOM reuses that machinery. The analyst checked all four tabs, none
+    carries an END column, and a terminator here would hand Oracle an extra field
+    it does not expect on these interfaces.
+    """
+    return bool(bom_layout()["with_end"])
+
+
+def bom_csv_name_for(sheet_name: str) -> str | None:
+    """Oracle's CSV file name for a BOM interface — ``EgpStructuresInterface.csv``.
+
+    From the workbook's Summary tab. Oracle matches the file inside the zip by
+    name, so the spec's spelling is used verbatim and nothing is prefixed onto it.
+    """
+    return bom_layout()["csv"].get(norm_hdr(safe_sheet_name(sheet_name))) or None
+
+
+def apply_bom_layout(sdf: "pd.DataFrame", sheet_name: str, is_bom: bool,
+                     with_end: bool | None = None) -> "pd.DataFrame":
+    """Reorder one BOM interface sheet to the Oracle column sequence.
+
+    No ``for_csv`` switch, deliberately: the FBDI worksheet order and the CSV order
+    are the same list on all four interfaces, so offering a choice would invent a
+    distinction the source workbook does not make.
+
+    ``with_end`` defaults to what the spec file says, which is ``False``. The
+    supplier package appends an END record terminator to every row and this module
+    is where that behaviour lives, so the default is the guard: a caller that
+    forgets the flag still gets BOM's answer rather than supplier's.
+
+    These are HEADERLESS CSVs — column POSITION is the only thing carrying meaning,
+    so a list that is right about the names and wrong about the order loads
+    silently into the wrong fields.
+    """
+    if not is_bom:
+        return sdf
+    if with_end is None:
+        with_end = bom_appends_end()
+    order = bom_sheet_order(sheet_name)
+    if not order:
+        return _with_end(sdf) if with_end else sdf
+    out = _reorder_to(sdf, order)
+    return _with_end(out) if with_end else out
+
+
 def supplier_col_order() -> dict:
     """{normalized interface sheet name -> ordered list of CSV headers}."""
     global _order_cache
@@ -185,21 +316,7 @@ def apply_customer_layout(sdf: "pd.DataFrame", sheet_name: str, is_customer: boo
     order = spec.get("csv_order" if for_csv else "fbdi_order") or []
     if not order:
         return sdf if not with_end else _with_end(sdf)
-    by_norm: dict = {}
-    for c in sdf.columns:
-        by_norm.setdefault(norm_hdr(c), c)
-    seen: set = set()
-    ordered: list = []
-    for h in order:
-        c = by_norm.get(norm_hdr(h))
-        if c is not None and c not in seen:
-            ordered.append(c)
-            seen.add(c)
-    for c in sdf.columns:
-        if c not in seen:
-            ordered.append(c)
-            seen.add(c)
-    out = sdf[ordered].copy()
+    out = _reorder_to(sdf, order)
     return _with_end(out) if with_end else out
 
 
@@ -248,24 +365,7 @@ def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: boo
     if not is_supplier:
         return sdf
     order = supplier_col_order().get(norm_hdr(safe_sheet_name(sheet_name)))
-    if order:
-        by_norm: dict = {}
-        for c in sdf.columns:
-            by_norm.setdefault(norm_hdr(c), c)
-        seen: set = set()
-        ordered: list = []
-        for h in order:
-            c = by_norm.get(norm_hdr(h))
-            if c is not None and c not in seen:
-                ordered.append(c)
-                seen.add(c)
-        for c in sdf.columns:  # keep any template column the tab didn't list
-            if c not in seen:
-                ordered.append(c)
-                seen.add(c)
-        sdf = sdf[ordered].copy()
-    else:
-        sdf = sdf.copy()
+    sdf = _reorder_to(sdf, order) if order else sdf.copy()
     if batch_id_first:
         # Header spelling varies across the templates (Batch_id / Batch ID /
         # BatchId), so match on the normalised header rather than an exact string.

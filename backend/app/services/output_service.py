@@ -1330,6 +1330,9 @@ from app.services.supplier_fbdi_layout import (  # noqa: E402
     customer_in_load_scope as _customer_in_scope,
     csv_name_for as _csv_name_for,
     zip_name_for as _zip_name_for,
+    apply_bom_layout as _bom_layout,
+    bom_csv_name_for as _bom_csv_name,
+    is_bom_sheet as _is_bom_sheet,
 )
 
 
@@ -2017,6 +2020,15 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         or "supplier" in _safe_sheet_name(s.sheet_name).lower()
         for s in sheets_with_fields
     )
+    # BOM Import — the four EGP_*_INTERFACE structure tables. The sheet test comes
+    # first and is the one that matters: the same object arrives as BOM, Bill of
+    # Materials or Item Structure depending on who created it, and a bare substring
+    # test on the name would also fire on ordinary words containing those letters.
+    # The name is matched on a word boundary purely as a fallback for a conversion
+    # whose sheets the spec has not heard of.
+    _is_bom = any(_is_bom_sheet(s.sheet_name) for s in sheets_with_fields) or bool(
+        re.search(r"\bbom\b|bills?\s+of\s+material", (obj_name or "").lower())
+    )
 
     # Shared customer linkage config (source system code + batch), and a reference
     # series derived ONCE from the party sheet so every interface table links
@@ -2139,6 +2151,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # file in the wrong order is indistinguishable from a correct one by eye —
         # it just loads every value into the neighbouring column.
         return _customer_layout(sdf, sheet_name, _is_customer, for_csv=for_csv)
+
+    def _apply_bom_layout(sdf: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+        # BOM ships ONE column order for both the worksheet and the CSV, and no
+        # record terminator. The supplier package appends one, and this call sits in
+        # the same generator that writes the supplier package, so the flag is passed
+        # explicitly rather than left to a default — an END here would hand Oracle
+        # an extra field it does not expect on these four interfaces.
+        return _bom_layout(sdf, sheet_name, _is_bom, with_end=False)
 
     def _customer_sheet_sort(sheets_in: list) -> list:
         # Oracle rejects a child row whose parent has not loaded, so the files go
@@ -2315,6 +2335,35 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                     del sdf
             return name, str(path), total_rows, total_cols
 
+        # BOM FBDI load package: the spec's column order, Oracle's own CSV file
+        # names, and NO record terminator. Written before the generic multi-sheet
+        # branch below because that one applies the SUPPLIER layout, which is a
+        # no-op on a BOM object and would have shipped these four interfaces in
+        # whatever order the template happened to hold.
+        # The branch needs a sheet the spec actually names, not just a matching
+        # object name: an object called BOM whose sheets are something else must
+        # keep the generic package rather than be renamed into Oracle's BOM files.
+        if _is_bom and any(_is_bom_sheet(s.sheet_name) for s in sheets_with_fields):
+            import zipfile as _zip
+            name = f"BOMImport_{ts}.zip"
+            path = out_dir / name
+            with _zip.ZipFile(path, "w", _zip.ZIP_DEFLATED) as zf:
+                for s in sheets_with_fields:
+                    if _sheet_carries_data(s):
+                        sdf = _finalize(fields_by_sheet[s.id])
+                    else:
+                        sdf = _headers_only(fields_by_sheet[s.id])
+                    sdf = _apply_bom_layout(sdf, s.sheet_name)
+                    # Oracle matches the file inside the zip by NAME, so the spec's
+                    # spelling is written verbatim with nothing prefixed onto it.
+                    _bname = _bom_csv_name(s.sheet_name)
+                    zf.writestr(_bname or f"{_safe_sheet_name(s.sheet_name)}.csv",
+                                sdf.to_csv(index=False, header=_hdr))
+                    total_rows = max(total_rows, len(sdf))
+                    total_cols += len(sdf.columns)
+                    del sdf
+            return name, str(path), total_rows, total_cols
+
         if multi and len(sheets_with_fields) > 1:
             import zipfile as _zip
             name = f"{obj_name}_{ts}.zip"
@@ -2337,6 +2386,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         fdf = _finalize(sfields) if sfields else _apply_control_defaults(df)
         _sname = (sheets_with_fields[0].sheet_name if multi else obj_name)
         fdf = _apply_supplier_layout(fdf, _sname)
+        # Single-file fallback. A BOM conversion normally leaves through the package
+        # branch above; this closes the path where it does not, so there is no route
+        # to a BOM CSV that skipped the column order.
+        fdf = _apply_bom_layout(fdf, _sname)
         name = f"{obj_name}_{ts}.csv"
         path = out_dir / name
         fdf.to_csv(path, index=False, header=_hdr)

@@ -103,6 +103,19 @@ REM handed over as a patch -- which is now the normal case, since the assistant
 REM can write here directly. Name patches here only when there ARE patches.
 set "EXPECT="
 
+REM WHAT THIS DEPLOY CONTAINS. Rewritten every time, exactly like EXPECT.
+REM
+REM EXPECT going empty is now the normal case, because the assistant writes
+REM into the repo directly. That removed the one line that used to say what a
+REM run was shipping, so every deploy started looking identical to every other
+REM deploy -- and a green run that shipped the wrong change is the failure this
+REM script exists to make impossible. Named here, echoed at the start and again
+REM on the DONE screen, so the thing you deployed is stated twice.
+REM
+REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
+REM would parse them as syntax.
+set "DEPLOY_NOTE=BOM FBDI column order wired - bom_col_order + apply_bom_layout, with_end=False, Oracle CSV file names. Backend suite 1087 passing, 14 skipped."
+
 echo Checking the deploy set...
 set "MISSING="
 if not defined EXPECT goto :setok
@@ -147,6 +160,7 @@ set "PAGER=cat"
 echo.
 echo ===================== DEPLOY =====================
 echo   Repo: %CD%
+if defined DEPLOY_NOTE echo   Shipping: %DEPLOY_NOTE%
 echo.
 
 if not exist "%MSG%" (
@@ -355,6 +369,7 @@ REM building, wait and refresh.
 for /f %%i in ('git rev-parse --short HEAD') do set SHA=%%i
 echo.
 echo ====== DONE - committed and pushed ======
+if defined DEPLOY_NOTE echo   Shipped       : !DEPLOY_NOTE!
 if defined PATCHED echo   Patches applied: !PATCHED!
 echo   Pushed commit : %SHA%
 echo   Now check     : https://trinamix-conversion-backend.onrender.com/api/health
