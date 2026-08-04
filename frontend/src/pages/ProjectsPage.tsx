@@ -155,7 +155,8 @@ const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number)
       const kept: any[] = res?.datasets_kept ?? [];
       const gone: string[] = res?.datasets_deleted ?? [];
       const errs: string[] = res?.capture_errors ?? [];
-      if (kept.length || errs.length) {
+      const warns: string[] = res?.warnings ?? [];
+      if (kept.length || errs.length || warns.length) {
         alert(
           `Deleted "${project.name}".\n\n` +
           (gone.length ? `Datasets removed: ${gone.join(", ")}\n\n` : "") +
@@ -170,12 +171,34 @@ const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number)
           (errs.length
             ? `WARNING — the mapping logic could not be captured for:\n` +
               errs.map((e) => `  • ${e}`).join("\n") +
-              `\nAnything decided on those conversions and not already learned is gone.`
+              `\nAnything decided on those conversions and not already learned may not have reached the library.\n\n`
+            : "") +
+          (warns.length
+            ? `The engagement was deleted, but some housekeeping failed:\n` +
+              warns.map((w) => `  • ${w}`).join("\n")
             : "")
         );
       }
-    } catch {
-      alert("Failed to delete engagement.");
+    } catch (err: any) {
+      // SAY WHY. "Failed to delete engagement." is the blank panel that could not
+      // explain itself: it cannot tell a timeout from a permission problem from a
+      // bad row, so the only next step it leaves anybody is to try again and get
+      // the same box. The API's global handler returns a JSON detail — show it.
+      const detail =
+        err?.response?.data?.detail ||
+        err?.message ||
+        "no further detail was returned";
+      const status = err?.response?.status;
+      alert(
+        `Could not delete "${project.name}".\n\n` +
+        (status ? `HTTP ${status}\n` : "") +
+        `${detail}\n\n` +
+        (status === 403
+          ? "This account is not allowed to delete engagements."
+          : status === 504 || /timeout|timed out|network/i.test(String(detail))
+          ? "The request ran out of time rather than being refused — the engagement may be large. It is safe to try again; the delete is idempotent."
+          : "Nothing has been deleted.")
+      );
       setDeleting(false);
     }
   };

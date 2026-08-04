@@ -181,10 +181,16 @@ def test_the_dialog_matches_the_cascade_it_describes():
         check(f"{model} is deleted by the endpoint", f"{model}" in code)
         check(f"and the dialog says so", word in deletes, f"missing: {word}")
 
+    # The row deletions moved into a labelled loop so one failure cannot make the
+    # engagement undeletable. The assertion moves with the structure: each model
+    # must appear in that loop, and the loop must actually delete.
+    loop = code[code.index("for _label, _op in ("):]
+    loop = loop[:loop.index("await Conversion.find")]
+    check("the loop deletes", "await _op.delete()" in loop)
     for model, word in (("MappingSuggestion", "mapping rows"),
                         ("TransformationRule", "transformation rules"),
                         ("Crosswalk", "crosswalk")):
-        check(f"{model} is deleted by the endpoint", ".delete()" in _delete_call_for(code, model))
+        check(f"{model} is deleted by the endpoint", f"{model}.find(" in loop)
         check("and the dialog says so", word in deletes, f"missing: {word}")
 
     check("SourceConnection is not in the cascade", "SourceConnection.find" not in code)
@@ -273,6 +279,49 @@ def test_the_learning_library_survives_a_delete():
 def test_the_endpoint_still_reports_what_it_removed():
     code = _router_code()
     check("the count comes back", "conversions_deleted" in code)
+
+
+def test_the_capture_cannot_hang_the_delete():
+    """The bug this caused in production. Capture across ~1200 fields is hundreds
+    of Mongo upserts — output_service skips it above 300 fields and says in as
+    many words that it "is what made the request hang". An unbounded loop of it
+    over every conversion did exactly that: small engagements deleted, the 6- and
+    17-conversion ones timed out at the gateway, and the browser reported a
+    generic failure for a backstop nobody had asked to wait for.
+    """
+    code = _router_code()
+    check("there is a deadline", "_CAPTURE_BUDGET_S" in code)
+    check("and a per-conversion cap", "_PER_CONVERSION_S" in code)
+    check("the call is bounded", "wait_for(" in code)
+    check("a timeout is caught", "TimeoutError" in code)
+    check("and reported, not swallowed", "timed out" in code)
+    check("what did not fit is named", "capture budget spent" in code)
+
+
+def test_housekeeping_failures_do_not_make_an_engagement_undeletable():
+    """A side task that throws must not leave the project on screen forever. The
+    engagement goes; what failed comes back in warnings."""
+    code = _router_code()
+    check("failures are collected", "warnings.append" in code)
+    check("and returned", '"warnings": warnings' in code)
+    check("datasets are handled one at a time", "dataset {d}:" in code)
+    page = _page()
+    check("and the page shows them", "res?.warnings" in page)
+
+
+def test_a_failed_delete_says_why():
+    """"Failed to delete engagement." is the blank panel that could not explain
+    itself — it cannot tell a timeout from a permission problem from a bad row, so
+    the only next step it leaves anyone is to press the same button again.
+    """
+    page = _page()
+    i = page.index("Could not delete")
+    body = page[i:i + 900]
+    check("the server detail is shown", "response?.data?.detail" in _page())
+    check("with the status code", "HTTP ${status}" in body)
+    check("403 is explained", "403" in body)
+    check("a timeout is distinguished from a refusal", "ran out of time" in body)
+    check("and says a retry is safe", "idempotent" in body)
 
 
 if __name__ == "__main__":

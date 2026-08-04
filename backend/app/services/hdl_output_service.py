@@ -38,6 +38,7 @@ from app.parsers import parse_tabular
 from app.services.hdl_schema import (
     COUNTRY_ISO2, HDL_LOAD_ORDER, HDL_OBJECTS, object_label as _object_label,
 )
+from app.transformations import apply_pipeline  # the analyst's own rules
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +103,39 @@ def _iso_country(v: Any) -> str:
     return COUNTRY_ISO2.get(s.lower(), s)
 
 
-def render_cell(spec: dict, resolve) -> str:
+# Returned by an ``analyst`` lookup that has nothing to say about a field. A
+# sentinel rather than None, because None and "" are both real answers here: the
+# analyst can say "ship this column empty" and that has to survive.
+NO_ANSWER = object()
+
+
+def render_cell(spec: dict, resolve, analyst=None) -> str:
     """Compute one HDL cell from its field spec. ``resolve(field_name, source_name)``
     returns the raw source value (or None). Pure + module-level so it's unit-tested
-    directly rather than through a DB-backed generation run."""
+    directly rather than through a DB-backed generation run.
+
+    ``analyst(field_name)`` returns what the ANALYST set for this field in Mapping
+    Review — a fixed value, "" for keep-blank, or ``NO_ANSWER``.
+
+    IT IS CHECKED FIRST, BEFORE THE SPEC, AND THAT IS THE POINT.
+
+    This function used to ignore it entirely. A ``const`` spec returned the
+    schema's hard-coded value unconditionally, so every fixed value and every
+    Keep blank an analyst set on an HDL component was stored, shown on screen,
+    re-applied from the library, explained in the AI panel — and never asked for
+    when the file was written. EffectiveStartDate is where it was noticed: the
+    screen said 1/1/1900 and the .dat carried 1990/01/01, which is the schema
+    constant. It was never about that one field. It was every constant on the
+    whole HDL path.
+
+    The schema's value is still there and still right — as the DEFAULT, for a
+    conversion where nobody has said otherwise. What it is not is an override of
+    a person.
+    """
+    if analyst is not None:
+        answer = analyst(spec.get("name"))
+        if answer is not NO_ANSWER:
+            return _clean(answer)
     kind = spec.get("kind")
     if kind == "const":
         return _clean(spec.get("value"))
@@ -170,17 +200,56 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
     # (a human/AI mapping wins over the schema's canonical source hint).
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
     override: dict[str, str] = {}
+    # What the analyst SET, as opposed to what they pointed at: fixed values and
+    # keep-blanks. Checked ahead of the schema's own constants.
+    const_override: dict[str, str] = {}
+    # field name -> the analyst's rule pipeline, in sequence order.
+    rules_by_field: dict[str, list] = {}
     if template:
         fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
         fname_by_id = {f.id: f.field_name for f in fields}
         maps = await MappingSuggestion.find(
             MappingSuggestion.conversion_id == conversion.id
         ).to_list()
-        for m in maps:
-            if m.status in ("not_applicable", "rejected"):
+        # ONE row per target field, chosen by the rule the screen uses. This
+        # walked every row, so a duplicate left by the suggest-mapping race could
+        # bind the column to whichever one came back last — the same defect the
+        # FBDI path had, on a path nobody had checked.
+        # THE RULES THE ANALYST TYPED. This path never loaded them: a custom
+        # transformation rule authored against a Worker/HCM field was saved,
+        # listed and explained, and then no code on the way to the .dat file ever
+        # asked for it. Same inert shape as the constants beside it — the FBDI
+        # generator has run these since it was written, and this one simply never
+        # learned to.
+        from app.models.transformation import TransformationRule
+        _rules = await TransformationRule.find(
+            TransformationRule.conversion_id == conversion.id
+        ).sort(+TransformationRule.sequence).to_list()
+        for _r in _rules:
+            _rfn = fname_by_id.get(_r.target_field_id)
+            if not _rfn or not _r.rule_type:
                 continue
-            fn = fname_by_id.get(m.target_field_id)
-            if fn and getattr(m, "source_column", None):
+            rules_by_field.setdefault(_rfn, []).append(
+                {"rule_type": _r.rule_type, "rule_config": _r.rule_config or {}})
+
+        from app.services.mapping_dedupe import best_mapping_by_target
+        for _tid, m in best_mapping_by_target(maps).items():
+            fn = fname_by_id.get(_tid)
+            if not fn:
+                continue
+            _dv = m.default_value
+            _dv = str(_dv).strip() if _dv is not None else ""
+            if _dv:
+                # A fixed value the analyst typed. The panel that sets it says it
+                # "overrides AI and clears the source column" — so it does.
+                const_override[fn] = _dv
+                continue
+            if m.status in ("not_applicable", "rejected"):
+                # Keep blank. An explicit instruction to ship the column empty,
+                # which is not the same as having nothing to say about it.
+                const_override[fn] = ""
+                continue
+            if getattr(m, "source_column", None):
                 override[fn] = m.source_column
 
     def _resolve_col(field_name: str, schema_source) -> str | None:
@@ -205,11 +274,30 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                 return col_by_norm[_norm(cand)]
         return None
 
+    def _analyst(field_name: str):
+        return const_override.get(field_name, NO_ANSWER) if field_name in const_override \
+            else NO_ANSWER
+
     def _cell(row: pd.Series, spec: dict) -> str:
         def _resolve(field_name: str, source_name: str | None):
             col = _resolve_col(field_name, source_name)
             return row[col] if col else None
-        return render_cell(spec, _resolve)
+        value = render_cell(spec, _resolve, _analyst)
+        # Rules run on whatever the field ended up holding — source value, schema
+        # constant or the analyst's fixed value — which is the order the FBDI
+        # generator uses. A rule is a transformation OF the value, so it has to
+        # see the value that was chosen rather than compete with it.
+        _rules = rules_by_field.get(spec.get("name"))
+        if not _rules:
+            return value
+        try:
+            return _clean(apply_pipeline(_rules, value, row=row.to_dict(),
+                                         ctx={"component": spec.get("name")}))
+        except Exception:  # noqa: BLE001
+            # A rule that throws must not take the whole file down. The FBDI path
+            # makes the same choice; the untransformed value still ships.
+            logger.exception("HDL rule failed for %s", spec.get("name"))
+            return value
 
     # ── Scope: active employees only (strategy assumptions A-02 / A-03) ──────
     # "An employee is active and in scope if ActiveStatus = Active"; inactive and

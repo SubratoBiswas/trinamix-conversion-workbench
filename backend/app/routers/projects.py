@@ -234,6 +234,10 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
     datasets_kept: list[dict] = []
     logic_captured = 0
     capture_errors: list[str] = []
+    # Anything that went wrong in the housekeeping. The ENGAGEMENT still goes —
+    # leaving it undeletable because a side task failed is what turns a tidy-up
+    # into a support call — but the failure is returned rather than swallowed.
+    warnings: list[str] = []
 
     if conv_ids:
         # Which datasets did this project use? dataset_ids is the multi-source
@@ -265,23 +269,28 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
                     still_used.setdefault(d, set()).add(_proj_names[o.project_id])
 
         for d in ds_ids:
-            ds = await Dataset.get(d)
-            if ds is None:
-                continue
-            if d in still_used:
-                datasets_kept.append(
-                    {"id": str(d), "name": ds.name,
-                     "still_used_by": sorted(still_used[d])})
-                continue
-            await DatasetColumnProfile.find(DatasetColumnProfile.dataset_id == d).delete()
+            # Per dataset, so one unreadable row cannot take the whole delete down
+            # with it and leave the engagement undeletable.
             try:
-                import os
-                if ds.file_path and os.path.exists(ds.file_path):
-                    os.remove(ds.file_path)
-            except Exception:  # noqa: BLE001 — file cleanup is best-effort
-                pass
-            await ds.delete()
-            datasets_deleted.append(ds.name)
+                ds = await Dataset.get(d)
+                if ds is None:
+                    continue
+                if d in still_used:
+                    datasets_kept.append(
+                        {"id": str(d), "name": ds.name,
+                         "still_used_by": sorted(still_used[d])})
+                    continue
+                await DatasetColumnProfile.find(DatasetColumnProfile.dataset_id == d).delete()
+                try:
+                    import os
+                    if ds.file_path and os.path.exists(ds.file_path):
+                        os.remove(ds.file_path)
+                except Exception:  # noqa: BLE001 — file cleanup is best-effort
+                    pass
+                await ds.delete()
+                datasets_deleted.append(ds.name)
+            except Exception as _ds_exc:  # noqa: BLE001
+                warnings.append(f"dataset {d}: {type(_ds_exc).__name__}")
 
         # LAST CHANCE TO KEEP THE LOGIC. Capture each conversion's trustworthy
         # mappings into the dated store before the rows go, so "Column A of this
@@ -290,13 +299,35 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
         # and generation captures again, so this is usually a no-op — but usually
         # is not a guarantee, and after the next statement the rows are gone.
         #
-        # Best-effort by design: a capture that fails must not strand a half
-        # deleted project. What it managed is reported rather than assumed.
+        # BOUNDED. Capture across ~1200 fields is hundreds of Mongo upserts, which
+        # is why generation itself skips it above 300 fields — output_service says
+        # in as many words that it "is what made the request hang". An unbounded
+        # loop of it over every conversion in an engagement did exactly that: the
+        # small projects deleted, the 6- and 17-conversion ones timed out at the
+        # gateway, and the browser reported "Failed to delete engagement" for what
+        # was really a backstop nobody had asked to wait for.
+        #
+        # So it runs against a deadline. What does not fit is REPORTED, not
+        # silently dropped — a delete that skipped the capture and said nothing
+        # would be the screen looking right while logic was lost.
+        import asyncio as _asyncio
+        import time as _time
+        _CAPTURE_BUDGET_S = 20.0     # total, across the whole engagement
+        _PER_CONVERSION_S = 6.0
+        _deadline = _time.monotonic() + _CAPTURE_BUDGET_S
         from app.services.learning_service import capture_learnings_from_conversion
         for _c in convs:
+            _left = _deadline - _time.monotonic()
+            if _left <= 0:
+                capture_errors.append(f"{_c.name}: skipped, capture budget spent")
+                continue
             try:
-                _cap = await capture_learnings_from_conversion(_c)
+                _cap = await _asyncio.wait_for(
+                    capture_learnings_from_conversion(_c),
+                    timeout=min(_PER_CONVERSION_S, _left))
                 logic_captured += int((_cap or {}).get("captured", 0) or 0)
+            except _asyncio.TimeoutError:
+                capture_errors.append(f"{_c.name}: timed out")
             except Exception as _cap_exc:  # noqa: BLE001
                 capture_errors.append(f"{_c.name}: {type(_cap_exc).__name__}")
 
@@ -304,15 +335,24 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
         # conversions. Keeping them would leave hundreds of thousands of rows no
         # screen can render and no query is scoped to reach.
         from app.models.transformation import TransformationRule, Crosswalk
-        await MappingSuggestion.find({"conversion_id": {"$in": conv_ids}}).delete()
-        await TransformationRule.find({"conversion_id": {"$in": conv_ids}}).delete()
-        await Crosswalk.find({"conversion_id": {"$in": conv_ids}}).delete()
-        await ConvertedOutput.find({"conversion_id": {"$in": conv_ids}}).delete()
-        runs = await LoadRun.find({"conversion_id": {"$in": conv_ids}}).to_list()
-        run_ids = [r.id for r in runs]
-        if run_ids:
-            await LoadError.find({"load_run_id": {"$in": run_ids}}).delete()
-        await LoadRun.find({"conversion_id": {"$in": conv_ids}}).delete()
+        for _label, _op in (
+            ("mapping rows", MappingSuggestion.find({"conversion_id": {"$in": conv_ids}})),
+            ("transformation rules", TransformationRule.find({"conversion_id": {"$in": conv_ids}})),
+            ("crosswalks", Crosswalk.find({"conversion_id": {"$in": conv_ids}})),
+            ("output records", ConvertedOutput.find({"conversion_id": {"$in": conv_ids}})),
+        ):
+            try:
+                await _op.delete()
+            except Exception as _del_exc:  # noqa: BLE001
+                warnings.append(f"{_label}: {type(_del_exc).__name__}")
+        try:
+            runs = await LoadRun.find({"conversion_id": {"$in": conv_ids}}).to_list()
+            run_ids = [r.id for r in runs]
+            if run_ids:
+                await LoadError.find({"load_run_id": {"$in": run_ids}}).delete()
+            await LoadRun.find({"conversion_id": {"$in": conv_ids}}).delete()
+        except Exception as _lr_exc:  # noqa: BLE001
+            warnings.append(f"load history: {type(_lr_exc).__name__}")
         await Conversion.find(Conversion.project_id == p.id).delete()
 
     # NOTE: deliberately NOT deleting SourceConnection — the live Oracle EBS
@@ -327,6 +367,7 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
         # and this number is the only evidence the store got what they held.
         "logic_captured": logic_captured,
         "capture_errors": capture_errors,
+        "warnings": warnings,
     }
 
 

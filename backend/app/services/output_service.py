@@ -629,6 +629,10 @@ def _transform_frame(
         # overlay was rescued from this trap on 30-Jul; the rules the analyst types
         # were left in it.
         rules = list(pipelines.get(tgt.id, []))
+        # The rules the ANALYST authored, captured before the engine's own
+        # suggested_transformation is appended below. A suggestion is a guess and
+        # must not count as somebody having spoken.
+        _authored_rules = list(rules)
         if (_discarded and not _ov_writes and not rules
                 and not (m.default_value and str(m.default_value).strip())):
             continue
@@ -757,9 +761,23 @@ def _transform_frame(
         # while it is the later one, and a directive issued after it still wins.
         _person_set_a_value = bool(str(m.source_column or "").strip()
                                    or str(m.default_value or "").strip())
+        # AUTHORING A RULE IS SPEAKING TOO.
+        #
+        # _explicit was computed from the MAPPING's status, so a custom rule typed
+        # against a field whose mapping still sat at "suggested" was not protected
+        # — a strategy constant replaced every row and took the rule's output with
+        # it. That is the same complaint as the constants above, one door along:
+        # the analyst did something deliberate and the file did not show it.
+        #
+        # A rule has no status to approve, so requiring one was the bug. It has a
+        # DATE, though, and date is how everything here is ranked — so it is
+        # ranked the same way the rule directive already ranks it: a rule written
+        # after the document wins, one written before it does not.
+        _authored_rule_wins = bool(_authored_rules) and _conversion_rule_wins(
+            _authored_rules, _asof)
         _explicit = bool(_person_set_a_value
                          and m.status in ("approved", "overridden")
-                         and _by_a_person and _person_is_newer)
+                         and _by_a_person and _person_is_newer) or _authored_rule_wins
         if _ov:
             if _ov.get("blank") and not _explicit:
                 col_values = [""] * n_rows
