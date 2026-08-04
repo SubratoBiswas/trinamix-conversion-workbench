@@ -202,9 +202,38 @@ const SingleValueForm = (label: string, hint?: string): React.FC<FormProps> =>
 
 const ValueMapForm: React.FC<FormProps> = ({ config, setConfig }) => {
   const reserved = new Set(["case_insensitive", "default"]);
-  const rows = Object.entries(config).filter(([k]) => !reserved.has(k));
+
+  // THE PAIRS LIVE HERE, AS A LIST — not as keys on `config`.
+  //
+  // "Add pair" did nothing. The rows were derived straight from
+  // `Object.entries(config)`, and `setRows` wrote them back with `if (k)`, which
+  // drops any pair whose FROM side is empty. So clicking Add pair appended
+  // ["", ""], the save immediately discarded it, `config` came back unchanged,
+  // and the list re-derived to exactly what it was. Nothing appeared, no error,
+  // nothing in the console — the button looked broken and read as a two-pair
+  // limit.
+  //
+  // The `if (k)` is right for what gets SAVED: a crosswalk entry with no
+  // left-hand side matches nothing and would be silently dead in the file. It is
+  // wrong as the editor's only memory. An editor has to be able to hold a row
+  // that is not valid yet, because every row is invalid for the moment between
+  // creating it and typing into it.
+  //
+  // Two more failures came from the same cause, and go with it:
+  //   * clearing a FROM box deleted the whole pair mid-edit, taking the TO value
+  //     with it;
+  //   * two pairs sharing a FROM value collapsed into one, because object keys
+  //     are unique. They now stay visible and the last one wins on save, which
+  //     is at least a duplicate you can SEE and fix.
+  const [rows, setRowsState] = React.useState<[string, string][]>(() => {
+    const initial = Object.entries(config)
+      .filter(([k]) => !reserved.has(k)) as [string, string][];
+    // One empty row to type into, rather than an empty panel with a button.
+    return initial.length ? initial : [["", ""]];
+  });
 
   const setRows = (next: [string, string][]) => {
+    setRowsState(next);
     const out: Cfg = {
       case_insensitive: config.case_insensitive ?? true,
       ...(config.default !== undefined ? { default: config.default } : {}),
