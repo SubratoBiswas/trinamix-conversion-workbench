@@ -732,7 +732,29 @@ def _transform_frame(
             # No approval timestamp means we cannot show the person spoke later,
             # and the dated file is the only thing that can be placed in time.
             _person_is_newer = bool(_appr_at) and _appr_at >= _asof
-        _explicit = bool(str(m.source_column or "").strip()
+        # A PERSON'S FIXED VALUE COUNTS, not only a person's source column.
+        #
+        # This read `m.source_column` alone, so the only analyst it could see was
+        # one who had bound a COLUMN. Setting a constant — "Receipt Routing = 3",
+        # typed into the Fixed value box and approved — leaves source_column null
+        # by definition, so `_explicit` was False and the strategy constant below
+        # replaced every row with its own value.
+        #
+        # Reported live on NextPower Supplier Test (Supplier Site): Receipt
+        # Routing set to 3, Invoice Match Option to R, Match Approval Level to 3,
+        # all approved and showing "currently 3" on screen — and the file shipped
+        # DIRECT, Receipt and 3-Way, the 13-Jul strategy values. The screen and
+        # the file disagreed and the screen looked right, which is the single most
+        # expensive shape of bug in this tool.
+        #
+        # Typing a constant and approving it is exactly as deliberate as binding a
+        # column, and the analyst's own precedence rule — "analyst manually
+        # changed OR the mapping file, whichever is latest" — draws no distinction
+        # between the two. The date test below is unchanged: their value wins
+        # while it is the later one, and a directive issued after it still wins.
+        _person_set_a_value = bool(str(m.source_column or "").strip()
+                                   or str(m.default_value or "").strip())
+        _explicit = bool(_person_set_a_value
                          and m.status in ("approved", "overridden")
                          and _by_a_person and _person_is_newer)
         if _ov:
