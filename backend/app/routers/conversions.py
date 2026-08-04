@@ -592,11 +592,12 @@ async def _reset_defaults_impl(conversion_id: str, body: "ResetDefaultsIn") -> d
             continue
         if not m.default_value:
             continue
-        await m.set({
+        from app.services.mapping_dedupe import stamp_edit
+        await m.set(stamp_edit({
             "default_value": None,
             "status": "suggested",
             "reason": "Gold-derived default removed by user",
-        })
+        }))
         cleared += 1
 
     remapped = None

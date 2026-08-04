@@ -35,8 +35,11 @@ from app.services.strategy_overlay import (
 # override beats an approval, an approval beats a deliberate "not applicable", and
 # "suggested" (auto-map guessing) always loses. Module level so generation and the
 # required-field gate agree on the winning row — two copies would drift.
-_SPRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1,
-          "suggested": 0}
+# Which mapping row wins is ONE rule, shared with the screen — see
+# services/mapping_dedupe. This module used to carry three separate copies of it
+# that compared status alone, so a tie was broken by whichever row Mongo returned
+# first and the generated file could disagree with Mapping Review.
+from app.services.mapping_dedupe import best_mapping_by_target  # noqa: E402
 
 
 async def _get_reference_standards(target_object: str | None) -> dict:
@@ -849,13 +852,7 @@ async def build_converted_dataframe(
     # auto-map "suggested" row plus an approved/overridden one, e.g. after prompt
     # steering or learning). Keep the highest-priority mapping per target field so
     # the output uses the APPROVED source, not whichever row was processed last.
-    _PRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
-    _best: dict = {}
-    for _m in mappings:
-        _cur = _best.get(_m.target_field_id)
-        if _cur is None or _PRIO.get(_m.status or "suggested", 0) > _PRIO.get(_cur.status or "suggested", 0):
-            _best[_m.target_field_id] = _m
-    mappings = list(_best.values())
+    mappings = list(best_mapping_by_target(mappings).values())
 
     # Memory: the source extract can be very wide (e.g. Customer is 234 columns),
     # but the transform only reads the columns that are actually mapped. Drop the
@@ -1133,12 +1130,7 @@ async def build_sheet_frames(
 
     maps = await MappingSuggestion.find(
         MappingSuggestion.conversion_id == conversion.id).to_list()
-    best: dict = {}
-    for m in maps:
-        cur = best.get(m.target_field_id)
-        if cur is None or _SPRIO.get(m.status or "suggested", 0) > _SPRIO.get(
-                cur.status or "suggested", 0):
-            best[m.target_field_id] = m
+    best = best_mapping_by_target(maps)
     fbyid = {f.id: f for f in fields}
 
     def _key(f) -> str:
@@ -1741,11 +1733,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     _all_maps = await MappingSuggestion.find(
         MappingSuggestion.conversion_id == conversion.id
     ).to_list()
-    _best_m: dict = {}
-    for _m in _all_maps:
-        _c = _best_m.get(_m.target_field_id)
-        if _c is None or _SPRIO.get(_m.status or "suggested", 0) > _SPRIO.get(_c.status or "suggested", 0):
-            _best_m[_m.target_field_id] = _m
+    _best_m = best_mapping_by_target(_all_maps)
     _fbyid = {f.id: f for f in fields}
     suppressed_keys = {
         _fbyid[tid].field_name.strip().lower().rstrip("*").strip()

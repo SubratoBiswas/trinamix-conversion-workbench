@@ -41,12 +41,30 @@ import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
 import { ClientsPage } from "@/pages/ClientsPage";
+import { ForbiddenPage } from "@/pages/ForbiddenPage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { isAdmin } from "@/lib/access";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const token = useAuth((s) => s.token);
   const location = useLocation();
   if (!token) return <Navigate to="/login" replace state={{ from: location }} />;
+  return <>{children}</>;
+};
+
+/**
+ * Administrator-only route.
+ *
+ * Renders the 403 page in place rather than redirecting: a silent bounce to Home
+ * is indistinguishable from a broken link, and the user just tries again.
+ *
+ * This is PRESENTATION. The route it guards is also guarded on the API, and that
+ * is the control — a Normal user who edits their own localStorage gets the page
+ * and then a wall of 403s from every request it makes. See lib/access.ts.
+ */
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const user = useAuth((s) => s.user);
+  if (!isAdmin(user)) return <ForbiddenPage />;
   return <>{children}</>;
 };
 
@@ -68,21 +86,24 @@ const App: React.FC = () => {
         {/* Overview */}
         <Route index element={<DashboardPage />} />
 
-        {/* Data */}
-        <Route path="convert"                element={<ConvertFilePage />} />
-        <Route path="datasets"               element={<DatasetsPage />} />
-        <Route path="datasets/:id"           element={<DatasetDetailPage />} />
-        <Route path="datasets/:id/prepare"   element={<DatasetPreparationPage />} />
-        <Route path="fbdi"                   element={<FbdiTemplatesPage />} />
-        <Route path="fbdi/:id"               element={<FbdiTemplateDetailPage />} />
-        <Route path="gold"                   element={<GoldStandardsPage />} />
+        {/* Data — administrator only; the list lives in lib/access.ts */}
+        <Route path="convert"                element={<AdminRoute><ConvertFilePage /></AdminRoute>} />
+        <Route path="datasets"               element={<AdminRoute><DatasetsPage /></AdminRoute>} />
+        <Route path="datasets/:id"           element={<AdminRoute><DatasetDetailPage /></AdminRoute>} />
+        <Route path="datasets/:id/prepare"   element={<AdminRoute><DatasetPreparationPage /></AdminRoute>} />
+        <Route path="fbdi"                   element={<AdminRoute><FbdiTemplatesPage /></AdminRoute>} />
+        <Route path="fbdi/:id"               element={<AdminRoute><FbdiTemplateDetailPage /></AdminRoute>} />
+        <Route path="gold"                   element={<AdminRoute><GoldStandardsPage /></AdminRoute>} />
 
         {/* Clients (tenants) */}
         <Route path="clients"                element={<ClientsPage />} />
 
         {/* Engagements */}
         <Route path="projects"               element={<ProjectsPage />} />
-        <Route path="projects/new"           element={<SetupWizard />} />
+        {/* The wizard uploads datasets and manages source connections, both of
+            which the API allows administrators only — so a Normal user would
+            fill in four steps and fail on the fifth. */}
+        <Route path="projects/new"           element={<AdminRoute><SetupWizard /></AdminRoute>} />
         <Route path="projects/:id"           element={<ProjectOverviewPage />} />
         <Route path="projects/:id/cutover"   element={<MigrationMonitorPage />} />
 
@@ -103,7 +124,7 @@ const App: React.FC = () => {
         {/* Quality */}
         <Route path="cleansing"              element={<CleansingPage />} />
         <Route path="validation"             element={<ValidationPage />} />
-        <Route path="dq-rules"               element={<DataQualityRulesPage />} />
+        <Route path="dq-rules"               element={<AdminRoute><DataQualityRulesPage /></AdminRoute>} />
 
         {/* Load Management */}
         <Route path="load"                   element={<LoadDashboardPage />} />
@@ -114,15 +135,15 @@ const App: React.FC = () => {
         <Route path="workflows"              element={<WorkflowsPage />} />
         <Route path="workflows/:id"          element={<WorkflowBuilderPage />} />
 
-        {/* AI Engine */}
-        <Route path="learning"               element={<LearningCenterPage />} />
-        <Route path="mapping-documents"      element={<MappingDocumentsPage />} />
-        <Route path="rules"                  element={<RuleLibraryPage />} />
-        <Route path="crosswalks"             element={<CrosswalkLibraryPage />} />
+        {/* AI Engine — administrator only */}
+        <Route path="learning"               element={<AdminRoute><LearningCenterPage /></AdminRoute>} />
+        <Route path="mapping-documents"      element={<AdminRoute><MappingDocumentsPage /></AdminRoute>} />
+        <Route path="rules"                  element={<AdminRoute><RuleLibraryPage /></AdminRoute>} />
+        <Route path="crosswalks"             element={<AdminRoute><CrosswalkLibraryPage /></AdminRoute>} />
 
-        {/* Compliance */}
-        <Route path="audit"                  element={<AuditPage />} />
-        <Route path="approvals"              element={<ApprovalsPage />} />
+        {/* Compliance — administrator only */}
+        <Route path="audit"                  element={<AdminRoute><AuditPage /></AdminRoute>} />
+        <Route path="approvals"              element={<AdminRoute><ApprovalsPage /></AdminRoute>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

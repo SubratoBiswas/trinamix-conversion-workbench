@@ -345,39 +345,77 @@ def health() -> dict:
     }
 
 
-app.include_router(auth_router.router)
-app.include_router(datasets_router.router)
-app.include_router(fbdi_router.router)
-app.include_router(fbdi_seed_router.router)
-app.include_router(gold_router.router)
-app.include_router(projects_router.router)
-app.include_router(conversions_router.router)
-app.include_router(cutover_router.router)
-app.include_router(mapping_router.router)
-app.include_router(quality_router.router)
-app.include_router(learned_router.router)
-app.include_router(mapping_proposals_router.router)
-app.include_router(manual_map_router.router)
-app.include_router(ops_router.output_router)
-app.include_router(ops_router.load_router)
-app.include_router(ops_router.workflow_router)
-app.include_router(ops_router.dep_router)
-app.include_router(ops_router.dashboard_router)
-# v10
-app.include_router(discovery_router.router)
-app.include_router(discovery_router.project_router)
-app.include_router(audit_router.router)
-app.include_router(audit_events_router.router)
-app.include_router(coa_router.router)
-app.include_router(governance_router.router)
-# v10 new
-app.include_router(source_systems_router.router)
-app.include_router(fusion_modules_router.router)
-app.include_router(source_connections_router.router)
-app.include_router(cutover_slice6_router.router)
-app.include_router(copilot_router.router)
-app.include_router(settings_router.router)
-app.include_router(clients_router.router)
-app.include_router(dq_rules_router.router)
-app.include_router(fusion_router.router)
-app.include_router(fusion_router.conv_router)
+# ===========================================================================
+# ROUTER REGISTRATION IS THE ACCESS CONTROL.
+#
+# Every router is mounted through access_control.mount with an explicit section.
+# The section is keyword-only and has no default, so a router added without one
+# is a TypeError at import rather than a silently public endpoint — which is the
+# failure this whole mechanism exists to make impossible. See
+# services/access_control.py for what each section means.
+#
+#   OPEN       Home, Conversion Workbench, Load Management — the three sections a
+#              Normal user keeps. Every method.
+#   READ_ONLY  Libraries the open screens READ from. Any signed-in user may GET;
+#              changing them needs an administrator.
+#   ADMIN      Everything else, every method.
+#   PUBLIC     No blanket guard; the router authenticates its own routes.
+# ===========================================================================
+from app.services.access_control import mount as _mount, PUBLIC, OPEN, READ_ONLY, ADMIN  # noqa: E402
+
+# Sign-in itself cannot require being signed in.
+_mount(app, auth_router.router, section=PUBLIC, name="auth")
+
+# --- Conversion Workbench ---------------------------------------------------
+_mount(app, clients_router.router, section=OPEN, name="clients")
+_mount(app, projects_router.router, section=OPEN, name="projects")
+_mount(app, conversions_router.router, section=OPEN, name="conversions")
+_mount(app, mapping_router.router, section=OPEN, name="mapping")
+_mount(app, mapping_proposals_router.router, section=OPEN, name="mapping_proposals")
+_mount(app, manual_map_router.router, section=OPEN, name="manual_map")
+_mount(app, quality_router.router, section=OPEN, name="quality")
+_mount(app, ops_router.output_router, section=OPEN, name="operations.output")
+_mount(app, ops_router.workflow_router, section=OPEN, name="operations.workflow")
+
+# --- Load Management --------------------------------------------------------
+_mount(app, ops_router.load_router, section=OPEN, name="operations.load")
+_mount(app, ops_router.dep_router, section=OPEN, name="operations.dependencies")
+_mount(app, cutover_router.router, section=OPEN, name="cutover")
+_mount(app, cutover_slice6_router.router, section=OPEN, name="cutover_slice6")
+_mount(app, fusion_router.router, section=OPEN, name="fusion")
+_mount(app, fusion_router.conv_router, section=OPEN, name="fusion.conversions")
+
+# --- Home -------------------------------------------------------------------
+_mount(app, ops_router.dashboard_router, section=OPEN, name="operations.dashboard")
+
+# The Copilot button floats on every page, including the three open sections.
+# Locking it to administrators would leave a Normal user a control that errors
+# everywhere it appears; it answers questions about a conversion they can
+# already see.
+_mount(app, copilot_router.router, section=OPEN, name="copilot")
+
+# --- Libraries the open screens read from -----------------------------------
+# Mapping Review, Recommendations, Project Overview and Conversion Detail all
+# read these. A Normal user may look; uploading a dataset, editing a gold
+# standard, seeding template fields or approving a learning is administrative.
+_mount(app, datasets_router.router, section=READ_ONLY, name="datasets")
+_mount(app, fbdi_router.router, section=READ_ONLY, name="fbdi")
+_mount(app, fbdi_seed_router.router, section=READ_ONLY, name="fbdi_seed")
+_mount(app, gold_router.router, section=READ_ONLY, name="gold")
+_mount(app, learned_router.router, section=READ_ONLY, name="learned")
+_mount(app, source_systems_router.router, section=READ_ONLY, name="source_systems")
+_mount(app, fusion_modules_router.router, section=READ_ONLY, name="fusion_modules")
+_mount(app, audit_events_router.router, section=READ_ONLY, name="audit_events")
+# Migration Monitor reads issues, risks, sign-offs and rehearsals. Raising a risk
+# or signing off a cutover is an administrator's decision.
+_mount(app, governance_router.router, section=READ_ONLY, name="governance")
+
+# --- Administrators only ----------------------------------------------------
+_mount(app, audit_router.router, section=ADMIN, name="audit")
+_mount(app, coa_router.router, section=ADMIN, name="coa")
+_mount(app, dq_rules_router.router, section=ADMIN, name="dq_rules")
+_mount(app, settings_router.router, section=ADMIN, name="settings")
+# Source connections hold credentials, and discovery drives them.
+_mount(app, discovery_router.router, section=ADMIN, name="discovery")
+_mount(app, discovery_router.project_router, section=ADMIN, name="discovery.project")
+_mount(app, source_connections_router.router, section=ADMIN, name="source_connections")

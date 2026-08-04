@@ -802,47 +802,27 @@ async def run_mapping_suggestions(conversion: Conversion) -> list[MappingSuggest
 # (conversion_id, target_field_id), so we collapse defensively on read and heal
 # physically at map time / on demand. The strongest HUMAN decision always wins.
 # ---------------------------------------------------------------------------
-_MAP_STATUS_PRIORITY = {
-    "overridden": 5, "approved": 4, "rejected": 3, "not_applicable": 2,
-    "suggested": 1, "": 0,
-}
-
-
-def _map_ts(m) -> float:
-    d = getattr(m, "updated_at", None) or getattr(m, "created_at", None)
-    try:
-        return d.timestamp() if d else 0.0
-    except Exception:  # noqa: BLE001
-        return 0.0
-
-
-def _dedup_key(m):
-    # strongest human status, then a row that actually carries a source, then freshest
-    return (
-        _MAP_STATUS_PRIORITY.get((getattr(m, "status", "") or ""), 0),
-        1 if getattr(m, "source_column", None) else 0,
-        _map_ts(m),
-    )
+# The rule itself lives in services/mapping_dedupe.py so that GENERATION uses the
+# same one. It did not: this module's version was reachable from one endpoint (the
+# one Mapping Review reads) while every output path carried its own status-only
+# copy, and the two disagreed. Re-exported here so existing importers keep working.
+from app.services.mapping_dedupe import (  # noqa: E402,F401
+    MAP_STATUS_PRIORITY as _MAP_STATUS_PRIORITY,
+    mapping_ts as _map_ts,
+    dedup_key as _dedup_key,
+)
 
 
 def collapse_mapping_dupes(items: list) -> list:
-    """Return one mapping per target_field_id (strongest per ``_dedup_key``),
-    preserving first-occurrence order. Non-destructive — for read/export paths."""
-    best: dict = {}
-    for m in items:
-        k = str(m.target_field_id)
-        cur = best.get(k)
-        if cur is None or _dedup_key(m) > _dedup_key(cur):
-            best[k] = m
-    seen: set = set()
-    out: list = []
-    for m in items:
-        k = str(m.target_field_id)
-        if k in seen:
-            continue
-        seen.add(k)
-        out.append(best[k])
-    return out
+    """Return one mapping per target_field_id (strongest per ``dedup_key``),
+    preserving first-occurrence order. Non-destructive — for read/export paths.
+
+    Delegates to the shared rule. It used to be implemented here, which is how
+    the screen and the generated file came to answer the same question two
+    different ways.
+    """
+    from app.services.mapping_dedupe import collapse_mapping_dupes as _collapse
+    return _collapse(items)
 
 
 async def dedupe_conversion_mappings(conversion_id) -> int:

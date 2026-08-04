@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=BOM FBDI column order wired - bom_col_order + apply_bom_layout, with_end=False, Oracle CSV file names. Backend suite 1087 passing, 14 skipped."
+set "DEPLOY_NOTE=BLOCKER FIX - mapping edits now reach the generated FBDI: one shared dedup rule for the screen and the file, plus updated_at stamped on every mapping write. Also BOM column order and Admin/Normal roles. Suite 1126 passing, 14 skipped, 0 failing. REGENERATE outputs after this."
 
 echo Checking the deploy set...
 set "MISSING="

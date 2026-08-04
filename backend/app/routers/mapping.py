@@ -20,6 +20,7 @@ from app.services.auth_service import get_current_user
 from app.services.learning_service import record_learning_from_mapping, record_learning_from_rule
 from app.services.mapping_service import enrich_mapping_with_samples, run_mapping_suggestions
 from app.transformations.engine import apply_pipeline
+from app.services.mapping_dedupe import stamp_edit  # every mapping write stamps its own date
 
 router = APIRouter(prefix="/api", tags=["mapping"])
 
@@ -205,9 +206,9 @@ async def ai_fill_blanks(
         m = by_tid.get(str(t.id))
         if m is None:
             continue
-        await m.set({"source_column": pick, "status": "suggested",
+        await m.set(stamp_edit({"source_column": pick, "status": "suggested",
                      "confidence": 0.5, "review_required": 1,
-                     "reason": "AI fill — review before use", "suggested_transformation": None})
+                     "reason": "AI fill — review before use", "suggested_transformation": None}))
         filled += 1
     return {"filled": filled, "considered": len(blanks)}
 
@@ -428,7 +429,7 @@ async def update_mapping(
         # it is a statement in its own right, carrying its own date, and it goes
         # into the store beside every other one.
         data["derived"] = False
-    await m.set(data)
+    await m.set(stamp_edit(data))
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
     # LEARN ON ANY DELIBERATE EDIT — not only on an approved one.
@@ -553,22 +554,25 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
               "status": "not_applicable", "source_column": None,
               "default_value": None, "review_required": 0,
               "approved_by": user.email, "approved_at": datetime.utcnow()}
-    await m.set(_blank)
+    await m.set(stamp_edit(_blank))
 
-    # Any SIBLING row for the same target field goes blank too. The generator keeps
-    # one mapping per target field and picks it by status priority, where
-    # not_applicable (2) ranks BELOW approved (3) and overridden (4) — so a stale
-    # duplicate row left over from an earlier auto-map would win the dedup and the
-    # column would keep shipping its value while the UI showed it blank. That is the
-    # same shape of bug as Batch ID, one layer down, so it is closed here rather than
-    # left for the next output to expose.
+    # Any SIBLING row for the same target field goes blank too. Generation keeps
+    # one mapping per target field, so a stale duplicate left over from an earlier
+    # auto-map could win the dedup and the column would keep shipping its value
+    # while the UI showed it blank — the screen and the file disagreeing again,
+    # one layer down. Closed here rather than left for the next output to expose.
+    #
+    # Both sides now choose through services/mapping_dedupe, so the sibling no
+    # longer has to lose on status alone: it loses because it carries no source
+    # column and is older. Blanking it as well is still worth doing — the row
+    # should not sit there contradicting the decision.
     if m.target_field_id:
         for sib in await MappingSuggestion.find(
             MappingSuggestion.conversion_id == m.conversion_id,
             MappingSuggestion.target_field_id == m.target_field_id,
         ).to_list():
             if sib.id != m.id:
-                await sib.set(_blank)
+                await sib.set(stamp_edit(_blank))
 
     await _mark_outputs_stale(m.conversion_id)
 
@@ -633,8 +637,8 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
     m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
-    await m.set({"status": "approved", "approved_by": user.email,
-                 "approved_at": datetime.utcnow(), "derived": False})
+    await m.set(stamp_edit({"status": "approved", "approved_by": user.email,
+                 "approved_at": datetime.utcnow(), "derived": False}))
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
     if m.source_column or (m.default_value and str(m.default_value).strip()):
@@ -706,7 +710,7 @@ async def _sync_mapping_to_rule(r: TransformationRule, actor: str) -> dict:
         if not patch:
             return {"synced": False, "note": "mapping already agreed with the rule"}
         patch.update({"approved_by": actor, "approved_at": datetime.utcnow()})
-        await m.set(patch)
+        await m.set(stamp_edit(patch))
         # Stale the outputs too: the file on disk was built from the old binding.
         await _mark_outputs_stale(r.conversion_id)
         return {"synced": True, "source_column": r.source_column,

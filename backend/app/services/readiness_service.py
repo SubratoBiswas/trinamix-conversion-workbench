@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-_STATUS_PRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
+from app.services.mapping_dedupe import best_mapping_by_target  # noqa: E402
 
 
 def score_readiness(sig: dict) -> dict:
@@ -95,11 +95,7 @@ async def assess_conversion(conversion) -> dict:
         if conversion.template_id else []
     required = [f for f in fields if f.required]
     maps = await MappingSuggestion.find(MappingSuggestion.conversion_id == conversion.id).to_list()
-    best: dict = {}
-    for m in maps:
-        c = best.get(m.target_field_id)
-        if c is None or _STATUS_PRIO.get(m.status or "suggested", 0) > _STATUS_PRIO.get(c.status or "suggested", 0):
-            best[m.target_field_id] = m
+    best = best_mapping_by_target(maps)
     covered = 0
     for f in required:
         m = best.get(f.id)

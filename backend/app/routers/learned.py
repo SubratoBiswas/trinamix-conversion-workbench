@@ -768,10 +768,11 @@ async def _revert_applied_mappings(item: LearnedMapping, actor: str) -> dict:
             # rule for a field does not revert a different rule on that field.
             if src and (m.source_column or "").strip().lower() != src:
                 continue
-            await m.set({"status": "suggested", "approved_by": None,
+            from app.services.mapping_dedupe import stamp_edit
+            await m.set(stamp_edit({"status": "suggested", "approved_by": None,
                          "approved_at": None, "review_required": 1,
                          "comment": f"Reverted — the learning behind this was "
-                                    f"retired by {actor}."})
+                                    f"retired by {actor}."}))
             reverted += 1
             seen.add(conv.id)
 

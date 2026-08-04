@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversionsApi, ProjectsApi } from "@/api";
+import { ADMIN_ONLY_SECTIONS, isAdmin } from "@/lib/access";
+import { useAuth } from "@/store/authStore";
 
 interface NavItem { to: string; label: string; icon: React.ElementType; badge?: number; }
 interface NavGroup { label: string; items: NavItem[]; }
@@ -102,6 +104,14 @@ export const Sidebar: React.FC = () => {
     projects: number; conversions: number;
   } | null>(null);
   const loc = useLocation();
+  // Presentation only. Every one of these screens is also guarded on its API
+  // route, which is where the decision is actually enforced — see lib/access.ts.
+  // Hiding the link stops a Normal user being shown a door that will not open;
+  // it is not what keeps them out.
+  const user = useAuth((s) => s.user);
+  const groups = isAdmin(user)
+    ? GROUPS
+    : GROUPS.filter((g) => !ADMIN_ONLY_SECTIONS.includes(g.label));
 
   const load = useCallback(() => {
     Promise.all([
@@ -155,7 +165,7 @@ export const Sidebar: React.FC = () => {
 
       {/* Nav */}
       <div className="flex-1 overflow-y-auto px-3 pb-6">
-        {GROUPS.map((g) => (
+        {groups.map((g) => (
           <div key={g.label} className="mb-4">
             <div className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
               {g.label}

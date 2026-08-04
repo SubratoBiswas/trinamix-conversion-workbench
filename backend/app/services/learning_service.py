@@ -166,12 +166,8 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
         FBDIField.template_id == conversion.template_id).to_list()}
     maps = await MappingSuggestion.find(
         MappingSuggestion.conversion_id == conversion.id).to_list()
-    _PRIO = {"overridden": 4, "approved": 3, "not_applicable": 2, "rejected": 1, "suggested": 0}
-    best: dict = {}
-    for m in maps:
-        c = best.get(m.target_field_id)
-        if c is None or _PRIO.get(m.status or "suggested", 0) > _PRIO.get(c.status or "suggested", 0):
-            best[m.target_field_id] = m
+    from app.services.mapping_dedupe import best_mapping_by_target
+    best = best_mapping_by_target(maps)
     n = 0
     for m in best.values():
         fname = fields.get(m.target_field_id)
