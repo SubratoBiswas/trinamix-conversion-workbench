@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Database, Plus, Eye, Sparkles, Search, Grid3x3, List as ListIcon, Wand2, Trash2, Loader2 } from "lucide-react";
+import { Database, Plus, Eye, Sparkles, Search, Grid3x3, List as ListIcon, Wand2, Trash2, Loader2, Download } from "lucide-react";
 import { DatasetsApi } from "@/api";
 import {
   Button, Card, CardBody, CardHeader, EmptyState, PageLoader, PageTitle, Pill,
@@ -161,8 +161,23 @@ export const DatasetsPage: React.FC = () => {
                 </div>
                 <div className="mt-3 flex w-full items-center justify-between border-t border-line pt-2 text-[11px] text-ink-muted">
                   <span>Updated {formatDate(d.uploaded_at)}</span>
-                  <span className="inline-flex items-center gap-1 text-brand-dark opacity-0 transition group-hover:opacity-100">
-                    <Wand2 className="h-3 w-3" /> Prepare →
+                  <span className="inline-flex items-center gap-2">
+                    {/* The source file, back out of the tool. It was reachable
+                        only from a conversion's own card, so a dataset not yet
+                        bound to one -- or one you are looking at HERE, which is
+                        where you look when the row/column counts are the
+                        question -- could not be opened at all. */}
+                    <button
+                      className="inline-flex items-center gap-1 rounded px-1 text-brand-dark hover:underline"
+                      title="Download the source file exactly as it was uploaded"
+                      onClick={(e) => { e.stopPropagation(); e.preventDefault();
+                        void DatasetsApi.download(String(d.id), d.file_name || d.name); }}
+                    >
+                      <Download className="h-3 w-3" /> Download
+                    </button>
+                    <span className="inline-flex items-center gap-1 text-brand-dark opacity-0 transition group-hover:opacity-100">
+                      <Wand2 className="h-3 w-3" /> Prepare →
+                    </span>
                   </span>
                 </div>
               </div>
@@ -199,6 +214,14 @@ export const DatasetsPage: React.FC = () => {
                       <div className="flex items-center justify-end gap-1">
                         <button className="btn-ghost h-7 px-2 text-xs" onClick={(e) => { e.stopPropagation(); nav(`/datasets/${d.id}/prepare`); }}>
                           <Wand2 className="h-3.5 w-3.5" /> Prepare
+                        </button>
+                        <button
+                          className="btn-ghost h-7 px-2 text-xs"
+                          title="Download the source file exactly as it was uploaded"
+                          onClick={(e) => { e.stopPropagation();
+                            void DatasetsApi.download(String(d.id), d.file_name || d.name); }}
+                        >
+                          <Download className="h-3.5 w-3.5" />
                         </button>
                         <button
                           className="btn-ghost h-7 px-2 text-xs text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
