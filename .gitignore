@@ -10,3 +10,8 @@ docs/_*
 docs/node_modules/
 docs/*.pdf
 node_modules/
+
+# Deploy inputs - see launch_git.bat. Not source.
+*.patch
+*.patch_old
+COMMIT_MSG.txt

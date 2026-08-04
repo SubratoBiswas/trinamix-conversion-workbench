@@ -98,10 +98,14 @@ REM into deploy.patch now, so the set is complete or it is absent, with nothing
 REM in between. An already-applied patch is skipped, so re-running is safe, and an
 REM old numbered patch left in the folder is reported rather than applied.
 REM ===========================================================================
-set "EXPECT=deploy.patch"
+REM Empty when the files were written straight into the repo folder rather than
+REM handed over as a patch -- which is now the normal case, since the assistant
+REM can write here directly. Name patches here only when there ARE patches.
+set "EXPECT="
 
 echo Checking the deploy set...
 set "MISSING="
+if not defined EXPECT goto :setok
 for %%E in (%EXPECT%) do (
   if not exist "%%E" (
     if defined MISSING (set "MISSING=!MISSING! %%E") else (set "MISSING=%%E")
@@ -122,6 +126,7 @@ if defined MISSING (
   exit /b 1
 )
 echo       every patch this deploy expects is present.
+:setok
 
 REM A .patch left over from an earlier deploy is not an error -- it will be
 REM recognised as already applied and skipped -- but it should be SAID, because
@@ -159,6 +164,22 @@ del /f /q ".git\HEAD.lock" 2>nul
 
 echo Dropping tracked bytecode...
 git rm -r --cached --ignore-unmatch backend/app/__pycache__ backend/app/services/__pycache__ backend/app/parsers/__pycache__ 1>nul 2>nul
+
+REM The deploy's OWN scratch files. `git add -A` swept deploy.patch, COMMIT_MSG.txt
+REM and a renamed supplier-site-tab.patch_old into the 03-Aug commit -- 170 KB of
+REM patch text stored permanently in history, and it would repeat every deploy,
+REM since the next deploy.patch reads as a modification of the tracked one. They
+REM are the INPUT to a deploy, not part of the source. Untracked here and ignored
+REM from now on; the files stay on disk, so re-running is unaffected.
+echo Untracking the deploy's own scratch files...
+git rm -r --cached --ignore-unmatch "*.patch" "*.patch_old" "COMMIT_MSG.txt" 1>nul 2>nul
+findstr /x /c:"*.patch" ".gitignore" 1>nul 2>nul || (
+  echo.>>".gitignore"
+  echo # Deploy inputs - see launch_git.bat. Not source.>>".gitignore"
+  echo *.patch>>".gitignore"
+  echo *.patch_old>>".gitignore"
+  echo COMMIT_MSG.txt>>".gitignore"
+)
 
 echo Removing scratch files (QA renders, Excel lock files)...
 rmdir /s /q "_qa" 2>nul
