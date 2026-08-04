@@ -153,6 +153,36 @@ def test_the_timeout_still_covers_a_long_bundle():
     check("more ticks than before", "i < 400" in src)
 
 
+def test_phase_two_is_not_silent():
+    """Generation ticks to 6/6 and then the zip runs with no feedback at all, so
+    the label froze on the last generation tick. The number stops moving, which
+    reads as a hang — and a bundle that is packaging and one that has died look
+    identical. Both ends now say something."""
+    src = _API.read_text(encoding="utf-8")
+    check("packaging is announced", "onTick?.(-1, -1, -1)" in src)
+    check("and the transfer is reported", "onDownloadProgress" in src)
+    page = (_BACKEND.parent / "frontend" / "src" / "pages"
+            / "ProjectOverviewPage.tsx").read_text(encoding="utf-8")
+    check("the page renders a packaging message", "Packaging" in page)
+    check("and a download message with size", "Downloading bundle" in page)
+
+
+def test_the_bundle_download_is_not_cut_off_at_two_minutes():
+    """The timeout was measured from the request going out, so a cold free tier
+    plus a large zip could blow it — and the failure arrived AFTER the wait, as a
+    generic message. Worst of both."""
+    src = _API.read_text(encoding="utf-8")
+    i = src.index("download-all`")
+    check("the window is generous", "timeout: 600000" in src[i:i + 600])
+
+
+def test_the_zip_step_is_timed_server_side():
+    src = _py("app/routers/operations.py")
+    check("it logs how long it took", "zipped in %.1fs" in src)
+    check("and how big it was", "len(_bytes) / 1e6" in src)
+    check("the client can see it too", "X-Zip-Seconds" in src)
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()

@@ -1448,6 +1448,8 @@ async def download_all_outputs(
         by_obj.setdefault(obj, []).append(c)
     objs = sorted(by_obj, key=lambda o: min((cc.planned_load_order or 100) for cc in by_obj[o]))
 
+    import time as _time
+    _zip_t0 = _time.monotonic()
     buf = io.BytesIO()
     used: dict[str, int] = {}
     added = 0
@@ -1541,11 +1543,29 @@ async def download_all_outputs(
 
     buf.seek(0)
     zip_name = f"{_safe_name(project.name)}_FBDI.zip"
+    _bytes = buf.getvalue()
+    # Phase 2 was invisible from both ends: the client stopped ticking when
+    # generation finished and the server said nothing about the zip, so a bundle
+    # that was packaging looked exactly like one that had hung.
+    log.info("download-all — %d of %d object(s), %.1f MB, zipped in %.1fs",
+             added, len(objs), len(_bytes) / 1e6, _time.monotonic() - _zip_t0)
+    # A PARTIAL bundle is the dangerous one. added == 0 already refuses, but 1 of 6
+    # returned a zip and said nothing — it downloads, it opens, and five interfaces
+    # are simply not in it. Name what is missing, in the log and on the response,
+    # so a short bundle cannot be mistaken for a complete one.
+    _missing = [o for o in objs if _safe_name(o) not in
+                {n.rsplit(".", 1)[0].split("_", 1)[-1] for n in used}]
+    if added < len(objs):
+        log.warning("download-all — %d object(s) NOT in the bundle: %s",
+                    len(objs) - added, ", ".join(stale or _missing) or "unknown")
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([_bytes]),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{zip_name}"',
+            "X-Zip-Seconds": f"{_time.monotonic() - _zip_t0:.1f}",
+            "X-Objects-Expected": str(len(objs)),
+            "X-Objects-Missing": ", ".join((stale or _missing))[:400],
             "X-Files-Added": str(added),
             "X-Files-Skipped": str(len(skipped)),
             # A load-file bundle that is missing interfaces is dangerous in a way a

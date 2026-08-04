@@ -6,8 +6,13 @@ import { useAuth } from "@/store/authStore";
 import { Button } from "@/components/ui/Primitives";
 
 export const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState("admin@trinamix.com");
-  const [password, setPassword] = useState("admin123");
+  // Blank, deliberately. The panel below the form printed the default
+  // account and its password on a public sign-in page; removing that and
+  // leaving them pre-filled here would move the disclosure rather than end
+  // it — the bundle still carries the string, and the form still submits
+  // them on a stray Enter.
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const setAuth = useAuth((s) => s.setAuth);
@@ -98,9 +103,6 @@ export const LoginPage: React.FC = () => {
               Sign in
             </Button>
           </form>
-          <div className="mt-6 rounded-md border border-line bg-canvas px-3 py-2 text-[11px] text-ink-muted">
-            <span className="font-medium text-ink">Default:</span> admin@trinamix.com / admin123
-          </div>
         </div>
       </div>
     </div>

@@ -1061,10 +1061,25 @@ export const OutputApi = {
     //    CSV bundles are headerless because the FBDI loader reads a header row as data).
     const results = await OutputApi.generateMergedAllAndWait(projectId, fmt, includeHeader, onTick);
     // 2) Fast zip — reuses the files just generated (regenerate=false).
+    // PHASE 2 HAS TO SAY SOMETHING TOO.
+    //
+    // Generation ticks to 6/6 and then this runs with no feedback at all, so the
+    // label sits frozen on the last generation tick while the server zips and the
+    // browser pulls the bytes. A bundle that is packaging and one that has hung
+    // look identical, which is why "6/6 (113s)" reads as stuck.
+    //
+    // The timeout was 2 minutes, measured from the request going out. A cold free
+    // tier plus a 20MB zip can exceed that, and when it does the whole download
+    // fails AFTER the wait with a generic message — the worst of both.
+    onTick?.(-1, -1, -1);   // -1 => "packaging", not a count
     const response = await api.get(`/conversions/project/${projectId}/download-all`, {
       responseType: "blob",
       params: { fmt },
-      timeout: 120000,
+      timeout: 600000,
+      onDownloadProgress: (e: any) => {
+        const mb = (e?.loaded ?? 0) / 1e6;
+        onTick?.(-2, Math.round(mb * 10) / 10, Math.round(((e?.total ?? 0) / 1e6) * 10) / 10);
+      },
     });
     const url = window.URL.createObjectURL(new Blob([response.data], { type: "application/zip" }));
     const a = document.createElement("a");

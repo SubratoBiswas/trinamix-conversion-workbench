@@ -296,7 +296,12 @@ export const ProjectOverviewPage: React.FC = () => {
         pid,
         `${(project?.name ?? "engagement").replace(/[^\w.-]+/g, "_")}_${_suffix}.zip`,
         fmt,
-        (sec, done, total) => setDlStatus(`Merging & generating ${_kind} files… ${done}/${total} (${sec}s)`),
+        // sec >= 0 is a generation tick; the two negatives are phase 2, which
+        // used to be silent — see generateMergedAllAndWait.
+        (sec, done, total) => setDlStatus(
+          sec === -1 ? `Packaging ${nObjs} ${_kind} file${nObjs === 1 ? "" : "s"} into a zip…`
+          : sec === -2 ? `Downloading bundle… ${done} MB${total > 0 ? ` of ${total} MB` : ""}`
+          : `Merging & generating ${_kind} files… ${done}/${total} (${sec}s)`),
         headerFlag,
       );
       const failed = (results || []).filter((r) => !r.ready);
@@ -308,10 +313,24 @@ export const ProjectOverviewPage: React.FC = () => {
       refresh();
       loadRefStandards();
     } catch (e: any) {
+      // SHOW THE SERVER'S OWN REASON. This collapsed every failure into one
+      // sentence, so a 409 that says exactly what is wrong — "merged files aren't
+      // generated yet", which is what a restarted instance with its output files
+      // gone looks like — arrived as "please try again". The bundle generated,
+      // the download produced nothing, and the only thing on screen was a shrug.
+      const _st = e?.response?.status;
+      const _detail =
+        (typeof e?.response?.data === "string" ? e.response.data : null) ||
+        e?.response?.data?.detail ||
+        e?.message;
       flash(
-        e?.response?.status === 400
+        _st === 400
           ? "No conversions are ready yet — each needs a source file and a bound FBDI template."
-          : "Couldn't build the FBDI bundle. Please try again.",
+          : _st === 409
+          ? `${_detail || "The merged files aren't on disk any more."} If generation just finished, the server may have restarted since — generate again and download straight away.`
+          : /timeout|exceeded/i.test(String(_detail))
+          ? "The bundle took too long to download. The files are generated — press Download again and it will reuse them."
+          : `Couldn't build the FBDI bundle${_st ? ` (HTTP ${_st})` : ""}. ${_detail || "No reason was returned."}`,
       );
     } finally { setDlAll(false); setDlStatus(null); setTimeout(() => setGenProg([]), 1500); }
   };
