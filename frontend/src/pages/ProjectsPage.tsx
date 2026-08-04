@@ -34,13 +34,35 @@ const STATUS_TONE: Record<string, "success" | "warning" | "info" | "neutral" | "
   on_hold:        "neutral",
 };
 
+/** Day only, no clock. The card is being scanned, not read. */
+const formatDay = (iso?: string | null) => {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: "numeric", month: "short", day: "2-digit",
+    });
+  } catch { return iso; }
+};
+
+const _created = (p: Project) => {
+  const t = new Date(p.created_at ?? 0).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
 /** List of implementation engagements (each contains 30+ conversion objects). */
 export const ProjectsPage: React.FC = () => {
   const [items, setItems] = useState<Project[] | null>(null);
+  // Oldest-first is the order you want when the job is clearing out old
+  // engagements, and it is the one the list has never offered — the API returns
+  // newest first, so the ones most likely to go were always at the bottom of 41.
+  const [oldestFirst, setOldestFirst] = useState(false);
   useEffect(() => { ProjectsApi.list().then(setItems); }, []);
 
   const handleDeleted = (id: string | number) =>
     setItems((prev) => (prev ? prev.filter((p) => String(p.id) !== String(id)) : prev));
+
+  const sorted = items === null ? null : [...items].sort(
+    (a, b) => (oldestFirst ? _created(a) - _created(b) : _created(b) - _created(a)));
 
   return (
     <>
@@ -48,9 +70,20 @@ export const ProjectsPage: React.FC = () => {
         title="Projects"
         subtitle="Implementation engagements — each contains many conversion objects"
         right={
-          <Link to="/projects/new" className="btn-primary">
-            <Plus className="h-4 w-4" /> New Engagement
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setOldestFirst((v) => !v)}
+              className="btn-ghost text-[12px]"
+              title="Sort by the date the engagement was created"
+            >
+              <Clock className="h-3.5 w-3.5" />
+              {oldestFirst ? "Oldest first" : "Newest first"}
+            </button>
+            <Link to="/projects/new" className="btn-primary">
+              <Plus className="h-4 w-4" /> New Engagement
+            </Link>
+          </div>
         }
       />
 
@@ -72,7 +105,7 @@ export const ProjectsPage: React.FC = () => {
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((p) => (
+            {(sorted ?? items).map((p) => (
               <ProjectCard key={p.id} project={p} onDeleted={handleDeleted} />
             ))}
           </div>
@@ -90,8 +123,22 @@ const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number)
     e.preventDefault();   // don't follow the card's Link
     e.stopPropagation();
     const n = project.conversion_count ?? 0;
+    // Say what goes AND what stays. "This cannot be undone" is true and useless:
+    // it does not answer the question anyone actually has, which is whether the
+    // uploaded data goes with it. The list below mirrors the cascade in
+    // backend/app/routers/projects.py delete_project — keep the two in step.
     if (!window.confirm(
-      `Delete engagement "${project.name}"${n ? ` and its ${n} conversion(s)` : ""}? This cannot be undone.`
+      `Delete engagement "${project.name}"?\n\n` +
+      `THIS DELETES\n` +
+      `  • the engagement\n` +
+      (n ? `  • its ${n} conversion object${n === 1 ? "" : "s"}\n` : "") +
+      `  • every mapping on those conversions, and their transformation rules and crosswalks\n` +
+      `  • their generated output records and load run history\n\n` +
+      `THIS KEEPS\n` +
+      `  • your datasets — uploaded files are not touched\n` +
+      `  • FBDI templates, gold standards and source connections\n` +
+      `  • the learning library, so a new engagement picks these mappings back up\n\n` +
+      `Cannot be undone.`
     )) return;
     setDeleting(true);
     try {
@@ -175,9 +222,18 @@ const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number)
       </div>
 
       <div className="flex items-center justify-between border-t border-line bg-canvas px-5 py-2 text-[11px] text-ink-muted">
-        <span className="inline-flex items-center gap-1">
-          <Calendar className="h-3 w-3" />
-          Go-live: {project.go_live_date ? formatDate(project.go_live_date) : "—"}
+        <span className="inline-flex items-center gap-3">
+          {/* Created is what tells the old engagements from the current ones —
+              with 40+ on screen and most of them named for a test, the name
+              alone cannot. Date only: the time of day is noise here. */}
+          <span className="inline-flex items-center gap-1" title={formatDate(project.created_at)}>
+            <Clock className="h-3 w-3" />
+            Created: {formatDay(project.created_at)}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            Go-live: {project.go_live_date ? formatDay(project.go_live_date) : "—"}
+          </span>
         </span>
         <span className="inline-flex items-center gap-1 font-medium text-brand-dark">
           Open <ArrowRight className="h-3 w-3" />
