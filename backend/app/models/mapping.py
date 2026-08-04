@@ -37,7 +37,6 @@ class MappingSuggestion(Document):
     derived: bool = False
     derived_from: Optional[str] = None
     derived_at: Optional[datetime] = None
-
     # v10: dual-approval for SOX-controlled projects
     requires_dual_approval: int = 0
     second_approver_email: Optional[str] = None

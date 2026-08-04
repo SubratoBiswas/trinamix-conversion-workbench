@@ -132,19 +132,48 @@ const ProjectCard: React.FC<{ project: Project; onDeleted: (id: string | number)
       `THIS DELETES\n` +
       `  • the engagement\n` +
       (n ? `  • its ${n} conversion object${n === 1 ? "" : "s"}\n` : "") +
-      `  • every mapping on those conversions, and their transformation rules and crosswalks\n` +
-      `  • their generated output records and load run history\n\n` +
-      `THIS KEEPS\n` +
-      `  • your datasets — uploaded files are not touched\n` +
-      `  • FBDI templates, gold standards and source connections\n` +
-      `  • the learning library, so a new engagement picks these mappings back up\n\n` +
+      `  • its datasets and the uploaded files behind them — EXCEPT any also used\n` +
+      `    by another engagement, which are kept and listed afterwards\n` +
+      `  • its mapping rows, transformation rules and crosswalks\n` +
+      `  • generated output records and load run history\n\n` +
+      `THIS KEEPS THE MAPPING LOGIC\n` +
+      `  • "column A of this source, for this module, maps to column B of the\n` +
+      `    FBDI" lives in the learning library, keyed by client and source system\n` +
+      `    — not on the conversion. It is captured again just before the delete,\n` +
+      `    so a rebuilt engagement picks these mappings straight back up.\n` +
+      `  • FBDI templates, gold standards and source connections\n\n` +
       `Cannot be undone.`
     )) return;
     setDeleting(true);
     try {
-      await ProjectsApi.remove(String(project.id));
+      const res: any = await ProjectsApi.remove(String(project.id));
       onDeleted(project.id);
       window.dispatchEvent(new Event("workbench:refresh"));  // refresh sidebar counts
+      // SAY WHAT WAS SKIPPED. A shared dataset is kept on purpose, and a delete
+      // that quietly did less than the dialog promised is the screen and the
+      // truth disagreeing again — just in the reassuring direction this time.
+      const kept: any[] = res?.datasets_kept ?? [];
+      const gone: string[] = res?.datasets_deleted ?? [];
+      const errs: string[] = res?.capture_errors ?? [];
+      if (kept.length || errs.length) {
+        alert(
+          `Deleted "${project.name}".\n\n` +
+          (gone.length ? `Datasets removed: ${gone.join(", ")}\n\n` : "") +
+          (kept.length
+            ? `Kept ${kept.length} dataset${kept.length === 1 ? "" : "s"} still in use elsewhere:\n` +
+              kept.map((k) => `  • ${k.name} — used by ${(k.still_used_by || []).join(", ")}`).join("\n") +
+              `\n\nDelete those engagements first if you want these gone too.\n\n`
+            : "") +
+          // A capture that failed means mapping logic MAY not have reached the
+          // library before its rows were deleted. Silence here would be the
+          // screen looking right while something was lost.
+          (errs.length
+            ? `WARNING — the mapping logic could not be captured for:\n` +
+              errs.map((e) => `  • ${e}`).join("\n") +
+              `\nAnything decided on those conversions and not already learned is gone.`
+            : "")
+        );
+      }
     } catch {
       alert("Failed to delete engagement.");
       setDeleting(false);

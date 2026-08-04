@@ -120,62 +120,154 @@ def test_sorting_does_not_mutate_the_loaded_list():
     check("it sorts a copy", "[...items].sort(" in src)
 
 
-def test_the_delete_dialog_says_the_datasets_are_kept():
-    """The actual question at that dialog. Answering it there is worth more than
-    answering it in a chat window a week earlier."""
+def _dialog() -> str:
     src = _page()
-    i = src.index("window.confirm(")
-    dialog = src[i:i + 1400]
-    check("it says what is kept", "THIS KEEPS" in dialog)
-    check("datasets by name", "datasets" in dialog.lower())
-    check("and that they are untouched", "not touched" in dialog.lower())
+    return src[src.index("window.confirm("):][:1600].lower()
 
 
-def test_the_delete_dialog_says_the_mappings_go():
-    """The half that is easy to leave out, and the expensive half. Mapping work
-    on those conversions is deleted outright."""
-    src = _page()
-    i = src.index("window.confirm(")
-    dialog = src[i:i + 1400]
-    check("it says what is deleted", "THIS DELETES" in dialog)
-    check("mappings are named", "mapping" in dialog.lower())
-    check("and it still says it is final", "undone" in dialog.lower())
+def test_the_delete_dialog_says_the_datasets_go_now():
+    """MOVED, not weakened. This used to assert the opposite — that datasets were
+    kept — because they were. The analyst asked for a delete to take its data
+    with it, so the endpoint changed and the assertion moved with it. Recorded
+    here rather than quietly rewritten: the old promise was on screen, and
+    anybody who read it then would be wrong now.
+    """
+    d = _dialog()
+    deletes = d.split("this keeps")[0]
+    check("datasets are named as deleted", "dataset" in deletes)
+    check("and the files behind them", "uploaded files" in deletes)
+    check("it still says it is final", "undone" in d)
+
+
+def test_the_dialog_warns_that_a_shared_dataset_is_kept():
+    """The exception is the whole risk. Uploads are deduped by content hash, so
+    the same file re-uploaded REUSES the row — a dataset can be shared, and
+    deleting it blind pulls the source out from under an engagement nobody
+    touched."""
+    d = _dialog()
+    check("the exception is stated", "except" in d)
+    check("and it names the reason", "another engagement" in d)
+
+
+def test_the_dialog_separates_the_rows_from_the_logic():
+    """The distinction the whole design rests on. The mapping ROWS are a view of
+    the dated store and go with their conversions. The LOGIC — column A of this
+    source, for this module, maps to column B of the FBDI — is a statement in the
+    library, keyed by client and source system, and is not stored on the
+    conversion at all. A dialog that blurred the two would make people keep rows
+    they do not need or lose logic they do."""
+    d = _dialog()
+    deletes, keeps = d.split("this keeps the mapping logic")
+    check("the rows are named as deleted", "mapping rows" in deletes)
+    check("with their rules and crosswalks",
+          "transformation rules" in deletes and "crosswalk" in deletes)
+    check("the logic is named as kept", "learning library" in keeps)
+    check("and how it is keyed", "source system" in keeps)
+    check("in the analyst's own terms", "column a" in keeps and "column b" in keeps)
 
 
 def test_the_dialog_matches_the_cascade_it_describes():
     """A dialog that drifts from the code is worse than no dialog: it is a
     promise. Every model the endpoint deletes must be named on screen, and
-    nothing the endpoint spares may be listed as deleted.
+    nothing the endpoint preserves may be listed as deleted.
     """
     code = _router_code()
-    dialog = _page()
-    dialog = dialog[dialog.index("window.confirm("):][:1400].lower()
-    deletes, keeps = dialog.split("this keeps")[0], dialog.split("this keeps")[1]
+    d = _dialog()
+    deletes, keeps = d.split("this keeps")[0], d.split("this keeps")[1]
 
-    for model, word in (("MappingSuggestion", "mapping"),
-                        ("TransformationRule", "transformation rule"),
-                        ("Crosswalk", "crosswalk"),
-                        ("ConvertedOutput", "output"),
-                        ("LoadRun", "load run")):
-        check(f"{model} is deleted by the endpoint", f"{model}.find" in code)
+    for model, word in (("ConvertedOutput", "output"),
+                        ("LoadRun", "load run"),
+                        ("Dataset", "dataset")):
+        check(f"{model} is deleted by the endpoint", f"{model}" in code)
         check(f"and the dialog says so", word in deletes, f"missing: {word}")
 
-    check("Dataset is not in the cascade", "Dataset" not in code)
-    check("and the dialog promises that", "dataset" in keeps)
+    for model, word in (("MappingSuggestion", "mapping rows"),
+                        ("TransformationRule", "transformation rules"),
+                        ("Crosswalk", "crosswalk")):
+        check(f"{model} is deleted by the endpoint", ".delete()" in _delete_call_for(code, model))
+        check("and the dialog says so", word in deletes, f"missing: {word}")
+
     check("SourceConnection is not in the cascade", "SourceConnection.find" not in code)
     check("and the dialog promises that", "source connection" in keeps)
 
 
+def _delete_call_for(code: str, model: str) -> str:
+    """The statement operating on ``model``, so a .delete() elsewhere in the
+    cascade cannot be mistaken for this model's."""
+    i = code.find(f"{model}.find")
+    return code[i:code.find("\n", i)] if i >= 0 else ""
+
+
+def test_the_logic_is_captured_before_the_rows_are_deleted():
+    """Order is the whole guarantee. Every deliberate edit already records a
+    learning as it is made, and generation captures again — but "already" is an
+    assumption, and after the delete statement the rows do not exist to be asked.
+    """
+    code = _router_code()
+    ci = code.index("capture_learnings_from_conversion(_c)")
+    di = code.index("MappingSuggestion.find({\"conversion_id\"")
+    check("capture runs", ci > 0)
+    check("BEFORE the rows go", ci < di, "the rows are deleted before the capture")
+
+
+def test_a_failed_capture_is_reported_and_never_blocks_the_delete():
+    """Best-effort, but not silent. A capture that throws must not strand a half
+    deleted project — and must not vanish either, because it means logic may not
+    have reached the library before its rows went."""
+    code = _router_code()
+    check("failures are caught", "except Exception as _cap_exc" in code)
+    check("and collected", "capture_errors.append" in code)
+    check("and returned", '"capture_errors"' in code)
+    check("with a count of what was kept", '"logic_captured"' in code)
+    page = _page()
+    check("the page warns about them", "capture_errors" in page)
+    check("in words", "could not be captured" in page.lower())
+
+
+def test_no_archive_fields_were_left_behind():
+    """A briefly-considered design stamped the surviving rows with orphaned_at.
+    The rows are deleted now, so those fields would be dead weight on the model —
+    exactly the shipped-and-inert shape, in the data layer."""
+    model = (_BACKEND / "app" / "models" / "mapping.py").read_text(encoding="utf-8")
+    check("no orphan stamp on the model", "orphaned_at" not in model)
+    check("nor in the endpoint", "orphaned_at" not in _router_code())
+
+
+def test_a_dataset_another_engagement_uses_is_skipped():
+    """The orphan rule. The endpoint must look for OTHER conversions before
+    deleting anything, and must exclude the ones it is about to delete — checking
+    after the fact would find nothing and delete everything."""
+    code = _router_code()
+    check("it looks for other users", "still_used" in code)
+    check("excluding the doomed conversions", '"$nin": conv_ids' in code)
+    check("a shared dataset is skipped", "datasets_kept.append" in code)
+    check("and the skip is reported", '"datasets_kept"' in code)
+
+
+def test_the_skipped_datasets_reach_the_screen():
+    """A delete that quietly did less than the dialog promised is the screen and
+    the truth disagreeing again, just in the reassuring direction. The kept list
+    has to be shown, not only returned."""
+    src = _page()
+    check("the response is read", "datasets_kept" in src)
+    check("and surfaced", "still_used_by" in src)
+
+
+def test_the_uploaded_file_is_removed_from_disk():
+    """Deleting the row and leaving the file is how a disk fills up with data
+    somebody believes they deleted."""
+    code = _router_code()
+    check("the file is removed", "os.remove(ds.file_path)" in code)
+    check("and its column profiles", "DatasetColumnProfile" in code)
+
+
 def test_the_learning_library_survives_a_delete():
-    """Worth stating on screen because it changes the decision: the mappings are
-    gone from the conversion but the library keeps what was learned, so a rebuilt
+    """Worth stating on screen because it changes the decision: a rebuilt
     engagement is not starting from nothing."""
     code = _router_code()
     check("no learned mappings are deleted", "LearnedMapping" not in code)
     check("no dated store rows are deleted", "mapping_store" not in code)
-    dialog = _page()
-    dialog = dialog[dialog.index("window.confirm("):][:1400].lower()
-    check("and the dialog says so", "learning library" in dialog)
+    check("and the dialog says so", "learning library" in _dialog())
 
 
 def test_the_endpoint_still_reports_what_it_removed():

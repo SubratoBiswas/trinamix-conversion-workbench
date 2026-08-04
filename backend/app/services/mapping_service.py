@@ -848,6 +848,72 @@ async def dedupe_conversion_mappings(conversion_id) -> int:
     return removed
 
 
+def duplicate_groups_pipeline() -> list:
+    """Mongo pipeline: every (conversion, target field) holding more than one row.
+
+    Pure and separate so it can be read and tested without a database, and so the
+    sweep below has nothing to get wrong at the point it matters.
+
+    It exists because the alternative — walking 183 conversions and loading a
+    thousand rows each to find out whether anything is wrong — is a minute of work
+    on every boot to usually discover nothing. This is one aggregation that
+    touches no documents when the data is clean.
+    """
+    return [
+        {"$group": {"_id": {"c": "$conversion_id", "t": "$target_field_id"},
+                    "n": {"$sum": 1}}},
+        {"$match": {"n": {"$gt": 1}}},
+    ]
+
+
+async def sweep_duplicate_mappings(dry_run: bool = True) -> dict:
+    """Find — and optionally remove — duplicate mapping rows across ALL conversions.
+
+    The per-conversion endpoint has existed for a while and healing 183
+    conversions by hand is not a plan. This is the fleet version.
+
+    WHY IT MATTERS NOW. Generation and the screen used to choose between duplicate
+    rows by different rules, so an analyst's edit could show on screen and be
+    absent from the generated FBDI. Both sides now share
+    ``services.mapping_dedupe``, which fixes WHICH row wins — it does not remove
+    the duplicates. This does, and until it runs a conversion with two rows is one
+    re-run of auto-map away from being confusing again.
+
+    ``dry_run`` defaults to True: report first, change nothing. The survivor is
+    picked by the shared ``dedup_key``, so what this keeps is exactly what
+    generation would now have chosen.
+    """
+    from collections import defaultdict
+    groups = await MappingSuggestion.aggregate(duplicate_groups_pipeline()).to_list()
+    extra_by_conv: dict = defaultdict(int)
+    for g in groups:
+        extra_by_conv[g["_id"]["c"]] += int(g.get("n", 1)) - 1
+
+    out: dict = {
+        "dry_run": bool(dry_run),
+        "conversions_affected": len(extra_by_conv),
+        "duplicate_rows_found": sum(extra_by_conv.values()),
+        "duplicate_rows_removed": 0,
+        "details": [],
+    }
+    for cid, extra in sorted(extra_by_conv.items(), key=lambda kv: -kv[1]):
+        conv = await Conversion.get(cid)
+        row = {"conversion_id": str(cid),
+               "conversion": conv.name if conv else "(deleted)",
+               "duplicate_rows": extra}
+        if not dry_run:
+            # An orphaned group — rows whose conversion is gone — is left alone.
+            # Deleting data on the strength of a dangling id is not a heal.
+            if conv is not None:
+                row["removed"] = await dedupe_conversion_mappings(cid)
+                out["duplicate_rows_removed"] += row["removed"]
+            else:
+                row["removed"] = 0
+                row["skipped"] = "conversion no longer exists"
+        out["details"].append(row)
+    return out
+
+
 async def enrich_mapping_with_samples(
     conversion: Conversion, mappings: list[MappingSuggestion]
 ) -> list[dict[str, Any]]:

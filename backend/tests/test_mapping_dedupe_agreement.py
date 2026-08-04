@@ -270,6 +270,77 @@ def test_every_mapping_write_in_the_router_stamps_its_date():
     check("every mapping write is dated", not bare, f"unstamped at lines {bare}")
 
 
+# ---------------------------------------------------------------------------
+# The sweep. Fixing which row wins does not remove the duplicates, and until they
+# are gone a conversion with two rows is one auto-map re-run from being confusing
+# again.
+# ---------------------------------------------------------------------------
+def test_the_duplicate_finder_asks_the_database_not_the_rows():
+    """183 conversions x ~1000 rows is a minute of work on every boot to usually
+    discover nothing. One aggregation touches no documents when the data is
+    clean, which is what makes it safe to run at startup."""
+    from app.services.mapping_service import duplicate_groups_pipeline
+    pipe = duplicate_groups_pipeline()
+    check("it groups", any("$group" in st for st in pipe))
+    grp = next(st["$group"] for st in pipe if "$group" in st)
+    check("by conversion", grp["_id"]["c"] == "$conversion_id")
+    check("and target field", grp["_id"]["t"] == "$target_field_id")
+    match = next(st["$match"] for st in pipe if "$match" in st)
+    check("keeping only real duplicates", match["n"] == {"$gt": 1})
+
+
+def test_the_sweep_reports_before_it_removes():
+    """dry_run defaults to True. A fleet-wide delete that runs because somebody
+    left a parameter off is not a heal."""
+    import inspect
+    from app.services.mapping_service import sweep_duplicate_mappings
+    sig = inspect.signature(sweep_duplicate_mappings)
+    check("dry_run defaults to True", sig.parameters["dry_run"].default is True)
+
+
+def test_the_sweep_keeps_the_row_generation_would_have_picked():
+    """The survivor has to be chosen by the SAME rule, or the heal quietly
+    decides something different from the generator it exists to serve."""
+    src = (_BACKEND / "app" / "services" / "mapping_service.py").read_text(encoding="utf-8")
+    i = src.index("async def dedupe_conversion_mappings")
+    body = src[i:i + 1200]
+    check("it sorts by the shared key", "_dedup_key" in body)
+
+
+def test_an_orphaned_group_is_not_deleted_on_the_strength_of_a_dangling_id():
+    src = (_BACKEND / "app" / "services" / "mapping_service.py").read_text(encoding="utf-8")
+    i = src.index("async def sweep_duplicate_mappings")
+    body = src[i:i + 2600]
+    check("a missing conversion is skipped", "conversion no longer exists" in body)
+
+
+def test_the_deploy_itself_heals_the_data():
+    """Asking anyone to call an endpoint 183 times is not a plan. The deploy that
+    fixes the selection rule is exactly when the rows should be cleaned."""
+    src = (_BACKEND / "app" / "main.py").read_text(encoding="utf-8")
+    check("startup runs the sweep", "sweep_duplicate_mappings(dry_run=False)" in src)
+    check("and says what it did", "duplicate_rows_removed" in src)
+    check("including that outputs are now stale", "Regenerate" in src)
+
+
+def test_the_fleet_sweep_is_admin_only():
+    """It deletes rows across every engagement. Not something a Normal user
+    should be able to set off from a URL."""
+    src = (_BACKEND / "app" / "routers" / "mapping.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+               and n.name == "dedupe_sweep"), None)
+    check("the endpoint exists", fn is not None)
+    guards = [d.args[0].id for a in fn.args.args
+              if isinstance(a.annotation, ast.Name) or True
+              for d in [a] if False] if fn else []
+    seg = src[src.index("async def dedupe_sweep"):]
+    seg = seg[:seg.index("):")]
+    check("it requires an admin", "Depends(require_admin)" in seg,
+          "the sweep is reachable by any signed-in user")
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()

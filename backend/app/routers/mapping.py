@@ -21,6 +21,7 @@ from app.services.learning_service import record_learning_from_mapping, record_l
 from app.services.mapping_service import enrich_mapping_with_samples, run_mapping_suggestions
 from app.transformations.engine import apply_pipeline
 from app.services.mapping_dedupe import stamp_edit  # every mapping write stamps its own date
+from app.services.access_control import require_admin  # the fleet-wide sweep is an admin action
 
 router = APIRouter(prefix="/api", tags=["mapping"])
 
@@ -268,6 +269,32 @@ async def dedupe_mappings(conversion_id: str, _: User = Depends(get_current_user
     from app.services.mapping_service import dedupe_conversion_mappings
     removed = await dedupe_conversion_mappings(conv.id)
     return {"conversion_id": conversion_id, "removed": removed}
+
+
+@router.post("/mappings/dedupe-sweep")
+async def dedupe_sweep(
+    dry_run: bool = True,
+    user: User = Depends(require_admin),
+):
+    """Find — and with ``dry_run=false``, remove — duplicate mapping rows across
+    EVERY conversion.
+
+    The per-conversion endpoint above heals one at a time, which is not a plan
+    for 183 of them. This is the fleet version, and the same sweep runs once at
+    startup so the deploy that fixed the selection rule also cleans the data.
+    Kept as an endpoint so it can be re-run and, more usefully, so it can be
+    asked what it WOULD do without doing it.
+
+    Administrator-only: it deletes rows across every engagement, which is not a
+    thing a Normal user should be able to set off from a URL.
+    """
+    from app.services.mapping_service import sweep_duplicate_mappings
+    result = await sweep_duplicate_mappings(dry_run=dry_run)
+    if not dry_run and result.get("duplicate_rows_removed"):
+        log.warning("dedupe sweep by %s removed %s row(s) across %s conversion(s)",
+                    getattr(user, "email", "?"), result["duplicate_rows_removed"],
+                    result["conversions_affected"])
+    return result
 
 
 @router.get("/conversions/{conversion_id}/source-columns")

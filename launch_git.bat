@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=BLOCKER FIX - mapping edits now reach the generated FBDI: one shared dedup rule for the screen and the file, plus updated_at on every mapping write. Also BOM column order, Admin/Normal roles, and created dates plus an honest delete dialog on Projects. Suite 1135 passing, 14 skipped, 0 failing. REGENERATE outputs after this."
+set "DEPLOY_NOTE=BLOCKER FIX - mapping edits now reach the generated FBDI. One shared dedup rule for the screen and the file, updated_at on every mapping write, and a startup sweep that removes the duplicate rows on this deploy. Also BOM column order, Admin/Normal roles, and Projects delete/created dates. REGENERATE outputs after this - the files on disk were built from the losing row."
 
 echo Checking the deploy set...
 set "MISSING="

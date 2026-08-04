@@ -194,6 +194,35 @@ async def _run_seeds_background() -> None:
     except Exception:  # noqa: BLE001
         log.exception("employee HDL field mapping seed failed")
     try:
+        # HEAL THE DUPLICATE MAPPING ROWS, ONCE, ON THE DEPLOY THAT FIXES THEM.
+        #
+        # A re-run race on the suggest-mapping endpoint leaves two rows for the
+        # same (conversion, target field). Generation and the screen used to pick
+        # between them by different rules, so an analyst's edit showed on screen
+        # and was missing from the generated FBDI — reported as a blocker across
+        # every track. Both sides now share services/mapping_dedupe, which fixes
+        # which row WINS; the duplicates themselves are still there, and a
+        # conversion carrying two rows is one auto-map re-run from being
+        # confusing again.
+        #
+        # Healing at startup rather than asking anyone to call an endpoint 183
+        # times: the deploy that fixes the rule is exactly when the data should
+        # be cleaned, and this is the same shape as the seeds below.
+        #
+        # Cheap when there is nothing to do. One aggregation finds the affected
+        # groups and no documents are loaded unless some exist.
+        from app.services.mapping_service import sweep_duplicate_mappings
+        r = await sweep_duplicate_mappings(dry_run=False)
+        if r.get("duplicate_rows_removed"):
+            log.warning("startup heal — removed %s duplicate mapping row(s) across "
+                        "%s conversion(s); the survivor is the row generation now "
+                        "picks. Regenerate any output produced before this.",
+                        r["duplicate_rows_removed"], r["conversions_affected"])
+        else:
+            log.info("startup heal — no duplicate mapping rows found")
+    except Exception:  # noqa: BLE001
+        log.exception("duplicate mapping sweep failed")
+    try:
         # BOM / Item Structure: force-seed the real 4-sheet bundled workbook
         # (EGP_STRUCTURES/COMPONENTS/SUB_COMPS/REF_DESGS_INTERFACE) so a from-scratch
         # DB has it and BOM conversions don't get stuck on the thin BomImport.

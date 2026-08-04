@@ -193,15 +193,117 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
     if not p:
         raise HTTPException(404, "Project not found")
 
-    # Cascade so nothing is orphaned (orphaned conversions would still show up
-    # in the global conversion dropdowns and the 'N conversions' counter).
+    # WHAT A DELETE TAKES, AND WHAT IT LEAVES.
+    #
+    # Three groups, and the split is deliberate rather than incidental:
+    #
+    #   PRESERVED — the LOGIC, which is not the rows. "Column A of a NetSuite
+    #     extract for this module maps to column B of the FBDI" is a statement in
+    #     the dated store, keyed (client, source system, target field). That is
+    #     what is worth keeping and it is not stored on the conversion at all.
+    #     The per-conversion mapping rows are a VIEW of it — deleting them loses
+    #     nothing the store already holds, which is why they go with their
+    #     conversions rather than accumulating as an archive nothing can render.
+    #
+    #     So the rows are CAPTURED FIRST and deleted second. Every deliberate
+    #     edit already records a learning as it is made, and generation captures
+    #     again — but "already" is an assumption, and this is the last moment the
+    #     rows exist. A backstop pass runs before the delete and never blocks it.
+    #
+    #   DELETED — the rows and the artefacts. Mapping rows, transformation rules,
+    #     crosswalks, generated output records, load runs and their errors.
+    #
+    #   DELETED, NEW — datasets, but ONLY those nothing else still uses. Uploads
+    #     are deduped by content hash, so re-uploading the same file REUSES the
+    #     Dataset row. A dataset can therefore be shared with another engagement,
+    #     and deleting it blind pulls the source out from under conversions in a
+    #     project nobody touched. Shared ones are skipped and NAMED in the
+    #     response, because a deliverable that quietly got smaller is worse than
+    #     one that says so.
+    #
+    # The learning library and the dated store are untouched, as they always
+    # were: the decisions live there, so a rebuilt engagement picks them up.
+    from app.models.mapping import MappingSuggestion
+    from app.models.output import ConvertedOutput
+    from app.models.load import LoadRun, LoadError
+    from app.models.dataset import Dataset, DatasetColumnProfile
+
     convs = await Conversion.find(Conversion.project_id == p.id).to_list()
     conv_ids = [c.id for c in convs]
+    datasets_deleted: list[str] = []
+    datasets_kept: list[dict] = []
+    logic_captured = 0
+    capture_errors: list[str] = []
+
     if conv_ids:
-        from app.models.mapping import MappingSuggestion
+        # Which datasets did this project use? dataset_ids is the multi-source
+        # list; dataset_id mirrors its first entry, and older rows only have that.
+        ds_ids: set = set()
+        for c in convs:
+            for d in list(getattr(c, "dataset_ids", None) or []):
+                ds_ids.add(d)
+            if getattr(c, "dataset_id", None):
+                ds_ids.add(c.dataset_id)
+
+        # Who else is still using them, ignoring the conversions about to go.
+        still_used: dict = {}
+        if ds_ids:
+            others = await Conversion.find(
+                {"_id": {"$nin": conv_ids},
+                 "$or": [{"dataset_id": {"$in": list(ds_ids)}},
+                         {"dataset_ids": {"$in": list(ds_ids)}}]}
+            ).to_list()
+            _proj_names: dict = {}
+            for o in others:
+                used = set(list(getattr(o, "dataset_ids", None) or []))
+                if getattr(o, "dataset_id", None):
+                    used.add(o.dataset_id)
+                for d in used & ds_ids:
+                    if o.project_id not in _proj_names:
+                        _op = await Project.get(o.project_id)
+                        _proj_names[o.project_id] = _op.name if _op else str(o.project_id)
+                    still_used.setdefault(d, set()).add(_proj_names[o.project_id])
+
+        for d in ds_ids:
+            ds = await Dataset.get(d)
+            if ds is None:
+                continue
+            if d in still_used:
+                datasets_kept.append(
+                    {"id": str(d), "name": ds.name,
+                     "still_used_by": sorted(still_used[d])})
+                continue
+            await DatasetColumnProfile.find(DatasetColumnProfile.dataset_id == d).delete()
+            try:
+                import os
+                if ds.file_path and os.path.exists(ds.file_path):
+                    os.remove(ds.file_path)
+            except Exception:  # noqa: BLE001 — file cleanup is best-effort
+                pass
+            await ds.delete()
+            datasets_deleted.append(ds.name)
+
+        # LAST CHANCE TO KEEP THE LOGIC. Capture each conversion's trustworthy
+        # mappings into the dated store before the rows go, so "Column A of this
+        # source maps to Column B of the FBDI" survives the engagement that
+        # taught it. Deliberate edits already record a learning as they are made
+        # and generation captures again, so this is usually a no-op — but usually
+        # is not a guarantee, and after the next statement the rows are gone.
+        #
+        # Best-effort by design: a capture that fails must not strand a half
+        # deleted project. What it managed is reported rather than assumed.
+        from app.services.learning_service import capture_learnings_from_conversion
+        for _c in convs:
+            try:
+                _cap = await capture_learnings_from_conversion(_c)
+                logic_captured += int((_cap or {}).get("captured", 0) or 0)
+            except Exception as _cap_exc:  # noqa: BLE001
+                capture_errors.append(f"{_c.name}: {type(_cap_exc).__name__}")
+
+        # The rows themselves are a view of the store, so they go with their
+        # conversions. Keeping them would leave hundreds of thousands of rows no
+        # screen can render and no query is scoped to reach.
         from app.models.transformation import TransformationRule, Crosswalk
-        from app.models.output import ConvertedOutput
-        from app.models.load import LoadRun, LoadError
         await MappingSuggestion.find({"conversion_id": {"$in": conv_ids}}).delete()
         await TransformationRule.find({"conversion_id": {"$in": conv_ids}}).delete()
         await Crosswalk.find({"conversion_id": {"$in": conv_ids}}).delete()
@@ -216,7 +318,16 @@ async def delete_project(project_id: str, _: User = Depends(get_current_user)):
     # NOTE: deliberately NOT deleting SourceConnection — the live Oracle EBS
     # connection is shared infrastructure and other engagements rely on it.
     await p.delete()
-    return {"deleted": project_id, "conversions_deleted": len(conv_ids)}
+    return {
+        "deleted": project_id,
+        "conversions_deleted": len(conv_ids),
+        "datasets_deleted": datasets_deleted,
+        "datasets_kept": datasets_kept,
+        # What survived as LOGIC. Reported rather than assumed: the rows are gone
+        # and this number is the only evidence the store got what they held.
+        "logic_captured": logic_captured,
+        "capture_errors": capture_errors,
+    }
 
 
 @router.get("/{project_id}/conversions", response_model=list[ConversionOut])
