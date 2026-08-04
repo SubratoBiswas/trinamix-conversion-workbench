@@ -938,8 +938,25 @@ export const OutputApi = {
       `/conversions/${conversionId}/output-preview-by-source`, { params: { limit } }).then(r => r.data),
   downloadUrl: (conversionId: string) => `/api/conversions/${conversionId}/download-output`,
   download: async (conversionId: string, filename = "output.csv") => {
+    // SIXTY SECONDS WAS THE WHOLE BUG.
+    //
+    // The axios instance defaults to timeout: 60_000, and this was the only
+    // binary download that never overrode it — the dataset download asks for
+    // 300s, the duplicate export 180s, the mapping export 90s. A wide supplier
+    // interface (8,561 rows across the full POZ template) streams for longer
+    // than that from a free-tier instance, especially on the first request after
+    // idle, where a ~45s cold start is spent before a byte moves.
+    //
+    // Axios then aborts the request. The browser had already opened the download,
+    // so it shows one running for many seconds, stops, and writes nothing —
+    // reported exactly that way, and indistinguishable from a broken button.
+    //
+    // The .zip bundle never hit this because it was built to generate in the
+    // BACKGROUND and poll, so its final fetch is a fast reuse. The per-file
+    // download streams the real work inside the request.
     const response = await api.get(`/conversions/${conversionId}/download-output`, {
       responseType: "blob",
+      timeout: 300_000,
     });
     // ALWAYS honour the server's real filename/extension — a supplier FBDI output
     // is a .zip (Oracle bundle), not .csv. Saving zip bytes under a forced .csv
@@ -993,6 +1010,10 @@ export const OutputApi = {
   conversionReport: async (projectId: string, filename = "conversion_report.xlsx") => {
     const response = await api.get(`/conversions/project/${projectId}/conversion-report`, {
       responseType: "blob",
+      // Same reason as the per-conversion download below: this walks every
+      // conversion in the project to build the workbook, which is far more than
+      // a minute's work on a large bundle, and the shared axios default is 60s.
+      timeout: 300_000,
     });
     const cd = (response.headers?.["content-disposition"] as string) || "";
     const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
