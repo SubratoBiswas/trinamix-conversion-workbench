@@ -1267,23 +1267,71 @@ async def generate_merged(
     return {"status": "generating", "conversion_id": str(carrier.id), "carrier_id": str(carrier.id)}
 
 
+def merge_concurrency() -> int:
+    """How many interface objects generate at once.
+
+    ONE was not an accident and this does not abandon the reason for it. A wide
+    multi-source load OOM'd the worker once; the request died at the gateway and
+    the browser reported it as a CORS error, which is an expensive way to learn
+    about memory. Generating strictly one at a time made peak memory the size of
+    the largest single object.
+
+    But it also made wall-clock the SUM of every object — six Supplier interfaces
+    took 353 seconds, and none of them was slow on its own. A bound of 2 keeps the
+    guarantee ("peak is N objects, and N is small and known") while roughly
+    halving the wait. It is an env var so the ceiling can be raised or dropped to
+    1 without a deploy, which matters on a free tier where the safe number is a
+    property of the instance rather than of this code.
+    """
+    import os
+    try:
+        return max(1, min(8, int(os.getenv("MERGE_CONCURRENCY", "2"))))
+    except (TypeError, ValueError):
+        return 2
+
+
 async def _run_merged_all(project_id, fmt, include_header, jobs) -> None:
-    """Background: generate the merged file for every interface object, sequentially
-    (bounded memory), updating each carrier's status as it completes."""
+    """Background: generate the merged file for every interface object, at most
+    ``merge_concurrency()`` at a time, updating each carrier as it completes.
+
+    Each object is timed and logged. The last round of "why is this slow" was
+    answered by reading code and measuring a template fill in isolation, which
+    established only where the time ISN'T. A number per object per phase, written
+    every run, is what makes the next answer a measurement.
+    """
+    import asyncio
+    import time as _time
     from app.services.output_service import generate_merged_artifact
-    for obj, carrier_id in jobs:
-        try:
-            await generate_merged_artifact(project_id, obj, fmt=fmt, include_header=include_header)
-            c = await Conversion.get(carrier_id)
-            if c:
-                await c.set({"output_status": "ready", "output_error": None, "updated_at": datetime.utcnow()})
-        except Exception as exc:  # noqa: BLE001
+    sem = asyncio.Semaphore(merge_concurrency())
+    _t0 = _time.monotonic()
+
+    async def _one(obj, carrier_id):
+        async with sem:
+            _s = _time.monotonic()
             try:
+                await generate_merged_artifact(project_id, obj, fmt=fmt,
+                                               include_header=include_header)
+                _el = _time.monotonic() - _s
+                log.info("merged generate — %s finished in %.1fs", obj, _el)
                 c = await Conversion.get(carrier_id)
                 if c:
-                    await c.set({"output_status": "failed", "output_error": str(exc)[:500]})
-            except Exception:
-                pass
+                    await c.set({"output_status": "ready", "output_error": None,
+                                 "output_seconds": round(_el, 1),
+                                 "updated_at": datetime.utcnow()})
+            except Exception as exc:  # noqa: BLE001
+                log.exception("merged generate — %s failed after %.1fs",
+                              obj, _time.monotonic() - _s)
+                try:
+                    c = await Conversion.get(carrier_id)
+                    if c:
+                        await c.set({"output_status": "failed",
+                                     "output_error": str(exc)[:500]})
+                except Exception:  # noqa: BLE001
+                    pass
+
+    await asyncio.gather(*(_one(obj, cid) for obj, cid in jobs))
+    log.info("merged generate — %d object(s) in %.1fs at concurrency %d",
+             len(jobs), _time.monotonic() - _t0, merge_concurrency())
 
 
 @output_router.post("/project/{project_id}/generate-merged-all")

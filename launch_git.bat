@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Everything the analyst sets now reaches the output: fixed values and custom rules run on the HCM .dat path for the first time, and authoring a rule protects the field from a strategy constant. Carries the mapping-dedup blocker fix, the delete hotfix, BOM column order and Admin/Normal roles. Suite 1166 passing, 14 skipped, 0 failing. REGENERATE outputs after this."
+set "DEPLOY_NOTE=Faster bundles - interface objects now generate 2 at a time instead of one by one, bounded so the old OOM cannot return, tune with MERGE_CONCURRENCY. Every object and the two heavy phases are timed in the log. Progress bar now moves. Carries the mapping-dedup blocker fix, HCM rules and constants, BOM column order and roles. Suite 1176 passing, 14 skipped, 0 failing. REGENERATE outputs after this."
 
 echo Checking the deploy set...
 set "MISSING="

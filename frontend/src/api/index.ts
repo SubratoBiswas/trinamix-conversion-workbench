@@ -776,11 +776,29 @@ export const OutputApi = {
     const total = carriers.length;
     const done: Record<string, { ready: boolean; error?: string }> = {};
     const t0 = Date.now();
-    for (let i = 0; i < 240; i++) {
-      await new Promise(res => setTimeout(res, 3000));
-      for (const c of carriers) {
-        if (done[c.conversion_id]) continue;
-        const s = await OutputApi.generationStatus(c.conversion_id);
+    for (let i = 0; i < 400; i++) {
+      // Poll every carrier AT ONCE, and tick as soon as the sweep lands.
+      //
+      // This walked the carriers with `await` inside the loop, so one tick cost
+      // six sequential round-trips on top of the 3s wait — and onTick only fired
+      // after the whole sweep. A bundle that was six-of-six done in the panel
+      // above still read "0/6 (353s)" on the button, which is the screen and the
+      // truth disagreeing in the direction that makes a wait feel broken.
+      //
+      // The interval also ramps: a second early on, when an object may finish at
+      // any moment, easing to three once it is clearly a long run. Nothing is
+      // gained by asking a 300-second job twenty times in the first minute.
+      await new Promise(res => setTimeout(res, i < 15 ? 1000 : 3000));
+      const pending = carriers.filter(c => !done[c.conversion_id]);
+      const states = await Promise.all(pending.map(async c => {
+        try {
+          return { c, s: await OutputApi.generationStatus(c.conversion_id) };
+        } catch {
+          return { c, s: null as any };   // a blip is not a failure; poll again
+        }
+      }));
+      for (const { c, s } of states) {
+        if (!s) continue;
         if (s.status === "ready") done[c.conversion_id] = { ready: true };
         else if (s.status === "failed") done[c.conversion_id] = { ready: false, error: s.error || "failed" };
       }

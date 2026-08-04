@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time as _time
 import io
 import logging
 import json
@@ -35,6 +37,22 @@ from app.services.strategy_overlay import (
 # override beats an approval, an approval beats a deliberate "not applicable", and
 # "suggested" (auto-map guessing) always loses. Module level so generation and the
 # required-field gate agree on the winning row — two copies would drift.
+@contextlib.contextmanager
+def _phase(name: str, obj: str = ""):
+    """Log how long one phase of a generate took.
+
+    Coarse on purpose. The question "can this be quicker" needs to be answerable
+    from a log line after a real run, not from someone reading the code and
+    guessing at the hot loop — which is how the last two attempts went.
+    """
+    _t = _time.monotonic()
+    try:
+        yield
+    finally:
+        log.info("generate phase — %s%s took %.1fs", f"{obj}: " if obj else "",
+                 name, _time.monotonic() - _t)
+
+
 # Which mapping row wins is ONE rule, shared with the screen — see
 # services/mapping_dedupe. This module used to carry three separate copies of it
 # that compared status alone, so a tie was broken by whichever row Mongo returned
@@ -1700,6 +1718,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # custom validation rules) produces an advisory issues report attached to the
     # artifact. Runs off the event loop; never blocks file generation.
     dq_report = None
+    _dq_t0 = _time.monotonic()
     try:
         from app.services.generate_dq import apply_cleansing, validate_frame, build_report
         from app.services.dq_rule_service import load_rules
@@ -1738,6 +1757,9 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         dq_report = {"error_count": 0, "warning_count": 0, "hard_error_count": 0,
                      "blocked": False, "cleansing_fix_count": 0, "cleansing_fixes": [],
                      "top_issues": [], "dq_error": f"{type(_dq_exc).__name__}: {_dq_exc}"[:300]}
+
+    log.info("generate phase — %s: cleanse + validate took %.1fs",
+             obj_name, _time.monotonic() - _dq_t0)
 
     # Group fields by their interface sheet (preserving field sequence).
     fields_by_sheet: dict[Any, list] = {}
@@ -2401,7 +2423,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         fdf.to_csv(path, index=False, header=_hdr)
         return name, str(path), len(fdf), len(fdf.columns)
 
+    _write_t0 = _time.monotonic()
     out_name, out_path_str, total_rows, total_cols = await asyncio.to_thread(_write_all)
+    log.info("generate phase — %s: write %s took %.1fs",
+             obj_name, fmt, _time.monotonic() - _write_t0)
     out_path = Path(out_path_str)
     artefact = ConvertedOutput(
         conversion_id=conversion.id, output_file_path=str(out_path),

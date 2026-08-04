@@ -37,6 +37,10 @@ class Conversion(Document):
     # off the request thread (the request returns immediately; the UI polls).
     #   None → never generated async · "generating" · "ready" · "failed"
     output_status: Optional[str] = None
+    # How long the last merged generate took, in seconds. Measured rather than
+    # guessed: "why is this slow" was answered twice by reading code, which can
+    # only establish where the time is NOT.
+    output_seconds: Optional[float] = None
     output_error: Optional[str] = None
     output_started_at: Optional[datetime] = None
     # Which cleansing families run at generation, and any per-field overrides.
