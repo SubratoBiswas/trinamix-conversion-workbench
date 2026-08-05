@@ -499,3 +499,58 @@ async def library_summary() -> dict:
         "objects_covered": objects,
         "rules_from_gold": rules,
     }
+
+
+async def purge_gold_learnings(dry_run: bool = True) -> dict:
+    """Remove EVERY learning captured from a gold output — across all objects.
+
+    Analyst, 05-Aug: "How to remove all the gold output learning till today." Gold
+    uploads seed the store with example_default, suppress_field and column_mapping
+    rows, all stamped ``captured_from == "gold example"``. They auto-apply to every
+    conversion of the object, which is the point of a gold reference — and also why,
+    once they are wrong (a field-wide default the analyst now wants per sheet, a
+    constant the analyst keeps clearing), they keep coming back. This wipes them in
+    one action so the store holds only what people have decided since.
+
+    ARCHIVED, NOT HARD-DELETED — same trail every other supersede leaves. Each row
+    is copied into ArchivedMappingDecision (reason="gold-purge") before it is
+    removed, so a purge is recoverable until that collection is dropped.
+
+    ``dry_run`` DEFAULTS TO TRUE: it reports what WOULD go and touches nothing.
+    ``dry_run=false`` performs it. Idempotent — a second run finds nothing left.
+
+    Returns counts by kind plus the total, so the dry run is a real preview.
+    """
+    from app.models.learned import LearnedMapping
+    from app.services.mapping_store import _archive
+
+    rows = await LearnedMapping.find(
+        {"captured_from": "gold example"}, include_deleted=True
+    ).to_list()
+
+    by_kind: dict[str, int] = {}
+    for r in rows:
+        k = getattr(r, "kind", "") or "unknown"
+        by_kind[k] = by_kind.get(k, 0) + 1
+
+    removed = 0
+    if not dry_run:
+        for r in rows:
+            try:
+                await _archive(r, superseded_by=None, reason="gold-purge")
+                await r.delete()
+                removed += 1
+            except Exception:  # noqa: BLE001 — never let one bad row abort the purge
+                log.exception("gold purge: could not archive/remove %s",
+                              getattr(r, "id", "?"))
+
+    return {
+        "dry_run": dry_run,
+        "gold_learnings_found": len(rows),
+        "by_kind": by_kind,
+        "removed": removed,
+        "note": ("Nothing was changed — pass dry_run=false to perform the purge."
+                 if dry_run else
+                 "Archived to archived_mapping_decisions (reason=gold-purge); "
+                 "regenerate affected conversions to drop the values from outputs."),
+    }

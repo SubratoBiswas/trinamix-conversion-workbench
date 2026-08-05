@@ -55,3 +55,26 @@ async def collapse_decisions(dry_run: bool = True,
     from app.services.mapping_store import collapse_existing_decisions
 
     return await collapse_existing_decisions(dry_run=dry_run)
+
+
+@router.post("/purge-gold-learnings")
+async def purge_gold_learnings_endpoint(dry_run: bool = True,
+                                        _: User = Depends(get_current_user)):
+    """Remove every learning captured from a gold output — across all objects.
+
+    Analyst, 05-Aug: "How to remove all the gold output learning till today." Gold
+    uploads seed the store with defaults, suppressions and mappings that auto-apply
+    to every conversion of the object; this wipes all of them in one action so the
+    store holds only what people have decided since.
+
+    Admin-only (this router is mounted under ADMIN). ``dry_run`` DEFAULTS TO TRUE —
+    the bare call reports what WOULD go and changes nothing; ``?dry_run=false``
+    performs it. Rows are ARCHIVED before removal (reason=gold-purge), so it is
+    recoverable, and it is idempotent. Regenerate affected conversions afterwards
+    to drop the values from the outputs on disk.
+
+    Returns ``{dry_run, gold_learnings_found, by_kind, removed, note}``.
+    """
+    from app.services.gold_library_service import purge_gold_learnings
+
+    return await purge_gold_learnings(dry_run=dry_run)

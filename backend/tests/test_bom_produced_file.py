@@ -93,7 +93,12 @@ _IFACE_BY_FILE = {v: k for k, v in _CSV_NAMES.items()}
 
 # One distinctive value per mapped source column, so a misplaced column shows up
 # as a value at the wrong index rather than as a subtle difference in a name.
-_PROBES = {"STRUCT": "PROBE-STRUCTURE", "ORG": "PROBE-ORG", "ITEM": "PROBE-ITEM"}
+_PROBES = {"STRUCT": "PROBE-STRUCTURE", "ORG": "PROBE-ORG", "ITEM": "PROBE-ITEM",
+           # The detail columns the Substitutes and Reference Designators tabs are
+           # now FILTERED on — a line without them is dropped from those tabs (BOM
+           # feedback, 05-Aug), so the probe rows must carry them or those tabs
+           # come back empty.
+           "SUBST": "PROBE-SUBSTITUTE", "REFDES": "PROBE-REFDES"}
 
 # Which template field each probe column is mapped into, per interface. Only
 # fields every one of these interfaces genuinely has.
@@ -102,8 +107,10 @@ _MAPPED = {
                                  "Organization Code": "ORG",
                                  "Item Name": "ITEM"},
     "EGP_COMPONENTS_INTERFACE": {"Structure Name": "STRUCT", "Organization Code": "ORG"},
-    "EGP_SUB_COMPS_INTERFACE": {"Structure Name": "STRUCT", "Organization Code": "ORG"},
-    "EGP_REF_DESGS_INTERFACE": {"Structure Name": "STRUCT", "Organization Code": "ORG"},
+    "EGP_SUB_COMPS_INTERFACE": {"Structure Name": "STRUCT", "Organization Code": "ORG",
+                                "Substitute Item Name": "SUBST"},
+    "EGP_REF_DESGS_INTERFACE": {"Structure Name": "STRUCT", "Organization Code": "ORG",
+                                "Reference Designator": "REFDES"},
 }
 
 

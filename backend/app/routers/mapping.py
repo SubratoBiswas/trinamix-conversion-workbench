@@ -1,5 +1,6 @@
 """Mapping suggestion endpoints."""
 import logging
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -836,6 +837,46 @@ class PreviewResponse(BaseModel):
     samples: list[PreviewSample]
 
 
+def _values_the_rules_key_on(rules: list, source_column: Optional[str]) -> set:
+    """The source values a rule actually branches on — so the preview can SHOW a
+    row that exercises it.
+
+    A CASE/WHEN of Country -> SA/AE/IL/CL previewed over the first five rows shows
+    blank on every one when those rows happen to be Australia, USA, Brazil: the
+    rule is right, the sample just never hits a branch, and it reads as "the rule
+    does nothing". Collecting the values the branches test lets the preview pull
+    rows that match, so the transformation is visible.
+    """
+    want: set = set()
+    src_norm = re.sub(r"[^a-z0-9]", "", (source_column or "").lower())
+
+    def _same_col(c) -> bool:
+        # A branch whose if_column is the source column (or empty -> the cell) keys
+        # on the source value; one testing another column does not.
+        if not c:
+            return True
+        return re.sub(r"[^a-z0-9]", "", str(c).lower()) == src_norm
+
+    for r in rules or []:
+        cfg = (getattr(r, "config", None) or {}) if not isinstance(r, dict) else (r.get("config") or {})
+        rt = (getattr(r, "rule_type", None) if not isinstance(r, dict) else r.get("rule_type")) or ""
+        rt = rt.upper()
+        if rt == "CASE_WHEN":
+            for br in cfg.get("branches") or []:
+                if _same_col(br.get("if_column")) and br.get("value") not in (None, ""):
+                    want.add(str(br["value"]))
+        elif rt == "CONDITIONAL":
+            if _same_col(cfg.get("if_column")) and cfg.get("equals") not in (None, ""):
+                want.add(str(cfg["equals"]))
+        elif rt in ("VALUE_MAP", "MAP_VALUES"):
+            for k in (cfg.get("mapping") or {}):
+                want.add(str(k))
+        elif rt == "MAP_BOOLEAN":
+            for v in (cfg.get("true_values") or []) + (cfg.get("false_values") or []):
+                want.add(str(v))
+    return want
+
+
 @router.post("/conversions/{conversion_id}/rules/preview", response_model=PreviewResponse)
 async def preview_rules(
     conversion_id: str, payload: PreviewRequest, user: User = Depends(get_current_user)
@@ -857,6 +898,9 @@ async def preview_rules(
     # Sample rows come from the uploaded file (dataset mode) or live Oracle EBS
     # (EBS mode — no file). Either way we never 404: a rule preview should work
     # the moment a source is bound.
+    # The values the rule branches on, if any — so we can show a row that hits one.
+    _wanted = _values_the_rules_key_on(payload.rules, payload.source_column)
+
     sample_rows: list[dict[str, Any]] = []
     if conv.dataset_id:
         ds = await Dataset.get(conv.dataset_id)
@@ -867,13 +911,32 @@ async def preview_rules(
             from app.services.dataset_file_store import materialize_dataset_file
             src_path = await materialize_dataset_file(ds)
             if src_path is not None:
-                # Only read the sample rows. Parsing the WHOLE extract (a wide
-                # 7.5k x 258 workbook) for a 5-row preview was slow enough to
-                # exhaust a small instance — and this fires on every keystroke.
+                # Only read a sample. Parsing the WHOLE extract (a wide 7.5k x 258
+                # workbook) for a preview was slow enough to exhaust a small
+                # instance, and this fires on every keystroke — so the scan is
+                # bounded. When the rule branches on specific source values, scan a
+                # little deeper (still capped) and PREFER rows that hit a branch, so
+                # the preview demonstrates the mapping instead of five blank rows.
+                _scan = n if not (_wanted and payload.source_column) else min(400, max(n, 200))
                 try:
-                    df = parse_tabular(str(src_path), file_type=ds.file_type, nrows=n)
-                    for _, row in df.head(n).iterrows():
-                        sample_rows.append({k: ("" if v is None else v) for k, v in row.to_dict().items()})
+                    df = parse_tabular(str(src_path), file_type=ds.file_type, nrows=_scan)
+                    all_rows = [{k: ("" if v is None else v) for k, v in row.to_dict().items()}
+                                for _, row in df.iterrows()]
+                    if _wanted and payload.source_column:
+                        def _val(rw):
+                            return str(rw.get(payload.source_column, "")).strip()
+                        matched, seen_vals, others = [], set(), []
+                        for rw in all_rows:
+                            v = _val(rw)
+                            if v in _wanted and v not in seen_vals:
+                                matched.append(rw); seen_vals.add(v)
+                            elif len(others) < n:
+                                others.append(rw)
+                        # Matching rows first (one per distinct branch value), then a
+                        # few non-matching so the default is visible too.
+                        sample_rows = (matched + others)[:max(n, len(matched))][:20]
+                    else:
+                        sample_rows = all_rows[:n]
                 except Exception as exc:  # noqa: BLE001 — preview must never 500
                     logging.getLogger(__name__).warning("rule preview: could not read source: %s", exc)
     else:

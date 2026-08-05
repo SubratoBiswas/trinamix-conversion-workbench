@@ -2573,6 +2573,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for s in sheets_with_fields:
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
+                        # Reshape the flat extract to THIS interface's grain: dedup
+                        # per the validation doc's uniqueness key, keep only lines
+                        # with a substitute on the Substitutes tab, and number Item
+                        # Sequence 10/20/30 per structure. Before this every tab
+                        # carried all ~20k source rows (NEXTPOWER BOM feedback,
+                        # 05-Aug). Defensive: a tab it does not recognise, or one
+                        # missing a key column, is returned unchanged.
+                        try:
+                            from app.services.bom_structure_service import reshape_for_sheet
+                            sdf = reshape_for_sheet(sdf, s.sheet_name)
+                        except Exception:  # noqa: BLE001 — never fail the load on reshape
+                            log.exception("BOM reshape failed for %s", s.sheet_name)
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
                     sdf = _apply_bom_layout(sdf, s.sheet_name)

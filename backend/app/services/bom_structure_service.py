@@ -1,0 +1,210 @@
+"""BOM Item Structure — reshape the ONE source extract into the FOUR interfaces.
+
+NEXTPOWER BOM validation feedback (docx, 05-Aug). A flat BOM extract has one row
+per parent/child component line, but Oracle's four interfaces each need a
+different GRAIN:
+
+  * Structures (EGP_STRUCTURES_INTERFACE): one row per assembly. Unique on
+    (Structure Name, Organization Code, Item Name) — the parent item.
+  * Components (EGP_COMPONENTS_INTERFACE): one row per component line. Unique on
+    (Structure Name, Organization Code, Component Item Name, Structure Item Name).
+    Item Sequence must be numeric (10, 20, 30 …).
+  * Substitutes (EGP_SUB_COMPS_INTERFACE): only lines that HAVE a substitute item.
+    Unique on (Structure Name, Organization Code, Component Item Name, Substitute
+    Item Name, Structure Item Name).
+  * Reference Designators (EGP_REF_DESGS_INTERFACE): unique on (Structure Name,
+    Organization Code, Component Item Name, Reference Designator, Structure Item
+    Name).
+
+Before this the generator copied every source row onto every tab — 19,911 lines
+became 19,911 Structures rows where there should be a few hundred, no substitute
+filter, and Item Sequence left as whatever the extract carried. This reshapes each
+finalized frame to the grain its interface expects.
+
+It runs on the FINALISED frame, whose headers are Oracle's field names (Item Name,
+Structure Item Name, …), so the column-to-source mapping is not this module's
+concern — the analyst's mapping put the parent/child numbers in the right columns
+already. This only fixes the row grain, the filter and the sequence.
+
+Every column is matched loosely and every step is defensive: a tab missing a key
+column is passed through unchanged rather than dropped, because shipping the rows
+un-deduped is recoverable and losing them is not.
+"""
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+import pandas as pd
+
+
+def _norm(s) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(s or "").strip().lower())
+
+
+# The interface each sheet name resolves to, matched on a normalised substring so
+# "EGP_STRUCTURES_INTERFACE", "Structures", "BOM Structures" all land the same.
+def _kind(sheet_name: str) -> Optional[str]:
+    n = _norm(sheet_name)
+    if "subcomp" in n or "substitut" in n:
+        return "substitutes"
+    if "refdesg" in n or "referencedesignator" in n or "refdesig" in n:
+        return "reference_designators"
+    if "component" in n:
+        return "components"
+    if "structure" in n:
+        return "structures"
+    return None
+
+
+# Dedup keys, in Oracle's field-name spelling. Matched loosely against the frame.
+_DEDUP_KEYS = {
+    "structures": ["Structure Name", "Organization Code", "Item Name"],
+    "components": ["Structure Name", "Organization Code",
+                   "Component Item Name", "Structure Item Name"],
+    "substitutes": ["Structure Name", "Organization Code", "Component Item Name",
+                    "Substitute Item Name", "Structure Item Name"],
+    "reference_designators": ["Structure Name", "Organization Code",
+                              "Component Item Name", "Reference Designator",
+                              "Structure Item Name"],
+}
+
+# Mandatory columns per interface, from the validation doc — used for a diagnostic,
+# never to drop rows.
+MANDATORY = {
+    "structures": ["Transaction Type", "Batch Number", "Structure Name",
+                   "Organization Code", "Item Name", "Effective Date"],
+    "components": ["Transaction Type", "Batch Number", "Structure Name",
+                   "Organization Code", "Component Item Name", "Structure Item Name",
+                   "Item Sequence", "Quantity"],
+    "substitutes": ["Transaction Type", "Batch Number", "Structure Name",
+                    "Organization Code", "Component Item Name", "Structure Item Name",
+                    "Substitute Item Name", "Substitute Quantity"],
+    "reference_designators": ["Transaction Type", "Batch Number", "Structure Name",
+                              "Organization Code", "Component Item Name",
+                              "Structure Item Name", "Reference Designator"],
+}
+
+
+def _find_col(df: pd.DataFrame, name: str) -> Optional[str]:
+    want = _norm(name)
+    # Exact normalised match first, then a contains, so "Reference Designator"
+    # matches a header "Reference Designators".
+    exact = [c for c in df.columns if _norm(c) == want]
+    if exact:
+        return exact[0]
+    near = [c for c in df.columns if want and want in _norm(c)]
+    return near[0] if near else None
+
+
+def _blank(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    return s.eq("") | s.str.lower().isin({"nan", "none", "null", "na", "<na>"})
+
+
+def _renumber_item_sequence(df: pd.DataFrame) -> pd.DataFrame:
+    """Item Sequence numeric, 10/20/30 within each structure.
+
+    "Item Sequence should be a numeric value (Eg: 10,20,30)." A blank or
+    non-numeric cell is assigned the next unused multiple of ten inside its
+    structure; a value that is already numeric is kept, so an extract that carried
+    a good sequence is not renumbered out from under the analyst.
+    """
+    seq_col = _find_col(df, "Item Sequence")
+    if seq_col is None or df.empty:
+        return df
+    struct = _find_col(df, "Structure Item Name") or _find_col(df, "Structure Name")
+    org = _find_col(df, "Organization Code")
+    group_cols = [c for c in (struct, org) if c]
+    if not group_cols:
+        # No structure to group by — one running sequence for the whole tab.
+        df["_g"] = 0
+        group_cols = ["_g"]
+
+    out = df.copy()
+    new_vals = out[seq_col].astype(str).tolist()
+    def _is_num(v: str) -> bool:
+        return bool(re.fullmatch(r"\d+", str(v).strip()))
+
+    for _, idx in out.groupby(group_cols, sort=False).groups.items():
+        used = set()
+        for i in idx:
+            v = str(out.at[i, seq_col]).strip()
+            if _is_num(v):
+                used.add(int(v))
+        nxt = 10
+        for i in idx:
+            v = str(out.at[i, seq_col]).strip()
+            if _is_num(v):
+                continue
+            while nxt in used:
+                nxt += 10
+            new_vals_i = out.index.get_loc(i)
+            new_vals[new_vals_i] = str(nxt)
+            used.add(nxt)
+            nxt += 10
+    out[seq_col] = new_vals
+    if "_g" in out.columns:
+        out = out.drop(columns=["_g"])
+    return out
+
+
+def reshape_for_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    """Reduce a finalised BOM frame to the grain its interface expects.
+
+    Order matters: the substitute filter runs before the dedup so a line with no
+    substitute never counts toward a Substitutes key, and the sequence is assigned
+    AFTER dedup so the numbers are contiguous on the rows actually shipped.
+    """
+    kind = _kind(sheet_name)
+    if kind is None or df is None or df.empty:
+        return df
+    out = df
+
+    # Keep only lines that carry the detail this tab exists for.
+    #
+    # Substitutes: the doc is explicit — "Only include item structures with
+    # substitute item is populated." Reference Designators: the doc does not say
+    # so in words, but it lists Reference Designator as a MANDATORY column, and a
+    # reference-designator line with no designator both fails the load and repeats
+    # its parent's component line pointlessly. Same shape as substitutes, so it is
+    # filtered the same way. If you actually want every component line on the
+    # Reference Designators tab, this is the one line to change.
+    _detail = {"substitutes": "Substitute Item Name",
+               "reference_designators": "Reference Designator"}.get(kind)
+    if _detail:
+        col = _find_col(out, _detail)
+        if col is not None:
+            out = out[~_blank(out[col])].copy()
+        if out.empty:
+            return out
+
+    # One record per key.
+    key_cols = [c for c in (_find_col(out, k) for k in _DEDUP_KEYS[kind]) if c]
+    if key_cols:
+        out = out.drop_duplicates(subset=key_cols, keep="first").reset_index(drop=True)
+
+    # Components: contiguous numeric Item Sequence per structure.
+    if kind == "components":
+        out = _renumber_item_sequence(out)
+
+    return out
+
+
+def missing_mandatory(df: pd.DataFrame, sheet_name: str) -> list[str]:
+    """Mandatory columns that are entirely blank (or absent) on this tab.
+
+    A diagnostic for the validation report — the shape of the doc's "Mandatory
+    Col" lists. Never used to drop or block; a load-time reject is the analyst's
+    to weigh, but the tool should say which required column is empty rather than
+    let it surface only in Oracle.
+    """
+    kind = _kind(sheet_name)
+    if kind is None:
+        return []
+    out = []
+    for name in MANDATORY[kind]:
+        col = _find_col(df, name)
+        if col is None or df.empty or bool(_blank(df[col]).all()):
+            out.append(name)
+    return out
