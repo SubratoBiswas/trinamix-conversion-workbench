@@ -52,12 +52,27 @@ def test_a_remittance_email_gives_email():
         assert run(obj, {"Remittance E-Mail": "ap@acme.com"}) == "EMAIL", obj
 
 
-def test_a_remittance_fax_with_no_email_also_gives_email():
-    """As stated, twice: "if remittance fax is not blank but remittance-email is
-    blank then the delivery method is EMAIL". See _open_question in the data file
-    — the 28-Jul version said FAX here."""
+def test_a_remittance_fax_with_no_email_gives_fax():
+    """MOVED 05-Aug, from EMAIL to FAX. The behaviour changed on purpose.
+
+    This asserted EMAIL because that is what the 04-Aug instruction said, twice,
+    and it was implemented as written with the doubt filed as an _open_question
+    rather than corrected on somebody's judgement. Subrato answered it on 05-Aug
+    and Oracle's own template is why:
+
+        Remittance E-mail (REMIT_ADVICE_EMAIL) — "Value must be provided when
+        Delivery Method is EMAIL or EMAILPDF."
+
+    This branch fires precisely when that column is BLANK, so EMAIL here produced
+    the one combination Oracle documents as not allowed, on every fax-only row.
+    FAX is among the four values it does accept.
+
+    The assertion is not relaxed — it is the same strictness pointed at the value
+    that is now correct. See supplier_corrections_05aug.json and
+    test_delivery_method_05aug.py.
+    """
     for obj in OBJECTS:
-        assert run(obj, {"Remittance Fax": "+1 415 555 0100"}) == "EMAIL", obj
+        assert run(obj, {"Remittance Fax": "+1 415 555 0100"}) == "FAX", obj
 
 
 def test_neither_gives_blank():
@@ -82,34 +97,42 @@ def test_the_column_spellings_the_extract_might_use_are_all_covered():
     for spelling in ("Remittance E-Mail", "Remittance Email", "Remittance E-mail",
                      "remittance_email"):
         assert run("Supplier Site", {spelling: "ap@acme.com"}) == "EMAIL", spelling
-    for spelling in ("Remittance Fax", "remittance_fax"):
-        assert run("Supplier Site", {spelling: "+1 415 555 0100"}) == "EMAIL", spelling
+    for spelling in ("Remittance Fax", "Remittance fax", "remittance_fax"):
+        assert run("Supplier Site", {spelling: "+1 415 555 0100"}) == "FAX", spelling
 
 
 # ── It has to be the NEWEST statement, or a stale seed shadows it ────────────
 
-def test_the_instruction_carries_todays_date():
-    """The whole point. Dated earlier, `_conversion_rule_wins` lets a rule seeded
-    onto the conversion — carrying the date it was SEEDED — shadow it, and the
-    column ships blank exactly as reported."""
+def test_the_instruction_carries_the_latest_date():
+    """The whole point, and the reason the column shipped blank on 04-Aug: dated
+    earlier, `_conversion_rule_wins` lets a rule SEEDED onto the conversion —
+    carrying the date it was seeded, not the date it was decided — shadow it.
+
+    MOVED 05-Aug from 04-Aug. Same assertion, one day on: the correction is a
+    newly-dated file rather than an edit to 04-Aug, so what the overlay resolves
+    to must move with it.
+    """
     for obj in OBJECTS:
-        assert rule_for(obj)["as_of"] == datetime(2026, 8, 4), obj
+        assert rule_for(obj)["as_of"] == datetime(2026, 8, 5), obj
 
 
 def test_it_is_newer_than_every_earlier_delivery_method_statement():
     import json
-    for f in ("supplier_strategy_defaults.json", "supplier_corrections_30jul.json"):
+    for f in ("supplier_strategy_defaults.json", "supplier_corrections_30jul.json",
+              "supplier_corrections_04aug.json"):
         doc = json.loads((_DATA / f).read_text(encoding="utf-8"))
         earlier = str(doc.get("_effective_date") or "")
-        assert earlier < "2026-08-04", f"{f} is dated {earlier}"
+        assert earlier < "2026-08-05", f"{f} is dated {earlier}"
 
 
 def test_the_new_file_is_actually_read():
     """A rule file nothing loads is the shipped-and-inert shape this codebase
-    repeats most."""
+    repeats most. Both dated files stay registered — dropping 04-Aug would not
+    change the answer today, and would delete the record of what it superseded."""
     src = (Path(__file__).resolve().parent.parent / "app" / "services"
            / "strategy_overlay.py").read_text(encoding="utf-8")
     assert '"supplier_corrections_04aug.json",' in src
+    assert '"supplier_corrections_05aug.json",' in src
 
 
 def test_it_reaches_every_supplier_sheet_rather_than_the_header_alone():
@@ -117,15 +140,22 @@ def test_it_reaches_every_supplier_sheet_rather_than_the_header_alone():
     without applies_to_all_sheets, the 13-Jul version reached one sheet and the
     other two shipped empty — the same symptom, a different cause."""
     import json
-    doc = json.loads((_DATA / "supplier_corrections_04aug.json").read_text(encoding="utf-8"))
-    assert all(r.get("applies_to_all_sheets") for r in doc["rules"])
+    for f in ("supplier_corrections_04aug.json", "supplier_corrections_05aug.json"):
+        doc = json.loads((_DATA / f).read_text(encoding="utf-8"))
+        assert all(r.get("applies_to_all_sheets") for r in doc["rules"]), f
 
 
 def test_the_open_question_is_carried_not_buried():
-    """Both branches emit EMAIL because that is what was written, twice. If the
-    fax branch was meant to stay FAX, that has to be visible without reading a
-    diff."""
+    """04-Aug emitted EMAIL in both branches because that is what was written,
+    twice, and it said so in an _open_question rather than quietly correcting it.
+    That question is the reason the 05-Aug answer exists and could be checked
+    against Oracle's template, so BOTH ends stay readable: the question where it
+    was asked, the answer where it was given."""
     import json
-    doc = json.loads((_DATA / "supplier_corrections_04aug.json").read_text(encoding="utf-8"))
-    q = doc.get("_open_question", "")
+    q = json.loads((_DATA / "supplier_corrections_04aug.json")
+                   .read_text(encoding="utf-8")).get("_open_question", "")
     assert "FAX" in q and "EMAIL" in q
+    answer = json.loads((_DATA / "supplier_corrections_05aug.json")
+                        .read_text(encoding="utf-8"))
+    assert "supplier_corrections_04aug.json" in answer.get("_supersedes", "")
+    assert "REMIT_ADVICE_EMAIL" in " ".join(answer["_why_a_new_dated_file"])

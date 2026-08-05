@@ -1,0 +1,62 @@
+{
+  "_source": "Subrato, 05-Aug-2026, answering the _open_question left in supplier_corrections_04aug.json: the fax branch of Delivery Method is FAX, not EMAIL.",
+  "_effective_date": "2026-08-05",
+  "_scope": "Client NextPower, the supplier bundle. Registered under 'Supplier' with applies_to_all_sheets, so it reaches Supplier, Supplier Address and Supplier Site — the three interfaces that carry the column. Same scope as the 04-Aug file it supersedes.",
+  "_why_a_new_dated_file": [
+    "The 04-Aug file assigned EMAIL in BOTH branches because the instruction was written that way, twice, and it was implemented exactly as written rather than corrected on someone's judgement. It recorded the doubt as an _open_question instead. This file answers that question; the 04-Aug file is left byte-for-byte as it was, because it is the record of what was decided on 04-Aug and precedence here is expressed by date, never by editing history.",
+    "The evidence that settled it is Oracle's own, read out of the bundled template 1_SupplierImport_POZ_SUPPLIERS_INT.xlsm rather than inferred. Delivery Method is REMIT_ADVICE_DELIVERY_METHOD, VARCHAR2(30), and its header comment names the valid values: EMAIL, EMAILPDF, FAX, PRINTED. FAX is a value Oracle accepts, so the 28-Jul rule was never proposing anything exotic.",
+    "The decisive part is the constraint on the neighbouring column. Remittance E-mail is REMIT_ADVICE_EMAIL, and Oracle's own description of it reads: 'Value must be provided when Delivery Method is EMAIL or EMAILPDF.' The fax branch fires precisely when remittance e-mail is BLANK. Sending EMAIL there produces, on every one of those rows, the exact combination Oracle documents as not allowed — a delivery method that requires an address alongside no address.",
+    "So the two readings are not equally defensible. EMAIL in both branches is a load Oracle has told us in writing it does not accept; FAX in the fax branch is what 28-Jul said and what the column was designed for."
+  ],
+  "_supersedes": "supplier_corrections_04aug.json — same field, same scope, one day newer. Only the fax branches change; the e-mail branches, their ordering and the blank default are carried across unchanged.",
+  "rules": [
+    {
+      "target_object": "Supplier",
+      "target_field": "Delivery Method",
+      "action": "rule",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {
+            "if_column": "Remittance E-Mail",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "Remittance Email",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "Remittance E-mail",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "remittance_email",
+            "op": "notblank",
+            "then": "EMAIL"
+          },
+          {
+            "if_column": "Remittance Fax",
+            "op": "notblank",
+            "then": "FAX"
+          },
+          {
+            "if_column": "Remittance fax",
+            "op": "notblank",
+            "then": "FAX"
+          },
+          {
+            "if_column": "remittance_fax",
+            "op": "notblank",
+            "then": "FAX"
+          }
+        ],
+        "default": ""
+      },
+      "applies_to_all_sheets": true,
+      "note": "E-mail branches are tested first, so a row carrying both an address and a fax number still reads EMAIL — that is what 'preference to EMAIL' meant on 28-Jul and it has not changed. Every plausible spelling of each source column is kept: a branch on a column the extract does not have reads blank and falls through, so naming several costs nothing while one wrong guess costs the whole rule. The default stays blank; a row with neither an address nor a fax number gets no value rather than a guessed code, because PRINTED would be an assumption nobody made."
+    }
+  ]
+}

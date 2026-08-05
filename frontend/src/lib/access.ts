@@ -20,6 +20,7 @@ export const ADMIN_ONLY_SECTIONS: readonly string[] = [
   "FBDI Library",
   "AI Engine",
   "Governance",
+  "Administration",
 ];
 
 /**
@@ -51,6 +52,7 @@ export const ADMIN_ONLY_PATHS: readonly string[] = [
   "crosswalks",
   "audit",
   "approvals",
+  "users",
 ];
 
 /**

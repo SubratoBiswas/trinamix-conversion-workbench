@@ -1709,7 +1709,21 @@ failed, so the suite cannot pass by luck.
 **Not verified against live data.** Re-scan Supplier Import and confirm the four
 Roytek rows now cluster.
 
-### 13.1a Drop Third_Party_Pay_Relationships from the Supplier Site workbook (NEXT)
+### 13.1a ~~Drop Third_Party_Pay_Relationships from the Supplier Site workbook~~ — DONE, verified 05-Aug
+
+Closed after checking, not after re-reading the entry. The tab is removed from
+the generated workbook and the list that removes it is DATA:
+`strategy_overlay.sheets_to_drop()` returns `{'thirdpartypayrelationships'}`
+straight out of `supplier_strategy_defaults.json`,
+`output_service._strategy_sheets_to_drop()` returns the same set, and
+`test_dropped_sheets.py` holds twelve checks over it — including that the list
+comes from the JSON rather than from code (§7.1), that the filler DELETES the
+worksheet instead of blanking it, and one that opens the real Supplier Site
+template and confirms the tab is genuinely there to be dropped.
+
+The original entry follows, kept because it is the reasoning.
+
+---
 
 Analyst, 03-Aug: the generated `03_Supplier_Site` filled-template workbook
 carries a worksheet tab `Third_Party_Pay_Relationships`. It must not be there.
@@ -1741,7 +1755,39 @@ Test: assert the generated Supplier Site workbook's sheet names do NOT include
 `Third_Party_Pay_Relationships`, and — per §7.1 — assert the DATA list is what
 drives it, so the mechanism cannot go inert again.
 
-### 13.1b Customer: keep only the 15 interfaces from the V2.3 sequence doc (NEXT)
+### 13.1b ~~Customer: keep only the 15 interfaces from the V2.3 sequence doc~~ — DONE, verified 05-Aug, with item 1 deliberately NOT done
+
+Items 2–5 were already wired. `customer_load_sequence()` returns the 15
+interfaces in order; `customer_in_load_scope()` answers False for
+HZ_IMP_CLASSIFICS_T, HZ_IMP_ACCOUNTRELS and RA_CUST_PAY_METHOD_INT_ALL and True
+for the fifteen; `customer_csv_name_for()` returns all 15 Oracle file names; the
+live spec carries 996 fbdi columns and 996 csv columns; and the three interfaces
+whose CSV order differs are HZ_IMP_ACCTSITES_T, HZ_IMP_ACCTSITEUSES_T and
+RA_CUSTOMER_PROFILES_INT_ALL — measured from the data, matching §5.7.
+
+**Item 1 — "replace the live file with the V2.3 extraction" — must not be done,
+and this is why.** The entry read as open for two days on the strength of version
+numbers: the live file named `V2 2.xlsx` as its source and the V2.3 extraction
+sat unused in `docs/incoming/`. Nobody had compared them. Diffed 05-Aug: they are
+the same document in every respect that decides a load — same 15 interfaces in
+the same order, same 15 CSV names, same 996 + 996 columns, same three reorderings.
+
+One difference, and it runs the wrong way. The extraction's last `csv_order`
+entry for RA_CUSTOMER_PROFILES_INT_ALL reads `"Review Before Consolidated
+Billing,"` — trailing comma, on the cell immediately before the END terminator.
+Oracle's own bundled `CustomerImport_HZ_IMP__RA_CUSTOMER.xlsm`, sheet
+RA_CUSTOMER_PROFILES_INT_ALL, header row 4, column 132, has no comma. Adopting
+the extraction wholesale would have put a column name matching nothing into a
+headerless CSV, which is the exact silent failure this spec exists to prevent.
+
+The live file is re-dated to `2026-08-03` — the date of the document its content
+agrees with — and carries a `_reconciled` block recording all of the above.
+`test_customer_spec_reconciled.py` re-runs the diff, reads Oracle's template
+directly, and fails if the artefact ever reaches the spec.
+
+The original entry follows, including the table, which is still the reference.
+
+---
 
 Analyst, 03-Aug, `Customer_Import_FBDI_Sequence_Mapping_V2 3.xlsx`. Customer
 output must be restricted to exactly the 15 interfaces below, in this order, with
@@ -1832,16 +1878,54 @@ it timed out. Check whether the source dataset has rows, whether an artifact was
 ever generated, and whether §12.1's 41 merged fields point Item mappings at
 columns absent from a SyteLine extract.
 
-### 13.3 Static site has no SPA rewrite (not code)
+### 13.3 Static site has no SPA rewrite — STILL OPEN, and it is a dashboard action
 
-`render.yaml` carries the rule but is bound to services named
-`trinamix-backend` / `trinamix-frontend`; the live sites are
-`tx-conversion-workbench` and `trinamix-conversion-workbench`, created by hand,
-so the manifest never governed them. Any refresh or pasted deep link returns
-**404 with a blank body**, which looks exactly like a broken page.
+`render.yaml` carries the rule but was bound to services named
+`trinamix-backend` / `trinamix-frontend`, which existed nowhere, so the manifest
+never governed anything. Any refresh or pasted deep link returns **404 with a
+blank body**, which looks exactly like a broken page.
 
 Fix in the Render dashboard → Redirects/Rewrites → source `/*`, destination
-`/index.html`, action **Rewrite**.
+`/index.html`, action **Rewrite**. Nothing in the repository can do this.
+
+**Measured 05-Aug**, rather than inferred: `tx-conversion-workbench.onrender.com/`
+serves the app and `tx-conversion-workbench.onrender.com/clients` returns 404.
+`trinamix-conversion-workbench.onrender.com` 404s at the root as well, so the
+live frontend is `tx-conversion-workbench` alone and the other name in the
+earlier note is not a second site.
+
+Done in the repo on 05-Aug, so that linking the services to the Blueprint later
+is one button rather than a puzzle:
+
+* the two service names now match the real ones (`trinamix-conversion-backend`,
+  `tx-conversion-workbench`),
+* the header of `render.yaml` states plainly that the file does not govern the
+  live services and lists the two things that must be set by hand,
+* `test_render_manifest.py` asserts the rewrite rule, the real names, and that
+  the warning is still in the header.
+
+That last file also turned up a second, unrelated problem — see 13.3a.
+
+### 13.3a The live backend signs tokens with the repository's default key (NEW, 05-Aug)
+
+`render.yaml` set `SECRET_KEY: generateValue: true`. Nothing reads `SECRET_KEY`.
+The settings model calls it `JWT_SECRET` and is configured `extra="ignore"`, so
+Render generated a value, the app discarded it in silence, and `JWT_SECRET` fell
+back to its default — `"trinamix-local-dev-secret-change-me"`, which is committed
+to this repository. Anyone who can read the repo can mint a token the live
+backend accepts.
+
+The manifest is why nobody looked: it plainly said a secret was being generated.
+
+The key is renamed in `render.yaml`, and `test_render_manifest.py` now fails if
+any env key in the manifest is not a real field on `Settings` — but
+`generateValue` only applies on the deploy that CREATES a variable, so **this is
+not fixed until `JWT_SECRET` is set by hand in the dashboard.** Doing so signs
+out every current session, which is the right outcome for a key that has been
+public. `ADMIN_PASSWORD` was also written into the manifest in plain text
+(`admin123`) and is now `sync: false`; note the seed only reads it when the
+account does not yet exist, so changing it does not rotate an existing admin's
+password.
 
 ### 13.4 `derived` flag under-reports
 

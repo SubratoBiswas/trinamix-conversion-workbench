@@ -50,6 +50,30 @@ export const AuthApi = {
   me: () => api.get<User>("/auth/me").then(r => r.data),
 };
 
+// ─── Users and roles (administrator only) ───
+//
+// Every route here sits behind the ADMIN section on the backend, so this client
+// is a convenience and never a permission. `password_set` is false for an
+// invited account nobody has given a password yet: the account exists, holds its
+// role, and cannot sign in until a human sets one.
+export interface UserAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  created_at?: string | null;
+  password_set: boolean;
+  /** The account making the request. The API refuses a self role change. */
+  is_self: boolean;
+}
+export const UsersApi = {
+  list: () => api.get<UserAccount[]>("/users").then(r => r.data),
+  invite: (body: { name: string; email: string; role: string }) =>
+    api.post<UserAccount>("/users", body).then(r => r.data),
+  setRole: (id: string, role: string) =>
+    api.patch<UserAccount>(`/users/${id}`, { role }).then(r => r.data),
+};
+
 // ─── Clients (tenants) ───
 export interface ClientSummary {
   id: string;

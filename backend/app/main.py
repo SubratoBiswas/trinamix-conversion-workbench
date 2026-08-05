@@ -40,6 +40,7 @@ from app.routers import fusion as fusion_router
 from app.routers import settings as settings_router
 from app.routers import clients as clients_router
 from app.routers import dq_rules as dq_rules_router
+from app.routers import users as users_router
 
 
 async def _run_seeds_background() -> None:
@@ -444,6 +445,11 @@ _mount(app, audit_router.router, section=ADMIN, name="audit")
 _mount(app, coa_router.router, section=ADMIN, name="coa")
 _mount(app, dq_rules_router.router, section=ADMIN, name="dq_rules")
 _mount(app, settings_router.router, section=ADMIN, name="settings")
+# Who is an administrator is itself an administrator's decision. Mounted here
+# rather than beside /api/auth: signing in is PUBLIC because it cannot require
+# being signed in, and putting user management on that router would have carried
+# the exemption across with it.
+_mount(app, users_router.router, section=ADMIN, name="users")
 # Source connections hold credentials, and discovery drives them.
 _mount(app, discovery_router.router, section=ADMIN, name="discovery")
 _mount(app, discovery_router.project_router, section=ADMIN, name="discovery.project")

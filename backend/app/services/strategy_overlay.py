@@ -38,6 +38,11 @@ _EXTRA_FILES = (
     "supplier_corrections_30jul.json",
     "customer_mapping_03aug.json",
     "supplier_corrections_04aug.json",
+    # Answers the _open_question 04-Aug left behind: the fax branch of Delivery
+    # Method is FAX, not EMAIL. Oracle's own template settles it — Remittance
+    # E-mail reads "Value must be provided when Delivery Method is EMAIL or
+    # EMAILPDF", and the fax branch fires exactly when that column is blank.
+    "supplier_corrections_05aug.json",
 )
 _cache: dict | None = None
 _blank_cache: dict | None = None

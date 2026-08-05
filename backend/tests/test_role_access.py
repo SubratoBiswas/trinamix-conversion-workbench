@@ -58,6 +58,10 @@ EXPECTED = {
     "fusion_modules": READ_ONLY, "audit_events": READ_ONLY, "governance": READ_ONLY,
     "audit": ADMIN, "coa": ADMIN, "dq_rules": ADMIN, "settings": ADMIN,
     "discovery": ADMIN, "source_connections": ADMIN,
+    # Who is an administrator is an administrator's decision. If this router ever
+    # reads OPEN or READ_ONLY, a Normal user can promote themselves and the whole
+    # split above becomes decoration.
+    "users": ADMIN,
 }
 
 
@@ -363,17 +367,44 @@ def test_the_four_restricted_sections_are_the_sidebar_group_labels():
         check(f"{label} stays visible", f'"{label}"' not in acc)
 
 
+def _admin_only_paths() -> list[str]:
+    """The entries of ADMIN_ONLY_PATHS, and nothing else.
+
+    This used to take every line in access.ts that looked like a quoted list
+    entry, which meant it also swept up ADMIN_ONLY_SECTIONS and then skipped the
+    four labels it knew about by name. That worked only for as long as the
+    restricted sections stayed exactly those four: adding "Administration" to the
+    section list made the sweep demand a route called `path="Administration"`,
+    which is a test failing for a reason that has nothing to do with what it
+    checks. Slice the one array instead — a section label can no longer be
+    mistaken for a route, and no skip list has to be kept in step with access.ts.
+    """
+    acc = _fe("lib/access.ts")
+    start = acc.find("ADMIN_ONLY_PATHS")
+    check("ADMIN_ONLY_PATHS is declared", start >= 0)
+    # From the "=", not from the name: the type annotation `readonly string[]`
+    # puts a pair of empty brackets between the two, and taking the first one
+    # reads the array as empty — which is a sweep that checks nothing and
+    # reports success.
+    equals = acc.find("=", start)
+    check("it is an assignment", equals > start)
+    open_bracket = acc.find("[", equals)
+    close_bracket = acc.find("]", open_bracket)
+    check("and is an array literal", open_bracket >= 0 and close_bracket > open_bracket)
+    body = acc[open_bracket + 1:close_bracket]
+    return [chunk.split('"')[1] for chunk in body.split(",") if '"' in chunk]
+
+
 def test_every_restricted_route_is_wrapped():
     """Nav filtering alone leaves the URL open, and a pasted link is exactly how
     somebody finds that. Each restricted path must be wrapped in App.tsx."""
     app = _fe("App.tsx")
-    acc = _fe("lib/access.ts")
-    paths = [ln.split('"')[1] for ln in acc.splitlines()
-             if ln.strip().startswith('"') and ln.strip().endswith('",')]
+    paths = _admin_only_paths()
     check("the path list was read", len(paths) >= 15, f"got {len(paths)}")
+    check("and holds no section labels",
+          not [p for p in paths if " " in p or p[:1].isupper()],
+          f"got {[p for p in paths if ' ' in p or p[:1].isupper()]}")
     for p in paths:
-        if p in ("Datasets", "FBDI Library", "AI Engine", "Governance"):
-            continue
         idx = app.find(f'path="{p}"')
         check(f"{p} is a route", idx >= 0)
         line = app[idx:app.find("\n", idx)]

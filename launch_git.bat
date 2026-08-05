@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Sign-in page no longer prints the default account and password, and the form no longer arrives pre-filled with them. Plus faster bundles - 113s vs 353s, 2 objects at a time via MERGE_CONCURRENCY - phase 2 progress and real failure messages, the mapping-dedup blocker fix and HCM rules/constants. Suite 1182 passing, 14 skipped, 0 failing. REGENERATE outputs after this."
+set "DEPLOY_NOTE=CRITICAL - restores output generation, which has been dead on the live build since 04-Aug 15:51. generate_output_artifact read obj_name sixty lines before it was assigned, so every generate raised UnboundLocalError before writing a byte - every format, every object - and 1182 tests were green over it because none of them called the function. Also - the Users screen completes the Admin/Normal split, BOM CSVs verified column-by-column against a PRODUCED file and against Oracle template, Delivery Method fax branch corrected to FAX per Oracle constraint, render.yaml service names fixed and a dead SECRET_KEY entry found. Suite 1239 passing, 14 skipped, 0 failing - measured on this tree. Frontend - vite build OK, tsc 146 errors unchanged from baseline. AFTER DEPLOYING - set JWT_SECRET in the Render dashboard, see START_HERE item 1. REGENERATE outputs after this."
 
 echo Checking the deploy set...
 set "MISSING="
@@ -377,10 +377,19 @@ echo   Deployed when the "commit" field there starts with %SHA%
 echo   (Render takes a few minutes. The free tier cold-starts, so the first
 echo    request after idle takes about 45 seconds - that is not your bug.)
 echo.
-echo   Reminder - not fixed by any deploy, it is a Render dashboard setting:
-echo     Static site -^> Redirects/Rewrites -^> source /*  destination /index.html
-echo     action Rewrite.  Without it, refreshing or pasting a deep link returns
-echo     404 with a blank body, which looks just like a broken page.
+echo   Two Render dashboard settings. Neither is fixed by any deploy:
+echo.
+echo     1. SECURITY - Backend -^> Environment -^> JWT_SECRET.
+echo        The manifest used to set SECRET_KEY, which nothing reads, so the
+echo        live backend signs every token with the default that is committed
+echo        to this repo. generateValue only fires when a variable is CREATED,
+echo        so the rename in render.yaml does not repair a service that exists.
+echo        Setting it signs everyone out - that is the correct outcome.
+echo.
+echo     2. Static site -^> Redirects/Rewrites -^> source /*  destination /index.html
+echo        action Rewrite.  Without it, refreshing or pasting a deep link
+echo        returns 404 with a blank body, which looks just like a broken page.
+echo        Measured 05-Aug - tx-conversion-workbench.onrender.com/clients 404s.
 echo.
 pause
 endlocal

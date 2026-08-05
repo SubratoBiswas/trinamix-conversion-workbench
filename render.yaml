@@ -1,9 +1,35 @@
 # Render deployment manifest — Trinamix Conversion Workbench
+#
+# READ THIS BEFORE TRUSTING ANYTHING BELOW.
+#
+# A Blueprint governs only the services Render created FROM it, or that have
+# since been linked to it. The live services were created by hand in the
+# dashboard, so nothing in this file has ever applied to them. That is not a
+# cosmetic problem: the frontend's `/*` → `/index.html` rewrite is written out
+# below, reads as done, and is not in effect — every browser refresh and every
+# shared deep link on the live site returns a bare 404. Verified 05-Aug:
+# `tx-conversion-workbench.onrender.com/` serves the app, and
+# `tx-conversion-workbench.onrender.com/clients` returns 404.
+#
+# Until the services are linked to this Blueprint, TWO THINGS MUST BE SET BY HAND
+# in the Render dashboard:
+#
+#   1. Static site → Redirects/Rewrites → source `/*` → destination
+#      `/index.html` → type **Rewrite** (not Redirect). There is no file-based
+#      alternative for a Render static site.
+#   2. Backend → Environment → `JWT_SECRET`. See the note on that key below.
+#
+# The service names here read `trinamix-backend` / `trinamix-frontend`, which
+# matched nothing that exists. They are now the real ones, so linking these
+# services to the Blueprint is a matter of pressing the button rather than first
+# working out which entry is meant to be which.
 
 services:
   # ── Backend (FastAPI + Beanie + MongoDB Atlas) ──────────────────────────
+  # Live at trinamix-conversion-backend.onrender.com — the host VITE_API_URL
+  # points at below, and the one /api/health answers on.
   - type: web
-    name: trinamix-backend
+    name: trinamix-conversion-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     plan: free
@@ -12,12 +38,35 @@ services:
         sync: false          # set in Render dashboard from Atlas
       - key: MONGODB_DB
         value: conversion_workbench
-      - key: SECRET_KEY
+      # THE KEY EVERY SESSION TOKEN IS SIGNED WITH.
+      #
+      # This entry used to read `SECRET_KEY`. Nothing reads that name — the
+      # settings model calls it JWT_SECRET and is configured `extra="ignore"`,
+      # so Render generated a value, the app discarded it without a word, and
+      # JWT_SECRET fell back to its default: "trinamix-local-dev-secret-change-me",
+      # which is in this repository. Anyone who can read the repo can mint a
+      # token the live backend accepts.
+      #
+      # generateValue only applies on the deploy that CREATES the variable, so
+      # this line does nothing for a service that already exists — set
+      # JWT_SECRET by hand in the dashboard. That signs out every current
+      # session, which is the correct outcome for a key that has been public.
+      - key: JWT_SECRET
         generateValue: true
+      # The container disk is wiped on every redeploy, taking uploaded template
+      # and dataset files with it. A Render Persistent Disk mounted at /var/data
+      # is picked up automatically (settings._data_root); DATA_DIR only needs a
+      # value if the disk is mounted somewhere else.
+      - key: DATA_DIR
+        sync: false
       - key: ADMIN_EMAIL
         value: admin@trinamix.com
+      # Bootstrap credential for the first sign-in, and it used to be written out
+      # here in plain text. Set it in the dashboard. Note the seed only reads it
+      # when the account does not yet exist, so changing this does NOT rotate the
+      # password of an admin that is already there.
       - key: ADMIN_PASSWORD
-        value: admin123
+        sync: false
       - key: ADMIN_NAME
         value: Admin
       - key: AI_PROVIDER
@@ -26,14 +75,20 @@ services:
         sync: false          # optional — enables AI Copilot
 
   # ── Frontend (React + Vite — static site) ──────────────────────────────
+  # Live at tx-conversion-workbench.onrender.com.
   - type: web
-    name: trinamix-frontend
+    name: tx-conversion-workbench
     runtime: static
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
         value: https://trinamix-conversion-backend.onrender.com
+    # Client-side routing. Every path the router owns — /clients, /users,
+    # /conversions/<id> — has to be served by index.html; without this the static
+    # host looks for a file of that name and returns 404, so the app works right
+    # up until the first refresh. A REWRITE, not a redirect: a redirect changes
+    # the address bar and loses the route the person was on.
     routes:
       - type: rewrite
         source: /*

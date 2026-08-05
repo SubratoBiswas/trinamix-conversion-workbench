@@ -41,6 +41,7 @@ import { CrosswalkLibraryPage } from "@/pages/CrosswalkLibraryPage";
 import { RecommendationsHubPage } from "@/pages/RecommendationsHubPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
 import { ClientsPage } from "@/pages/ClientsPage";
+import { UsersPage } from "@/pages/UsersPage";
 import { ForbiddenPage } from "@/pages/ForbiddenPage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { isAdmin } from "@/lib/access";
@@ -144,6 +145,9 @@ const App: React.FC = () => {
         {/* Compliance — administrator only */}
         <Route path="audit"                  element={<AdminRoute><AuditPage /></AdminRoute>} />
         <Route path="approvals"              element={<AdminRoute><ApprovalsPage /></AdminRoute>} />
+
+        {/* Administration — who is an administrator is an administrator's call */}
+        <Route path="users"                  element={<AdminRoute><UsersPage /></AdminRoute>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

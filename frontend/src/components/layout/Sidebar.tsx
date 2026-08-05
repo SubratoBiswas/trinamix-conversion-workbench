@@ -4,7 +4,7 @@ import {
   Home, Database, FileSpreadsheet, Boxes, Workflow as WfIcon,
   Sparkles, ListChecks, ShieldCheck, Cloud, Network, BookOpen,
   Library, ArrowLeftRight, BadgeCheck, Eye, AlertTriangle, Layers,
-  CircleDot, Activity, Award, Building2,
+  CircleDot, Activity, Award, Building2, UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConversionsApi, ProjectsApi } from "@/api";
@@ -71,6 +71,12 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/audit", label: "Audit Trail", icon: ShieldCheck },
       { to: "/approvals", label: "Approvals", icon: ListChecks },
+    ],
+  },
+  {
+    label: "Administration",
+    items: [
+      { to: "/users", label: "Users", icon: UsersRound },
     ],
   },
 ];

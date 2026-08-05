@@ -1703,6 +1703,27 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         _src_frames = {}          # single source — nothing to route
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
+    # What this object is called. Prefer the template's business object (the
+    # precise interface, e.g. "Supplier Address"), then the conversion's target
+    # object (always set), then the template name — "fbdi" only when nothing is
+    # available.
+    #
+    # ASSIGNED HERE, ONCE, AS SOON AS ``template`` EXISTS.
+    #
+    # It used to be assigned about sixty lines further down, after the DQ pass —
+    # and the DQ pass's own timing log referenced it. Because a name assigned
+    # anywhere in a function is local for the whole of it, that read raised
+    # UnboundLocalError before a single byte was written, on EVERY call: 04-Aug
+    # 15:51 through 05-Aug, no output of any format for any object. The log line
+    # that broke it is advisory, which is the part worth remembering — the
+    # failure was total and the code that caused it did nothing.
+    obj_name = (
+        (template.business_object if template else None)
+        or getattr(conversion, "target_object", None)
+        or (template.name if template else None)
+        or "fbdi"
+    )
+
     # Fetch fields (interface sequence) + sheets so we can emit exactly the
     # template's columns and, for multi-sheet workbooks, one file per sheet.
     fields = await FBDIField.find(
@@ -1820,15 +1841,8 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     out_dir = settings.output_path / f"conversion_{conversion.id}"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    # Name the output after the object: prefer the template's business object,
-    # then the conversion's target object (always set, e.g. "Supplier Site"),
-    # then the template name — only fall back to "fbdi" if nothing is available.
-    obj_name = (
-        (template.business_object if template else None)
-        or getattr(conversion, "target_object", None)
-        or (template.name if template else None)
-        or "fbdi"
-    )
+    # obj_name is resolved once, up where ``template`` is loaded. Recomputing it
+    # here is what let the two drift apart in the first place.
 
     # Fields the signed strategy / analyst rules say must ship BLANK. Merged into
     # the suppression set so neither the auto-number sequence nor the "fill an empty
