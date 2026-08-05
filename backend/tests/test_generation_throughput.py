@@ -177,10 +177,75 @@ def test_the_bundle_download_is_not_cut_off_at_two_minutes():
 
 
 def test_the_zip_step_is_timed_server_side():
+    """MOVED 05-Aug: the size now comes from the file on disk rather than from
+    ``len(_bytes)``, because the bundle is no longer held in memory. Same
+    assertion — the step reports how long it took and how big it was."""
     src = _py("app/routers/operations.py")
     check("it logs how long it took", "zipped in %.1fs" in src)
-    check("and how big it was", "len(_bytes) / 1e6" in src)
+    check("and how big it was", "_zip_bytes / 1e6" in src)
+    check("measured from the file, not from a buffer",
+          "zip_path.stat().st_size" in src)
     check("the client can see it too", "X-Zip-Seconds" in src)
+    check("and the size, machine-readable", "X-Zip-Bytes" in src)
+
+
+def test_the_bundle_is_never_held_in_memory():
+    """The bundle used to be built in an io.BytesIO and then copied whole by
+    ``buf.getvalue()`` before the response started — peak memory twice the zip on
+    an instance that has 512MB in total, and not a byte sent until the last entry
+    was compressed. With the "template" format those entries are real Oracle
+    .xlsm workbooks; the six supplier templates are ~2.4MB before a row goes in.
+
+    A bundle that was slow and one that had hung were also indistinguishable from
+    the browser, which is what makes a stuck "Packaging…" invite a second click —
+    and a second concurrent build of the same zip.
+    """
+    src = _py("app/routers/operations.py")
+    i = src.index("async def download_all_outputs")
+    j = src.index("async def download_project_zip")
+    body = src[i:j]
+    check("no in-memory buffer", "io.BytesIO()" not in body, "the bundle is in RAM again")
+    check("no whole-bundle copy", "getvalue()" not in body)
+    check("it is spooled to a temp file", "NamedTemporaryFile" in body)
+    check("and streamed from disk", "FileResponse(" in body)
+    check("the temp file is cleaned up after the response",
+          "BackgroundTask(_drop_tmp)" in body)
+
+
+def test_the_download_never_regenerates_inline():
+    """generate_merged_artifact inside the download request is the work the
+    background job exists to keep OUT of a request — done up to six times over,
+    with no progress reported, while the browser sits on "Packaging…". The client
+    already generates and waits for every object first, so a missing file means
+    something went wrong and is worth a sentence rather than a ten-minute
+    silence. ``regenerate=true`` still rebuilds, for a caller that asks knowingly.
+    """
+    src = _py("app/routers/operations.py")
+    i = src.index("async def download_all_outputs")
+    j = src.index("async def download_project_zip")
+    body = src[i:j]
+    call = body.index("generate_merged_artifact(project_id, obj, fmt=fmt)")
+    check("the rebuild is behind a regenerate check",
+          "if art is None and not regenerate:" in body,
+          "the default path can still rebuild inline")
+    check("the guard comes first",
+          body.index("if art is None and not regenerate:") < call)
+    check("and the default path records what is missing instead",
+          0 < body.index("missing_files.append(obj)") < call)
+
+
+def test_a_short_bundle_is_refused_rather_than_shipped():
+    """A zip missing two of six interfaces downloads, opens, and looks finished;
+    the analyst finds out at load time against a live pod. Naming the objects in
+    a 409 costs one retry."""
+    src = _py("app/routers/operations.py")
+    i = src.index("async def download_all_outputs")
+    j = src.index("async def download_project_zip")
+    body = src[i:j]
+    check("incompleteness raises", "if missing_files or (added < len(objs)" in body)
+    check("it is a 409, not a 500", "409," in body)
+    check("and it names the interfaces", "', '.join(_why)" in body)
+    check("the half-built zip is dropped first", body.index("_drop_tmp()") < body.index("', '.join(_why)"))
 
 
 if __name__ == "__main__":

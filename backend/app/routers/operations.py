@@ -1448,85 +1448,152 @@ async def download_all_outputs(
         by_obj.setdefault(obj, []).append(c)
     objs = sorted(by_obj, key=lambda o: min((cc.planned_load_order or 100) for cc in by_obj[o]))
 
+    import tempfile
     import time as _time
     _zip_t0 = _time.monotonic()
-    buf = io.BytesIO()
+    # THE ZIP IS BUILT ON DISK, NOT IN MEMORY.
+    #
+    # It used to be an io.BytesIO, and then `buf.getvalue()` took a SECOND full
+    # copy before the response started, so peak memory was twice the bundle on an
+    # instance that has 512MB in total. The "template" format is the one that
+    # breaks it: those entries are real Oracle .xlsm workbooks rewritten by
+    # openpyxl, and the six supplier templates are ~2.4MB before a single row goes
+    # in. Two people pressing Download at once — or one person pressing it twice,
+    # which is exactly what a bundle that looks stuck invites — doubles it again.
+    #
+    # Nothing was sent until the whole thing existed in RAM either, so a slow zip
+    # and a hung one were indistinguishable from the browser: the label sat on
+    # "Packaging…" and no byte ever arrived to move it on.
+    #
+    # Spooled to a temp file and streamed with FileResponse, peak memory is one
+    # zip entry rather than the whole bundle, and the transfer starts as soon as
+    # the last entry is written.
+    _tmp = tempfile.NamedTemporaryFile(prefix="fbdi_bundle_", suffix=".zip", delete=False)
+    _tmp.close()
+    zip_path = Path(_tmp.name)
+
+    def _drop_tmp() -> None:
+        """Delete the spooled bundle. Runs on every exit — after the response has
+        been sent, and on any refusal or error before it. A half-built zip left in
+        the temp directory of an instance with a small disk is the next outage."""
+        try:
+            zip_path.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001 — a leftover temp file is not worth a 500
+            pass
+
     used: dict[str, int] = {}
     added = 0
     stale: list[str] = []
+    missing_files: list[str] = []
     ext = "xlsx" if fmt == "xlsx" else "csv"
 
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, obj in enumerate(objs, start=1):
-            group = by_obj[obj]
-            art = None
-            # REUSE the merged artifact already written for this object. The merged
-            # file is written under a carrier conversion, but which conversion is the
-            # carrier can differ by sort tie-breaks, so look across EVERY conversion
-            # in the group and take the newest artifact whose file is on disk. NOTE:
-            # a "csv" generation may be a .zip (Oracle FBDI bundle) or a .csv — both
-            # are the csv family; a filled "template" is a .xlsm. Only reuse an
-            # artifact whose extension belongs to the requested format's family.
-            _FAMILY = {"csv": {"csv", "zip"}, "xlsx": {"xlsx"},
-                       "template": {"xlsm", "xlsx"}}
-            _want_ext = _FAMILY.get(fmt, {"csv", "zip"})
-            if not regenerate:
-                cand = None
-                for cc in group:
-                    e = await ConvertedOutput.find(
-                        ConvertedOutput.conversion_id == cc.id
-                    ).sort("-generated_at").first_or_none()
-                    if not e or not Path(e.output_file_path).exists():
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, obj in enumerate(objs, start=1):
+                group = by_obj[obj]
+                art = None
+                # REUSE the merged artifact already written for this object. The merged
+                # file is written under a carrier conversion, but which conversion is the
+                # carrier can differ by sort tie-breaks, so look across EVERY conversion
+                # in the group and take the newest artifact whose file is on disk. NOTE:
+                # a "csv" generation may be a .zip (Oracle FBDI bundle) or a .csv — both
+                # are the csv family; a filled "template" is a .xlsm. Only reuse an
+                # artifact whose extension belongs to the requested format's family.
+                _FAMILY = {"csv": {"csv", "zip"}, "xlsx": {"xlsx"},
+                           "template": {"xlsm", "xlsx"}}
+                _want_ext = _FAMILY.get(fmt, {"csv", "zip"})
+                if not regenerate:
+                    cand = None
+                    for cc in group:
+                        e = await ConvertedOutput.find(
+                            ConvertedOutput.conversion_id == cc.id
+                        ).sort("-generated_at").first_or_none()
+                        if not e or not Path(e.output_file_path).exists():
+                            continue
+                        # STALE MEANS THE RULES CHANGED SINCE THIS FILE WAS WRITTEN.
+                        # Reusing it hands back the pre-fix output and every symptom
+                        # follows: a rule edited in the UI never appears in the download,
+                        # a Fix button reports success and changes nothing, and a change
+                        # one analyst makes is invisible to a colleague — because BOTH are
+                        # served the same cached artifact from disk. Staleness was recorded
+                        # everywhere and consulted nowhere. Treat it exactly like a missing
+                        # file: fall through and rebuild.
+                        if getattr(e, "status", "") == "stale":
+                            stale.append(f"{obj} ({cc.name})")
+                            continue
+                        ext_e = Path(e.output_file_name).suffix.lstrip(".").lower()
+                        if ext_e not in _want_ext:
+                            continue  # wrong format family
+                        if cand is None or (e.generated_at and cand.generated_at
+                                            and e.generated_at > cand.generated_at):
+                            cand = e
+                    art = cand
+                if art is None and not regenerate:
+                    # MISSING is not the same as STALE, and neither is silently
+                    # dropped — the 28-Jul "FBDI templates" download shipped 2 of 7
+                    # supplier interfaces because the other 5 had csv-family artifacts
+                    # and no xlsm, and nothing said so. A partial load file set is
+                    # worse than a failed download.
+                    #
+                    # But it must not be REBUILT here either. This branch used to call
+                    # generate_merged_artifact inline, inside the download request —
+                    # the very work the background /generate-merged-all exists to keep
+                    # out of a request, done six times over with no progress reported,
+                    # while the browser sat on "Packaging…". A ten-minute silence is
+                    # not a better answer than a sentence.
+                    #
+                    # The client always runs generation first and waits for every
+                    # object to report ready, so reaching this point means a file that
+                    # was just written is gone or superseded — worth saying out loud.
+                    # ``regenerate=true`` still rebuilds, for a caller that asks for it
+                    # knowingly.
+                    missing_files.append(obj)
+                    continue
+                if art is None:
+                    try:
+                        art = await generate_merged_artifact(project_id, obj, fmt=fmt)
+                    except Exception:
+                        skipped.append(obj)
                         continue
-                    # STALE MEANS THE RULES CHANGED SINCE THIS FILE WAS WRITTEN.
-                    # Reusing it hands back the pre-fix output and every symptom
-                    # follows: a rule edited in the UI never appears in the download,
-                    # a Fix button reports success and changes nothing, and a change
-                    # one analyst makes is invisible to a colleague — because BOTH are
-                    # served the same cached artifact from disk. Staleness was recorded
-                    # everywhere and consulted nowhere. Treat it exactly like a missing
-                    # file: fall through and rebuild.
-                    if getattr(e, "status", "") == "stale":
-                        stale.append(f"{obj} ({cc.name})")
-                        continue
-                    ext_e = Path(e.output_file_name).suffix.lstrip(".").lower()
-                    if ext_e not in _want_ext:
-                        continue  # wrong format family
-                    if cand is None or (e.generated_at and cand.generated_at
-                                        and e.generated_at > cand.generated_at):
-                        cand = e
-                art = cand
-            if art is None:
-                # MISSING is not the same as STALE. ``regenerate`` means "rebuild
-                # even though a good file exists"; it must not mean "silently omit
-                # an object that has no file in this format yet". The 28-Jul
-                # "FBDI templates" download shipped only 2 of the 7 supplier
-                # interfaces — the other 5 had csv-family artifacts from the
-                # earlier CSV run but no xlsx/xlsm, so they fell into this branch
-                # and vanished from a bundle that gave no hint it was incomplete.
-                # A partial load file set is worse than a slow download.
-                try:
-                    art = await generate_merged_artifact(project_id, obj, fmt=fmt)
-                except Exception:
+                if not art or not Path(art.output_file_path).exists():
                     skipped.append(obj)
                     continue
-            if not art or not Path(art.output_file_path).exists():
-                skipped.append(obj)
-                continue
-            real_ext = (Path(art.output_file_name).suffix.lstrip(".") or ext)
-            order = min((cc.planned_load_order for cc in group
-                         if cc.planned_load_order and cc.planned_load_order < 100), default=None)
-            prefix = f"{order:02d}_" if order is not None else ""
-            arcname = f"{prefix}{_safe_name(obj)}.{real_ext}"
-            if arcname in used:
-                used[arcname] += 1
-                arcname = f"{prefix}{_safe_name(obj)}_{used[arcname]}.{real_ext}"
-            else:
-                used[arcname] = 0
-            zf.write(art.output_file_path, arcname=arcname)
-            added += 1
+                real_ext = (Path(art.output_file_name).suffix.lstrip(".") or ext)
+                order = min((cc.planned_load_order for cc in group
+                             if cc.planned_load_order and cc.planned_load_order < 100), default=None)
+                prefix = f"{order:02d}_" if order is not None else ""
+                arcname = f"{prefix}{_safe_name(obj)}.{real_ext}"
+                if arcname in used:
+                    used[arcname] += 1
+                    arcname = f"{prefix}{_safe_name(obj)}_{used[arcname]}.{real_ext}"
+                else:
+                    used[arcname] = 0
+                zf.write(art.output_file_path, arcname=arcname)
+                added += 1
+    except Exception:
+        # Never leave a half-written bundle behind on the way out.
+        _drop_tmp()
+        raise
+
+    # REFUSE A SHORT BUNDLE RATHER THAN SHIP ONE.
+    #
+    # A zip missing two of six interfaces downloads, opens, and looks finished.
+    # The analyst finds out at load time, against a live pod. Naming the objects
+    # in a 409 costs one retry; shipping the bundle costs a load.
+    if missing_files or (added < len(objs) and (stale or skipped)):
+        _drop_tmp()
+        _why = missing_files or stale or skipped
+        raise HTTPException(
+            409,
+            f"{len(_why)} of {len(objs)} interface(s) have no current "
+            f"{'template' if fmt == 'template' else fmt.upper()} file on disk: "
+            f"{', '.join(_why)}. Generate again and download straight away — the "
+            f"server's disk is wiped on redeploy, so files can disappear between "
+            f"generating and downloading.",
+        )
 
     if added == 0:
+        _drop_tmp()
         if stale:
             # Files just aren't generated yet — tell the client to generate first.
             raise HTTPException(
@@ -1541,14 +1608,13 @@ async def download_all_outputs(
             "(each needs a source dataset and a bound FBDI template).",
         )
 
-    buf.seek(0)
     zip_name = f"{_safe_name(project.name)}_FBDI.zip"
-    _bytes = buf.getvalue()
+    _zip_bytes = zip_path.stat().st_size
     # Phase 2 was invisible from both ends: the client stopped ticking when
     # generation finished and the server said nothing about the zip, so a bundle
     # that was packaging looked exactly like one that had hung.
     log.info("download-all — %d of %d object(s), %.1f MB, zipped in %.1fs",
-             added, len(objs), len(_bytes) / 1e6, _time.monotonic() - _zip_t0)
+             added, len(objs), _zip_bytes / 1e6, _time.monotonic() - _zip_t0)
     # A PARTIAL bundle is the dangerous one. added == 0 already refuses, but 1 of 6
     # returned a zip and said nothing — it downloads, it opens, and five interfaces
     # are simply not in it. Name what is missing, in the log and on the response,
@@ -1558,12 +1624,20 @@ async def download_all_outputs(
     if added < len(objs):
         log.warning("download-all — %d object(s) NOT in the bundle: %s",
                     len(objs) - added, ", ".join(stale or _missing) or "unknown")
-    return StreamingResponse(
-        iter([_bytes]),
+    # Streamed FROM DISK, and the temp file is removed after the last byte goes
+    # out. FileResponse sends Content-Length, so the browser can show a real
+    # progress bar instead of an unbounded spinner — which is the other half of
+    # "packaging and hung looked identical".
+    from starlette.background import BackgroundTask
+
+    return FileResponse(
+        zip_path,
         media_type="application/zip",
+        filename=zip_name,
+        background=BackgroundTask(_drop_tmp),
         headers={
-            "Content-Disposition": f'attachment; filename="{zip_name}"',
             "X-Zip-Seconds": f"{_time.monotonic() - _zip_t0:.1f}",
+            "X-Zip-Bytes": str(_zip_bytes),
             "X-Objects-Expected": str(len(objs)),
             "X-Objects-Missing": ", ".join((stale or _missing))[:400],
             "X-Files-Added": str(added),
