@@ -134,6 +134,21 @@ async def _template_object(conversion) -> str | None:
         return None
 
 
+def _place_default_by_sheet(defaults_by_sheet: dict, sheet_names: list, lm,
+                            field_key: str) -> None:
+    """Write one default onto every sheet its scope allows.
+
+    Pure and separate so the per-sheet rule — a field-wide default (no scope)
+    reaches every sheet, a scoped one only its own — is unit-testable without a
+    database. ``lm`` needs only ``sheets`` / ``exclude_sheets`` (what
+    ``sheet_allowed`` reads) and its resolved value.
+    """
+    from app.services.mapping_store import sheet_allowed as _sheet_allowed
+    for _sn in sheet_names:
+        if _sheet_allowed(lm, _sn):
+            defaults_by_sheet.setdefault(_sn, {})[field_key] = lm.resolved_value
+
+
 async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True) -> dict:
     """Return effective defaults for every unmapped target field of a conversion.
 
@@ -234,6 +249,23 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     # approved. However it should only reflect in the RA_CUSTOMER_PROFILES_INT_ALL
     # sheet, where it is a mandatory field."
     scopes: dict[str, dict] = {}
+    # PER-SHEET defaults: {sheet_name: {field_key: value}}. A default carries the
+    # interface it was set on, so "EffectiveStartDate = 1900/1/1 on Location" must
+    # show on Location and NOWHERE else. The flat `defaults`/`scopes` above keep one
+    # value per field, so the grid painted a Location-scoped default across all four
+    # sheets — the "I set it on one sheet and it appeared on all four" report. This
+    # resolves the winning default for each (field, sheet) pair, so a field-wide
+    # default still shows everywhere and a per-sheet one shows only where it applies.
+    from app.services.mapping_store import sheet_allowed as _sheet_allowed
+    sheet_names: list[str] = []
+    try:
+        from app.models.fbdi import FBDISheet
+        sheet_names = [sh.sheet_name for sh in await FBDISheet.find(
+            FBDISheet.template_id == conversion.template_id).to_list() if sh.sheet_name]
+    except Exception:  # noqa: BLE001
+        sheet_names = []
+    defaults_by_sheet: dict[str, dict[str, str]] = {s: {} for s in sheet_names}
+
     if target_object:
         from app.services.client_service import client_id_for_conversion, scope_query
         _scope = await scope_query(await client_id_for_conversion(conversion))
@@ -257,6 +289,12 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
                 if _only or _never:
                     scopes[_norm(lm.target_field)] = {"sheets": _only,
                                                       "exclude_sheets": _never}
+                # Oldest-first order means the last write per (sheet, field) wins,
+                # matching the resolver. A field-wide row (no scope) reaches every
+                # sheet; a scoped one only its own. Built through a pure helper so
+                # the per-sheet rule is unit-testable without the Beanie stack.
+                _place_default_by_sheet(defaults_by_sheet, sheet_names, lm,
+                                        _norm(lm.target_field))
 
     defaults: dict[str, str] = {}
     detail: list[dict] = []
@@ -328,4 +366,8 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
     # an absent default and a deliberately blanked field look identical otherwise,
     # and the analyst needs to see that their decision took.
     return {"defaults": defaults, "detail": detail, "ai_used": ai_used,
-            "suppressed": sorted(suppressed), "scopes": scopes}
+            "suppressed": sorted(suppressed), "scopes": scopes,
+            # Per-sheet resolution for the grid, so a per-interface default stops
+            # painting itself across every sheet. Empty for single-sheet objects,
+            # where the flat `defaults` is already right.
+            "defaults_by_sheet": defaults_by_sheet}

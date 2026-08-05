@@ -1353,17 +1353,27 @@ _DATE_INPUT_FORMATS = (
 # three different spellings.
 FBDI_DATE_FORMAT = "%Y/%m/%d"
 
+# Tokens that mean "today", not a literal string. An analyst who sets a date
+# column's constant to SYSDATE means Oracle's current date, not the seven letters
+# "SYSDATE" — which is what shipped: the BOM Effective Date column carried the text
+# SYSDATE on every row. Resolved to today in the output spelling.
+_TODAY_TOKENS = {"sysdate", "today", "now", "current_date", "currentdate",
+                 "system date", "systemdate", "getdate()", "current date"}
+
 
 def to_fbdi_date(v: Any) -> Any:
     """One cell → ``yyyy/mm/dd``, or the value untouched if it is not a date.
 
     Untouched is deliberate: a column that turns out to hold free text must not be
     mangled, and an unparseable date is more useful in the reject report as the
-    analyst's original string than as a blank.
+    analyst's original string than as a blank. The exception is a SYSDATE-style
+    token, which is an INSTRUCTION ("use today"), not free text, and is resolved.
     """
     if v is None or str(v).strip() == "":
         return v
     s = str(v).strip()
+    if s.lower() in _TODAY_TOKENS:
+        return datetime.utcnow().strftime(FBDI_DATE_FORMAT)
     # Fractional seconds ("2020-01-15 00:00:00.000") — strptime has no optional
     # group for them, so drop the fraction before matching.
     core = re.sub(r"\.\d+$", "", s)

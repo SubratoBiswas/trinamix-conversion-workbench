@@ -141,6 +141,19 @@ def test_a_number_is_not_coerced_into_a_date():
     check("0 unchanged", to_fbdi_date(0) == 0)
 
 
+def test_sysdate_tokens_resolve_to_today():
+    """A date column whose constant is SYSDATE means "today", not the seven letters.
+    The BOM Effective Date shipped the literal SYSDATE on every row; it is an
+    instruction, so it resolves to today in yyyy/mm/dd."""
+    from datetime import datetime
+    today = datetime.utcnow().strftime("%Y/%m/%d")
+    for tok in ("SYSDATE", "sysdate", "Today", "NOW", "System Date", "getdate()"):
+        check(f"{tok!r} -> today", to_fbdi_date(tok) == today, f"got {to_fbdi_date(tok)!r}")
+    # A real date is still parsed, not treated as a token.
+    check("a real date is untouched by the token path",
+          to_fbdi_date("2020-01-15") == "2020/01/15")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

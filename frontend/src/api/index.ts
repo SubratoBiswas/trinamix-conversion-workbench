@@ -448,6 +448,9 @@ export const ConversionsApi = {
       detail: { field: string; label: string; value: string; source: string }[];
       ai_used: boolean;
       suppressed?: string[];
+      /** Per-sheet resolution: sheet name -> { field key -> value }. Lets the grid
+       *  show a per-interface default only on the sheets it applies to. */
+      defaults_by_sheet?: Record<string, Record<string, string>>;
     }>(`/conversions/${id}/effective-defaults`, { params: { use_ai: useAi } }).then(r => r.data),
   /** Remove learned/gold-derived constant defaults (e.g. a wrong Country → AE that a
    *  gold file baked in). Forgets the object-level rule so it can't reapply, and can
