@@ -103,6 +103,13 @@ _PROBE_VALUE = "PROBE-ORG-05AUG"
 _PROBE_SHEET = "HZ_IMP_PARTIES_T"
 _PROBE_FIELD = "Organization Name"
 
+# And a SECOND probe, on a column the glue DOES generate, recorded the way the
+# learning engine records one. This is the 05-Aug live defect: the screen said
+# NETSUITE, the file said LEGACY, on three linkage columns at once.
+_GLUE_FIELD = "Party Original System"
+_GLUE_VALUE = "PROBE-ENGINE-CONSTANT"
+_ENGINE = "learning-engine"
+
 
 def check(name, cond, detail=""):
     if cond:
@@ -175,6 +182,14 @@ async def _build_conversion(tmp: Path):
                             target_field_id=field.id,
                             source_column=_PROBE_COLUMN,
                             confidence=1.0, status="approved").insert()
+
+    gfield = by_name.get(_GLUE_FIELD)
+    check(f"{_PROBE_SHEET} has {_GLUE_FIELD}", gfield is not None)
+    await MappingSuggestion(conversion_id=conversion.id,
+                            target_field_id=gfield.id,
+                            default_value=_GLUE_VALUE,
+                            confidence=1.0, status="approved",
+                            approved_by=_ENGINE).insert()
     return conversion
 
 
@@ -305,6 +320,36 @@ def test_a_mapped_value_lands_at_the_index_the_spec_gives_it():
         check(f"{name} row {r}: {_PROBE_FIELD} is at position {want_index}",
               i == want_index,
               f"landed at {i} = {order[i] if i < len(order) else '?'!r}")
+
+
+def test_a_constant_the_engine_recorded_is_not_overwritten_by_the_linkage_glue():
+    """The 05-Aug live defect, on the file rather than on the rule.
+
+    ``customer_structure_service.apply_to_frame`` generates the linkage columns —
+    Batch Identifier, Party Original System, the source-system references. It is a
+    FALLBACK for what no source supplies, and it skips any column the analyst has
+    decided. "Decided" was resolved through ``analyst_default``, which returned
+    None for anything approved by the learning engine, so an engine-recorded
+    constant was not protected and the glue wrote over it.
+
+    The shipped Customer file said LEGACY where the mapping screen said NETSUITE,
+    on three columns at once, with no error anywhere.
+
+    This maps a constant onto ``Party Original System`` with
+    ``approved_by="learning-engine"`` — the exact provenance of the live rows —
+    and reads the produced CSV. Before the fix the cell holds the glue's source
+    system; after it, the analyst's value."""
+    name = next(n for n in _generated()["headerless"]
+                if _iface_of(n) == _PROBE_SHEET)
+    rows = _generated()["headerless"][name]
+    order = [str(c).strip() for c in _SHEETS[_PROBE_SHEET]["csv_order"]]
+    i = order.index(_GLUE_FIELD)
+    check(f"{name} has data rows", bool(rows))
+    for r, row in enumerate(rows):
+        got = row[i].strip() if i < len(row) else "(missing)"
+        check(f"{name} row {r}: {_GLUE_FIELD} is the recorded constant",
+              got == _GLUE_VALUE,
+              f"got {got!r} — the glue overwrote a decided column")
 
 
 # ---------------------------------------------------------------------------

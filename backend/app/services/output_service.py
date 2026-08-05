@@ -1541,19 +1541,71 @@ def _by_a_person(m) -> bool:
 
 
 def analyst_default(m) -> str | None:
-    """The default value THE ANALYST typed on this mapping row, or None.
+    """The decided default value on this mapping row, or None.
 
     Module-level and pure so the rule can be tested directly. It decides whether a
     constant reaches the file, whether an otherwise-empty interface sheet is written
     with rows at all, and whether the generated linkage may overwrite the column —
     three separate 31-Jul issues turn on it.
+
+    THE AUTHORSHIP GATE IS GONE. It used to end `if _by_a_person(m) else None`, and
+    on 05-Aug that shipped a Customer file contradicting its own mapping screen:
+
+        Party Original System                     screen NETSUITE   file LEGACY
+        Customer Account Source System Reference   screen LEGACY_SYSTEM
+                                                            file NXT000001_C1
+        Account Site Source System                 screen NETSUITE   file LEGACY
+
+    All three rows read approved, dated 05-Aug, `approved_by="learning-engine"`.
+    Not a person -> None -> the field never entered the protected set -> the
+    linkage glue in `customer_structure_service.apply_to_frame` overwrote it. The
+    other twelve fixed values on the same file landed correctly, purely because
+    the glue does not touch those columns.
+
+    This is the FIFTH place the same rule was wrong, and the same fix as
+    `_decision_outranks_directive` two hundred lines up:
+
+        "Sources are all equal: mapping workbook, gold standard, learning, steer
+         box, grid edit, custom rule. Newest wins. Authorship is provenance, not
+         precedence."                                        -- ONE_DATED_STORE.md
+
+    The old docstring's fear -- "a seeded row re-populates the fields the analyst
+    has been clearing" -- was answered by the one-row store, not by authorship. A
+    key holds ONE row now. There is no older seeded statement to lose to, and if a
+    newer one exists it is the client's newest statement and SHOULD win.
+
+    What a row still has to do to count: carry a non-empty value, and be approved
+    or overridden. Those are unchanged.
     """
     dv = getattr(m, "default_value", None)
     if dv is None or not str(dv).strip():
         return None
     if (getattr(m, "status", "") or "") not in ("approved", "overridden"):
         return None
-    return str(dv) if _by_a_person(m) else None
+    return str(dv)
+
+
+def person_set_default(m) -> str | None:
+    """`analyst_default`, narrowed to a decision a PERSON made. Or None.
+
+    Exists because two different questions used to share one answer, and widening
+    the answer for the first would have silently changed the second:
+
+      1. WHAT VALUE does this column carry, and may the linkage glue overwrite it?
+         Authorship is irrelevant -- see `analyst_default`. Newest wins.
+      2. Does an OPTIONAL interface emit rows at all?
+         Here authorship still decides, and deliberately. An engine-seeded default
+         switching a child table on is how "5,599 rows into all 19 sheets" comes
+         back -- thousands of rows of pure linkage glue with no real content, which
+         is the thing the suppression exists to prevent.
+
+    Only question 2 calls this. Stated as its own rule rather than left riding on
+    `analyst_default`'s authorship check, so that widening one cannot move the
+    other by accident. That coupling is precisely what made the 05-Aug Customer
+    fix look risky.
+    """
+    dv = analyst_default(m)
+    return dv if (dv is not None and _by_a_person(m)) else None
 
 
 def analyst_keeps_blank(m) -> bool:
@@ -2251,8 +2303,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # Person-set only, deliberately: an engine-seeded default must not be able to
     # switch an optional interface back on, or the 19-sheets-of-linkage-glue problem
     # this suppression exists to prevent returns through the back door.
+    #
+    # `person_set_default`, NOT `analyst_default`. The authorship check moved out of
+    # `analyst_default` on 05-Aug so that an engine-recorded constant could hold its
+    # column against the linkage glue; this line is the one caller that still wants
+    # the narrow rule, and it now says so itself instead of inheriting it.
     _analyst_const_field_ids = {
-        tid for tid, m in _best_m.items() if analyst_default(m) is not None
+        tid for tid, m in _best_m.items() if person_set_default(m) is not None
     }
 
     def _sheet_carries_data(s) -> bool:

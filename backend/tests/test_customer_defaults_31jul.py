@@ -54,7 +54,7 @@ from app.services.customer_structure_service import (                  # noqa: E
     apply_to_frame, level_for_sheet,
 )
 from app.services.output_service import (                              # noqa: E402
-    analyst_default, analyst_keeps_blank,
+    analyst_default, analyst_keeps_blank, person_set_default,
 )
 from app.services.learning_service import sheet_allowed                # noqa: E402
 
@@ -94,18 +94,59 @@ def test_a_person_typing_a_default_is_a_decision():
           analyst_default(M("overridden", "CONTACT", approved_by=PERSON)) == "CONTACT")
 
 
-def test_an_engine_default_is_not():
-    """The learning engine approves the mappings it applies. Counting those as the
-    analyst is what let seeded rows outrank the analyst's own later corrections —
-    and here it would let a seeded default switch an optional interface back on."""
-    check("learning-engine is not a person",
-          analyst_default(M("approved", "NETSUITE", approved_by="learning-engine")) is None)
-    check("no approver is not a person",
-          analyst_default(M("approved", "NETSUITE")) is None)
-    check("an unapproved default does not ship",
+def test_an_engine_default_is_a_decision_too_because_authorship_is_provenance():
+    """CHANGED 05-Aug, and this is the reason.
+
+    This test used to assert the opposite — that `analyst_default` returns None for
+    a row approved by "learning-engine". That rule shipped a Customer file
+    contradicting its own mapping screen:
+
+        Party Original System                    screen NETSUITE  file LEGACY
+        Customer Account Source System Reference screen LEGACY_SYSTEM
+                                                          file NXT000001_C1
+        Account Site Source System               screen NETSUITE  file LEGACY
+
+    All three approved, dated 05-Aug, `approved_by="learning-engine"`. Not a person
+    -> not a default -> never entered the protected set -> the linkage glue
+    overwrote all three. The twelve other constants on the same file were right,
+    only because the glue does not touch those columns.
+
+    The rule now is the one the architecture states and the analyst restated twice:
+    newest wins, authorship is provenance. The old fear — a seeded row outranking a
+    later correction — is answered by the one-row store and by date, not by who
+    signed it.
+
+    What a row still has to do is unchanged: say something, and be approved."""
+    check("an engine-approved default IS a default now",
+          analyst_default(M("approved", "NETSUITE", approved_by="learning-engine"))
+          == "NETSUITE")
+    check("so is one with no recorded approver",
+          analyst_default(M("approved", "NETSUITE")) == "NETSUITE")
+    check("an unapproved default still does not ship",
           analyst_default(M("suggested", "NETSUITE", approved_by=PERSON)) is None)
-    check("a blank default is not a default",
+    check("a blank default is still not a default",
           analyst_default(M("approved", "   ", approved_by=PERSON)) is None)
+
+
+def test_switching_an_optional_interface_on_still_takes_a_person():
+    """The other half, and why the change above is safe.
+
+    Two questions used to share one answer. WHAT VALUE a column carries no longer
+    asks who typed it. Whether an OPTIONAL child table emits rows AT ALL still
+    does — an engine-seeded constant must not be able to switch one back on, or the
+    naive fan-out that put 5,599 rows of pure linkage glue into all 19 sheets
+    returns through the back door.
+
+    `person_set_default` is that narrow rule, stated on its own so widening the
+    wide one cannot move it by accident."""
+    check("a person's constant switches the sheet on",
+          person_set_default(M("approved", "CONTACT", approved_by=PERSON)) == "CONTACT")
+    check("the engine's does not",
+          person_set_default(M("approved", "CONTACT", approved_by="learning-engine")) is None)
+    check("nor does one with no approver",
+          person_set_default(M("approved", "CONTACT")) is None)
+    check("and an unapproved one still does not",
+          person_set_default(M("suggested", "CONTACT", approved_by=PERSON)) is None)
 
 
 def test_keep_blank_is_not_applicable_with_the_default_cleared():
@@ -222,8 +263,13 @@ def test_a_constants_only_sheet_now_counts_as_carrying_data():
     out = (_ROOT / "app" / "services" / "output_service.py").read_text(encoding="utf-8")
     check("analyst constants are collected",
           "_analyst_const_field_ids = {" in out)
-    check("through the shared person-only rule",
-          "if analyst_default(m) is not None" in out)
+    # `person_set_default`, not `analyst_default`. The authorship check moved out
+    # of `analyst_default` on 05-Aug so an engine-recorded constant could hold its
+    # column against the linkage glue. Switching an OPTIONAL interface on is the
+    # one question that still wants the narrow rule, so it now names it directly
+    # instead of inheriting it — see `test_switching_an_optional_interface_on_...`.
+    check("through the person-only rule, named explicitly",
+          "if person_set_default(m) is not None" in out)
     check("and they keep the sheet alive",
           "f.id in _mapped_field_ids or f.id in _analyst_const_field_ids" in out)
 
