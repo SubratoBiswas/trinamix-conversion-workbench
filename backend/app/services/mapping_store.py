@@ -37,6 +37,7 @@ without a database.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field as _dc_field
 from datetime import datetime
@@ -72,6 +73,8 @@ DECISION_TO_KIND: dict[str, str] = {v: k for k, v in KIND_TO_DECISION.items()}
 # uploaded file, `ignore_source` is about a source column rather than a target
 # field, and `reference_standard` records a master-key format.
 DECISION_KINDS = frozenset(KIND_TO_DECISION)
+
+log = logging.getLogger(__name__)
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
@@ -560,13 +563,38 @@ def plan_write(existing: Sequence[Any], *, kind: str, when: Optional[datetime],
     itself with today: a seed re-running on every boot would then out-rank every
     instruction ever given, which is exactly what ``captured_at`` used to do.
     """
-    same_kind = [r for r in existing if getattr(r, "kind", None) == kind]
-    if not same_kind:
+    # ONE ROW PER KEY, WHATEVER THE KIND. (05-Aug)
+    #
+    # This partitioned by ``kind``: a column_mapping, an example_default and a
+    # rule for the same field were three separate rows, each with its own date,
+    # all alive at once. That is a fallback — and a fallback is something
+    # generation can reach for when the newest statement does not suit it.
+    #
+    # Receipt Routing is what it cost. A rule dated 03-Aug and a fixed value dated
+    # 04-Aug both existed; generation consulted them in code order rather than
+    # date order, and the file shipped a third value from a 13-Jul document.
+    # Three statements about one field, none of them wrong on its own.
+    #
+    # Analyst, 05-Aug: "there should be just one row for each mapping or fixed
+    # value stored with date ... so that it does not even have other previous
+    # mappings or values to refer to even if it wants."
+    #
+    # So the four DECISION_KINDS now compete for ONE row. A fixed value typed
+    # today does not outrank yesterday's rule — it REPLACES it, and
+    # record_decision deletes anything else still sitting under the key.
+    #
+    # Deliberately NOT true of the other kinds on LearnedMapping: ``crosswalk``
+    # is one row per source VALUE and must stay many-per-field, and
+    # ``file_signature``, ``ignore_source`` and ``reference_standard`` are not
+    # statements about how a field maps. find_rows_for_key already queries only
+    # the four, which is what makes collapsing them safe.
+    decisions = [r for r in existing if getattr(r, "kind", None) in DECISION_KINDS]
+    if not decisions:
         return (INSERT, None)
     # Newest first, so an edit lands on the row the resolver would have picked
     # rather than on whichever happened to be inserted first.
-    same_kind = sorted(same_kind, key=effective_of, reverse=True)
-    row = same_kind[0]
+    decisions = sorted(decisions, key=effective_of, reverse=True)
+    row = decisions[0]
     if getattr(row, "is_deleted", False) and not revive:
         # The analyst retired this. An automatic path — a seed, an auto-capture,
         # a replay — must not bring it back.
@@ -653,6 +681,15 @@ async def record_decision(*, decision: str, target_field: str,
     if action in (UPDATE, REFRESH):
         patch = {
             **shape,
+            # THE KIND MOVES WITH THE STATEMENT.
+            #
+            # One row per key means the row's kind is whatever the newest
+            # statement is: a field that carried a rule yesterday and a fixed
+            # value today is a default_value row now, not two rows. Leaving the
+            # old kind in place would have kept the row resolving as a rule while
+            # holding a constant's value — a fallback hiding inside one document.
+            "kind": kind,
+            "category": category or _DEFAULT_CATEGORY[decision],
             "captured_from": captured_from,
             "captured_by": captured_by,
             "captured_at": now,
@@ -667,8 +704,6 @@ async def record_decision(*, decision: str, target_field: str,
             # REFRESH deliberately leaves the stored date alone — the file is
             # restating itself, not saying something new.
             patch["effective_date"] = when
-        if category:
-            patch["category"] = category
         if sheets is not None:
             patch["sheets"] = _merge_sheets(getattr(row, "sheets", None), sheets)
         if exclude_sheets is not None:
@@ -677,7 +712,27 @@ async def record_decision(*, decision: str, target_field: str,
         if revive and getattr(row, "is_deleted", False):
             patch.update({"is_deleted": False, "deleted_at": None,
                           "deleted_by": None})
+        # ARCHIVE THE STATEMENT THIS REPLACES, BEFORE IT IS OVERWRITTEN.
+        #
+        # One row per key means a newer statement lands ON the existing row, so
+        # the older one does not get deleted — it gets mutated out of existence.
+        # Archiving only the rows _delete_other_decisions removes would therefore
+        # have caught almost nothing: in the ordinary two-statement case there IS
+        # no second row, and the previous decision would vanish with no trace at
+        # all. That is worse than the hard delete it was meant to soften.
+        #
+        # REFRESH is excluded on purpose: that is the same dated file restating
+        # itself, not a new statement, so there is nothing being superseded.
+        if action == UPDATE:
+            try:
+                await _archive(row, superseded_by=getattr(row, "id", None),
+                               reason="superseded")
+            except Exception:  # noqa: BLE001 — never fail a write over the trail
+                log.exception("could not archive the previous decision for %r",
+                              target_field)
         await row.set(patch)
+        await _delete_other_decisions(row, target_field=target_field,
+                                      client_id=client_id, source_erp=source_erp)
         return row
 
     row = LearnedMapping(
@@ -697,7 +752,155 @@ async def record_decision(*, decision: str, target_field: str,
         **shape,
     )
     await row.insert()
+    await _delete_other_decisions(row, target_field=target_field,
+                                  client_id=client_id, source_erp=source_erp)
     return row
+
+
+async def _delete_other_decisions(keep, *, target_field: str, client_id: Any,
+                                  source_erp: str | None) -> int:
+    """Remove every OTHER decision row under this key. Returns how many went.
+
+    "There should be just one row for each mapping or fixed value stored with
+    date ... so that it does not even have other previous mappings or values to
+    refer to even if it wants" — analyst, 05-Aug. The point is not tidiness. A
+    row that still exists is a row some future code path can read, and every
+    screen-versus-file bug in this tool has been two stored statements
+    disagreeing. Deleting the losers is what makes the winner unambiguous
+    structurally rather than by everybody remembering to sort by date.
+
+    ARCHIVED, NOT DELETED — analyst, 05-Aug: "keep the older rules in archival
+    currently, do not hard delete it but do not fall back to it, we will delete
+    it after testing." The row is copied into ``ArchivedMappingDecision`` and
+    removed from ``LearnedMapping``, so the guarantee is unchanged — the resolver
+    queries LearnedMapping and finds exactly one row — while the trail survives
+    until the analyst is satisfied.
+
+    A separate COLLECTION rather than a flag, deliberately. A flag would leave
+    the superseded statement sitting in the collection every reader already
+    queries, which is the fallback this whole change exists to remove. Switching
+    to a hard delete later is one branch here, not a rewrite.
+
+    Only the four DECISION_KINDS are touched. Crosswalks are one row per source
+    VALUE and must stay many-per-field; file signatures, ignore_source and
+    reference standards are not statements about how a field maps.
+    """
+    rows = await find_rows_for_key(target_field=target_field, client_id=client_id,
+                                   source_erp=source_erp, include_deleted=True)
+    gone = 0
+    for other in rows:
+        if getattr(other, "id", None) == getattr(keep, "id", None):
+            continue
+        if getattr(other, "kind", None) not in DECISION_KINDS:
+            continue
+        try:
+            await _archive(other, superseded_by=getattr(keep, "id", None),
+                           reason="superseded")
+            await other.delete()
+            gone += 1
+        except Exception:  # noqa: BLE001 — a failed cleanup must not fail the write
+            log.exception("could not archive superseded decision %s for %r",
+                          getattr(other, "id", None), target_field)
+    if gone:
+        log.info("one-row store: archived %d superseded decision(s) for %r",
+                 gone, target_field)
+    return gone
+
+
+async def _archive(row, *, superseded_by=None, reason: str = "superseded") -> None:
+    """Copy a decision into the archive collection before it leaves the store.
+
+    Raises on failure, so the caller does NOT delete a row it could not archive —
+    losing a decision silently is the one outcome worse than keeping a duplicate.
+    """
+    from app.models.learned import ArchivedMappingDecision
+
+    await ArchivedMappingDecision(
+        kind=getattr(row, "kind", "") or "",
+        category=getattr(row, "category", None),
+        original_value=getattr(row, "original_value", None),
+        resolved_value=getattr(row, "resolved_value", None),
+        target_object=getattr(row, "target_object", None),
+        target_field=getattr(row, "target_field", None),
+        rule_type=getattr(row, "rule_type", None),
+        rule_config=getattr(row, "rule_config", None),
+        client_id=getattr(row, "client_id", None),
+        is_global=bool(getattr(row, "is_global", False)),
+        project_id=getattr(row, "project_id", None),
+        captured_from=getattr(row, "captured_from", None),
+        captured_by=getattr(row, "captured_by", None),
+        captured_at=getattr(row, "captured_at", None),
+        effective_date=getattr(row, "effective_date", None),
+        source_erp=getattr(row, "source_erp", None),
+        sheets=list(getattr(row, "sheets", None) or []),
+        exclude_sheets=list(getattr(row, "exclude_sheets", None) or []),
+        is_deleted=bool(getattr(row, "is_deleted", False)),
+        original_id=getattr(row, "id", None),
+        superseded_by=superseded_by,
+        reason=reason,
+    ).insert()
+
+
+async def collapse_existing_decisions(dry_run: bool = False) -> dict:
+    """Bring data written BEFORE the one-row rule into line. Idempotent.
+
+    ``plan_write`` now keeps a single decision row per (client, source, field),
+    but that only applies from the next write onwards. Everything stored under
+    the old shape still carries up to four live rows per field — one per kind —
+    and those are exactly the fallbacks this change exists to remove. A key
+    nobody happens to edit again would keep them forever.
+
+    So: for every key, keep the newest decision and delete the rest. Same rule as
+    the writer, applied to history once.
+
+    A RETIRED row is kept if it is the newest, because the tombstone is itself
+    the analyst's latest statement about that field and removing it would revive
+    what they retired.
+
+    Losers are ARCHIVED, not deleted — see ``_archive``. ``dry_run=True`` reports
+    what would move without touching anything.
+    """
+    from app.models.learned import LearnedMapping
+
+    rows = await LearnedMapping.find(
+        {"kind": {"$in": sorted(DECISION_KINDS)}},
+        {"target_field": {"$ne": None}},
+        include_deleted=True,
+    ).to_list()
+
+    by_key: dict[tuple, list] = {}
+    for row in rows:
+        key = (client_key(getattr(row, "client_id", None)),
+               normalise_source(getattr(row, "source_erp", None)),
+               normalise_field(getattr(row, "target_field", None)))
+        by_key.setdefault(key, []).append(row)
+
+    kept = removed = 0
+    collapsed_keys = 0
+    for key, group in by_key.items():
+        kept += 1
+        if len(group) < 2:
+            continue
+        collapsed_keys += 1
+        # Newest first — the same ordering the resolver uses, so the survivor is
+        # the row that was already winning. This must not change any answer; it
+        # removes the losers, it does not promote one.
+        group = sorted(group, key=effective_of, reverse=True)
+        for loser in group[1:]:
+            removed += 1
+            if not dry_run:
+                try:
+                    await _archive(loser, superseded_by=getattr(group[0], "id", None),
+                                   reason="collapsed")
+                    await loser.delete()
+                except Exception:  # noqa: BLE001
+                    log.exception("could not archive/collapse decision %s",
+                                  getattr(loser, "id", None))
+    log.info("one-row store: %d key(s), %d had duplicates, %d row(s) %s",
+             kept, collapsed_keys, removed,
+             "would be archived" if dry_run else "archived")
+    return {"keys": kept, "keys_with_duplicates": collapsed_keys,
+            "rows_removed": removed, "dry_run": dry_run}
 
 
 async def record_reference_standard(*, target_object: str | None,

@@ -26,7 +26,7 @@ async def init_db() -> None:
         GoldStandard,
     )
     from app.models.mapping import MappingSuggestion
-    from app.models.learned import LearnedMapping
+    from app.models.learned import ArchivedMappingDecision, LearnedMapping
     from app.models.mapping_proposal import MappingProposal
     from app.models.candidate_verdict import CandidateVerdict
     from app.models.dq_rule import DataQualityRule
@@ -56,6 +56,11 @@ async def init_db() -> None:
             FBDITemplate, FBDISheet, FBDIField, FBDITemplateFile, OracleLookup,
             GoldStandard,
             MappingSuggestion, LearnedMapping, MappingProposal, CandidateVerdict,
+            # The holding pen for superseded decisions. Registered so the
+            # collection exists and can be inspected; NOTHING reads it — see
+            # ArchivedMappingDecision for why it is a separate collection and
+            # not a flag on the row.
+            ArchivedMappingDecision,
             # Registered so its UNIQUE index is actually BUILT. A number that
             # must never be issued twice depends on that index existing, and a
             # model Beanie never initialises has no indexes at all — the

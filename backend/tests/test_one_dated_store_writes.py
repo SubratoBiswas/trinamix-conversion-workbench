@@ -91,14 +91,40 @@ def test_a_retired_row_is_checked_before_the_date():
                       when=d(13))[0] == SKIP_RETIRED
 
 
-def test_the_four_decisions_are_separate_rows_that_compete_by_date():
-    """One field holds at most one live column mapping, one default, one
-    suppression and one rule. They are four statements about one field, and the
-    resolver picks the latest — so writing a default must not stamp on the
-    column mapping."""
+def test_one_field_holds_exactly_one_decision_whatever_its_kind():
+    """MOVED 05-Aug. Was test_the_four_decisions_are_separate_rows_that_compete_by_date.
+
+    It asserted that a column mapping, a default, a suppression and a rule were
+    FOUR live rows for one field, competing by date at read time. That is a
+    fallback: four stored answers, and whichever code path asks first decides.
+
+    Receipt Routing is what it cost. A rule dated 03-Aug and a fixed value dated
+    04-Aug both existed; generation consulted them in code order rather than date
+    order, and the file shipped a third value from a 13-Jul document.
+
+    Analyst, 05-Aug: "there should be just one row for each mapping or fixed value
+    stored with date ... so that it does not even have other previous mappings or
+    values to refer to even if it wants."
+
+    So the four kinds now compete for ONE row. A default written today lands on
+    the column mapping's row and replaces it; an older statement of any kind is
+    still refused. The assertion is not relaxed — it is the same date rule, with
+    the kind no longer able to carve out a second row to hide in.
+    """
     column = Row(kind="column_mapping", effective_date=d(31), tag="column")
-    assert plan_write([column], kind="example_default", when=d(13))[0] == INSERT
+    action, row = plan_write([column], kind="example_default", when=d(2, month=8))
+    assert (action, row) == (UPDATE, column), "a newer default must REPLACE the row"
+    assert plan_write([column], kind="example_default", when=d(13))[0] == SKIP_OLDER
     assert plan_write([column], kind="column_mapping", when=d(13))[0] == SKIP_OLDER
+
+
+def test_a_kind_that_is_not_a_mapping_decision_never_collapses_the_row():
+    """Crosswalks are one row per source VALUE and must stay many-per-field;
+    file signatures and reference standards are not statements about how a field
+    maps. Only the four DECISION_KINDS compete for the single row — find_rows_for_key
+    already queries only those, and plan_write must agree."""
+    crosswalk = Row(kind="crosswalk", effective_date=d(31), tag="xwalk")
+    assert plan_write([crosswalk], kind="example_default", when=d(13))[0] == INSERT
 
 
 def test_the_edit_lands_on_the_row_the_resolver_would_have_picked():

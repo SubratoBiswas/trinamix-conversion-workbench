@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=LATEST DATE WINS, now on BOTH write paths - so all five modules. There are only two writers in this tool: _transform_frame, which Supplier, Customer, Item and BOM all use, and the HDL writer, which Employee uses. The same test was wrong in FOUR places and every one of them only counted a bound source column, so a fixed value the analyst typed was invisible: the strategy-overlay guard, the transformation-rule branch, the control-defaults explicit set, and the HDL writer which had no date test at all. All four now rank by date - an approved mapping or fixed value beats anything older and loses to anything newer, undated loses to dated, suggested is not a statement. No per-object copies remain. Suite 1280 passing, 13 skipped, 0 failing. REGENERATE everything."
+set "DEPLOY_NOTE=Adds the admin endpoint that RUNS the one-row migration - POST /api/settings/collapse-decisions, dry_run defaults to TRUE so running it by accident reports and changes nothing. It is an endpoint rather than a script because the deploy box has no Python environment and the only machine that can reach Mongo is the running service. Administrators only - the settings router is mounted under ADMIN and a test asserts that. Also fixes the archive sweep to read the AST rather than the file text: a docstring that MENTIONS ArchivedMappingDecision is documentation, not a reader, and counting the mention is the same mistake three tests made when a comment quoted the expression being counted. Suite 1301 passing, 13 skipped, 0 failing."
 
 echo Checking the deploy set...
 set "MISSING="

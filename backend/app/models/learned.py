@@ -88,3 +88,62 @@ class LearnedMapping(Document):
         if include_deleted:
             return super().find_all(*args, **kwargs)
         return super().find({"is_deleted": {"$ne": True}}, *args, **kwargs)
+
+
+class ArchivedMappingDecision(Document):
+    """A superseded mapping decision, kept out of the way.
+
+    THE POINT IS THAT NOTHING READS THIS.
+
+    The store holds exactly one live decision per (client, source, field). When a
+    newer statement arrives the older one is moved HERE and removed from
+    ``LearnedMapping`` — so the guarantee is structural: the resolver queries
+    LearnedMapping and there is only ever one row to find. Making this a flag on
+    the row instead would have left the old statement sitting in the collection
+    every reader already queries, which is the fallback the whole change exists
+    to remove.
+
+    Analyst, 05-Aug: "keep the older rules in archival currently, do not hard
+    delete it but do not fall back to it, we will delete it after testing."
+
+    So this is a holding pen with a deliberate end date, not a second store.
+    Nothing in generation, mapping, learning or the UI may read it. When the
+    analyst is satisfied, the collection is dropped and `_delete_other_decisions`
+    goes back to deleting outright — the code for that is one branch, not a
+    rewrite.
+
+    The original ``_id`` is kept as ``original_id`` so a row can be traced back,
+    and ``superseded_by`` records which decision replaced it.
+    """
+    kind: str
+    category: Optional[str] = None
+    original_value: Optional[str] = None
+    resolved_value: Optional[str] = None
+    target_object: Optional[str] = None
+    target_field: Optional[str] = None
+    rule_type: Optional[str] = None
+    rule_config: Optional[dict] = None
+    client_id: Optional[PydanticObjectId] = None
+    is_global: bool = False
+    project_id: Optional[PydanticObjectId] = None
+    captured_from: Optional[str] = None
+    captured_by: Optional[str] = None
+    captured_at: Optional[datetime] = None
+    effective_date: Optional[datetime] = None
+    source_erp: Optional[str] = None
+    sheets: list = Field(default_factory=list)
+    exclude_sheets: list = Field(default_factory=list)
+    is_deleted: bool = False
+
+    #: The row this used to be, so it can be traced or restored by hand.
+    original_id: Optional[PydanticObjectId] = None
+    #: The decision that replaced it.
+    superseded_by: Optional[PydanticObjectId] = None
+    #: Why it left: "superseded" (a newer statement) or "collapsed" (the one-off
+    #: migration bringing pre-existing history into line).
+    reason: str = "superseded"
+    archived_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "archived_mapping_decisions"
+        indexes = ["target_field", "client_id", "archived_at"]
