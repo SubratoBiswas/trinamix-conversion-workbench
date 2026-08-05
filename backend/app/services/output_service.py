@@ -2454,15 +2454,40 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # capturing across ~1200 fields is hundreds of Mongo upserts per generate and
     # contributes nothing to the file that was just written; it's what made the
     # request hang. Their learnings are already captured when gold is applied.
+    #
+    # NOT AWAITED. It is one Mongo upsert per mapped field, in sequence, and the
+    # file it contributes nothing to is already on disk by the time it starts.
+    #
+    # Measured live on 05-Aug: a Supplier Site generate wrote its artifact at 150s
+    # and the API went on reporting "generating" past 410s. The file was complete
+    # and downloadable for that entire four minutes — I downloaded it while the
+    # poller still said the run was in progress. Every second of that was this
+    # pass. The skip above already concedes the point for objects over 300 fields;
+    # Supplier Site has 211, so it paid in full.
+    #
+    # The deliverable is the artifact. Learning capture is a side effect, and a
+    # side effect does not get to hold the deliverable hostage — so it runs after
+    # the return, and a failure is logged rather than raised. If the worker dies
+    # mid-capture, the learnings are lost and the file is not, which is the right
+    # way round; nothing downstream reads them synchronously.
     if not _heavy:
+        async def _capture() -> None:
+            try:
+                from app.services.learning_service import capture_learnings_from_conversion
+                await capture_learnings_from_conversion(conversion)
+            except Exception:  # noqa: BLE001
+                # Silence here means nothing was learned from a completed
+                # conversion and the analyst is never told.
+                log.exception("capture_learnings_from_conversion failed for conversion "
+                              "%s — nothing was learned from this generate",
+                              conversion.id)
+
         try:
-            from app.services.learning_service import capture_learnings_from_conversion
-            await capture_learnings_from_conversion(conversion)
-        except Exception as _cl_exc:  # noqa: BLE001
-            # Same reasoning as the apply pass above: silence here means nothing was
-            # learned from a completed conversion and the analyst is never told.
-            log.exception("capture_learnings_from_conversion failed for conversion %s "
-                          "— nothing was learned from this generate", conversion.id)
+            asyncio.get_running_loop().create_task(_capture())
+        except RuntimeError:
+            # No running loop (a script or a sync test). Do it inline rather than
+            # dropping it — correctness first where there is nobody waiting.
+            await _capture()
     return artefact
 
 
