@@ -1585,29 +1585,6 @@ def analyst_default(m) -> str | None:
     return str(dv)
 
 
-def person_set_default(m) -> str | None:
-    """`analyst_default`, narrowed to a decision a PERSON made. Or None.
-
-    Exists because two different questions used to share one answer, and widening
-    the answer for the first would have silently changed the second:
-
-      1. WHAT VALUE does this column carry, and may the linkage glue overwrite it?
-         Authorship is irrelevant -- see `analyst_default`. Newest wins.
-      2. Does an OPTIONAL interface emit rows at all?
-         Here authorship still decides, and deliberately. An engine-seeded default
-         switching a child table on is how "5,599 rows into all 19 sheets" comes
-         back -- thousands of rows of pure linkage glue with no real content, which
-         is the thing the suppression exists to prevent.
-
-    Only question 2 calls this. Stated as its own rule rather than left riding on
-    `analyst_default`'s authorship check, so that widening one cannot move the
-    other by accident. That coupling is precisely what made the 05-Aug Customer
-    fix look risky.
-    """
-    dv = analyst_default(m)
-    return dv if (dv is not None and _by_a_person(m)) else None
-
-
 def analyst_keeps_blank(m) -> bool:
     """Keep blank: not_applicable with the default cleared, decided by a person.
 
@@ -2300,16 +2277,31 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # (which does not); Relationship Type and Relationship Code reached neither
     # HZ_IMP_RELSHIPS_T nor HZ_IMP_ACCOUNTRELS.
     #
-    # Person-set only, deliberately: an engine-seeded default must not be able to
-    # switch an optional interface back on, or the 19-sheets-of-linkage-glue problem
-    # this suppression exists to prevent returns through the back door.
+    # ANY decided constant switches an optional interface on, whoever recorded it.
     #
-    # `person_set_default`, NOT `analyst_default`. The authorship check moved out of
-    # `analyst_default` on 05-Aug so that an engine-recorded constant could hold its
-    # column against the linkage glue; this line is the one caller that still wants
-    # the narrow rule, and it now says so itself instead of inheriting it.
+    # This used to be person-set only, to stop an engine-seeded default reopening a
+    # child table. Reviewed 05-Aug against the produced files and reversed, because
+    # the narrow rule was silently dropping four constants the analyst had set:
+    #
+    #     Role Type = CONTACT             -> HZ_IMP_CONTACTROLES   never shipped
+    #     Relationship Type = CUSTOMER    -> HZ_IMP_RELSHIPS_T     never shipped
+    #     Relationship Code = CONTACT_OF  -> HZ_IMP_RELSHIPS_T     never shipped
+    #     Account Relationship Set = STANDARD                      never shipped
+    #
+    # all recorded `approved_by="learning-engine"`, which is how a constant reaches
+    # a conversion once it is in the library — so in practice the narrow rule
+    # dropped everything except a value typed into this very conversion's grid.
+    # Tejaswini asked for exactly this on 31-Jul: "Role Type … set … for both
+    # target sheets, however it only reflects in the HZ_IMP_ACCTCONTACTS_T sheet
+    # and not in HZ_IMP_CONTACTROLES."
+    #
+    # The blast radius is bounded and was measured before the change: of the 15
+    # interfaces NextPower loads, 11 already emitted and these 4 did not. The four
+    # the analyst EXCLUDED are held out by load scope, which is a different
+    # mechanism and unaffected — a constant set on one of those still ships
+    # nowhere, by design.
     _analyst_const_field_ids = {
-        tid for tid, m in _best_m.items() if person_set_default(m) is not None
+        tid for tid, m in _best_m.items() if analyst_default(m) is not None
     }
 
     def _sheet_carries_data(s) -> bool:

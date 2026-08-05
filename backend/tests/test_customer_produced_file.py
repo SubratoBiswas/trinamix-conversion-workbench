@@ -110,6 +110,19 @@ _GLUE_FIELD = "Party Original System"
 _GLUE_VALUE = "PROBE-ENGINE-CONSTANT"
 _ENGINE = "learning-engine"
 
+# A THIRD probe, on an OPTIONAL in-scope interface that nothing else touches, to
+# prove an engine-recorded constant switches it on. Tejaswini, 31-Jul: "Role Type
+# … set … for both target sheets, however it only reflects in the
+# HZ_IMP_ACCTCONTACTS_T sheet and not in HZ_IMP_CONTACTROLES."
+_OPT_SHEET = "HZ_IMP_CONTACTROLES"
+_OPT_FIELD = "Role Type"
+_OPT_VALUE = "PROBE-ROLE"
+
+# And a FOURTH, on an interface the analyst EXCLUDED. Load scope is the guard now
+# that authorship no longer is, so a constant here must still ship nowhere.
+_EXCL_SHEET = "RA_CUSTOMER_BANKS_INT_ALL"
+_EXCL_VALUE = "PROBE-EXCLUDED"
+
 
 def check(name, cond, detail=""):
     if cond:
@@ -188,6 +201,27 @@ async def _build_conversion(tmp: Path):
     await MappingSuggestion(conversion_id=conversion.id,
                             target_field_id=gfield.id,
                             default_value=_GLUE_VALUE,
+                            confidence=1.0, status="approved",
+                            approved_by=_ENGINE).insert()
+
+    async def _engine_const(sheet_name: str, field_name: str, value: str):
+        for f in fields.get(sheet_name, []):
+            if f.field_name == field_name or (f.display_name or "") == field_name:
+                await MappingSuggestion(conversion_id=conversion.id,
+                                        target_field_id=f.id, default_value=value,
+                                        confidence=1.0, status="approved",
+                                        approved_by=_ENGINE).insert()
+                return True
+        return False
+
+    check(f"{_OPT_SHEET} has {_OPT_FIELD}",
+          await _engine_const(_OPT_SHEET, _OPT_FIELD, _OPT_VALUE))
+    # Any field will do on the excluded tab — the point is that scope, not the
+    # field, is what keeps it out.
+    _excl = fields.get(_EXCL_SHEET) or []
+    check(f"{_EXCL_SHEET} is in the template", bool(_excl))
+    await MappingSuggestion(conversion_id=conversion.id,
+                            target_field_id=_excl[-1].id, default_value=_EXCL_VALUE,
                             confidence=1.0, status="approved",
                             approved_by=_ENGINE).insert()
     return conversion
@@ -350,6 +384,43 @@ def test_a_constant_the_engine_recorded_is_not_overwritten_by_the_linkage_glue()
         check(f"{name} row {r}: {_GLUE_FIELD} is the recorded constant",
               got == _GLUE_VALUE,
               f"got {got!r} — the glue overwrote a decided column")
+
+
+def test_an_engine_constant_switches_an_optional_interface_on():
+    """Tejaswini's 31-Jul row 31, closed against a produced file.
+
+    An optional child interface emits rows when something is decided for it. That
+    used to require a PERSON, which in practice meant "typed into this grid" —
+    every constant arriving from the library carries `approved_by=learning-engine`.
+    So `Role Type = CONTACT` set for both target sheets reached
+    HZ_IMP_ACCTCONTACTS_T (which has mapped columns anyway) and never reached
+    HZ_IMP_CONTACTROLES, which is precisely what was reported."""
+    name = next(n for n in _generated()["headerless"] if _iface_of(n) == _OPT_SHEET)
+    rows = _generated()["headerless"][name]
+    check(f"{name} carries rows", bool(rows),
+          "an optional interface with a decided constant shipped headers-only")
+    order = [str(c).strip() for c in _SHEETS[_OPT_SHEET]["csv_order"]]
+    i = next((k for k, c in enumerate(order) if c.strip().lstrip("*") == _OPT_FIELD), None)
+    check(f"{_OPT_FIELD} is in the spec for {_OPT_SHEET}", i is not None)
+    got = rows[0][i].strip() if i < len(rows[0]) else "(missing)"
+    check(f"{name}: {_OPT_FIELD} carries the constant", got == _OPT_VALUE,
+          f"got {got!r}")
+
+
+def test_load_scope_still_holds_an_excluded_interface_out():
+    """The other guard, now that authorship is not one.
+
+    A constant on RA_CUSTOMER_BANKS_INT_ALL must ship nowhere: the analyst named
+    the fifteen interfaces this client loads and that one is not among them. If
+    widening the constant rule ever reopens an excluded tab, this is the test that
+    says so."""
+    names = set(_generated()["headerless"])
+    for n in names:
+        check(f"{n} is not the excluded tab", _iface_of(n) != _EXCL_SHEET)
+    for n, rows in _generated()["headerless"].items():
+        for r, row in enumerate(rows):
+            check(f"{n} row {r} does not carry the excluded constant",
+                  _EXCL_VALUE not in [c.strip() for c in row])
 
 
 # ---------------------------------------------------------------------------

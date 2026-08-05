@@ -9,7 +9,7 @@ from beanie import PydanticObjectId
 from app.ai import get_mapping_provider
 from app.ai.base import SourceColumn, TargetField
 from app.models.dataset import Dataset, DatasetColumnProfile
-from app.models.fbdi import FBDIField, FBDITemplate
+from app.models.fbdi import FBDIField, FBDISheet, FBDITemplate
 from app.models.mapping import MappingSuggestion
 from app.models.conversion import Conversion
 from app.parsers import parse_tabular
@@ -928,6 +928,44 @@ async def enrich_mapping_with_samples(
     else:
         fields = []
     fields_by_id = {f.id: f for f in fields}
+
+    # WHICH INTERFACE this field belongs to, and whether that interface is one the
+    # client actually loads.
+    #
+    # Customer's Oracle template ships 19 interface tables and NextPower loads 15.
+    # A constant set on one of the other four is accepted by the grid, shows as
+    # approved, and ships nowhere — measured 05-Aug on live packages:
+    #
+    #     Receipt Method = EMAIL          -> RA_CUST_PAY_METHOD_INT_ALL   excluded
+    #     Bank Account Country Code = US  -> RA_CUSTOMER_BANKS_INT_ALL    excluded
+    #
+    # The exclusion is right (Tejaswini, 31-Jul). What was wrong is that the screen
+    # gave the analyst no way to know, so the work looked done. `response_model`
+    # strips anything the schema does not name, so both fields are declared on
+    # MappingOut — the mapping_sync lesson.
+    sheet_name_by_id: dict[Any, str] = {}
+    if template:
+        for _s in await FBDISheet.find(FBDISheet.template_id == template.id).to_list():
+            sheet_name_by_id[_s.id] = _s.sheet_name
+    _is_customer = "customer" in str(getattr(conversion, "target_object", "") or "").lower()
+    _in_scope_cache: dict[str, bool] = {}
+
+    def _scope_of(sheet: str | None) -> bool:
+        # Only Customer carries a load scope today. Everything else is in scope,
+        # rather than asking a Customer spec about a Supplier tab and trusting its
+        # unknown-sheet fallback to be kind.
+        if not _is_customer or not sheet:
+            return True
+        if sheet not in _in_scope_cache:
+            try:
+                from app.services.supplier_fbdi_layout import customer_in_load_scope
+                _in_scope_cache[sheet] = bool(customer_in_load_scope(sheet))
+            except Exception:  # noqa: BLE001
+                # A spec that cannot be read must never make the screen claim a
+                # field is dead. Same rule the layout itself follows.
+                _in_scope_cache[sheet] = True
+        return _in_scope_cache[sheet]
+
     out: list[dict[str, Any]] = []
     for m in mappings:
         tgt = fields_by_id.get(m.target_field_id)
@@ -948,6 +986,9 @@ async def enrich_mapping_with_samples(
             "review_required": m.review_required, "status": m.status,
             "default_value": m.default_value, "comment": m.comment,
             "approved_by": m.approved_by, "approved_at": m.approved_at,
+            "target_sheet": sheet_name_by_id.get(getattr(tgt, "sheet_id", None)) if tgt else None,
+            "target_in_load_scope": _scope_of(
+                sheet_name_by_id.get(getattr(tgt, "sheet_id", None)) if tgt else None),
             "sample_source_values": sample_src, "sample_converted_values": [],
         })
     return out

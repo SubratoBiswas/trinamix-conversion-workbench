@@ -32,6 +32,12 @@ class MappingOut(ApiOut):
     # which is how mapping_sync came to be silently dropped.
     derived: bool = False
     derived_from: Optional[str] = None
+    # Which Oracle interface this field lives on, and whether the client loads it.
+    # Customer's template ships 19 interfaces and NextPower loads 15; a constant set
+    # on one of the other four is accepted, reads approved, and ships nowhere.
+    # Declared here for the same reason `derived` is.
+    target_sheet: Optional[str] = None
+    target_in_load_scope: bool = True
     sample_source_values: list[Any] = []
     sample_converted_values: list[Any] = []
 

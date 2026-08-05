@@ -622,6 +622,18 @@ export interface MappingSuggestion {
    */
   derived?: boolean;
   derived_from?: string | null;
+  /**
+   * Which Oracle interface this field lives on, and whether the client loads it.
+   *
+   * Customer's template ships 19 interface tables; NextPower loads 15
+   * (Tejaswini, 31-Jul: "they are working on 15 files only"). A constant set on
+   * one of the other four is accepted, reads approved, and ships nowhere — two
+   * were found that way on 05-Aug, Receipt Method = EMAIL and Bank Account
+   * Country Code = US. The exclusion is correct; the screen saying nothing about
+   * it was not. `target_in_load_scope === false` is what the grid badges.
+   */
+  target_sheet?: string | null;
+  target_in_load_scope?: boolean;
   // Cross-source Mapping Knowledge Bank provenance. When kb_source is set,
   // the row was pre-filled from a prior project on the same source ERP.
   // The Mapping Review UI shows a "🧠 from {Source} KB" badge and counts

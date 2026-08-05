@@ -3235,6 +3235,20 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                           ƒ rule
                         </span>
                       )}
+                      {/* This interface is not one the client loads, so anything
+                          decided here ships nowhere. Two constants were found in
+                          exactly that state on 05-Aug — Receipt Method = EMAIL and
+                          Bank Account Country Code = US, both approved, both absent
+                          from every generated file. The exclusion is correct; the
+                          screen being silent about it was not. */}
+                      {mapping?.target_in_load_scope === false && (
+                        <span
+                          className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-bold text-amber-800"
+                          title={`${mapping.target_sheet || "This interface"} is not one of the interfaces this client loads, so a value set here will not appear in any generated file.`}
+                        >
+                          ⚠ not loaded
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 font-mono text-[10px] text-ink-muted">
                       <span>

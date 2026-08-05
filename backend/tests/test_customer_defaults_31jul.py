@@ -54,7 +54,7 @@ from app.services.customer_structure_service import (                  # noqa: E
     apply_to_frame, level_for_sheet,
 )
 from app.services.output_service import (                              # noqa: E402
-    analyst_default, analyst_keeps_blank, person_set_default,
+    analyst_default, analyst_keeps_blank,
 )
 from app.services.learning_service import sheet_allowed                # noqa: E402
 
@@ -128,25 +128,34 @@ def test_an_engine_default_is_a_decision_too_because_authorship_is_provenance():
           analyst_default(M("approved", "   ", approved_by=PERSON)) is None)
 
 
-def test_switching_an_optional_interface_on_still_takes_a_person():
-    """The other half, and why the change above is safe.
+def test_switching_an_optional_interface_on_does_not_take_a_person_either():
+    """The other half, decided 05-Aug after reading the produced files.
 
-    Two questions used to share one answer. WHAT VALUE a column carries no longer
-    asks who typed it. Whether an OPTIONAL child table emits rows AT ALL still
-    does — an engine-seeded constant must not be able to switch one back on, or the
-    naive fan-out that put 5,599 rows of pure linkage glue into all 19 sheets
-    returns through the back door.
+    Whether an OPTIONAL child table emits rows was person-set only, to stop a
+    seeded default reopening a table the suppression had closed. Measured against
+    the real Customer packages, that rule was dropping four constants the analyst
+    had set:
 
-    `person_set_default` is that narrow rule, stated on its own so widening the
-    wide one cannot move it by accident."""
-    check("a person's constant switches the sheet on",
-          person_set_default(M("approved", "CONTACT", approved_by=PERSON)) == "CONTACT")
-    check("the engine's does not",
-          person_set_default(M("approved", "CONTACT", approved_by="learning-engine")) is None)
-    check("nor does one with no approver",
-          person_set_default(M("approved", "CONTACT")) is None)
-    check("and an unapproved one still does not",
-          person_set_default(M("suggested", "CONTACT", approved_by=PERSON)) is None)
+        Role Type = CONTACT              -> HZ_IMP_CONTACTROLES  shipped empty
+        Relationship Type = CUSTOMER     -> HZ_IMP_RELSHIPS_T    shipped empty
+        Relationship Code = CONTACT_OF   -> HZ_IMP_RELSHIPS_T    shipped empty
+        Account Relationship Set = STANDARD                      shipped empty
+
+    every one `approved_by="learning-engine"` — which is simply how a constant
+    reaches a conversion once it is in the library. So the narrow rule was not
+    filtering seeds from decisions; it was filtering LIBRARY decisions from
+    grid-typed ones, and Tejaswini's 31-Jul row 31 is a complaint about exactly
+    that.
+
+    The guard against 19-sheets-of-glue is now load scope alone, which is a
+    different mechanism: the four interfaces the analyst excluded stay excluded no
+    matter what constant is set on them. `test_the_excluded_interfaces_...`
+    covers that end."""
+    for who in (PERSON, "learning-engine", None):
+        check(f"a constant approved by {who or 'nobody'} switches the sheet on",
+              analyst_default(M("approved", "CONTACT", approved_by=who)) == "CONTACT")
+    check("an unapproved one still does not",
+          analyst_default(M("suggested", "CONTACT", approved_by=PERSON)) is None)
 
 
 def test_keep_blank_is_not_applicable_with_the_default_cleared():
@@ -263,13 +272,8 @@ def test_a_constants_only_sheet_now_counts_as_carrying_data():
     out = (_ROOT / "app" / "services" / "output_service.py").read_text(encoding="utf-8")
     check("analyst constants are collected",
           "_analyst_const_field_ids = {" in out)
-    # `person_set_default`, not `analyst_default`. The authorship check moved out
-    # of `analyst_default` on 05-Aug so an engine-recorded constant could hold its
-    # column against the linkage glue. Switching an OPTIONAL interface on is the
-    # one question that still wants the narrow rule, so it now names it directly
-    # instead of inheriting it — see `test_switching_an_optional_interface_on_...`.
-    check("through the person-only rule, named explicitly",
-          "if person_set_default(m) is not None" in out)
+    check("through the one decided-constant rule, authorship-free",
+          "if analyst_default(m) is not None" in out)
     check("and they keep the sheet alive",
           "f.id in _mapped_field_ids or f.id in _analyst_const_field_ids" in out)
 
