@@ -80,12 +80,70 @@ def test_the_strategy_constant_still_fills_a_field_nobody_has_set():
     assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
 
 
-def test_an_engine_approval_does_not_count_as_a_person():
-    """The learning engine approves what it applies. If that counted, a seeded
-    mapping would outrank the analyst's own later correction — the defect the
-    _by_a_person test was added for."""
+def test_an_engine_approval_dated_after_the_strategy_file_now_wins():
+    """MOVED 05-Aug, from DIRECT to 3. The behaviour changed on purpose.
+
+    This asserted that an engine approval could never outrank a strategy constant,
+    on the reasoning that a SEEDED row must not re-populate a field a correction
+    had declared blank. The instinct was right and the rule was wrong: it made
+    AUTHORSHIP decisive, which is the opposite of what this architecture says
+    about itself — "newest wins; authorship is provenance only".
+
+    Measured live on NextPower Supplier Test / Supplier Site: all seven strategy
+    constants were overriding the value on screen, and three of them differed.
+    Every one of those rows was approved, carried a fixed value, and was dated
+    03/04-Aug. The directive that beat them is dated 13-JUL. It won solely because
+    the newer statement was stamped "learning-engine" — provenance, not a date.
+    The analyst reported it as "the mappings in the UI do not reach the output",
+    across supplier, customer, BOM, Item and Employee.
+
+    The case the old rule protected is a date question too — see
+    test_a_seeded_row_older_than_the_directive_still_loses. A seed carries the
+    date it was seeded, which was older than the correction, so it loses on its
+    own merits without needing an authorship test.
+
+    Confirmed by Subrato, 05-Aug: date wins, as the architecture says.
+    """
     out = run([M(1, dv="3", by="learning-engine")], {1: F(1, "Receipt Routing")})
+    assert list(out["Receipt Routing"]) == ["3", "3"]
+
+
+def test_a_seeded_row_older_than_the_directive_still_loses():
+    """The defect the authorship test was originally added for, now decided by
+    date. Supplier Name New carried the supplier name on all 3,872 rows because a
+    seeded row skipped its own blank rule; that seed was OLDER than the correction
+    which blanked it, so under "newest wins" it never gets the chance."""
+    out = run([M(1, dv="3", by="learning-engine", at=LAST_YEAR)],
+              {1: F(1, "Receipt Routing")})
     assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
+
+
+def test_a_row_with_no_date_at_all_cannot_outrank_a_dated_directive():
+    """An undated statement cannot be shown to be newer, so it does not win. This
+    is what stops an old seeded row with no approval timestamp resurfacing now
+    that authorship is no longer the gate."""
+    out = run([M(1, dv="3", by="learning-engine", at=None)],
+              {1: F(1, "Receipt Routing")})
+    assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
+
+
+def test_an_unapproved_row_never_wins_however_new_it_is():
+    """Status is still a gate. A "suggested" row is the auto-mapper thinking out
+    loud, and thinking out loud does not overrule a signed strategy document."""
+    out = run([M(1, dv="3", by="learning-engine", status="suggested")],
+              {1: F(1, "Receipt Routing")})
+    assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
+
+
+def test_the_three_reported_fields_now_ship_what_the_screen_shows():
+    """The live report reproduced exactly: engine-approved constants dated
+    03/04-Aug against the 13-Jul strategy values."""
+    for tid, name, mine, strategy in CASES:
+        out = run([M(tid, dv=mine, by="learning-engine")], {tid: F(tid, name)})
+        got = list(out[name])
+        assert got == [mine, mine], (
+            f"{name}: screen shows {mine!r}, file carried {got!r} "
+            f"(the 13-Jul strategy says {strategy!r})")
 
 
 def test_a_constant_set_before_the_strategy_file_does_not_win():

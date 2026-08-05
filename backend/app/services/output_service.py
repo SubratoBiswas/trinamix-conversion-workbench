@@ -740,6 +740,40 @@ def _transform_frame(
         # learning_service._eligible, which already had to draw it.
         _approver = str(getattr(m, "approved_by", "") or "").strip()
         _by_a_person = bool(_approver) and _approver != "learning-engine"
+        # AUTHORSHIP IS PROVENANCE. THE DATE DECIDES. (05-Aug)
+        #
+        # The paragraph above is still the right instinct and was still the wrong
+        # rule, because it made authorship decisive rather than the date — which is
+        # the opposite of what this architecture says about itself:
+        #
+        #     "Every statement about how a field maps is a dated entry ...
+        #      Newest wins; authorship is provenance only."
+        #
+        # Measured live on NextPower Supplier Test / Supplier Site: ALL SEVEN
+        # strategy constants were overriding the value the screen showed, and three
+        # of them differed — Receipt Routing showed 3 and shipped DIRECT, Invoice
+        # Match Option showed R and shipped Receipt, Match Approval Level showed 3
+        # and shipped 3-Way. Every one of those rows was approved, carried a fixed
+        # value, and was dated 03/04-Aug. The directive that beat them is dated
+        # 13-JUL — three weeks older — and it won purely because the newer statement
+        # was stamped "learning-engine".
+        #
+        # The analyst reported it as "the mappings in the UI do not reach the
+        # output", across supplier, customer, BOM, Item and Employee. It is one
+        # rule, in one place, and this is it.
+        #
+        # WHAT STILL PROTECTS THE CASE THE OLD RULE WAS ADDED FOR. That case was a
+        # SEEDED row re-populating a field a correction had declared blank — and it
+        # is a date question too: the seed carried the date it was seeded, which was
+        # older than the correction, so under this rule it loses on its own merits.
+        # The comparison below is unchanged; only the authorship requirement is
+        # gone. A row still has to carry a real statement, still has to be approved
+        # or overridden, and still has to be NEWER than the directive it beats.
+        #
+        # An undated row cannot be shown to be newer and therefore does not win —
+        # see _person_is_newer, which requires an actual timestamp. That is what
+        # stops an old seeded row with no approval date from resurfacing.
+        _decision_outranks_directive = bool(_approver) or _by_a_person
         # ...and WHICHEVER IS LATEST. Analyst, 30-Jul, stating the precedence in
         # full: "1) analyst manually changed or present in mapping file (whichever
         # is latest) 2) learnings and golden records from database 3) AI".
@@ -793,9 +827,14 @@ def _transform_frame(
         # after the document wins, one written before it does not.
         _authored_rule_wins = bool(_authored_rules) and _conversion_rule_wins(
             _authored_rules, _asof)
+        # `_decision_outranks_directive` replaces the old `_by_a_person` here. The
+        # row must still SAY something, must still be approved or overridden, and
+        # must still be newer than the directive — what it no longer has to be is
+        # signed by a human. See the note beside its definition for why.
         _explicit = bool(_person_set_a_value
                          and m.status in ("approved", "overridden")
-                         and _by_a_person and _person_is_newer) or _authored_rule_wins
+                         and _decision_outranks_directive
+                         and _person_is_newer) or _authored_rule_wins
         if _ov:
             if _ov.get("blank") and not _explicit:
                 col_values = [""] * n_rows
