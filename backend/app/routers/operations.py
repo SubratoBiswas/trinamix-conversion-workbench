@@ -108,6 +108,29 @@ async def generate_output(
     return {"status": "generating", "conversion_id": conversion_id}
 
 
+def _generation_timeout() -> int:
+    """How long a generation may run before the poller gives up on it.
+
+    Was a hard-coded 600. That is shorter than a single real interface takes on
+    the free instance — Supplier Site, 5,476 rows into a 210-column template,
+    measured at ~570s — so the guard was firing on healthy work rather than on
+    lost work.
+
+    Worse, ``generate-merged-all`` stamps ``output_started_at`` on ALL carriers at
+    kick-off while only ``MERGE_CONCURRENCY`` of them run at a time, so the last
+    pair had been "generating" for twenty minutes before their turn came. Every
+    one of the six then reported failed at 600s with nothing wrong. ``_run_merged_all``
+    now re-stamps each carrier when its turn actually starts, so this measures work
+    rather than queueing — and the ceiling is an env var so it can be raised on a
+    slow instance without a deploy.
+    """
+    import os
+    try:
+        return max(60, int(os.getenv("GENERATION_TIMEOUT_SECONDS", "2400")))
+    except Exception:  # noqa: BLE001
+        return 2400
+
+
 @output_router.get("/{conversion_id}/generation-status")
 async def generation_status(conversion_id: str, _: User = Depends(get_current_user)):
     """Poll target for background generation. Returns generating/ready/failed and,
@@ -117,12 +140,45 @@ async def generation_status(conversion_id: str, _: User = Depends(get_current_us
 
     # If a background task was lost (worker restart / OOM kill) the status can be
     # stuck on "generating" forever — treat a stale one as failed so the UI recovers.
+    #
+    # BUT ASK THE DISK BEFORE BELIEVING THE CLOCK.
+    #
+    # This guard used to declare failure on elapsed time alone, and it was wrong in
+    # the most expensive direction: measured live on 05-Aug, one Supplier Site
+    # interface (5,476 source rows, 88 columns, into a 210-column template) finished
+    # in about 570 seconds on the free instance and WROTE ITS ARTIFACT — and this
+    # guard flipped it to "failed" at 600s a few seconds later. The file was on
+    # disk, correct, 646KB, and downloadable the whole time. The screen said failed.
+    #
+    # That is this codebase's signature bug wearing the opposite mask: usually the
+    # screen looks right and the file is wrong; here the file was right and the
+    # screen said it had failed, so nobody went looking for it.
+    #
+    # A finished artifact newer than this run is proof the work completed, and it
+    # beats a timer that knows nothing about what the worker is doing.
     if status == "generating" and c.output_started_at:
         age = (datetime.utcnow() - c.output_started_at).total_seconds()
-        if age > 600:
-            status = "failed"
-            await c.set({"output_status": "failed",
-                         "output_error": "Generation timed out or the worker restarted. Try again."})
+        if age > _generation_timeout():
+            finished = await ConvertedOutput.find(
+                ConvertedOutput.conversion_id == c.id
+            ).sort("-generated_at").first_or_none()
+            if (finished and finished.generated_at
+                    and finished.generated_at >= c.output_started_at
+                    and Path(finished.output_file_path).exists()):
+                status = "ready"
+                await c.set({"output_status": "ready", "output_error": None,
+                             "updated_at": datetime.utcnow()})
+                log.info("generation-status — %s ran past the guard but had already "
+                         "finished; reporting ready", conversion_id)
+            else:
+                status = "failed"
+                await c.set({
+                    "output_status": "failed",
+                    "output_error": (
+                        f"No output after {int(age)}s and no file was written — the "
+                        f"worker was probably restarted or ran out of memory. Try "
+                        f"again, or generate one interface at a time."),
+                })
 
     out = None
     if status == "ready":
@@ -1307,6 +1363,20 @@ async def _run_merged_all(project_id, fmt, include_header, jobs) -> None:
 
     async def _one(obj, carrier_id):
         async with sem:
+            # THE CLOCK STARTS WHEN THE WORK DOES, NOT WHEN IT WAS QUEUED.
+            #
+            # generate-merged-all stamps output_started_at on every carrier up
+            # front, but only merge_concurrency() of them run at a time. With six
+            # supplier interfaces at two at a time, the last pair had been
+            # "generating" for twenty minutes before their turn came — and the
+            # poller's staleness guard, which measures from that stamp, failed
+            # them for it. All six reported failed on 05-Aug with nothing wrong.
+            try:
+                _c0 = await Conversion.get(carrier_id)
+                if _c0:
+                    await _c0.set({"output_started_at": datetime.utcnow()})
+            except Exception:  # noqa: BLE001 — a re-stamp is not worth failing over
+                pass
             _s = _time.monotonic()
             try:
                 await generate_merged_artifact(project_id, obj, fmt=fmt,
