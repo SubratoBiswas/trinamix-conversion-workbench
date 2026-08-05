@@ -79,14 +79,47 @@ def clamp_style_values(styles_xml: bytes) -> tuple[bytes, int]:
     return out, changed
 
 
+# EVERY part that can carry a <font>, not only the stylesheet.
+#
+# The out-of-range value is a FONT attribute, and OOXML lets a font description
+# appear in more places than xl/styles.xml: shared strings carry one per rich-text
+# run, and each comment carries one per run of its tooltip. openpyxl parses all of
+# them through the same bounded descriptor, so any single one refuses the whole
+# workbook.
+#
+# 3_SupplierSite_POZ_SUPPLIER_SITES_INT.xlsm is the case that proved it. Its
+# styles.xml is clean — the <family val="34"/> sits in xl/comments1.xml, in a
+# tooltip Oracle attaches to a column header. Repairing only the stylesheet
+# reported "nothing out of range", changed nothing, and the workbook still would
+# not open, so a filled Supplier Site template could never be produced.
+#
+# Nothing said so, either, and that is the part worth remembering: the parser
+# reads with read_only=True, which skips comments entirely. The template uploaded,
+# parsed, and listed all 211 of its fields — and failed only at the moment of
+# being filled, which is a different code path on a different day.
+_FONT_PARTS = re.compile(r"^xl/(styles\.xml|sharedStrings\.xml|comments\d*\.xml)$")
+
+
 def _rewrite(raw: bytes, styles: bytes) -> bytes:
+    """Swap the stylesheet alone. Kept for the last-resort _MIN_STYLES fallback,
+    which is deliberately about the stylesheet and nothing else."""
+    return _rewrite_parts(raw, {"xl/styles.xml": styles})
+
+
+def _rewrite_parts(raw: bytes, replacements: dict[str, bytes]) -> bytes:
+    """Copy the zip through, swapping only the named parts.
+
+    Everything else — macros, drawings, the VBA project — passes through byte for
+    byte, because this file is a TEMPLATE that gets filled and handed back, and
+    its own formatting is the deliverable.
+    """
     src = zipfile.ZipFile(io.BytesIO(raw))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as out:
         for item in src.infolist():
-            data = src.read(item.filename)
-            if item.filename == "xl/styles.xml":
-                data = styles
+            data = replacements.get(item.filename)
+            if data is None:
+                data = src.read(item.filename)
             out.writestr(item.filename, data)
     return buf.getvalue()
 
@@ -95,14 +128,24 @@ def repair_bytes(raw: bytes) -> tuple[bytes, str]:
     """``(possibly-rewritten bytes, what was done)``. Never raises."""
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            if "xl/styles.xml" not in z.namelist():
-                return raw, "no stylesheet to repair"
-            styles = z.read("xl/styles.xml")
+            parts = [n for n in z.namelist() if _FONT_PARTS.match(n)]
+            if not parts:
+                return raw, "no part that could carry a font"
+            originals = {n: z.read(n) for n in parts}
     except Exception:                                           # noqa: BLE001
         return raw, "not a readable zip"
-    clamped, n = clamp_style_values(styles)
-    if n:
-        return _rewrite(raw, clamped), f"clamped {n} out-of-range font attribute(s)"
+
+    replacements: dict[str, bytes] = {}
+    total = 0
+    for name, data in originals.items():
+        clamped, n = clamp_style_values(data)
+        if n:
+            replacements[name] = clamped
+            total += n
+    if total:
+        return (_rewrite_parts(raw, replacements),
+                f"clamped {total} out-of-range font attribute(s) in "
+                f"{', '.join(sorted(replacements))}")
     return raw, "nothing out of range"
 
 
