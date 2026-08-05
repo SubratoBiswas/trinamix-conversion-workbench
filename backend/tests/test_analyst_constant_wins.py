@@ -198,3 +198,76 @@ def test_the_three_reported_fields_really_are_strategy_constants():
     assert by_field.get("Receipt Routing") == "DIRECT"
     assert by_field.get("Invoice Match Option") == "Receipt"
     assert by_field.get("Match Approval Level") == "3-Way"
+
+
+# ── A rule and a fixed value on the same field: whichever is latest ──────────
+#
+# Receipt Routing, measured live on Supplier Site AFTER the authorship fix above
+# had already taken effect. The lineage showed `strategy_overruled_by_mapping:
+# true` — the overlay had stood aside correctly — and the column still shipped
+# DIRECT, because a THIRD actor was in the way:
+#
+#   a VALUE_MAP dated 03-Aug 18:32, mapping "Direct Delivery"->3 etc, default "",
+#   with NO source column — so it evaluated against "" on all 198 rows and
+#   returned blank; the analyst's fixed value 3, approved 04-Aug 10:57 (sixteen
+#   hours later), was skipped because a rule existed; and the overlay then filled
+#   every blank with DIRECT.
+#
+# The screen showed "Filled with a constant default 3" and a rule badge at once,
+# both true, with no indication which would reach the file.
+
+RULE_AT = pd.Timestamp("2026-08-03 18:32:04").to_pydatetime()
+DV_AT = pd.Timestamp("2026-08-04 10:57:10").to_pydatetime()
+VALUE_MAP = {"rule_type": "VALUE_MAP", "as_of": RULE_AT, "source_column": None,
+             "config": {"Direct Delivery": "3", "Inspection Required": "2",
+                        "Standard Receipt": "1", "case_insensitive": True,
+                        "default": ""}}
+
+
+def run_with_rules(maps, fields, pipelines):
+    out, _ = _transform_frame(SRC, maps, fields, pipelines, set(), "Supplier Site")
+    return out
+
+
+def test_a_fixed_value_newer_than_the_rule_reaches_the_file():
+    """The live case. Sixteen hours newer, and it was being discarded."""
+    out = run_with_rules([M(1, dv="3", by="learning-engine", at=DV_AT)],
+                         {1: F(1, "Receipt Routing")}, {1: [VALUE_MAP]})
+    assert list(out["Receipt Routing"]) == ["3", "3"]
+
+
+def test_a_rule_authored_after_the_fixed_value_still_wins():
+    """The case the original 'rules are authoritative' comment defended: a freshly
+    written CASE_WHEN must be safe from a stale captured default. It is — by date,
+    not by ignoring the default entirely."""
+    out = run_with_rules([M(1, dv="3", by="learning-engine",
+                            at=pd.Timestamp("2026-08-01").to_pydatetime())],
+                         {1: F(1, "Receipt Routing")}, {1: [VALUE_MAP]})
+    assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
+
+
+def test_an_unapproved_fixed_value_does_not_beat_a_rule():
+    """Status is still a gate here too."""
+    out = run_with_rules([M(1, dv="3", by="learning-engine", at=DV_AT,
+                            status="suggested")],
+                         {1: F(1, "Receipt Routing")}, {1: [VALUE_MAP]})
+    assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
+
+
+def test_a_rule_with_no_fixed_value_is_untouched():
+    """No default to prefer, so the rule's own result — blank here — stands, and
+    the overlay fills it. Unchanged behaviour."""
+    out = run_with_rules([M(1, dv=None, by="learning-engine", at=DV_AT)],
+                         {1: F(1, "Receipt Routing")}, {1: [VALUE_MAP]})
+    assert list(out["Receipt Routing"]) == ["DIRECT", "DIRECT"]
+
+
+def test_a_rule_that_actually_produces_values_is_not_overwritten_by_an_older_default():
+    """The protection that matters most: a rule doing real work keeps its output
+    unless the fixed value is genuinely newer."""
+    mapped = dict(VALUE_MAP, source_column="Vendor Site Code",
+                  config={"S1": "ONE", "S2": "TWO", "default": "", "case_insensitive": True})
+    out = run_with_rules([M(1, dv="3", by="learning-engine",
+                            at=pd.Timestamp("2026-08-01").to_pydatetime())],
+                         {1: F(1, "Receipt Routing")}, {1: [mapped]})
+    assert list(out["Receipt Routing"]) == ["ONE", "TWO"]

@@ -701,6 +701,49 @@ def _transform_frame(
                                ctx={**_rule_ctx, "row_index": row_offset + i})
                 for i in range(n_rows)
             ]
+            # A NEWER FIXED VALUE BEATS AN OLDER RULE. (05-Aug)
+            #
+            # The paragraph above says the rule is authoritative and the mapping's
+            # default_value is never overlaid on a rule result. That protects an
+            # intentional blank — a CASE_WHEN whose own default is "" must not be
+            # turned into a constant by a stray default. It is right about the
+            # danger and silent about the date, which is the same mistake the
+            # authorship test made one branch below.
+            #
+            # Receipt Routing, measured live on Supplier Site: a VALUE_MAP dated
+            # 03-Aug 18:32 maps "Direct Delivery"->3, "Inspection Required"->2,
+            # "Standard Receipt"->1, default "". It has NO source column, so it
+            # evaluated against "" on every row and returned its default — a blank
+            # column, 198 rows of nothing. The analyst then typed the fixed value 3
+            # and approved it at 04-Aug 10:57, SIXTEEN HOURS LATER. That value was
+            # skipped because a rule existed, the column stayed blank, and the
+            # strategy overlay filled every blank with DIRECT.
+            #
+            # The screen showed "Filled with a constant default 3" and a rule badge
+            # at the same time, both true, fighting each other, with no indication
+            # which would reach the file.
+            #
+            # So the same rule as everywhere else: whichever is latest. A fixed
+            # value that is approved and NEWER than every rule on the field wins
+            # outright — "write one constant into this column for every row" is
+            # what the box the analyst typed into says it does. A rule authored
+            # after the value still wins, so a freshly written CASE_WHEN is safe
+            # from a stale captured default, which is the case the original comment
+            # was defending.
+            #
+            # An undated rule loses to a dated approval, for the same reason an
+            # undated approval loses to a dated directive: it cannot be shown to be
+            # the later statement. The engine's own suggested_transformation is
+            # appended to `rules` unstamped, and a guess should never outrank a
+            # value a person approved.
+            _rule_dates = [r.get("as_of") for r in rules if r.get("as_of")]
+            _newest_rule = max(_rule_dates) if _rule_dates else None
+            _dv_at = getattr(m, "approved_at", None)
+            if (dv is not None and str(dv).strip()
+                    and m.status in ("approved", "overridden")
+                    and _dv_at is not None
+                    and (_newest_rule is None or _dv_at > _newest_rule)):
+                col_values = [dv] * n_rows
         elif has_src:
             src_vals = col_cache[m.source_column]
             col_values = [
@@ -1216,10 +1259,24 @@ async def build_sheet_frames(
         if m.status == "not_applicable" and tid in fbyid and fbyid[tid].field_name
         and not (getattr(m, "default_value", None) and str(m.default_value).strip())
     }
+    # A FIXED VALUE IS AN EXPLICIT MAPPING TOO — the same blind spot, a third time.
+    #
+    # This read `source_column` alone, exactly as the strategy-overlay guard did
+    # before 05-Aug and as the rule branch did until this morning. A constant has
+    # no source column — that is what makes it a constant — so a field the analyst
+    # had pinned to a fixed value was NOT in `explicit`, and the control defaults
+    # were free to write over it.
+    #
+    # It has been survivable only by luck: _CONTROL_DEFAULTS fills blank columns
+    # only, and after this morning's fixes a pinned field is no longer blank by the
+    # time it gets here. That is a coincidence, not a guarantee, and the two other
+    # places this same test was wrong both shipped wrong values for weeks.
     explicit = {
         _key(fbyid[tid]) for tid, m in best.items()
         if tid in fbyid and fbyid[tid].field_name
-        and (m.source_column or "").strip()
+        and ((m.source_column or "").strip()
+             or (getattr(m, "default_value", None) is not None
+                 and str(m.default_value).strip()))
         and (m.status or "") in ("approved", "overridden")
     }
     src_by_field = {m.target_field_id: str(m.source_column)
