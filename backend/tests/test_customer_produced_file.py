@@ -123,6 +123,14 @@ _OPT_VALUE = "PROBE-ROLE"
 _EXCL_SHEET = "RA_CUSTOMER_BANKS_INT_ALL"
 _EXCL_VALUE = "PROBE-EXCLUDED"
 
+# A FIFTH: Keep blank, recorded by the engine, on a column the glue generates.
+# Pressing Keep blank once and having it reach the other eighteen sheets IS
+# propagation, so a propagated keep-blank is the normal case, not the exotic one.
+# Live on 05-Aug: eighteen Keep blanks on Batch Identifier, CONV-E3F9D5 in the
+# file on every one of them.
+_BLANK_SHEET = "HZ_IMP_PARTYSITES_T"
+_BLANK_FIELD = "Batch Identifier"
+
 
 def check(name, cond, detail=""):
     if cond:
@@ -224,6 +232,14 @@ async def _build_conversion(tmp: Path):
                             target_field_id=_excl[-1].id, default_value=_EXCL_VALUE,
                             confidence=1.0, status="approved",
                             approved_by=_ENGINE).insert()
+
+    _bf = next((f for f in fields.get(_BLANK_SHEET, [])
+                if f.field_name == _BLANK_FIELD
+                or (f.display_name or "").lstrip("*") == _BLANK_FIELD), None)
+    check(f"{_BLANK_SHEET} has {_BLANK_FIELD}", _bf is not None)
+    await MappingSuggestion(conversion_id=conversion.id, target_field_id=_bf.id,
+                            default_value=None, confidence=1.0,
+                            status="not_applicable", approved_by=_ENGINE).insert()
     return conversion
 
 
@@ -405,6 +421,32 @@ def test_an_engine_constant_switches_an_optional_interface_on():
     got = rows[0][i].strip() if i < len(rows[0]) else "(missing)"
     check(f"{name}: {_OPT_FIELD} carries the constant", got == _OPT_VALUE,
           f"got {got!r}")
+
+
+def test_a_propagated_keep_blank_leaves_a_generated_column_blank():
+    """The 05-Aug evening report, on the file.
+
+    Batch Identifier is generated linkage — `customer_structure_service` invents
+    `CONV-<conversion id suffix>` because Oracle requires the column and no source
+    supplies it. That is right until the analyst says otherwise, and Keep blank is
+    how they say otherwise.
+
+    Pressing Keep blank once and having it reach the other eighteen sheets that
+    carry the same field name IS propagation, so the row that lands on those
+    sheets reads `approved_by="learning-engine"`. An authorship check therefore
+    honoured the keep-blank on exactly the sheet it was pressed on and ignored it
+    everywhere else — which is the shape of the original 31-Jul report, "Batch
+    Identifier came back after Keep blank"."""
+    name = next(n for n in _generated()["headerless"] if _iface_of(n) == _BLANK_SHEET)
+    rows = _generated()["headerless"][name]
+    order = [str(c).strip() for c in _SHEETS[_BLANK_SHEET]["csv_order"]]
+    i = next((k for k, c in enumerate(order) if c.strip().lstrip("*") == _BLANK_FIELD), None)
+    check(f"{_BLANK_FIELD} is in the spec for {_BLANK_SHEET}", i is not None)
+    check(f"{name} has data rows", bool(rows))
+    for r, row in enumerate(rows):
+        got = row[i].strip() if i < len(row) else "(missing)"
+        check(f"{name} row {r}: {_BLANK_FIELD} is blank", got == "",
+              f"got {got!r} — the glue re-filled a column Keep blank had cleared")
 
 
 def test_load_scope_still_holds_an_excluded_interface_out():

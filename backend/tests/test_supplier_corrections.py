@@ -318,16 +318,32 @@ def test_the_propagation_helper_exists_and_protects_human_decisions():
 
 
 def test_approve_calls_the_propagation():
+    """Both still propagate — now by SCHEDULING the shared background helper rather
+    than awaiting the fan-out inline, so the click is not held behind the fleet
+    walk. The propagation itself lives in `_propagate_in_background`."""
     src = (_BACKEND / "app" / "routers" / "mapping.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     for name in ("approve_mapping", "update_mapping"):
         fn = next(n for n in ast.walk(tree)
                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                   and n.name == name)
-        calls = {n.func.id for n in ast.walk(fn)
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        check(f"{name} propagates", "propagate_learning_to_open_conversions" in calls,
-              f"got {sorted(calls)}")
+        # A background task added as `background_tasks.add_task(_propagate_in_background, …)`
+        scheduled = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "add_task"
+            and any(isinstance(a, ast.Name) and a.id == "_propagate_in_background"
+                    for a in n.args)
+            for n in ast.walk(fn))
+        check(f"{name} schedules the propagation", scheduled)
+    # And the helper it schedules does the real fan-out.
+    helper = next(n for n in ast.walk(tree)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n.name == "_propagate_in_background")
+    helper_calls = {n.func.id for n in ast.walk(helper)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    check("the helper propagates",
+          "propagate_learning_to_open_conversions" in helper_calls,
+          f"got {sorted(helper_calls)}")
 
 
 def test_applies_to_all_sheets_is_actually_read():

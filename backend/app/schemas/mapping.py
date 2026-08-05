@@ -38,6 +38,12 @@ class MappingOut(ApiOut):
     # Declared here for the same reason `derived` is.
     target_sheet: Optional[str] = None
     target_in_load_scope: bool = True
+    # Set when the generator will fill this column itself — the Customer linkage
+    # (Batch Identifier, the Original System keys and their references) that no
+    # source extract contains. Without it the grid calls such a field "Required
+    # field with no source and no default" while the shipped file carries a value
+    # on every row, which reads as the tool ignoring the mapping.
+    target_generated: Optional[str] = None
     sample_source_values: list[Any] = []
     sample_converted_values: list[Any] = []
 

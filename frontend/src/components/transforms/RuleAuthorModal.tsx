@@ -1143,6 +1143,41 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   // applies it to the mapping instead of creating a transformation rule.
   const [nlIntent, setNlIntent] = useState<string | null>(null);
 
+  // The SQL box — paste a SQL expression, get a rule. A CASE ... END parses
+  // offline on the server; anything else goes to the same Claude path the English
+  // box uses. Kept separate from the NL state so the two boxes do not clobber each
+  // other's explanation/error.
+  const [sqlOpen, setSqlOpen] = useState(false);
+  const [sqlText, setSqlText] = useState("");
+  const [sqlBusy, setSqlBusy] = useState(false);
+  const [sqlError, setSqlError] = useState<string | null>(null);
+  const [sqlExplanation, setSqlExplanation] = useState<string | null>(null);
+  const [sqlSource, setSqlSource] = useState<string | null>(null);
+
+  const translateSql = async () => {
+    if (!sqlText.trim()) return;
+    setSqlBusy(true);
+    setSqlError(null);
+    try {
+      const res = await MappingApi.sqlToRule(String(conversionId), {
+        sql: sqlText,
+        target_field_id: targetFieldId != null ? String(targetFieldId) : undefined,
+        source_column: sourceColumn || undefined,
+      });
+      // Drop the compiled rule into the structured form — same as the English box,
+      // so the analyst reviews and edits before Save.
+      setType(res.rule_type);
+      setConfig(res.config || {});
+      setAdvancedRaw(JSON.stringify(res.config || {}, null, 2));
+      setSqlExplanation(res.explanation || null);
+      setSqlSource(res.source || "ai-sql");
+    } catch (e: any) {
+      setSqlError(e?.response?.data?.detail || e?.message || "Could not parse the SQL");
+    } finally {
+      setSqlBusy(false);
+    }
+  };
+
   const applyRuleToForm = (r: TransformationRule) => {
     const cfg = r.rule_config || {};
     setEditingRuleId(String(r.id));
@@ -1557,6 +1592,84 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
                           </li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SQL box — paste a SQL expression, get a rule. A CASE...END compiles
+              offline; other SQL goes to the AI path. Compiles into the SAME
+              structured form below, which the analyst reviews before saving. */}
+          {true && (
+            <div className="rounded-md border border-violet-300 bg-violet-50/40">
+              <button
+                onClick={() => setSqlOpen((o) => !o)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left"
+              >
+                <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-violet-700">
+                  <span className="font-mono text-[11px]">SQL</span>
+                  Build this rule from a SQL expression
+                </span>
+                {sqlOpen ? (
+                  <ChevronDown className="h-3.5 w-3.5 text-violet-700" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 text-violet-700" />
+                )}
+              </button>
+              {sqlOpen && (
+                <div className="border-t border-violet-300 p-3">
+                  <textarea
+                    className="input min-h-[104px] font-mono text-[12px]"
+                    placeholder={"CASE\n  WHEN Country = 'Saudi Arabia' THEN 'SA'\n  WHEN Worker_Type LIKE '%Employee%' THEN 'E' || Employee_ID\n  ELSE ''\nEND"}
+                    value={sqlText}
+                    onChange={(e) => setSqlText(e.target.value)}
+                  />
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <div className="text-[10.5px] text-ink-muted">
+                      A CASE … WHEN … THEN … END compiles offline. Reference another
+                      column in a result as {"{Column}"} or with SQL{" "}
+                      <span className="font-mono">||</span> (e.g.{" "}
+                      <span className="font-mono">'E' || Employee_ID</span>).
+                    </div>
+                    <Button
+                      onClick={translateSql}
+                      loading={sqlBusy}
+                      disabled={!sqlText.trim()}
+                      className="!h-8"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Build rule
+                    </Button>
+                  </div>
+                  {sqlError && (
+                    <div className="mt-2 rounded-md bg-danger-subtle px-3 py-2 text-[11px] text-danger">
+                      <AlertTriangle className="mr-1 inline h-3 w-3" />
+                      {sqlError}
+                    </div>
+                  )}
+                  {sqlExplanation && (
+                    <div className="mt-2 rounded-md border border-violet-300 bg-white px-3 py-2 text-[11.5px] text-ink">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-700">
+                          Compiled
+                        </span>
+                        {sqlSource && (
+                          <span className={cn(
+                            "rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider",
+                            sqlSource === "sql"
+                              ? "bg-success-subtle text-success"
+                              : "bg-violet-100 text-violet-700"
+                          )}>
+                            {sqlSource === "sql" ? "Parsed · deterministic" : "AI · Claude"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 leading-snug">{sqlExplanation}</div>
+                      <div className="mt-1.5 text-[10px] text-ink-muted">
+                        Rule populated in the structured form below — review, edit, then Save.
+                      </div>
                     </div>
                   )}
                 </div>

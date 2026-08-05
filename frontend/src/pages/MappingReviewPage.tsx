@@ -2443,9 +2443,21 @@ const MappingTableView: React.FC<{
         // this the table sorted/counted on f.required alone, which was falsy for
         // every HDL row, so "sort by Required" reordered nothing.
         const req = !!(f.required || m?.target_required);
-        const isGap = req && !m?.source_column && !dv && m?.status !== "not_applicable";
+        /* A column the GENERATOR fills is not a gap.
+           Customer's interface tables are stitched together by columns no source
+           extract contains — Batch Identifier, the Original System keys, their
+           references — and the tool generates them. Counting those as gaps put a
+           red "Required field with no source and no default" beside a field whose
+           every shipped row read CONV-E3F9D5, which is not a warning, it is a
+           false statement, and it sent an analyst looking for a bug that was not
+           there. `target_generated` is only set when the glue will actually run,
+           so a column with a source, a fixed value or a Keep blank still counts as
+           whatever it genuinely is. */
+        const generated = m?.target_generated || null;
+        const isGap = req && !m?.source_column && !dv && !generated
+          && m?.status !== "not_applicable";
         const confirm = needsConfirmation(m, f, alts, dv);
-        return { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm, req };
+        return { f, m, hasRule, method, dv, prof, transform, alts, isGap, generated, confirm, req };
       });
   }, [targetFields, visibleTargetIds, mapByTarget, ruleTargetIds, effectiveDefaults, srcProfile, altByTarget]);
 
@@ -2546,6 +2558,12 @@ const MappingTableView: React.FC<{
         suggested = top.source_column || "";
         confidence = Math.round((top.confidence ?? 0) * 100);
         reason = r.m?.reason || optReason(top) || "weak name/type overlap only";
+      } else if (r.generated) {
+        // Resolved, just not by a mapping. Exporting this as "no confident match
+        // found" understates it exactly as badly as the old gap text overstated it.
+        suggested = "(generated) linkage";
+        confidence = 100;
+        reason = r.generated;
       } else {
         reason = r.m?.reason || (r.isGap ? "Required field with no source and no default." : "No confident match found");
       }
@@ -2566,9 +2584,14 @@ const MappingTableView: React.FC<{
       // Extra columns for the flat "All Fields" sheet (mirror the on-screen table).
       const how_mapped = [r.method?.label, r.hasRule && !r.transform ? "custom rule" : ""]
         .filter(Boolean).join(" · ");
+      // Same three-way as the on-screen Notes column — the exported workbook is
+      // what gets mailed around, so it must not carry a statement the screen no
+      // longer makes.
       const notes = r.isGap
         ? "Required field with no source and no default."
-        : (r.confirm || r.m?.reason || r.method?.detail || "");
+        : r.generated
+          ? `Filled by the generator — ${r.generated}.`
+          : (r.confirm || r.m?.reason || r.method?.detail || "");
       return { target_field: r.f.field_name, suggested_source: suggested,
                confidence, reason, excluded: isExcluded(r), alternatives, crosswalks,
                required: !!r.req, how_mapped, transform: r.transform || "",
@@ -2711,7 +2734,7 @@ const MappingTableView: React.FC<{
         </thead>
         <tbody>
           {rows.map((r) => {
-            const { f, m, hasRule, method, dv, prof, transform, alts, isGap, confirm, req } = r;
+            const { f, m, hasRule, method, dv, prof, transform, alts, isGap, generated, confirm, req } = r;
             const selected = m && selectedMappingId === m.id;
             return (
               <tr
@@ -2867,6 +2890,13 @@ const MappingTableView: React.FC<{
                 <td className="px-3 py-2 text-[11px] leading-snug text-ink-muted">
                   {isGap ? (
                     <span className="font-medium text-danger">Required field with no source and no default.</span>
+                  ) : generated ? (
+                    /* Say what WILL be in the file. The previous text said the
+                       opposite of the truth for this row. */
+                    <span className="text-ink-muted">
+                      Filled by the generator — {generated}. Set a fixed value to
+                      override it, or Keep blank to leave the column empty.
+                    </span>
                   ) : confirm ? (
                     <span className="text-warning-dark">{confirm}</span>
                   ) : (
@@ -3241,6 +3271,14 @@ const MappingCanvas: React.FC<CanvasProps> = ({
                           Bank Account Country Code = US, both approved, both absent
                           from every generated file. The exclusion is correct; the
                           screen being silent about it was not. */}
+                      {mapping?.target_generated && (
+                        <span
+                          className="inline-flex items-center gap-0.5 rounded bg-sky-100 px-1 py-0.5 font-mono text-[9px] font-bold text-sky-800"
+                          title={`No source system supplies this column, so the generator fills it: ${mapping.target_generated}. A fixed value you set here overrides it; Keep blank leaves the column empty.`}
+                        >
+                          ⚙ generated
+                        </span>
+                      )}
                       {mapping?.target_in_load_scope === false && (
                         <span
                           className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-bold text-amber-800"

@@ -1346,8 +1346,16 @@ _DATE_INPUT_FORMATS = (
 )
 
 
+# The date spelling every output carries. Analyst, 05-Aug: "all dates should be
+# yyyy/mm/dd format" — chosen for FBDI and the Excel templates alike (HDL already
+# wrote it). This is the ONE place the output mask is defined; everything below
+# formats through it so the CSV, the workbook and the DATE rules cannot drift to
+# three different spellings.
+FBDI_DATE_FORMAT = "%Y/%m/%d"
+
+
 def to_fbdi_date(v: Any) -> Any:
-    """One cell → Oracle's ``YYYYMMDD``, or the value untouched if it is not a date.
+    """One cell → ``yyyy/mm/dd``, or the value untouched if it is not a date.
 
     Untouched is deliberate: a column that turns out to hold free text must not be
     mangled, and an unparseable date is more useful in the reject report as the
@@ -1361,23 +1369,22 @@ def to_fbdi_date(v: Any) -> Any:
     core = re.sub(r"\.\d+$", "", s)
     for fmt_in in _DATE_INPUT_FORMATS:
         try:
-            return datetime.strptime(core, fmt_in).strftime("%Y%m%d")
+            return datetime.strptime(core, fmt_in).strftime(FBDI_DATE_FORMAT)
         except ValueError:
             pass
     return v
 
 
 def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
-    """Reformat any date/Date columns to YYYYMMDD as required by Oracle FBDI.
+    """Reformat any date/Date columns to ``yyyy/mm/dd`` (see FBDI_DATE_FORMAT).
 
     Matched on a NORMALISED name (case and punctuation folded), because the frame's
     headers and the template's field names routinely disagree on both: the EBS path
     runs ``_normalize_columns`` first, so ``EffectiveStartDate`` arrives as
     ``EFFECTIVE_START_DATE``. The previous exact ``col in date_field_names`` test
-    therefore matched nothing on that path and shipped ``2020-01-15`` to a loader
-    that only accepts ``20200115`` — every dated row rejected, silently. Found by
-    tests/test_ebs_output.py, which encoded the intent from the start; the
-    implementation never met it.
+    therefore matched nothing on that path and shipped ``2020-01-15`` unconverted —
+    every dated row a mismatch. Found by tests/test_ebs_output.py, which encoded
+    the intent from the start; the implementation never met it.
     """
     date_field_names = {
         re.sub(r"[^a-z0-9]", "", (f.field_name or "").lower())
@@ -1527,17 +1534,14 @@ _CONTROL_DEFAULTS: dict[str, str] = {
 }
 
 
-def _by_a_person(m) -> bool:
-    """Did a PERSON make this decision, as opposed to the learning engine?
-
-    The same line drawn in the strategy overlay and in ``learning_service._eligible``.
-    An engine-applied default is a suggestion; it must not be able to force a value
-    onto a sheet, or a seeded row re-populates the very fields the analyst has been
-    clearing. A row with no recorded approver counts as NOT a person, because reading
-    those as human approvals is what let seeded mappings outrank the analyst before.
-    """
-    who = str(getattr(m, "approved_by", "") or "").strip()
-    return bool(who) and who != "learning-engine"
+# `_by_a_person` used to live here — "is the approver a human, or the learning
+# engine?" — and gated both `analyst_default` and `analyst_keeps_blank`. Both gates
+# were removed on 05-Aug after each was caught producing a file that contradicted
+# its own mapping screen, so nothing reads it and it is deleted rather than left
+# sitting available to be reached for again.
+#
+# The distinction it drew is not meaningless; it is just not PRECEDENCE. Provenance
+# is still recorded on every row and still shown. What decides is the date.
 
 
 def analyst_default(m) -> str | None:
@@ -1586,18 +1590,40 @@ def analyst_default(m) -> str | None:
 
 
 def analyst_keeps_blank(m) -> bool:
-    """Keep blank: not_applicable with the default cleared, decided by a person.
+    """Keep blank: not_applicable with the default cleared.
 
     not_applicable WITH a default means "populate with this constant" (Invoice Match
     Option = Receipt), which is the opposite instruction — so the cleared default is
     load-bearing, not incidental.
+
+    THE AUTHORSHIP GATE IS GONE HERE TOO, and leaving it out of the morning's fix
+    was a mistake. It was judged inert on the grounds that the learning engine does
+    not set `not_applicable`. It does — by propagating one, which is the only way a
+    Keep blank pressed once reaches the other eighteen sheets that carry the same
+    field name.
+
+    Measured on Customer 03082026, 05-Aug:
+
+        Batch Identifier   HZ_IMP_PARTIES_T       approved        by a person
+        Batch Identifier   18 other interfaces    not_applicable  by learning-engine
+
+    Eighteen Keep blanks, and CONV-E3F9D5 in the shipped file on every one of them,
+    because `_by_a_person` said the engine's copy of the instruction was not the
+    instruction. Tejaswini reported this exact symptom on 31-Jul — "Batch Identifier
+    came back after Keep blank" — and it was half-fixed then: the glue learned to
+    respect a decision, but this function would not call a propagated one a
+    decision.
+
+    Same rule as `analyst_default`, for the same reason. Newest wins; authorship is
+    provenance. What still has to be true is unchanged: status `not_applicable`,
+    and the default genuinely cleared.
     """
     if (getattr(m, "status", "") or "") != "not_applicable":
         return False
     dv = getattr(m, "default_value", None)
     if dv is not None and str(dv).strip():
         return False
-    return _by_a_person(m)
+    return True
 
 
 def _header_label(f) -> str:

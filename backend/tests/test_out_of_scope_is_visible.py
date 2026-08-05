@@ -154,8 +154,116 @@ def test_the_response_model_actually_carries_both_fields():
     names = set(MappingOut.model_fields)
     check("target_sheet is declared", "target_sheet" in names)
     check("target_in_load_scope is declared", "target_in_load_scope" in names)
+    check("target_generated is declared", "target_generated" in names)
     check("and it defaults to in-scope, so a silent None never reads as a warning",
           MappingOut.model_fields["target_in_load_scope"].default is True)
+
+
+def test_a_generated_column_is_reported_as_generated_not_as_a_gap():
+    """Batch Identifier, 05-Aug, the screenshot.
+
+        screen:  SOURCE (none) · REQUIRED · Unmapped
+                 "Required field with no source and no default."
+        file:    CONV-E3F9D5, on all 9,809 rows.
+
+    Both were accurate about their own half and the screen's half was FALSE about
+    the outcome. Customer's interface tables are stitched by columns no flat
+    extract contains, so the tool generates them — correctly. Nothing said so."""
+    from app.services.customer_structure_service import generated_role
+
+    check("Batch Identifier is generated",
+          generated_role("*Batch Identifier") is not None)
+    check("so is the party linkage",
+          generated_role("Party Original System Reference") is not None)
+    check("a content column is not",
+          generated_role("Organization Name") is None)
+    check("nor is a constant the analyst sets",
+          generated_role("Role Type") is None)
+    check("the reference is described as the reference, not the system",
+          "reference" in (generated_role("Party Original System Reference") or ""))
+
+
+def test_a_decided_column_is_never_badged_as_generated():
+    """The glue skips any column the analyst decided, so badging a decided column
+    would describe the opposite of what happens. Checked through the enrichment,
+    not the helper, because that is where the three conditions live."""
+    import asyncio
+
+    async def run():
+        await init_beanie(database=AsyncMongoMockClient()["gen_flag"],
+                          document_models=_MODELS)
+        template = FBDITemplate(name="T", business_object="Customer",
+                                file_name="t.xlsm", status="parsed", is_global=True)
+        await template.insert()
+        sheet = FBDISheet(template_id=template.id, sheet_name=_IN_SCOPE,
+                          sequence=1, field_count=4)
+        await sheet.insert()
+        made = []
+        for i in range(4):
+            f = FBDIField(template_id=template.id, sheet_id=sheet.id,
+                          field_name="Batch Identifier", display_name="*Batch Identifier",
+                          sequence=i + 1)
+            await f.insert()
+            made.append(f)
+
+        client = Client(name="C", code="C", is_default=True); await client.insert()
+        project = Project(name="P", client_id=client.id); await project.insert()
+        conv = Conversion(project_id=project.id, name="c", template_id=template.id,
+                          target_object="Customer", source_type="dataset")
+        await conv.insert()
+
+        cases = [
+            ("undecided", dict(status="approved")),
+            ("a source column", dict(status="approved", source_column="BATCH")),
+            ("a fixed value", dict(status="approved", default_value="B-1")),
+            ("Keep blank", dict(status="not_applicable")),
+        ]
+        rows = []
+        for f, (_label, kw) in zip(made, cases):
+            m = MappingSuggestion(conversion_id=conv.id, target_field_id=f.id,
+                                  confidence=1.0, approved_by="learning-engine", **kw)
+            await m.insert()
+            rows.append(m)
+        return [_label for _label, _ in cases], await enrich_mapping_with_samples(conv, rows)
+
+    labels, enriched = asyncio.run(run())
+    got = {label: r["target_generated"] for label, r in zip(labels, enriched)}
+    check("an undecided linkage column is badged", got["undecided"] is not None,
+          "the analyst is told nothing and the file gets a value anyway")
+    for label in ("a source column", "a fixed value", "Keep blank"):
+        check(f"{label} is not badged as generated", got[label] is None,
+              f"got {got[label]!r} — the glue will not run for this row")
+
+
+def test_the_generated_roles_cover_every_column_the_glue_fills():
+    """Drift guard. Two lists in one module — the columns `apply_to_frame` sets
+    and the roles `generated_role` describes — and a column that gains one without
+    the other is a screen that lies again, quietly, later."""
+    import ast
+
+    src = (_ROOT / "app" / "services" / "customer_structure_service.py").read_text(
+        encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "apply_to_frame")
+    # Every `setcol(_find(cols, "a", "b"), …)` in the body — the needles ARE the
+    # column identity here, so they are what must be covered.
+    needles = []
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "setcol" and node.args):
+            inner = node.args[0]
+            if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                    and inner.func.id == "_find"):
+                needles.append(tuple(a.value for a in inner.args[1:]
+                                     if isinstance(a, ast.Constant)))
+    check("the glue fills something", bool(needles))
+
+    from app.services.customer_structure_service import _GENERATED_ROLES
+    known = {frozenset(n) for n, _why in _GENERATED_ROLES}
+    for n in needles:
+        check(f"{' + '.join(n)} has a role", frozenset(n) in known,
+              "apply_to_frame fills this column and the grid cannot explain it")
 
 
 def test_the_grid_renders_the_flag():
@@ -168,6 +276,10 @@ def test_the_grid_renders_the_flag():
     check("the grid reads the flag", "target_in_load_scope === false" in src)
     check("and names the interface in the explanation",
           re.search(r"mapping\.target_sheet", src) is not None)
+    check("a generated column is no longer counted as a gap",
+          "!generated" in src and "const generated = m?.target_generated" in src)
+    check("and the row says what will be in the file",
+          "Filled by the generator" in src)
 
 
 if __name__ == "__main__":

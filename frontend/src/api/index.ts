@@ -662,6 +662,27 @@ export const MappingApi = {
         source?: "local" | "ai";
       }>(`/conversions/${conversionId}/rules/translate`, body)
       .then((r) => r.data),
+
+  // Compile a SQL expression into a rule. A CASE...END parses server-side offline;
+  // other SQL goes to the AI path. Same {rule_type, config, ...} shape as
+  // translateRule, so the modal drops it into the form the same way.
+  sqlToRule: (
+    conversionId: string,
+    body: {
+      sql: string;
+      target_field_id?: string;
+      source_column?: string;
+    }
+  ) =>
+    api
+      .post<{
+        rule_type: string;
+        config: any;
+        explanation?: string;
+        ambiguities?: { phrase: string; interpreted_as: string; alternatives: string[] }[];
+        source?: string;
+      }>(`/conversions/${conversionId}/rules/from-sql`, body)
+      .then((r) => r.data),
 };
 
 export const QualityApi = {

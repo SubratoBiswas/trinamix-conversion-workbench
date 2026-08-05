@@ -34,9 +34,85 @@ def _to_str(v: Any) -> str:
 _TRUEISH = {"yes", "y", "1", "true", "t"}
 _FALSEISH = {"no", "n", "0", "false", "f"}
 
+# The output spelling every date rule defaults to. Analyst, 05-Aug: "all dates
+# should be yyyy/mm/dd format." A rule that names its own output_format still wins;
+# this is the default when none is given, kept in step with
+# output_service.FBDI_DATE_FORMAT.
+_OUT_DATE_FORMAT = "%Y/%m/%d"
+
 
 def _is_blank(v: Any) -> bool:
     return v is None or _to_str(v).strip() == ""
+
+
+# ``{Column_Name}`` inside a rule's result string, so a CASE/WHEN "then" can build
+# a value out of OTHER columns on the row.
+_PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
+
+
+def _interpolate(template: Any, row: Any) -> Any:
+    """Substitute ``{Column}`` tokens in a result string with the row's values.
+
+    Reported 05-Aug: a CASE/WHEN branch set to ``E{Employee_ID}`` shipped the
+    literal text ``E{Employee_ID}`` — the live preview showed it, and so did the
+    file. The analyst means "an E, then this row's Employee_ID": the only way to
+    express "prefix the id with a letter that depends on Worker Type" in one rule.
+    The engine returned every ``then`` verbatim, so no result value could reference
+    another column.
+
+    A token is a column NAME (matched case- and punctuation-loosely, the same way
+    the rest of the engine resolves columns), replaced by that column's cell value.
+    A token that names no column on the row is left EXACTLY as written — including
+    its braces — so a result that legitimately contains braces, or names a column
+    this extract does not have, is never silently blanked. Non-strings and rows
+    without a lookup pass straight through.
+    """
+    if row is None or not isinstance(template, str) or "{" not in template:
+        return template
+    # Resolve each column name once, tolerant of case/spacing/punctuation, because
+    # a frame header ("EMPLOYEE_ID") and what the analyst typed ("Employee_ID" or
+    # "employee id") routinely differ — the same mismatch _resolve_column handles.
+    def _lookup(name: str):
+        if row is None:
+            return None
+        try:
+            if name in row:
+                return row.get(name)
+        except Exception:  # noqa: BLE001 — row may not support `in`
+            pass
+        want = re.sub(r"[^a-z0-9]", "", name.lower())
+        keys = None
+        for attr in ("keys", "_keys"):
+            fn = getattr(row, attr, None)
+            if callable(fn):
+                try:
+                    keys = list(fn())
+                    break
+                except Exception:  # noqa: BLE001
+                    keys = None
+        for k in (keys or []):
+            if re.sub(r"[^a-z0-9]", "", str(k).lower()) == want:
+                return row.get(k)
+        return None
+
+    def _sub(match: "re.Match") -> str:
+        name = match.group(1).strip()
+        val = _lookup(name)
+        if val is None or _to_str(val).strip() == "":
+            # Unknown column -> leave the token untouched (do not blank a result).
+            # A resolved-but-empty cell -> empty string, so "E{Employee_ID}" on a
+            # row with no id becomes "E", which is the sensible reading.
+            try:
+                if row is not None and (name in row):
+                    return ""
+            except Exception:  # noqa: BLE001
+                pass
+            if _lookup(name) is not None:
+                return ""
+            return match.group(0)
+        return _to_str(val)
+
+    return _PLACEHOLDER.sub(_sub, template)
 
 
 def _to_float(v: Any) -> float | None:
@@ -272,7 +348,10 @@ def _apply_one_rule(
 
     if rt == "DATE_FORMAT":
         in_fmt = cfg.get("input_format", "%m/%d/%Y")
-        out_fmt = cfg.get("output_format", "%Y%m%d")
+        # yyyy/mm/dd is the output spelling every file uses now (analyst, 05-Aug:
+        # "all dates should be yyyy/mm/dd format"). A rule that names its own
+        # output_format still wins — this is only the default when none is given.
+        out_fmt = cfg.get("output_format", _OUT_DATE_FORMAT)
         s = _to_str(value).strip()
         if not s:
             return s
@@ -431,7 +510,10 @@ def _apply_one_rule(
         else_v = cfg.get("else", value)
         if row is None or col is None:
             return value
-        return then_v if _to_str(row.get(col, "")) == _to_str(eq) else else_v
+        chosen = then_v if _to_str(row.get(col, "")) == _to_str(eq) else else_v
+        # Same {Column} interpolation as CASE_WHEN, so the two branch rules behave
+        # alike — a result may build itself from other columns on the row.
+        return _interpolate(chosen, row)
 
     if rt == "CASE_WHEN":
         # Multi-branch CASE/SWITCH with comparison ops. Each branch:
@@ -441,8 +523,11 @@ def _apply_one_rule(
         default = cfg.get("default", value)
         for br in branches:
             if _branch_holds(br, value, row):
-                return br.get("then", default)
-        return default
+                # ``then`` may reference other columns as ``{Column}`` — e.g.
+                # ``E{Employee_ID}``. Literal results (``SA``, ``AE``) have no
+                # braces and pass through unchanged.
+                return _interpolate(br.get("then", default), row)
+        return _interpolate(default, row)
 
     if rt == "MAP_BOOLEAN":
         # Normalise a boolean-ish source value to a fixed pair of output codes.
@@ -477,7 +562,7 @@ def _apply_one_rule(
                            "%Y%m%d", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S",
                            "%Y-%m-%d %H:%M:%S"):
                 try:
-                    return datetime.strptime(s, fmt_in).strftime("%Y%m%d")
+                    return datetime.strptime(s, fmt_in).strftime(_OUT_DATE_FORMAT)
                 except ValueError:
                     continue
             return s
@@ -490,7 +575,7 @@ def _apply_one_rule(
             if low in ("null", "none", ""):
                 return ""
             if low in ("sysdate", "today", "now"):
-                return now.strftime("%Y%m%d")
+                return now.strftime(_OUT_DATE_FORMAT)
             if row is not None and s in row:  # token is another column's name
                 return _norm_date(_to_str(row.get(s, "")).strip())
             return _norm_date(s)
@@ -526,9 +611,9 @@ def _apply_one_rule(
         fmt = cfg.get("format")
         now = ctx.get("now") or datetime.utcnow()
         if source == "today":
-            return now.strftime(fmt or "%Y%m%d")
+            return now.strftime(fmt or _OUT_DATE_FORMAT)
         if source == "now":
-            return now.strftime(fmt or "%Y%m%d %H:%M:%S")
+            return now.strftime(fmt or f"{_OUT_DATE_FORMAT} %H:%M:%S")
         if source == "row_index":
             return ctx.get("row_index", 0)
         if source == "uuid":

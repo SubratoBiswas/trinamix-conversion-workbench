@@ -377,3 +377,282 @@ async def translate_rule(conversion: Conversion, description: str,
                         "columns use Case / when (multi-branch)."),
         "ambiguities": [], "source": "local",
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQL → rule
+#
+# Analyst, 05-Aug: "Any SQL query written in the new text box should be understood
+# by python or AI functions and it should be converted to a rule for that field."
+#
+# A SQL CASE expression is the same shape as the CASE/WHEN rule the analyst builds
+# by hand — WHEN <condition> THEN <result>, ELSE <default> — so this parses that
+# form deterministically and hands anything it cannot to the same Claude path the
+# English box uses. Both return the identical {rule_type, config, ...} the modal
+# already drops into its form.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SQL comparison operator -> the engine's op name (_COMPARISON_OPS).
+_SQL_OPS = {
+    "=": "eq", "==": "eq", "!=": "neq", "<>": "neq",
+    ">": "gt", ">=": "gte", "<": "lt", "<=": "lte",
+}
+
+
+def _strip_sql_literal(tok: str) -> str:
+    """`'Saudi Arabia'` -> Saudi Arabia; unquoted stays as-is (a column name)."""
+    t = tok.strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
+        return t[1:-1].replace("''", "'")
+    return t
+
+
+def _sql_result_to_template(expr: str) -> str:
+    """A THEN/ELSE result expression -> the engine's result string.
+
+    A quoted literal is itself. A bare column becomes ``{Column}`` so the engine
+    interpolates it. ``'E' || Employee_ID`` becomes ``E{Employee_ID}`` — the exact
+    id-prefix case. CONCAT(a, b) is treated the same as ``a || b``.
+    """
+    e = expr.strip()
+    m = re.match(r"(?i)^concat\s*\((.*)\)$", e)
+    if m:
+        parts = _split_top_level(m.group(1), ",")
+    else:
+        parts = _split_top_level(e, "||")
+    out = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if len(p) >= 2 and p[0] == p[-1] and p[0] in ("'", '"'):
+            out.append(_strip_sql_literal(p))
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_ ]*", p):
+            out.append("{" + p.strip() + "}")
+        else:
+            # An expression we do not model (a function call, arithmetic) — keep it
+            # literally rather than guess; the analyst can edit, and the AI path is
+            # tried first for anything with these.
+            out.append(p)
+    return "".join(out)
+
+
+def _split_top_level(s: str, sep: str) -> list[str]:
+    """Split on ``sep`` that is not inside quotes or parentheses."""
+    parts, buf, depth, i = [], [], 0, 0
+    quote = None
+    while i < len(s):
+        ch = s[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch; buf.append(ch)
+        elif ch == "(":
+            depth += 1; buf.append(ch)
+        elif ch == ")":
+            depth = max(0, depth - 1); buf.append(ch)
+        elif depth == 0 and s[i:i + len(sep)] == sep:
+            parts.append("".join(buf)); buf = []; i += len(sep); continue
+        else:
+            buf.append(ch)
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _parse_condition(cond: str, case_operand: Optional[str], cols: list[str]) -> Optional[dict]:
+    """One WHEN condition -> a CASE_WHEN branch clause (no ``then`` yet).
+
+    Handles ``col = 'x'``, ``col <> 'x'``, ``col > 5``, ``col LIKE '%x%'`` (->
+    contains / startswith / endswith), ``col IS [NOT] NULL``, and the simple-CASE
+    form ``CASE col WHEN 'x'`` where the operand is implicit.
+    """
+    c = cond.strip()
+    # IS NULL / IS NOT NULL
+    m = re.match(r"(?i)^(.+?)\s+is\s+(not\s+)?null$", c)
+    if m:
+        col = _match_column(cols, m.group(1).strip()) or m.group(1).strip()
+        return {"if_column": col, "op": "notblank" if m.group(2) else "isblank",
+                "value": ""}
+    # LIKE
+    m = re.match(r"(?i)^(.+?)\s+like\s+(.+)$", c)
+    if m:
+        col = _match_column(cols, m.group(1).strip()) or m.group(1).strip()
+        pat = _strip_sql_literal(m.group(2))
+        lead = pat.startswith("%")
+        trail = pat.endswith("%")
+        core = pat.strip("%")
+        op = ("contains" if lead and trail else
+              "endswith" if lead else "startswith" if trail else "eq")
+        return {"if_column": col, "op": op, "value": core}
+    # simple CASE: "CASE Country WHEN 'Saudi Arabia' THEN ..." -> operand implicit
+    if case_operand and re.fullmatch(r"'.*'|\".*\"|[-\w. ]+", c):
+        col = _match_column(cols, case_operand) or case_operand
+        return {"if_column": col, "op": "eq", "value": _strip_sql_literal(c)}
+    # binary comparison
+    for sym in ("<>", "!=", ">=", "<=", "=", ">", "<"):
+        idx = _find_top_level_op(c, sym)
+        if idx >= 0:
+            left = c[:idx].strip()
+            right = c[idx + len(sym):].strip()
+            col = _match_column(cols, left) or left
+            return {"if_column": col, "op": _SQL_OPS[sym],
+                    "value": _strip_sql_literal(right)}
+    return None
+
+
+def _find_top_level_op(s: str, sym: str) -> int:
+    depth, i, quote = 0, 0, None
+    while i < len(s):
+        ch = s[i]
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and s[i:i + len(sym)] == sym:
+            # ">=" must not match the ">" scan first: callers try longer ops first.
+            return i
+        i += 1
+    return -1
+
+
+def parse_sql_case(sql: str, cols: list[str]) -> Optional[dict]:
+    """A SQL CASE expression -> a CASE_WHEN rule config, or None if it is not one.
+
+    Deterministic, offline. Returns ``{rule_type, config, explanation, source}``
+    the same shape the English translator returns.
+    """
+    if not sql or "case" not in sql.lower():
+        return None
+    m = re.search(r"(?is)\bcase\b(.*?)\bend\b", sql)
+    body = m.group(1).strip() if m else sql.strip()
+
+    # Optional simple-CASE operand: "CASE <operand> WHEN ..." — text before the
+    # first WHEN that is not itself a WHEN clause.
+    case_operand = None
+    head = re.split(r"(?i)\bwhen\b", body, maxsplit=1)
+    if head and head[0].strip():
+        case_operand = head[0].strip()
+
+    branches: list[dict] = []
+    # Each "WHEN ... THEN ..." up to the next WHEN / ELSE / end of body.
+    for wm in re.finditer(r"(?is)\bwhen\b(.+?)\bthen\b(.+?)(?=\bwhen\b|\belse\b|$)", body):
+        cond = wm.group(1).strip()
+        result = wm.group(2).strip()
+        clause = _parse_condition(cond, case_operand, cols)
+        if not clause:
+            return None  # a WHEN we can't model — hand the whole thing to AI
+        clause["then"] = _sql_result_to_template(result)
+        branches.append(clause)
+    if not branches:
+        return None
+
+    default = ""
+    em = re.search(r"(?is)\belse\b(.+?)$", body)
+    if em:
+        default = _sql_result_to_template(em.group(1).strip())
+
+    return {
+        "rule_type": "CASE_WHEN",
+        "config": {"branches": branches, "default": default},
+        "explanation": (f"Parsed a SQL CASE into {len(branches)} branch"
+                        f"{'es' if len(branches) != 1 else ''}"
+                        + (" plus a default" if default else "") + "."),
+        "ambiguities": [],
+        "source": "sql",
+    }
+
+
+def _sql_prompt(sql: str, cols: list[str], target_field: Optional[str]) -> str:
+    cols_s = ", ".join(cols[:80]) if cols else "(unknown)"
+    return (
+        "Convert this SQL expression into ONE transformation rule for an Oracle "
+        "data-conversion tool. Return ONLY JSON: "
+        '{"rule_type": <TYPE>, "config": {...}, "explanation": "...", '
+        '"ambiguities": ["..."]}.\n'
+        f"Allowed rule_type values: {', '.join(_SUPPORTED_TYPES)}.\n"
+        "A CASE expression -> CASE_WHEN with config "
+        '{"branches":[{"if_column","op","value","then"}],"default"}. '
+        "op is one of eq, neq, gt, gte, lt, lte, contains, startswith, endswith, "
+        "isblank, notblank. In a THEN/ELSE result, reference another column as "
+        "{Column_Name} (e.g. 'E' || Employee_ID becomes \"E{Employee_ID}\").\n"
+        f"Source columns available: {cols_s}.\n"
+        f"Target field: {target_field or '(unspecified)'}.\n"
+        f"SQL:\n{sql.strip()}"
+    )
+
+
+async def _ai_translate_sql(sql: str, cols: list[str],
+                            target_field: Optional[str]) -> Optional[dict]:
+    from app.config import settings
+    api_key = getattr(settings, "ANTHROPIC_API_KEY", None)
+    if not api_key:
+        return None
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": getattr(settings, "ANTHROPIC_MODEL", None) or "claude-sonnet-4-6",
+                      "max_tokens": 1500,
+                      "messages": [{"role": "user",
+                                    "content": _sql_prompt(sql, cols, target_field)}]},
+            )
+            r.raise_for_status()
+            text = "".join(b.get("text", "") for b in r.json().get("content", [])
+                           if b.get("type") == "text")
+        s, e = text.find("{"), text.rfind("}")
+        if s == -1 or e == -1:
+            return None
+        obj = json.loads(text[s:e + 1])
+        rt = (obj.get("rule_type") or "").strip().upper()
+        if rt not in _SUPPORTED_TYPES:
+            return None
+        return {"rule_type": rt, "config": obj.get("config") or {},
+                "explanation": obj.get("explanation") or "",
+                "ambiguities": obj.get("ambiguities") or [], "source": "ai-sql"}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("SQL translate AI failed: %s", exc)
+        return None
+
+
+async def translate_sql(conversion: Conversion, sql: str,
+                        target_field_id: Optional[str] = None,
+                        source_column: Optional[str] = None) -> dict:
+    """SQL text -> {rule_type, config, explanation, ambiguities, source}.
+
+    Deterministic CASE parse first (offline, no cost), Claude for anything else,
+    and a benign editable CONSTANT if neither can — the box never errors.
+    """
+    cols = await _source_columns(conversion)
+    target_field = None
+    if target_field_id:
+        try:
+            from beanie import PydanticObjectId
+            f = await FBDIField.get(PydanticObjectId(str(target_field_id)))
+            target_field = f.field_name if f else None
+        except Exception:  # noqa: BLE001
+            target_field = None
+
+    local = parse_sql_case(sql or "", cols)
+    if local:
+        return local
+    ai = await _ai_translate_sql(sql or "", cols, target_field)
+    if ai:
+        return ai
+    return {
+        "rule_type": "CONSTANT", "config": {"value": ""},
+        "explanation": ("Couldn't parse this SQL automatically (AI unavailable). "
+                        "A CASE ... WHEN ... THEN ... END expression parses "
+                        "offline; other SQL needs the AI path."),
+        "ambiguities": [], "source": "local",
+    }

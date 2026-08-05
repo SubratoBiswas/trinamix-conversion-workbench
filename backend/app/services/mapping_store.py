@@ -487,15 +487,41 @@ def _row_shape(decision: str, value: Optional[str], target_field: str,
             "rule_type": rule_type, "rule_config": dict(rule_config or {})}
 
 
-def _merge_sheets(previous: Iterable[Any], incoming: Iterable[Any]) -> list:
-    """Union, never replace.
+def sheet_key(sheets: Iterable[Any] | None) -> frozenset:
+    """THE FOURTH KEY DIMENSION: which interface this decision is about.
 
-    A default carries the sheet it was set on, and the row is found without the
-    sheet — so setting the same default on a second sheet used to overwrite
-    ``sheets=["A"]`` with ``["B"]`` and silently un-set the first one. Both saves
-    said approved; the screen showed two defaults and the file carried one.
-    Narrowing is done by keeping the field blank on the sheet it should not apply
-    to, which is its own dated statement, not by re-saving with a shorter list.
+    Analyst, 05-Aug: "client, source, field, sheet should be 4 dimensions for all
+    columns, for all source and fields." Insert Update Indicator is why — it must
+    be "I" on one interface and blank on another, and until now it could not,
+    because the store keyed (client, source, field) and one field held ONE value.
+    A per-sheet keep-blank and a field-wide default collapsed into a single row.
+
+    A decision's sheet identity is the normalised set of sheets it names. The
+    empty set is FIELD-WIDE — every decision written before this, and any decision
+    the analyst makes "for all sheets", carries it. So an empty-set write behaves
+    exactly as it did before: one row per field. The dimension only splits rows
+    once a writer names a sheet, which keeps this change inert until it is used.
+
+    exclude_sheets is deliberately not part of the identity. The per-sheet UI
+    writes an inclusion (``sheets=[X]``); "everywhere except X" remains one
+    field-wide statement that the resolver narrows at read time.
+    """
+    return frozenset(
+        normalise_field(s) for s in (sheets or []) if str(s).strip())
+
+
+def _row_sheet_key(row: Any) -> frozenset:
+    return sheet_key(getattr(row, "sheets", None))
+
+
+def _merge_sheets(previous: Iterable[Any], incoming: Iterable[Any]) -> list:
+    """Union within one sheet identity.
+
+    Rows are now partitioned by ``sheet_key`` before they reach here, so previous
+    and incoming already share an identity — this only de-dups spellings and keeps
+    the list stable. Across identities there is nothing to merge: a ``sheets=["A"]``
+    statement and a ``sheets=["B"]`` statement are two different rows now, one per
+    interface, which is the whole point of the fourth dimension.
     """
     seen, merged = set(), []
     for item in [*(previous or []), *(incoming or [])]:
@@ -665,12 +691,17 @@ async def record_decision(*, decision: str, target_field: str,
     if resolved_value is not None:
         shape["resolved_value"] = resolved_value
 
-    # The identity of a stored row is (client, source, field, kind) — the key,
-    # plus which of the four things it says. So one field holds at most one live
-    # column mapping, one default, one suppression and one rule, and those
-    # compete by date. The object is NOT part of it: that is the change.
+    # The identity of a stored row is (client, source, field, SHEET) — the key.
+    # One field on one interface holds at most one live decision, and those compete
+    # by date. A decision about a DIFFERENT interface is a different row, which is
+    # what lets Insert Update Indicator be "I" on one sheet and blank on another.
+    # The object is NOT part of the identity; the sheet is (05-Aug).
+    _want_sheets = sheet_key(sheets)
     rows = await find_rows_for_key(target_field=target_field, client_id=client_id,
                                    source_erp=source_erp, include_deleted=True)
+    # Only rows about the SAME interface(s) compete for this write. A field-wide
+    # row (empty set) and a sheet-B row are left untouched by a sheet-A write.
+    rows = [r for r in rows if _row_sheet_key(r) == _want_sheets]
     action, row = plan_write(rows, kind=kind, when=when, revive=revive,
                              captured_from=captured_from)
 
@@ -784,7 +815,14 @@ async def _delete_other_decisions(keep, *, target_field: str, client_id: Any,
     Only the four DECISION_KINDS are touched. Crosswalks are one row per source
     VALUE and must stay many-per-field; file signatures, ignore_source and
     reference standards are not statements about how a field maps.
+
+    ONLY THE SAME INTERFACE. With sheet in the key, "one row per key" means one row
+    per (client, source, field, sheet). A decision about sheet A must not delete
+    the field-wide row or a sheet-B decision — those are different keys, and wiping
+    them is precisely the collapse that made per-sheet values impossible. So the
+    losers are filtered to the survivor's own sheet identity.
     """
+    keep_sheets = _row_sheet_key(keep)
     rows = await find_rows_for_key(target_field=target_field, client_id=client_id,
                                    source_erp=source_erp, include_deleted=True)
     gone = 0
@@ -792,6 +830,9 @@ async def _delete_other_decisions(keep, *, target_field: str, client_id: Any,
         if getattr(other, "id", None) == getattr(keep, "id", None):
             continue
         if getattr(other, "kind", None) not in DECISION_KINDS:
+            continue
+        if _row_sheet_key(other) != keep_sheets:
+            # A different interface (or the field-wide base). Not this key.
             continue
         try:
             await _archive(other, superseded_by=getattr(keep, "id", None),
@@ -870,9 +911,13 @@ async def collapse_existing_decisions(dry_run: bool = False) -> dict:
 
     by_key: dict[tuple, list] = {}
     for row in rows:
+        # Sheet is part of the key now (05-Aug). Collapsing across sheets would
+        # delete a per-interface decision as a "duplicate" of a field-wide one and
+        # undo exactly the per-sheet control this dimension exists to give.
         key = (client_key(getattr(row, "client_id", None)),
                normalise_source(getattr(row, "source_erp", None)),
-               normalise_field(getattr(row, "target_field", None)))
+               normalise_field(getattr(row, "target_field", None)),
+               _row_sheet_key(row))
         by_key.setdefault(key, []).append(row)
 
     kept = removed = 0

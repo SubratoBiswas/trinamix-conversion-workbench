@@ -199,3 +199,49 @@ def apply_to_frame(
             setcol(as_ref, "")
 
     return sorted(set(touched))
+
+
+# ---------------------------------------------------------------------------
+# What the screen needs to know about all of the above
+# ---------------------------------------------------------------------------
+# Every column `apply_to_frame` fills, and a phrase describing where the value
+# comes from. The grid reads this so a generated column stops being reported as
+# "Required field with no source and no default" — which is not merely unhelpful
+# but FALSE: the column ships populated.
+#
+# 05-Aug: Batch Identifier on HZ_IMP_PARTIES_T showed SOURCE (none), status
+# Unmapped, a red REQUIRED chip and that note, while every row of the shipped file
+# carried CONV-E3F9D5. An analyst reading that screen has no way to tell whether
+# the tool is broken or the field is handled, and reasonably concludes the former.
+#
+# Keyed by the same loose needle-match `_find` uses, so this list and the code that
+# fills the columns cannot drift into disagreeing about which columns are glue —
+# `test_the_generated_roles_cover_every_column_the_glue_fills` asserts exactly that.
+_GENERATED_ROLES: list[tuple[tuple[str, ...], str]] = [
+    (("batch",), "batch identifier generated for this conversion"),
+    (("party", "original", "system", "reference"), "party linkage reference generated"),
+    (("party", "original", "system"), "party linkage source system generated"),
+    (("customer", "account", "source", "system", "reference"),
+     "account linkage reference generated"),
+    (("customer", "account", "source", "system"),
+     "account linkage source system generated"),
+    (("account", "site", "source", "system", "reference"),
+     "site linkage reference generated"),
+    (("account", "site", "source", "system"), "site linkage source system generated"),
+]
+
+
+def generated_role(column: str) -> str | None:
+    """Why this column is filled without a mapping, or None if it is not.
+
+    Longest needle-set first, so "Party Original System Reference" is described as
+    the reference and not as the system — the same precedence `_find` gets from the
+    order of the calls in `apply_to_frame`.
+    """
+    n = _norm(column)
+    if not n:
+        return None
+    for needles, why in _GENERATED_ROLES:
+        if all(_norm(x) in n for x in needles):
+            return why
+    return None

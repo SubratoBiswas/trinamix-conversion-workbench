@@ -27,16 +27,18 @@ def test_normalize_columns_to_fbdi_headers():
     assert list(out.columns) == ["UOM_CODE", "BASE_UOM_FLAG", "UOM_CLASS"]
 
 
-def test_format_date_columns_to_yyyymmdd():
+def test_format_date_columns_to_yyyy_slash_mm_slash_dd():
+    # Analyst, 05-Aug: "all dates should be yyyy/mm/dd format." A compact 20221231
+    # (Oracle's own FBDI spelling) still converts to the slash form.
     fields = [_Field("EffectiveStartDate", "Date"), _Field("EffectiveEndDate", "date")]
     df = pd.DataFrame({
         "EFFECTIVESTARTDATE": ["2020-01-15", "2021/03/02", "03/04/2022", ""],
         "EFFECTIVEENDDATE": ["2020-01-15 00:00:00", "", "20221231", "not-a-date"],
     })
     out = _format_date_columns(df, fields)
-    assert out["EFFECTIVESTARTDATE"].tolist() == ["20200115", "20210302", "20220304", ""]
+    assert out["EFFECTIVESTARTDATE"].tolist() == ["2020/01/15", "2021/03/02", "2022/03/04", ""]
     # datetime strings parse; blanks pass through; unparseable values are left as-is
-    assert out["EFFECTIVEENDDATE"].tolist() == ["20200115", "", "20221231", "not-a-date"]
+    assert out["EFFECTIVEENDDATE"].tolist() == ["2020/01/15", "", "2022/12/31", "not-a-date"]
 
 
 def test_non_date_columns_untouched():

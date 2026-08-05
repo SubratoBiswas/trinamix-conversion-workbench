@@ -48,7 +48,7 @@ class F:
 
 # ── Header matching (defect 1) ───────────────────────────────────────────────
 def test_header_spelling_does_not_decide_whether_dates_convert():
-    """Every spelling of one field name must reach the same YYYYMMDD output.
+    """Every spelling of one field name must reach the same yyyy/mm/dd output.
 
     ``EFFECTIVE_START_DATE`` is not hypothetical — it is exactly what
     ``_normalize_columns`` produces on the live EBS path.
@@ -58,7 +58,7 @@ def test_header_spelling_does_not_decide_whether_dates_convert():
                    "Effective-Start-Date", " EffectiveStartDate "):
         out = _format_date_columns(
             pd.DataFrame({header: ["2020-01-15"]}), [F("EffectiveStartDate")])
-        check(f"{header!r} converts", out[header].tolist() == ["20200115"],
+        check(f"{header!r} converts", out[header].tolist() == ["2020/01/15"],
               f"got {out[header].tolist()}")
 
 
@@ -83,40 +83,42 @@ def test_the_sql_timestamp_spelling_converts():
     """The regression that mattered most: this is what a database export writes."""
     for s in ("2020-01-15 00:00:00", "2020-01-15 00:00:00.000",
               "2020-01-15T09:30:00", "2020-01-15 09:30"):
-        check(f"{s!r} -> 20200115", to_fbdi_date(s) == "20200115",
+        check(f"{s!r} -> 2020/01/15", to_fbdi_date(s) == "2020/01/15",
               f"got {to_fbdi_date(s)!r}")
 
 
 def test_oracles_own_date_display_converts():
     """DD-MON-YYYY is the default DATE format in SQL*Plus, so EBS extracts are
     full of it."""
-    check("15-JAN-2020", to_fbdi_date("15-JAN-2020") == "20200115")
-    check("15-Jan-20", to_fbdi_date("15-Jan-20") == "20200115")
-    check("15 Jan 2020", to_fbdi_date("15 Jan 2020") == "20200115")
-    check("Jan 15, 2020", to_fbdi_date("Jan 15, 2020") == "20200115")
+    check("15-JAN-2020", to_fbdi_date("15-JAN-2020") == "2020/01/15")
+    check("15-Jan-20", to_fbdi_date("15-Jan-20") == "2020/01/15")
+    check("15 Jan 2020", to_fbdi_date("15 Jan 2020") == "2020/01/15")
+    check("Jan 15, 2020", to_fbdi_date("Jan 15, 2020") == "2020/01/15")
 
 
 def test_slash_and_dash_dates():
-    check("2020/01/15", to_fbdi_date("2020/01/15") == "20200115")
-    check("2020/01/15 08:00:00", to_fbdi_date("2020/01/15 08:00:00") == "20200115")
-    check("01/15/2020 (US first)", to_fbdi_date("01/15/2020") == "20200115")
-    check("01-15-2020", to_fbdi_date("01-15-2020") == "20200115")
+    check("2020/01/15", to_fbdi_date("2020/01/15") == "2020/01/15")
+    check("2020/01/15 08:00:00", to_fbdi_date("2020/01/15 08:00:00") == "2020/01/15")
+    check("01/15/2020 (US first)", to_fbdi_date("01/15/2020") == "2020/01/15")
+    check("01-15-2020", to_fbdi_date("01-15-2020") == "2020/01/15")
 
 
 def test_already_formatted_values_are_idempotent():
-    """Generation can run twice over the same frame; a second pass must be a no-op
-    rather than reinterpreting 20200115 as something else."""
-    check("20200115 stays", to_fbdi_date("20200115") == "20200115")
-    check("idempotent", to_fbdi_date(to_fbdi_date("2020-01-15")) == "20200115")
+    """Generation can run twice over the same frame; a second pass over a value
+    already in yyyy/mm/dd must be a no-op. A compact 20200115 (Oracle's own FBDI
+    spelling) still converts to the slash form, since that is the output now."""
+    check("a yyyy/mm/dd value stays", to_fbdi_date("2020/01/15") == "2020/01/15")
+    check("compact 20200115 -> 2020/01/15", to_fbdi_date("20200115") == "2020/01/15")
+    check("idempotent", to_fbdi_date(to_fbdi_date("2020-01-15")) == "2020/01/15")
 
 
 def test_ambiguous_day_month_resolves_us_first():
     """03/04/2022 is 4 March in the US reading. Locked in deliberately: the
     extracts in play are US-sourced, and silently switching would move thousands of
     dates by up to eleven months with nothing in the file to show it."""
-    check("03/04/2022 -> 20220304", to_fbdi_date("03/04/2022") == "20220304")
-    check("25/12/2022 (only valid as DD/MM) -> 20221225",
-          to_fbdi_date("25/12/2022") == "20221225")
+    check("03/04/2022 -> 2022/03/04", to_fbdi_date("03/04/2022") == "2022/03/04")
+    check("25/12/2022 (only valid as DD/MM) -> 2022/12/25",
+          to_fbdi_date("25/12/2022") == "2022/12/25")
 
 
 # ── Values that must survive untouched ───────────────────────────────────────

@@ -630,12 +630,18 @@ def test_all_three_mapping_grid_call_sites_pass_the_bundle():
     from pathlib import Path as _P
     src = (_P(__file__).resolve().parent.parent / "app" / "routers" / "mapping.py"
            ).read_text(encoding="utf-8")
-    calls = src.count("propagate_learning_to_open_conversions(")
-    passes = src.count("extra_object_keys=await bundle_objects_for(conv)")
-    check("the three call sites are still there \u2014 save, keep blank, approve",
-          calls == 3, f"found {calls}")
-    check("and every one of them passes the load sequence", passes == calls,
-          f"{passes} of {calls} do")
+    # The fan-out is now ONE helper (_propagate_in_background, run off the request
+    # so a click is not held behind the fleet walk), so the widening lives in one
+    # place and cannot be forgotten by one site \u2014 but all three sites must still
+    # SCHEDULE it, which is what this checks.
+    check("the fan-out passes the load sequence, in one place",
+          src.count("extra_object_keys=await bundle_objects_for(conv)") == 1,
+          "the bundle should be widened once, inside the shared helper")
+    check("the helper still calls the real propagation",
+          "propagate_learning_to_open_conversions(" in src)
+    sites = src.count("background_tasks.add_task(_propagate_in_background")
+    check("all three grid call sites \u2014 save, keep blank, approve \u2014 schedule it",
+          sites == 3, f"found {sites}")
 
 
 # ── 8. how far it travels: projects yes, tenants no ─────────────────────────

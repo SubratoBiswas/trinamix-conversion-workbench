@@ -966,6 +966,40 @@ async def enrich_mapping_with_samples(
                 _in_scope_cache[sheet] = True
         return _in_scope_cache[sheet]
 
+    def _generated_of(m, tgt) -> str | None:
+        """Why this column ships populated with no mapping — or None.
+
+        Customer Import is 19 interface tables stitched together by columns that
+        repeat down the hierarchy (Batch Identifier, the Original System keys and
+        their references). A flat customer extract contains none of them, so the
+        tool generates them. That is correct and load-bearing.
+
+        What was not correct is the grid calling such a field
+        "Required field with no source and no default" — 05-Aug, Batch Identifier
+        on HZ_IMP_PARTIES_T: SOURCE (none), a red REQUIRED chip, that note, and
+        CONV-E3F9D5 on every row of the shipped file. The note is not unhelpful, it
+        is false, and an analyst reading it concludes the tool ignored their
+        mapping.
+
+        Reported ONLY when the glue will actually run for this row. The generator
+        skips any column the analyst has decided — a source column, a fixed value,
+        or a Keep blank — so a decided column is not generated and must not be
+        badged as though it were.
+        """
+        if not _is_customer or tgt is None:
+            return None
+        if (m.source_column or "").strip():
+            return None
+        if m.default_value is not None and str(m.default_value).strip():
+            return None
+        if (m.status or "") == "not_applicable":
+            return None
+        try:
+            from app.services.customer_structure_service import generated_role
+            return generated_role(getattr(tgt, "display_name", None) or tgt.field_name)
+        except Exception:  # noqa: BLE001
+            return None
+
     out: list[dict[str, Any]] = []
     for m in mappings:
         tgt = fields_by_id.get(m.target_field_id)
@@ -989,6 +1023,7 @@ async def enrich_mapping_with_samples(
             "target_sheet": sheet_name_by_id.get(getattr(tgt, "sheet_id", None)) if tgt else None,
             "target_in_load_scope": _scope_of(
                 sheet_name_by_id.get(getattr(tgt, "sheet_id", None)) if tgt else None),
+            "target_generated": _generated_of(m, tgt),
             "sample_source_values": sample_src, "sample_converted_values": [],
         })
     return out

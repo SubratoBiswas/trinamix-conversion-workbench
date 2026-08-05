@@ -164,8 +164,32 @@ def test_keep_blank_is_not_applicable_with_the_default_cleared():
     # constant (Invoice Match Option = Receipt) — so the cleared default matters.
     check("not_applicable + default is not keep-blank",
           analyst_keeps_blank(M("not_applicable", "Receipt", approved_by=PERSON)) is False)
-    check("an engine not_applicable is not a decision",
-          analyst_keeps_blank(M("not_applicable", None, approved_by="learning-engine")) is False)
+
+
+def test_a_propagated_keep_blank_is_still_a_keep_blank():
+    """CHANGED 05-Aug (evening). This asserted the opposite and was wrong.
+
+    The authorship gate was left on this function in the morning, judged inert
+    because "the learning engine does not set not_applicable". It does — by
+    propagating one, which is the ONLY way a Keep blank pressed once reaches the
+    other eighteen sheets carrying the same field name.
+
+    Measured on Customer 03082026:
+
+        Batch Identifier   HZ_IMP_PARTIES_T     approved        admin@trinamix.com
+        Batch Identifier   18 other interfaces  not_applicable  learning-engine
+
+    Eighteen Keep blanks, and `CONV-E3F9D5` in the shipped file on every one,
+    because the engine's copy of the instruction did not count as the instruction.
+    Tejaswini reported this exact symptom on 31-Jul: "Batch Identifier came back
+    after Keep blank."
+
+    What still has to be true: status `not_applicable`, default genuinely cleared."""
+    for who in (PERSON, "learning-engine", None):
+        check(f"keep blank recorded by {who or 'nobody'} is honoured",
+              analyst_keeps_blank(M("not_applicable", None, approved_by=who)) is True)
+    check("but a status that is not not_applicable is not a keep blank",
+          analyst_keeps_blank(M("approved", None, approved_by=PERSON)) is False)
 
 
 # ── Cause one: the glue must not overwrite the person ───────────────────────
@@ -342,17 +366,21 @@ if __name__ == "__main__":
     print("\nall 31-Jul customer default checks passed")
 
 # ── Role Type set on TWO sheets (CW 31-Jul, row 30) ─────────────────────────
-def test_setting_one_default_on_a_second_sheet_does_not_unset_the_first():
-    """Analyst: "Role Type target field has been set a default value as CONTACT for
-    both target sheets, however it only reflects in [one]."
+def test_setting_a_default_on_a_second_sheet_is_a_separate_row():
+    """CHANGED 05-Aug: the key gained a fourth dimension — the sheet.
 
-    A default carries the sheet it was set on, and for the single-answer kinds the
-    row is found by (object, field, client, source) WITHOUT the sheet — so the second
-    save overwrote sheets=["HZ_IMP_CONTACTS_T"] with sheets=["HZ_IMP_RELSHIPS_T"] and
-    silently cancelled the first. Both saves reported approved. The screen showed two
-    defaults and the file carried one, which is the shape that costs a whole
-    regenerate-and-read cycle to notice.
-    """
+    This used to assert that setting the same default on two sheets MERGED into one
+    row with sheets=[both]. That was the right answer while the key was
+    (client, source, field) and a field could hold only one value — but it is the
+    wrong answer for what the analyst now needs: "Insert Update Indicator should be
+    I on one sheet and blank on another." A single merged row cannot say two
+    different things.
+
+    So the key is (client, source, field, SHEET) now. Two sheet-scoped saves are
+    two rows, each about its own interface. The first is not unset — it is a
+    different key. Same value on both sheets (Role Type = CONTACT on both, per
+    Tejaswini's 31-Jul note) is simply two rows that agree, which is what the
+    per-sheet model produces and what lets a THIRD sheet disagree."""
     import asyncio
     import app.models.learned as learned_model
     from app.services import mapping_store
@@ -403,9 +431,13 @@ def test_setting_one_default_on_a_second_sheet_does_not_unset_the_first():
     finally:
         learned_model.LearnedMapping = _real
 
-    check("it is still ONE learning, not two competing ones", len(rows) == 1,
+    check("there is one row per sheet now, not one merged row", len(rows) == 2,
           f"got {len(rows)}")
-    check("and it now covers both sheets",
-          set(rows[0].sheets) == {"HZ_IMP_CONTACTS_T", "HZ_IMP_RELSHIPS_T"},
-          f"got {rows[0].sheets}")
+    check("each row is scoped to its own interface",
+          {tuple(r.sheets) for r in rows}
+          == {("HZ_IMP_CONTACTS_T",), ("HZ_IMP_RELSHIPS_T",)},
+          f"got {[r.sheets for r in rows]}")
+    check("and the first was not unset — both carry the value",
+          all(r.resolved_value == "CONTACT" for r in rows),
+          f"got {[r.resolved_value for r in rows]}")
 

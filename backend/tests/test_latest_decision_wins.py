@@ -91,9 +91,17 @@ def test_any_deliberate_edit_is_captured_and_dated():
 
 
 def test_the_result_of_propagating_is_reported_rather_than_swallowed():
+    """The fan-out now runs off the request, so its result is LOGGED rather than
+    returned — there is no synchronous caller left to hand it to. What must not
+    happen is the old silent swallow, where a fan-out that threw and one that
+    reached twelve conversions looked identical."""
     m = _SRC["mapping.py"]
-    check("the count comes back", 'out["propagation"] = _prop' in m)
-    check("and a failure is reported as one", '_prop = {"error":' in m)
+    helper = m[m.index("async def _propagate_in_background"):]
+    helper = helper[:helper.index("\n\n\n")] if "\n\n\n" in helper else helper
+    check("the reached count is logged",
+          "log.info(" in helper and "reached" in helper)
+    check("and a failure is logged as one, not swallowed",
+          "log.exception(" in helper)
 
 
 # ── 2. one answer per field ─────────────────────────────────────────────────
@@ -186,10 +194,24 @@ def test_a_bundled_file_that_never_said_when_is_not_stamped_with_today():
 
 # ── 4. removal is a decision too ────────────────────────────────────────────
 def test_keep_blank_propagates():
+    """The suppression still reaches the other conversions — now AFTER the reply.
+
+    It used to be awaited inside the request, which walked all 35 conversions with
+    per-conversion Atlas round-trips and blew past the browser's 60s axios timeout;
+    the analyst saw Keep blank "do nothing" because the answer never came back. The
+    fan-out now runs as a FastAPI background task, so the row flips and the reply
+    returns immediately while the rest catches up off the request."""
     m = _SRC["mapping.py"]
     tail = m[m.index('out["learned_suppression"] = learned') - 2000:]
-    check("the suppression is pushed out",
-          "propagate_learning_to_open_conversions" in tail)
+    check("the suppression is still pushed out",
+          "_propagate_in_background" in tail)
+    check("and the background helper is what runs the real fan-out",
+          "background_tasks.add_task(_propagate_in_background" in m)
+    check("the helper calls the real propagation",
+          "async def _propagate_in_background" in m
+          and "propagate_learning_to_open_conversions(" in m)
+    check("keep-blank no longer awaits the fan-out inside the request",
+          "_prop = await propagate_learning_to_open_conversions" not in m)
 
 
 def test_a_suppression_actually_blanks_the_target_mapping():

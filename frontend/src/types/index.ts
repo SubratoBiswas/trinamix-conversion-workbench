@@ -634,6 +634,20 @@ export interface MappingSuggestion {
    */
   target_sheet?: string | null;
   target_in_load_scope?: boolean;
+  /**
+   * Set when the GENERATOR fills this column itself, with the reason.
+   *
+   * Customer Import is 19 interface tables stitched together by columns a flat
+   * extract does not contain — Batch Identifier, the Original System keys, their
+   * references — so the tool generates them. Until 05-Aug the grid showed those
+   * as `Required field with no source and no default` in red while the shipped
+   * file carried a value on every row (`CONV-E3F9D5`), which reads as the tool
+   * having ignored the mapping. It had not; nothing said the column was handled.
+   *
+   * Only set when the glue will actually run: a column the analyst has decided —
+   * source, fixed value, or Keep blank — is not generated and is not badged.
+   */
+  target_generated?: string | null;
   // Cross-source Mapping Knowledge Bank provenance. When kb_source is set,
   // the row was pre-filled from a prior project on the same source ERP.
   // The Mapping Review UI shows a "🧠 from {Source} KB" badge and counts

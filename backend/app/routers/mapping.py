@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 from beanie import PydanticObjectId
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.models.conversion import Conversion
@@ -434,7 +434,8 @@ async def source_columns(conversion_id: str, _: User = Depends(get_current_user)
 
 @router.put("/mappings/{mapping_id}", response_model=MappingOut)
 async def update_mapping(
-    mapping_id: str, payload: MappingUpdate, user: User = Depends(get_current_user)
+    mapping_id: str, payload: MappingUpdate, background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user)
 ):
     m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
@@ -470,36 +471,18 @@ async def update_mapping(
     #
     # A rejected/not_applicable edit is a decision too — "remove this mapping" — and
     # is captured through the keep-blank path, which now propagates as well.
-    _prop: dict | None = None
     if _is_decision and (m.source_column
                          or (m.default_value and str(m.default_value).strip())):
         _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
         if _lm is not None:
-            try:
-                from app.services.learning_service import (
-                    bundle_objects_for, propagate_learning_to_open_conversions)
-                # ACROSS THE LOAD SEQUENCE. This fan-out was scoped to the edited
-                # conversion's own business object, so correcting Supplier Name on the
-                # Supplier Import tab reached other Supplier Import conversions and
-                # NOT Address, Site, Site Assignment, Contacts or Banks — one sixth of
-                # what the analyst is looking at, with nothing on screen to say which
-                # five were skipped. The steer box already worked this way; the mapping
-                # grid, where corrections are actually made, did not.
-                _prop = await propagate_learning_to_open_conversions(
-                    _lm, conv, captured_by=user.email,
-                    extra_object_keys=await bundle_objects_for(conv))
-            except Exception as exc:  # noqa: BLE001
-                log.exception("propagating the saved learning failed for %s", mapping_id)
-                # NOT silent. Both call sites swallowed this and returned 200 with a
-                # normal payload, so a propagation that threw and one that reached 12
-                # conversions looked identical to the analyst.
-                _prop = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+            # ACROSS THE LOAD SEQUENCE, and AFTER the response is sent. The fan-out
+            # reaches the whole bundle (correcting Supplier Name on the Import tab
+            # has to reach Address, Site, Site Assignment, Contacts and Banks, not
+            # just other Import conversions), which means walking the fleet — too
+            # slow to hold a Save behind. The edited row is already saved above; the
+            # rest catches up off the request. See _propagate_in_background.
+            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
     out = (await enrich_mapping_with_samples(conv, [m]))[0]
-    if _prop is not None:
-        try:
-            out["propagation"] = _prop
-        except Exception:  # noqa: BLE001 — a non-dict response shape must not break
-            pass
     return out
 
 
@@ -557,8 +540,49 @@ async def value_map_accept(
     return result
 
 
+async def _propagate_in_background(lm, conv: Conversion, captured_by: str) -> None:
+    """The cross-conversion fan-out, run AFTER the response has been sent.
+
+    WHY THIS IS NOT AWAITED INLINE ANYMORE
+
+    ``propagate_learning_to_open_conversions`` walks EVERY conversion in the fleet
+    — thirty-five of them today — and for each does a handful of separate awaited
+    Atlas round-trips (business object, client tag, source ERP, the template's
+    fields, the sheet scope, the extract's columns) before touching its mappings.
+    On a hosted Mongo that is tens of seconds of latency, serialised.
+
+    Doing it inside the request made Keep blank and Save look DEAD. The analyst
+    clicked, the row they were looking at did flip — that part is applied before
+    this — but the endpoint then sat on the fan-out until the browser's 60s axios
+    timeout gave up, so the reply that would have refreshed the screen never
+    arrived. "The keep blank button does not do anything" was a click that fired,
+    worked, and appeared to fail because the answer came back after a minute or
+    not at all.
+
+    The decision the analyst is waiting on is already saved by the time this runs:
+    this row, its siblings on the same conversion, the suppress_field learning, and
+    the stale-marking of this conversion's outputs. Reaching the OTHER conversions
+    is not something anyone is staring at, so it happens here, off the request.
+
+    Swallows its own errors — a fan-out that throws must not take down a request
+    that has already returned 200, and there is nothing left to return it to.
+    """
+    try:
+        from app.services.learning_service import (
+            bundle_objects_for, propagate_learning_to_open_conversions)
+        _p = await propagate_learning_to_open_conversions(
+            lm, conv, captured_by=captured_by,
+            extra_object_keys=await bundle_objects_for(conv))
+        log.info("background propagation of %s reached: %s",
+                 getattr(lm, "id", "?"), _p)
+    except Exception:  # noqa: BLE001
+        log.exception("background propagation failed for learning %s",
+                      getattr(lm, "id", "?"))
+
+
 @router.put("/mappings/{mapping_id}/keep-blank", response_model=MappingOut)
-async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
+async def keep_blank(mapping_id: str, background_tasks: BackgroundTasks,
+                     user: User = Depends(get_current_user)):
     """Ship this column empty, and hold that decision everywhere.
 
     "Leave it blank" is a real decision and it was surprisingly hard to express: an
@@ -606,12 +630,22 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
     learned = False
     lm = None
     try:
-        from app.models.fbdi import FBDIField
+        from app.models.fbdi import FBDIField, FBDISheet
         from app.services.client_service import client_id_for_conversion
         from app.services.learning_service import (_upsert, source_erp_for_conversion,
                                                    _business_object_for)
         f = await FBDIField.get(m.target_field_id) if m.target_field_id else None
         obj = await _business_object_for(conv)
+        # THE INTERFACE THIS KEEP-BLANK IS ABOUT. Without it, the suppression is
+        # field-wide and blanks the column on every one of the 19 sheets that
+        # carries the name — the exact opposite of "blank on THIS sheet, I on
+        # another". Oracle repeats field names across interfaces, so a keep-blank
+        # has to name the interface it was pressed on, the same way a fixed value
+        # already does (record_learning_from_mapping scopes its default by sheet).
+        _sheet_name = None
+        if f is not None and getattr(f, "sheet_id", None) is not None:
+            _sh = await FBDISheet.get(f.sheet_id)
+            _sheet_name = getattr(_sh, "sheet_name", None) if _sh else None
         if f is not None and obj:
             lm = await _upsert(
                 kind="suppress_field", category="Left blank on purpose",
@@ -623,6 +657,10 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
                 source_erp=await source_erp_for_conversion(conv),
                 captured_from="kept blank in Mapping Review",
                 captured_by=user.email,
+                # Scoped to the interface it was pressed on — the fourth key
+                # dimension. A None sheet stays field-wide (old behaviour), which
+                # is the right fallback when the field lives on only one sheet.
+                sheets=[_sheet_name] if _sheet_name else None,
                 # An analyst pressing this IS an explicit action, so it may revive a
                 # suppression they previously retired.
                 revive=True,
@@ -632,35 +670,25 @@ async def keep_blank(mapping_id: str, user: User = Depends(get_current_user)):
         log.exception("keep-blank: could not record the suppression learning")
 
     # "Remove this mapping" is a decision like any other and has to reach the
-    # conversions that already exist. This captured the suppression and then stopped,
-    # so a field the analyst blanked here stayed populated everywhere else — the one
-    # direction where the gap is silently destructive, because the analyst has every
-    # reason to believe a blank means blank.
-    _prop: dict | None = None
+    # conversions that already exist. It reaches them AFTER this response is sent —
+    # see _propagate_in_background for why it is no longer awaited here (short
+    # version: the fan-out is slower than the browser's patience, and the row the
+    # analyst pressed is already blank without it). More sharply here than on the
+    # save path, because "leave this blank" that reaches one of six conversions
+    # leaves the field populated in the other five while the analyst has every
+    # reason to believe blank means blank — so it still has to happen, just not
+    # while the click waits.
     if learned and lm is not None:
-        try:
-            from app.services.learning_service import (
-                bundle_objects_for, propagate_learning_to_open_conversions)
-            # Across the load sequence, for the same reason as the save path — and
-            # more sharply here, because "leave this blank" that reaches one of six
-            # conversions leaves the field populated in the other five while the
-            # analyst has every reason to believe blank means blank.
-            _prop = await propagate_learning_to_open_conversions(
-                lm, conv, captured_by=user.email,
-                extra_object_keys=await bundle_objects_for(conv))
-        except Exception as exc:  # noqa: BLE001
-            log.exception("keep-blank: propagating the suppression failed")
-            _prop = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+        background_tasks.add_task(_propagate_in_background, lm, conv, user.email)
 
     out = (await enrich_mapping_with_samples(conv, [m]))[0]
     out["learned_suppression"] = learned
-    if _prop is not None:
-        out["propagation"] = _prop
     return out
 
 
 @router.put("/mappings/{mapping_id}/approve", response_model=MappingOut)
-async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user)):
+async def approve_mapping(mapping_id: str, background_tasks: BackgroundTasks,
+                          user: User = Depends(get_current_user)):
     m = await MappingSuggestion.get(PydanticObjectId(mapping_id))
     if not m:
         raise HTTPException(404, "Mapping not found")
@@ -672,19 +700,12 @@ async def approve_mapping(mapping_id: str, user: User = Depends(get_current_user
         _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
         # "Any rule or correction I make apply in learning so that it will be available
         # for all CURRENT and future conversions" (analyst, 30-Jul). Capturing the
-        # learning already covered future conversions; this reaches the ones that
-        # already exist. It never touches a mapping another person approved.
+        # learning already covered future conversions; reaching the ones that already
+        # exist is the fleet walk, so it runs AFTER the response — same reason as the
+        # save and keep-blank paths. It never touches a mapping another person
+        # approved. See _propagate_in_background.
         if _lm is not None:
-            try:
-                from app.services.learning_service import (
-                    bundle_objects_for, propagate_learning_to_open_conversions)
-                _p = await propagate_learning_to_open_conversions(
-                    _lm, conv, captured_by=user.email,
-                    extra_object_keys=await bundle_objects_for(conv))
-                log.info("approve %s propagated: %s", mapping_id, _p)
-            except Exception:  # noqa: BLE001 — never fail the approve on the fan-out
-                log.exception("propagating the approved learning failed for %s",
-                              mapping_id)
+            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
     if m.source_column:
         from app.services.learning_service import propagate_rules_to_downstream
         await propagate_rules_to_downstream(conv, m)
@@ -901,6 +922,33 @@ async def translate_rule_endpoint(
     from app.services.rule_translation_service import translate_rule
     return await translate_rule(
         conv, payload.description,
+        target_field_id=payload.target_field_id, source_column=payload.source_column,
+    )
+
+
+class SqlToRuleRequest(BaseModel):
+    sql: str
+    target_field_id: Optional[str] = None
+    source_column: Optional[str] = None
+
+
+@router.post("/conversions/{conversion_id}/rules/from-sql")
+async def sql_to_rule_endpoint(
+    conversion_id: str, payload: SqlToRuleRequest, _: User = Depends(get_current_user)
+):
+    """Compile a SQL expression into a structured transformation rule for the Rule
+    Author modal's SQL box. A CASE ... WHEN ... THEN ... END parses deterministically
+    (offline); anything else goes to the Claude path the English box uses. Returns
+    {rule_type, config, explanation, ambiguities, source}; never 500s — an
+    unparseable query comes back as an editable CONSTANT with an explanation."""
+    conv = await Conversion.get(PydanticObjectId(conversion_id))
+    if not conv:
+        raise HTTPException(404, "Conversion not found")
+    if not (payload.sql or "").strip():
+        raise HTTPException(400, "Paste a SQL expression first.")
+    from app.services.rule_translation_service import translate_sql
+    return await translate_sql(
+        conv, payload.sql,
         target_field_id=payload.target_field_id, source_column=payload.source_column,
     )
 
