@@ -203,6 +203,10 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
     # What the analyst SET, as opposed to what they pointed at: fixed values and
     # keep-blanks. Checked ahead of the schema's own constants.
     const_override: dict[str, str] = {}
+    # field name -> when the analyst approved that fixed value. Only set for an
+    # approved/overridden row that carries a date; an undated one cannot be shown
+    # to be later, so it does not get to outrank a rule.
+    const_at: dict[str, Any] = {}
     # field name -> the analyst's rule pipeline, in sequence order.
     rules_by_field: dict[str, list] = {}
     if template:
@@ -230,7 +234,10 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             if not _rfn or not _r.rule_type:
                 continue
             rules_by_field.setdefault(_rfn, []).append(
-                {"rule_type": _r.rule_type, "rule_config": _r.rule_config or {}})
+                {"rule_type": _r.rule_type, "rule_config": _r.rule_config or {},
+                 # WHEN the rule was written. Carried so this path can rank a rule
+                 # against a fixed value by DATE, the way the FBDI path does.
+                 "as_of": getattr(_r, "created_at", None)})
 
         from app.services.mapping_dedupe import best_mapping_by_target
         for _tid, m in best_mapping_by_target(maps).items():
@@ -243,6 +250,14 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                 # A fixed value the analyst typed. The panel that sets it says it
                 # "overrides AI and clears the source column" — so it does.
                 const_override[fn] = _dv
+                # ...and WHEN they typed it, so a rule can be ranked against it.
+                # Employee is the only object that generates through this writer,
+                # and it had no date test at all: a fixed value beat every rule
+                # regardless of age, while in the FBDI path a newer rule wins. One
+                # intent, two behaviours, decided by which loader the object uses.
+                _dv_at = getattr(m, "approved_at", None)
+                if _dv_at is not None and (m.status or "") in ("approved", "overridden"):
+                    const_at[fn] = _dv_at
                 continue
             if m.status in ("not_applicable", "rejected"):
                 # Keep blank. An explicit instruction to ship the column empty,
@@ -290,6 +305,18 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
         _rules = rules_by_field.get(spec.get("name"))
         if not _rules:
             return value
+        # LATEST DATE WINS, here too.
+        #
+        # A fixed value the analyst approved AFTER every rule on the field is the
+        # later statement, so the rule does not get to transform it away. A rule
+        # written after the value still runs, which is the FBDI behaviour and the
+        # analyst's own precedence: "whichever is latest".
+        _fn = spec.get("name")
+        _at = const_at.get(_fn)
+        if _at is not None:
+            _rule_dates = [r.get("as_of") for r in _rules if r.get("as_of")]
+            if not _rule_dates or _at > max(_rule_dates):
+                return value
         try:
             return _clean(apply_pipeline(_rules, value, row=row.to_dict(),
                                          ctx={"component": spec.get("name")}))

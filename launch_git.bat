@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=ONE RULE - LATEST DATE WINS, for mappings and constants, in every module. The same test was wrong in THREE places and each one only counted a bound source column, so a fixed value the analyst typed was invisible to all three: the strategy overlay guard, the transformation-rule branch, and the control-defaults explicit set. Now a dated approved statement - column or fixed value - beats anything older, and loses to anything newer. Verified live on Supplier Site via output lineage. Supplier, Customer, Item and BOM all go through _transform_frame so all four are covered by the one change; Employee uses the HDL writer, where a fixed value already wins outright. Suite 1276 passing, 13 skipped, 0 failing. REGENERATE everything."
+set "DEPLOY_NOTE=LATEST DATE WINS, now on BOTH write paths - so all five modules. There are only two writers in this tool: _transform_frame, which Supplier, Customer, Item and BOM all use, and the HDL writer, which Employee uses. The same test was wrong in FOUR places and every one of them only counted a bound source column, so a fixed value the analyst typed was invisible: the strategy-overlay guard, the transformation-rule branch, the control-defaults explicit set, and the HDL writer which had no date test at all. All four now rank by date - an approved mapping or fixed value beats anything older and loses to anything newer, undated loses to dated, suggested is not a statement. No per-object copies remain. Suite 1280 passing, 13 skipped, 0 failing. REGENERATE everything."
 
 echo Checking the deploy set...
 set "MISSING="

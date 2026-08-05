@@ -223,3 +223,66 @@ if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()
     print("\nall HDL analyst-constant checks passed")
+
+
+def _src() -> str:
+    """The HDL writer's source. Read fresh each time so a test cannot pass on a
+    stale copy."""
+    return (_BACKEND / "app" / "services"
+            / "hdl_output_service.py").read_text(encoding="utf-8")
+
+
+# ── Latest date wins on the HDL path too (05-Aug) ────────────────────────────
+#
+# Employee is the only object that generates through this writer, and it had no
+# date test at all: a fixed value was taken as const_override and every rule then
+# transformed it, however old the value or however new the rule. The FBDI path
+# ranks the two by date. One intent, two behaviours, decided by which loader the
+# object happened to use — which is exactly the "two copies of a rule" shape this
+# codebase keeps paying for.
+#
+# Analyst, 05-Aug: "just follow the date, latest date wins in mapping and
+# constants in all modules."
+
+def test_the_hdl_writer_carries_the_rules_own_date():
+    """A rule cannot be ranked against anything without one."""
+    src = _src()
+    i = src.index("rules_by_field.setdefault")
+    block = src[i:i + 400]
+    check("the rule's date is carried", '"as_of"' in block, block[:200])
+    check("from the rule row", "created_at" in block)
+
+
+def test_the_hdl_writer_records_when_a_fixed_value_was_approved():
+    src = _src()
+    check("there is a date map for constants", "const_at: dict" in src)
+    # A generous window: the reasoning beside this line is long, and a short
+    # slice would fail on the comment rather than on the code.
+    i = src.index("const_override[fn] = _dv")
+    block = src[i:i + 1200]
+    check("it is stamped beside the value", "const_at[fn]" in block, block[:220])
+    check("only for an approved row",
+          '("approved", "overridden")' in block or "'approved', 'overridden'" in block)
+    check("and only when it carries a date", "_dv_at is not None" in block)
+
+
+def test_a_fixed_value_newer_than_every_rule_is_not_transformed():
+    """The alignment itself: the later statement wins, so the rule does not get to
+    rewrite a value approved after it."""
+    src = _src()
+    i = src.index("_rules = rules_by_field.get(spec.get(\"name\"))")
+    j = src.index("apply_pipeline(_rules, value", i)
+    block = src[i:j]
+    check("the constant's date is consulted", "const_at.get(" in block, block[:300])
+    check("against the newest rule", "max(_rule_dates)" in block)
+    check("and the value is returned untransformed", "return value" in block)
+
+
+def test_an_undated_fixed_value_still_lets_the_rule_run():
+    """Same rule as everywhere else: undated cannot be shown to be later, so it
+    does not outrank anything."""
+    src = _src()
+    i = src.index("_at = const_at.get(")
+    block = src[i:i + 400]
+    check("a missing date falls through to the rule", "_at is not None" in block,
+          block[:200])
