@@ -2283,12 +2283,21 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                                 batch_id_first=batch_id_first)
 
     def _apply_customer_layout(sdf: pd.DataFrame, sheet_name: str,
-                               for_csv: bool = True) -> pd.DataFrame:
+                               for_csv: bool = True,
+                               with_end: bool | None = None) -> pd.DataFrame:
         # Customer Import ships its CSVs in a column order that differs from the
         # worksheet order on three of fifteen interfaces. The counts match, so a
         # file in the wrong order is indistinguishable from a correct one by eye —
         # it just loads every value into the neighbouring column.
-        return _customer_layout(sdf, sheet_name, _is_customer, for_csv=for_csv)
+        #
+        # with_end appends the END record terminator and MUST be forwarded: the
+        # CSV branch passes it explicitly. A wrapper that swallowed it raised
+        # TypeError at generation time and failed every Customer conversion —
+        # the source-text test above only proved the CALL was written, not that
+        # the callee could accept it. Default None means "follow for_csv", which
+        # is the module's own default.
+        return _customer_layout(sdf, sheet_name, _is_customer, for_csv=for_csv,
+                                with_end=with_end)
 
     def _apply_bom_layout(sdf: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         # BOM ships ONE column order for both the worksheet and the CSV, and no

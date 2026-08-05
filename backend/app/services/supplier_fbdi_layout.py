@@ -137,22 +137,48 @@ def _reorder_to(sdf: "pd.DataFrame", order: list) -> "pd.DataFrame":
     name are kept and appended in their existing relative order: a template that has
     gained a column still round-trips, because dropping one silently would be a
     worse failure than the misordering this exists to fix.
+
+    A NAME THE SPEC LISTS TWICE GETS TWO POSITIONS.
+    Oracle's ``HZ_IMP_LOCATIONS_T`` prints "Address Line 1" at columns 6 AND 22 —
+    its own template does, row 4, and the spec transcribes it faithfully at 87
+    wide. The frame reaching this function is built through ``_dedup``, so it
+    carries the name ONCE. Matching by name and skipping repeats therefore emitted
+    86 columns, and every one of the 66 fields after position 21 shipped one place
+    to the left — same plausible-looking file, every value in the neighbouring
+    field. Locations is one of the fifteen interfaces NextPower loads.
+
+    So a spec name with no frame column left to give it gets an EMPTY column at
+    that position rather than nothing. An empty cell is what an unmapped column
+    already ships; a missing one shifts the whole tail. Locations is the only
+    interface in any of the three specs where this fires — supplier's five and
+    BOM's four have no repeated name — so everywhere else this is a no-op.
     """
-    by_norm: dict = {}
+    import pandas as pd  # local: the module is imported by spec-only tests too
+
+    available: dict = {}
     for c in sdf.columns:
-        by_norm.setdefault(norm_hdr(c), c)
-    seen: set = set()
-    ordered: list = []
+        available.setdefault(norm_hdr(c), []).append(c)
+    taken: set = set()
+    pieces: list = []
+    labels: list = []
     for h in order:
-        c = by_norm.get(norm_hdr(h))
-        if c is not None and c not in seen:
-            ordered.append(c)
-            seen.add(c)
+        pool = available.get(norm_hdr(h)) or []
+        col = next((c for c in pool if c not in taken), None)
+        if col is not None:
+            taken.add(col)
+            pieces.append(sdf[col])
+            labels.append(col)
+        else:
+            pieces.append(pd.Series([""] * len(sdf), index=sdf.index, dtype=object))
+            labels.append(h)
     for c in sdf.columns:
-        if c not in seen:
-            ordered.append(c)
-            seen.add(c)
-    return sdf[ordered].copy()
+        if c not in taken:
+            taken.add(c)
+            pieces.append(sdf[c])
+            labels.append(c)
+    out = pd.concat(pieces, axis=1) if pieces else sdf.copy()
+    out.columns = labels
+    return out
 
 
 def bom_layout() -> dict:
