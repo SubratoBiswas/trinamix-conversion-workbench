@@ -1040,6 +1040,80 @@ async def seed_customer_mapping_03aug() -> dict:
     return out
 
 
+_CUSTOMER_06AUG = _DATA / "customer_mapping_06aug.json"
+
+
+async def seed_customer_mapping_06aug() -> dict:
+    """The 06-Aug Customer yellow-column changes from 01_Customer_Import.xlsx.
+
+    Carries the CHANGES and genuinely new columns the workbook flagged (Party Original
+    System Reference -> internalid on Parties; Site Language / Primary Indicator kept
+    blank; From Date coalesce; Relationship Source System Reference concat), dated
+    06-Aug so they win over the 03-Aug statements they revise. Client-scoped and
+    sheet-scoped, so every NextPower Customer conversion resolves them at generate
+    time — the same pipeline for the FBDI and the CSV output. Per-row resilient +
+    returns errors, like the other seeds.
+    """
+    import json as _json
+    if not _CUSTOMER_06AUG.exists():
+        return {"seeded": 0, "note": "customer_mapping_06aug.json not found"}
+    try:
+        doc = _json.loads(_CUSTOMER_06AUG.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+
+    nid = await _nextpower_client_id()
+    eff = _effective_date_of(doc)
+    label = doc.get("_label") or "NXT Customer mapping (06-Aug-2026)"
+    erp = "netsuite"
+    _ACTIONS = {
+        "derive": mapping_store.SOURCE_COLUMN,
+        "constant": mapping_store.DEFAULT_VALUE,
+        "blank": mapping_store.SUPPRESS,
+        "rule": mapping_store.RULE,
+    }
+    counts = {"column_mapping": 0, "example_default": 0, "suppress_field": 0, "rule": 0}
+    retired = skipped = 0
+    errors: list[dict] = []
+
+    for r in doc.get("rules") or []:
+        decision = _ACTIONS.get((r.get("action") or "").strip())
+        tgt = (r.get("target_field") or "").strip()
+        if not decision or not tgt:
+            skipped += 1
+            continue
+        value = (r.get("source_column") or "").strip() or None
+        if decision == mapping_store.DEFAULT_VALUE:
+            value = r.get("value")
+        elif decision == mapping_store.RULE and not value:
+            value = "(rule)"
+        try:
+            row = await mapping_store.record_decision(
+                decision=decision, target_field=tgt, value=value,
+                client_id=nid, source_erp=erp, effective_date=eff,
+                captured_from=label, captured_by=None,
+                rule_type=r.get("rule_type"),
+                rule_config={**(r.get("rule_config") or {}), "note": r.get("note") or ""},
+                target_object=r.get("target_object") or "Customer",
+                sheets=list(r.get("sheets") or []),
+                exclude_sheets=list(r.get("exclude_sheets") or []),
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad row must not lose the rest
+            errors.append({"target_field": tgt, "error": f"{type(exc).__name__}: {exc}"})
+            logger.exception("customer 06-Aug seed: %r failed to record", tgt)
+            continue
+        if row is None:
+            retired += 1
+            continue
+        counts[mapping_store.DECISION_TO_KIND[decision]] += 1
+
+    out = {**counts, "retired": retired, "skipped": skipped,
+           "errors": errors, "error_count": len(errors),
+           "effective_date": doc.get("_effective_date")}
+    logger.info("customer 06-Aug mapping seed: %s", out)
+    return out
+
+
 _SUPPLIER_TRANSFORMS_06AUG = _DATA / "supplier_transforms_06aug.json"
 
 

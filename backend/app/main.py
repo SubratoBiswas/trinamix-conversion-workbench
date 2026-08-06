@@ -280,6 +280,17 @@ async def _run_seeds_background() -> None:
         log.exception("customer 03-Aug mapping seed failed")
 
     try:
+        # The 06-Aug yellow-column changes from 01_Customer_Import.xlsx — runs AFTER
+        # the 03-Aug seed and is dated later, so its revisions (Party Original System
+        # Reference -> internalid on Parties, the two keep-blanks, From Date coalesce,
+        # Relationship Source System Reference concat) win where they overlap.
+        from app.services.catalog_seed_service import seed_customer_mapping_06aug
+        r = await seed_customer_mapping_06aug()
+        log.info("startup seed — customer mapping 06-Aug: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer 06-Aug mapping seed failed")
+
+    try:
         # Supplier transform rules of 06-Aug: #1 Parent Supplier Name (self-lookup)
         # and #3 Supplier Site = BU(country code)-City. Client + object scoped, so they
         # reach every NextPower supplier conversion at generate time.

@@ -621,6 +621,13 @@ async def reseed_customer_mapping(_: User = Depends(get_current_user)):
     return await seed_customer_mapping_03aug()
 
 
+@router.post("/reseed-customer-mapping-06aug")
+async def reseed_customer_mapping_06aug(_: User = Depends(get_current_user)):
+    """Re-run the 06-Aug Customer yellow-column changes seed on demand + return counts."""
+    from app.services.catalog_seed_service import seed_customer_mapping_06aug
+    return await seed_customer_mapping_06aug()
+
+
 @router.post("/reseed-supplier-transforms")
 async def reseed_supplier_transforms(_: User = Depends(get_current_user)):
     """Re-run the 06-Aug Supplier transforms seed (#1 Parent Supplier Name, #3 Supplier

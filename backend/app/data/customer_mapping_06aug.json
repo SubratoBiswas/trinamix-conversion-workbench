@@ -1,0 +1,65 @@
+{
+ "_label": "NXT Customer mapping — 01_Customer_Import.xlsx yellow columns (06-Aug-2026)",
+ "_source": "01_Customer_Import 1.xlsx (Subrato, 06-Aug-2026). Every yellow column across the 15 sheets is a newly-mapped/changed rule; its row-4 note is the instruction. Most were already implemented on 03-Aug; this file carries the CHANGES and the genuinely new columns, dated 06-Aug so they beat the 03-Aug statements they revise.",
+ "_effective_date": "2026-08-06",
+ "_scope": "Client NextPower, source NetSuite, target object Customer. Each rule is scoped to the sheet the workbook flagged it on. Applies at generate time to every conversion, so it covers both the FBDI and CSV outputs (one transform pipeline feeds both).",
+ "_precedence": "One dated store, effective_date 2026-08-06 — later than the 03-Aug customer document, so these win where they overlap and lose to any analyst edit made afterwards.",
+ "rules": [
+  {
+   "target_field": "Party Original System Reference",
+   "action": "derive",
+   "source_column": "internalid",
+   "sheets": ["HZ_IMP_PARTIES_T"],
+   "note": "01_Customer_Import (06-Aug), Parties C4: 'Source column: internalid (from customer.csv) - currently shows values from entityid, instead of internalid'. Mapped to internalid ONLY on the Parties sheet, where the customer's own internalid is directly present (analyst choice: 'only where it maps directly'). The child sheets keep the generated reference, so cross-sheet linkage is left exactly as it is.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Site Language",
+   "action": "blank",
+   "sheets": ["HZ_IMP_PARTYSITES_T"],
+   "note": "01_Customer_Import (06-Aug), HZ_IMP_PARTYSITES_T O4: 'should be unmapped'. Recorded as a keep-blank so the control-default pass cannot refill it.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Primary Indicator",
+   "action": "blank",
+   "sheets": ["HZ_IMP_PARTYSITEUSES_T"],
+   "note": "01_Customer_Import (06-Aug), HZ_IMP_PARTYSITEUSES_T G4: 'should be unmapped'.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "From Date",
+   "action": "rule",
+   "rule_type": "COALESCE",
+   "rule_config": {
+    "columns": [
+     ["startdate", "Start Date", "start_date"],
+     ["datecreated", "Date Created", "date_created", "datecreated"]
+    ],
+    "default": ""
+   },
+   "sheets": ["HZ_IMP_PARTYSITEUSES_T"],
+   "note": "01_Customer_Import (06-Aug), HZ_IMP_PARTYSITEUSES_T I4: 'should be mapped to startdate source column, fallback to datecreated source column if startdate is blank for any row'. COALESCE takes the first non-blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Relationship Source System Reference",
+   "action": "rule",
+   "rule_type": "CONCAT",
+   "rule_config": {
+    "separator": "_",
+    "columns": [
+     ["entityid", "Entity ID", "entity_id", "Customer ID"],
+     ["internalid", "Internal ID", "internal_id", "contactinternalid"]
+    ],
+    "require_all": true,
+    "then": [
+     {"rule_type": "SUFFIX", "config": {"suffix": "_RS", "skip_blank": true, "skip_if_present": true}}
+    ]
+   },
+   "sheets": ["HZ_IMP_PARTYSITES_T"],
+   "note": "01_Customer_Import (06-Aug), HZ_IMP_PARTYSITES_T AV4: 'entityid_internalid_RS (both entityid and internalid source fields to be taken from contacts input sheet)'. CONCAT entityid + _ + internalid, then append _RS. require_all: half a composite key is a wrong key, so a row missing either half blanks rather than shipping a dangling reference.",
+   "target_object": "Customer"
+  }
+ ]
+}
