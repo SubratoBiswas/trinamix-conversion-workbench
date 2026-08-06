@@ -607,6 +607,20 @@ async def reseed_customer_sheet_scope(_: User = Depends(get_current_user)):
     return await seed_customer_sheet_scope()
 
 
+@router.post("/reseed-customer-mapping")
+async def reseed_customer_mapping(_: User = Depends(get_current_user)):
+    """Re-run the 03-Aug/06-Aug Customer mapping seed on demand and RETURN its result.
+
+    The seed also runs at startup, but its outcome was invisible — a failure was
+    swallowed by main.py's try/except, so "did the constants land?" cost a redeploy
+    and a guess. Exposed here it returns the per-kind counts AND the `errors` list
+    (the fields whose write raised), which is how the "derive/rule landed but every
+    constant/blank was missing" fault is now diagnosed rather than inferred.
+    Idempotent — an older statement never overwrites a newer one."""
+    from app.services.catalog_seed_service import seed_customer_mapping_03aug
+    return await seed_customer_mapping_03aug()
+
+
 @router.post("/backfill-dated-store")
 async def backfill_dated_store(_: User = Depends(get_current_user)):
     """Carry every decision made before the store existed into it.

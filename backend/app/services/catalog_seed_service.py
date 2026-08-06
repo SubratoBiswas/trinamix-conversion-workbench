@@ -968,6 +968,7 @@ async def seed_customer_mapping_03aug() -> dict:
     # reached the store, and the derived constants shipped only via the overlay.
     counts = {"column_mapping": 0, "example_default": 0, "suppress_field": 0, "rule": 0}
     retired = skipped = 0
+    errors: list[dict] = []
 
     for r in doc.get("rules") or []:
         decision = _ACTIONS.get((r.get("action") or "").strip())
@@ -990,16 +991,29 @@ async def seed_customer_mapping_03aug() -> dict:
             # `apply_learned_to_conversion` now lets a rule through on the columns
             # its CONFIG names rather than on this one.
             value = "(rule)"
-        row = await mapping_store.record_decision(
-            decision=decision, target_field=tgt, value=value,
-            client_id=nid, source_erp=erp, effective_date=eff,
-            captured_from=label, captured_by=None,
-            rule_type=r.get("rule_type"),
-            rule_config={**(r.get("rule_config") or {}),
-                         "note": r.get("note") or ""},
-            target_object=r.get("target_object") or "Customer",
-            sheets=sheets, exclude_sheets=list(r.get("exclude_sheets") or []),
-        )
+        # PER-RULE RESILIENCE. One field whose write raises must not abort the whole
+        # document — that turned a single production-data quirk on one derive/rule row
+        # into "every constant and blank after it is missing", which is exactly the
+        # shape this seed shipped: the derive/rule rows landed, then one row threw and
+        # the 27 defaults + 2 suppressions after them never got written. Each row is
+        # now isolated; a failure is recorded and named in `errors` so it is visible
+        # (the reseed endpoint returns it) rather than silently swallowed by the
+        # startup try/except, and the remaining rows still land.
+        try:
+            row = await mapping_store.record_decision(
+                decision=decision, target_field=tgt, value=value,
+                client_id=nid, source_erp=erp, effective_date=eff,
+                captured_from=label, captured_by=None,
+                rule_type=r.get("rule_type"),
+                rule_config={**(r.get("rule_config") or {}),
+                             "note": r.get("note") or ""},
+                target_object=r.get("target_object") or "Customer",
+                sheets=sheets, exclude_sheets=list(r.get("exclude_sheets") or []),
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad row must not lose the rest
+            errors.append({"target_field": tgt, "error": f"{type(exc).__name__}: {exc}"})
+            logger.exception("customer 03-Aug seed: %r failed to record", tgt)
+            continue
         if row is None:
             retired += 1        # the analyst retired this — do not resurrect
             continue
@@ -1019,6 +1033,7 @@ async def seed_customer_mapping_03aug() -> dict:
 
     out = {**counts, "retired": retired, "skipped": skipped,
            "excluded_source_columns": excluded,
+           "errors": errors, "error_count": len(errors),
            "effective_date": doc.get("_effective_date"),
            "open_questions": len(doc.get("_open_questions") or [])}
     logger.info("customer 03-Aug mapping seed: %s", out)
