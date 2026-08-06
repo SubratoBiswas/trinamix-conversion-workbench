@@ -1040,6 +1040,79 @@ async def seed_customer_mapping_03aug() -> dict:
     return out
 
 
+_SUPPLIER_TRANSFORMS_06AUG = _DATA / "supplier_transforms_06aug.json"
+
+
+async def seed_supplier_transforms_06aug() -> dict:
+    """The 06-Aug Supplier transform rules (#1 Parent Supplier Name, #3 Supplier Site).
+
+    Recorded as dated RULE decisions in the one store, client-scoped and scoped to the
+    Supplier interface object each rule names, so they apply to every NextPower
+    supplier conversion of that object — current and future — the same way the Customer
+    document does. Per-row resilient and observable (returns `errors`), like the
+    customer seed, so one bad row cannot take the rest down silently.
+    """
+    import json as _json
+    if not _SUPPLIER_TRANSFORMS_06AUG.exists():
+        return {"seeded": 0, "note": "supplier_transforms_06aug.json not found"}
+    try:
+        doc = _json.loads(_SUPPLIER_TRANSFORMS_06AUG.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"seeded": 0, "error": str(exc)}
+
+    nid = await _nextpower_client_id()
+    eff = _effective_date_of(doc)
+    label = doc.get("_label") or "NXT Supplier transforms (06-Aug-2026)"
+    erp = "netsuite"
+
+    _ACTIONS = {
+        "derive": mapping_store.SOURCE_COLUMN,
+        "constant": mapping_store.DEFAULT_VALUE,
+        "blank": mapping_store.SUPPRESS,
+        "rule": mapping_store.RULE,
+    }
+    counts = {"column_mapping": 0, "example_default": 0, "suppress_field": 0, "rule": 0}
+    retired = skipped = 0
+    errors: list[dict] = []
+
+    for r in doc.get("rules") or []:
+        decision = _ACTIONS.get((r.get("action") or "").strip())
+        tgt = (r.get("target_field") or "").strip()
+        if not decision or not tgt:
+            skipped += 1
+            continue
+        value = (r.get("source_column") or "").strip() or None
+        if decision == mapping_store.DEFAULT_VALUE:
+            value = r.get("value")
+        elif decision == mapping_store.RULE and not value:
+            value = "(rule)"
+        try:
+            row = await mapping_store.record_decision(
+                decision=decision, target_field=tgt, value=value,
+                client_id=nid, source_erp=erp, effective_date=eff,
+                captured_from=label, captured_by=None,
+                rule_type=r.get("rule_type"),
+                rule_config={**(r.get("rule_config") or {}), "note": r.get("note") or ""},
+                target_object=r.get("target_object") or "Supplier Import",
+                sheets=list(r.get("sheets") or []),
+                exclude_sheets=list(r.get("exclude_sheets") or []),
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad row must not lose the rest
+            errors.append({"target_field": tgt, "error": f"{type(exc).__name__}: {exc}"})
+            logger.exception("supplier 06-Aug seed: %r failed to record", tgt)
+            continue
+        if row is None:
+            retired += 1
+            continue
+        counts[mapping_store.DECISION_TO_KIND[decision]] += 1
+
+    out = {**counts, "retired": retired, "skipped": skipped,
+           "errors": errors, "error_count": len(errors),
+           "effective_date": doc.get("_effective_date")}
+    logger.info("supplier 06-Aug transforms seed: %s", out)
+    return out
+
+
 def customer_03aug_open_questions() -> list[str]:
     """What the analyst still has to confirm about the 03-Aug documents.
 

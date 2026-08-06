@@ -280,6 +280,16 @@ async def _run_seeds_background() -> None:
         log.exception("customer 03-Aug mapping seed failed")
 
     try:
+        # Supplier transform rules of 06-Aug: #1 Parent Supplier Name (self-lookup)
+        # and #3 Supplier Site = BU(country code)-City. Client + object scoped, so they
+        # reach every NextPower supplier conversion at generate time.
+        from app.services.catalog_seed_service import seed_supplier_transforms_06aug
+        r = await seed_supplier_transforms_06aug()
+        log.info("startup seed — supplier transforms 06-Aug: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("supplier 06-Aug transforms seed failed")
+
+    try:
         # Mine allowed_values / lookup_type out of the descriptions of templates
         # that were parsed before the LOV parser existed. Cheap (no file IO) and
         # idempotent, so it's safe to run on every boot.

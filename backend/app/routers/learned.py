@@ -621,6 +621,14 @@ async def reseed_customer_mapping(_: User = Depends(get_current_user)):
     return await seed_customer_mapping_03aug()
 
 
+@router.post("/reseed-supplier-transforms")
+async def reseed_supplier_transforms(_: User = Depends(get_current_user)):
+    """Re-run the 06-Aug Supplier transforms seed (#1 Parent Supplier Name, #3 Supplier
+    Site) on demand and return its counts + errors. Idempotent."""
+    from app.services.catalog_seed_service import seed_supplier_transforms_06aug
+    return await seed_supplier_transforms_06aug()
+
+
 @router.post("/backfill-field-key")
 async def backfill_field_key_endpoint(_: User = Depends(get_current_user)):
     """Stamp field_key on legacy rows so the resolver's index can be used.

@@ -1,0 +1,36 @@
+{
+ "_label": "NXT Supplier transforms (06-Aug-2026)",
+ "_source": "Supplier issues raised by Subrato, 06-Aug-2026. #1 Parent Supplier Name and #3 Supplier Site are implemented here; #2 (taxpayer id by country) is deliberately NOT implemented — no supplier source carries the per-country tax columns it named, so it would only ship blanks.",
+ "_effective_date": "2026-08-06",
+ "_scope": "Client NextPower, supplier source systems (NetSuite tracker, All-Vendors Phoenix, eBOS). Each rule is scoped to the Supplier interface object it belongs to.",
+ "_precedence": "One dated store. These entries carry effective_date 2026-08-06, so they beat earlier statements about the same field and lose to anything said later — including an analyst's own edit.",
+ "rules": [
+  {
+   "target_field": "Parent Supplier",
+   "action": "rule",
+   "rule_type": "SELF_LOOKUP",
+   "rule_config": {
+    "key_column": "Parent Vendor Id",
+    "match_column": "Internal ID",
+    "value_column": "Legal Name",
+    "default": ""
+   },
+   "target_object": "Supplier Import",
+   "note": "Supplier issue #1: 'Parent Supplier Name to fetch and display the legal_name associated with the parent supplier id.' A self-join within the supplier extract: this row's Parent Vendor Id identifies another vendor by Internal ID, and that vendor's Legal Name is the parent name. SELF_LOOKUP builds the Internal ID->Legal Name index once per generation. Was mapped to the raw Parent Vendor Id; this replaces the id with the name."
+  },
+  {
+   "target_field": "Supplier Site",
+   "action": "rule",
+   "rule_type": "CITY_COUNTRY_KEY",
+   "rule_config": {
+    "country_column": ["Billing Country Code", "country", "Country Code", "Country"],
+    "city_column": ["city", "City"],
+    "separator": "-",
+    "resolve_country_from_city": true,
+    "country_map": {}
+   },
+   "target_object": "Supplier Site",
+   "note": "Supplier issue #3: 'Format the Supplier Site string using the convention BU(country code)-CITY.' BU is a lookup on the country code, so country_map holds the country-code -> BU pairs (e.g. {\"US\":\"US-PROC\",\"CA\":\"CA-PROC\"}); a code not in the map ships unchanged. country_map is EMPTY pending the analyst's BU mapping — until it is filled this behaves exactly like the existing country-code + city key, which is safe."
+  }
+ ]
+}

@@ -729,6 +729,15 @@ def _apply_one_rule(
         if not cc and city and cfg.get("resolve_country_from_city"):
             idx = (ctx or {}).get("city_country") or {}
             cc = idx.get(re.sub(r"[^a-z]", "", city.lower()), "")
+        # BU(country code): optionally map the resolved code through a lookup before
+        # joining, so Supplier Site becomes "<BU>-City" (e.g. US -> US-PROC) instead
+        # of the raw "<code>-City". The lookup is case/punctuation-insensitive on the
+        # key; a code not in the map falls through unchanged, so a partial map still
+        # ships the raw code rather than a blank. Empty/absent map = old behaviour.
+        cmap = cfg.get("country_map") or cfg.get("bu_map")
+        if cc and isinstance(cmap, dict) and cmap:
+            _cm = {re.sub(r"[^a-z0-9]", "", str(k).lower()): v for k, v in cmap.items()}
+            cc = _to_str(_cm.get(re.sub(r"[^a-z0-9]", "", cc.lower()), cc))
         parts = [p for p in (cc, city) if p]
         if not parts:
             # Neither column had anything — which is ALSO what it looks like when
