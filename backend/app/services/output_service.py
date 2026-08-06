@@ -1428,6 +1428,34 @@ def _blank_null_sentinels(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _resolve_today_tokens(df: pd.DataFrame) -> pd.DataFrame:
+    """Whole-cell SYSDATE/TODAY/NOW → today's date, in EVERY column, type-blind.
+
+    ``to_fbdi_date`` already resolves these tokens, but only on columns
+    ``_format_date_columns`` recognises as date-typed. A template that types a date
+    field as *Character* slips past that filter: the BOM ``Effective Date`` column is
+    declared Character, its default is the literal ``SYSDATE``, and it is filled by
+    ``_apply_control_defaults`` — AFTER the date pass — so every one of the 5,000+
+    rows shipped the seven letters "SYSDATE" instead of a date, which Oracle rejects.
+
+    A cell equal to one of these tokens is an INSTRUCTION ("use today"), never valid
+    output, whatever the column's declared type — so this is the type-independent
+    backstop, run on the finished frame after every default/decision has landed.
+    Whole-cell, token-set match only (same shape and safety as
+    ``_blank_null_sentinels``), so a real value that merely contains the word is
+    untouched.
+    """
+    today = datetime.utcnow().strftime(FBDI_DATE_FORMAT)
+    for col in df.columns:
+        s = df[col]
+        if s.dtype != object:
+            continue
+        mask = s.astype(str).str.strip().str.lower().isin(_TODAY_TOKENS)
+        if mask.any():
+            df.loc[mask, col] = today
+    return df
+
+
 def _dedup(cols: list[str]) -> list[str]:
     seen: set[str] = set()
     return [c for c in cols if not (c in seen or seen.add(c))]
@@ -2183,6 +2211,12 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # directly, so they outrank both the control table and the effective
         # defaults. See _sheet_decisions.
         sdf = _apply_sheet_decisions(sdf, sfields)
+        # A SYSDATE/TODAY token is an instruction, not a literal — resolve it to
+        # today AFTER every default and decision has landed, and on ALL columns, so
+        # a Character-typed date field (BOM Effective Date) that slipped past the
+        # date pass at _format_date_columns above still ships a real date, not the
+        # word "SYSDATE".
+        sdf = _resolve_today_tokens(sdf)
         # Cross-column strategy rules need the finished frame (see
         # strategy_overlay.apply_frame_rules) — e.g. blank Alternate Name where it
         # duplicates Supplier Name. Runs AFTER control defaults so a default that

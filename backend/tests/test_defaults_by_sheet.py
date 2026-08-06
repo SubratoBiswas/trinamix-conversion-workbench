@@ -13,7 +13,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.services.defaults_service import _place_default_by_sheet  # noqa: E402
+from app.services.defaults_service import (  # noqa: E402
+    _place_default_by_sheet,
+    _strip_suppressed_by_sheet,
+)
 
 
 class _LM:
@@ -70,6 +73,46 @@ def test_two_sheets_can_hold_different_values_for_one_field():
           f"got {by_sheet['Location']}")
     check("Job kept the field-wide value", by_sheet["Job"]["flag"] == "I")
     check("Position kept the field-wide value", by_sheet["Position"]["flag"] == "I")
+
+
+def test_a_suppressed_field_is_stripped_from_every_sheet():
+    """Live 05-Aug (Employee HDL): SourceSystemOwner=LEGACY, ActionCode=CREATE,
+    EffectiveSequence=1, EffectiveLatestChange=Y are suppressed — blank in the .dat —
+    yet they were seeded onto every sheet of `defaults_by_sheet` from the learned
+    rows, ahead of the flat-defaults suppression gate. The per-sheet map then
+    disagreed with both `defaults` and the file. This strips them back out."""
+    by_sheet = {
+        "Worker": {"sourcesystemowner": "LEGACY", "actioncode": "CREATE",
+                   "effectivestartdate": "1900/1/1"},
+        "Assignment": {"effectivesequence": "1", "effectivelatestchange": "Y",
+                       "setcode": "DEFAULT"},
+    }
+    suppressed = {"sourcesystemowner", "actioncode", "effectivesequence",
+                  "effectivelatestchange"}
+    _strip_suppressed_by_sheet(by_sheet, suppressed)
+    check("Worker.sourcesystemowner gone", "sourcesystemowner" not in by_sheet["Worker"])
+    check("Worker.actioncode gone", "actioncode" not in by_sheet["Worker"])
+    check("Assignment.effectivesequence gone", "effectivesequence" not in by_sheet["Assignment"])
+    check("Assignment.effectivelatestchange gone", "effectivelatestchange" not in by_sheet["Assignment"])
+    # non-suppressed defaults survive
+    check("Worker keeps a real default", by_sheet["Worker"].get("effectivestartdate") == "1900/1/1")
+    check("Assignment keeps a real default", by_sheet["Assignment"].get("setcode") == "DEFAULT")
+
+
+def test_strip_suppressed_is_a_noop_when_nothing_suppressed():
+    by_sheet = {"Job": {"setcode": "DEFAULT"}}
+    _strip_suppressed_by_sheet(by_sheet, set())
+    check("untouched", by_sheet["Job"].get("setcode") == "DEFAULT")
+
+
+def test_compute_effective_defaults_strips_suppressed_from_by_sheet():
+    """The endpoint must apply the strip before returning, or the payload ships the
+    leak. Guards against a refactor dropping the post-pass call."""
+    import inspect
+    from app.services import defaults_service
+    src = inspect.getsource(defaults_service.compute_effective_defaults)
+    check("compute_effective_defaults calls _strip_suppressed_by_sheet",
+          "_strip_suppressed_by_sheet(defaults_by_sheet, suppressed)" in src)
 
 
 def test_the_return_shape_declares_defaults_by_sheet():

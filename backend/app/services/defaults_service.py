@@ -149,6 +149,24 @@ def _place_default_by_sheet(defaults_by_sheet: dict, sheet_names: list, lm,
             defaults_by_sheet.setdefault(_sn, {})[field_key] = lm.resolved_value
 
 
+def _strip_suppressed_by_sheet(defaults_by_sheet: dict, suppressed) -> None:
+    """Drop every suppressed field from every sheet's default map, in place.
+
+    A suppressed field is deliberately blank in the generated file, so it must be
+    absent from the per-sheet map the UI and exports read — otherwise the map
+    contradicts both the flat ``defaults`` and the .dat. Pure and separate so the
+    invariant ("no suppressed field survives in ``defaults_by_sheet``") is
+    unit-testable without a database. ``suppressed`` is any container of normalised
+    field keys; keys are matched exactly (both sides are already ``_norm``-ed).
+    """
+    supp = set(suppressed or ())
+    if not supp:
+        return
+    for _sheet, _fields in defaults_by_sheet.items():
+        for _k in [k for k in _fields if k in supp]:
+            del _fields[_k]
+
+
 async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True) -> dict:
     """Return effective defaults for every unmapped target field of a conversion.
 
@@ -283,18 +301,18 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
         _rows.sort(key=_effective_of)
         for lm in _rows:
             if lm.target_field and lm.resolved_value:
-                learned[_norm(lm.target_field)] = lm.resolved_value
+                _nf = _norm(lm.target_field)
+                learned[_nf] = lm.resolved_value
                 _only = [s for s in (getattr(lm, "sheets", None) or []) if str(s).strip()]
                 _never = [s for s in (getattr(lm, "exclude_sheets", None) or []) if str(s).strip()]
                 if _only or _never:
-                    scopes[_norm(lm.target_field)] = {"sheets": _only,
-                                                      "exclude_sheets": _never}
+                    scopes[_nf] = {"sheets": _only,
+                                   "exclude_sheets": _never}
                 # Oldest-first order means the last write per (sheet, field) wins,
                 # matching the resolver. A field-wide row (no scope) reaches every
                 # sheet; a scoped one only its own. Built through a pure helper so
                 # the per-sheet rule is unit-testable without the Beanie stack.
-                _place_default_by_sheet(defaults_by_sheet, sheet_names, lm,
-                                        _norm(lm.target_field))
+                _place_default_by_sheet(defaults_by_sheet, sheet_names, lm, _nf)
 
     defaults: dict[str, str] = {}
     detail: list[dict] = []
@@ -361,6 +379,19 @@ async def compute_effective_defaults(conversion: Conversion, use_ai: bool = True
                     rule_type="default", rule_config={"default_value": v},
                     captured_from="ai-inference", captured_by=None,
                 )
+
+    # A suppressed field is deliberately blank in the file — output_service never
+    # writes it — so it must not appear in the per-sheet map either. The flat
+    # `defaults` loop gates on `suppressed`, but `defaults_by_sheet` is built earlier,
+    # straight from the learned rows, and so re-introduced exactly the values the
+    # suppression removed (SourceSystemOwner=LEGACY, ActionCode=CREATE,
+    # EffectiveSequence=1, EffectiveLatestChange=Y). The grid masks that (defaultFor
+    # checks `suppressed` first), but the payload was internally inconsistent —
+    # `defaults_by_sheet` disagreed with both `defaults` and the .dat — and any
+    # consumer that read the per-sheet map without re-applying suppression would show
+    # a default the output never carries. One post-pass keeps the invariant no matter
+    # how a field got placed.
+    _strip_suppressed_by_sheet(defaults_by_sheet, suppressed)
 
     # Returned so the UI can say "kept blank" rather than silently showing nothing —
     # an absent default and a deliberately blanked field look identical otherwise,

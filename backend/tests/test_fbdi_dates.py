@@ -24,7 +24,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.output_service import (  # noqa: E402
-    _format_date_columns, to_fbdi_date,
+    _format_date_columns, _resolve_today_tokens, to_fbdi_date,
 )
 
 _failures = []
@@ -152,6 +152,50 @@ def test_sysdate_tokens_resolve_to_today():
     # A real date is still parsed, not treated as a token.
     check("a real date is untouched by the token path",
           to_fbdi_date("2020-01-15") == "2020/01/15")
+
+
+def test_a_character_typed_date_field_still_slips_past_the_date_pass():
+    """Root cause of the live 05-Aug BOM finding: `_format_date_columns` only
+    touches DATE/DATETIME fields. BOM's `Effective Date` is typed **Character** in
+    the template, so the date pass leaves its literal SYSDATE alone — proving the
+    date-column fix alone could never have caught this. The backstop is what must."""
+    out = _format_date_columns(
+        pd.DataFrame({"Effective Date": ["SYSDATE", "SYSDATE"]}),
+        [F("Effective Date", "Character")])
+    check("date pass leaves a Character SYSDATE untouched",
+          out["Effective Date"].tolist() == ["SYSDATE", "SYSDATE"])
+
+
+def test_resolve_today_tokens_fixes_the_character_typed_column():
+    """The type-independent backstop: every whole-cell SYSDATE/TODAY token becomes
+    today's date, in ANY column, regardless of declared type — so the BOM Effective
+    Date ships a real date on all 5,000+ rows instead of the word SYSDATE."""
+    from datetime import datetime
+    today = datetime.utcnow().strftime("%Y/%m/%d")
+    df = pd.DataFrame({
+        "Effective Date": ["SYSDATE", "sysdate", "  NOW  "],   # instruction, all rows
+        "Item Name": ["NTE001", "NTE002", "NTE003"],           # real data, untouched
+        "Comments": ["installed now", "SYSDATE-driven note", "today we shipped"],  # contains, not equals
+    })
+    out = _resolve_today_tokens(df)
+    check("all SYSDATE/NOW cells -> today",
+          out["Effective Date"].tolist() == [today, today, today],
+          f"got {out['Effective Date'].tolist()}")
+    check("item names untouched", out["Item Name"].tolist() == ["NTE001", "NTE002", "NTE003"])
+    check("free text that merely CONTAINS a token is left alone",
+          out["Comments"].tolist() == ["installed now", "SYSDATE-driven note", "today we shipped"],
+          f"got {out['Comments'].tolist()}")
+
+
+def test_resolve_today_tokens_is_idempotent_and_safe_on_dates():
+    """A second pass, or a column already holding real dates, must be a no-op."""
+    from datetime import datetime
+    today = datetime.utcnow().strftime("%Y/%m/%d")
+    df = pd.DataFrame({"Effective Date": ["2020/01/15", today, ""]})
+    out = _resolve_today_tokens(_resolve_today_tokens(df))
+    check("real dates and blanks survive",
+          out["Effective Date"].tolist() == ["2020/01/15", today, ""],
+          f"got {out['Effective Date'].tolist()}")
 
 
 if __name__ == "__main__":
