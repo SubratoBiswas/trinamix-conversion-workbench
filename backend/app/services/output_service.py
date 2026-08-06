@@ -119,6 +119,36 @@ def _branch_columns(branches) -> set[str]:
     return cols
 
 
+# ``{Column}`` inside a rule's RESULT string — the same token the engine's
+# ``_interpolate`` substitutes from the row. Kept identical to
+# ``transformations.engine._PLACEHOLDER`` so the two cannot disagree about what a
+# token is.
+_RESULT_TOKEN = re.compile(r"\{([^{}]+)\}")
+
+
+def _interpolated_columns(*values) -> set[str]:
+    """Columns a rule reads through ``{Column}`` interpolation in its RESULT — a
+    CASE_WHEN branch's ``then`` (or the top-level ``default``) and a CONDITIONAL's
+    ``then`` / ``else``.
+
+    These are named nowhere else on the rule, so a walk that only looks at
+    ``if_column`` misses them entirely — the frame prunes the column and the engine
+    ships the LITERAL token to the file. Reported 06-Aug (NextPower Supplier): a
+    Taxpayer-ID CASE_WHEN mapped India->``{pan}``, United States->``{tax_id}``,
+    Canada->``{tax_id_canada}`` shipped the raw text ``{tax_id}`` / ``{tax_id_canada}``
+    for the US and Canada rows. ``pan`` resolved only because it was the rule's own
+    ``source_column`` and so survived pruning; the other two were referenced solely
+    inside a ``then`` and were dropped before the rule ran."""
+    cols: set[str] = set()
+    for v in values:
+        if isinstance(v, str) and "{" in v:
+            for m in _RESULT_TOKEN.finditer(v):
+                name = m.group(1).strip()
+                if name:
+                    cols.add(name)
+    return cols
+
+
 def _rule_referenced_columns(rules: list[dict]) -> set[str]:
     """Source columns a rule reads OTHER than the cell's own mapped column —
     CASE_WHEN/CONDITIONAL ``if_column`` and CONCAT/COALESCE ``columns``. These must
@@ -141,10 +171,21 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
                 cols |= _rule_referenced_columns([_nxt])
         if rt in ("CONCAT", "COALESCE"):
             cols.update(_flat_cols(cfg.get("columns")))
-        elif rt == "CONDITIONAL" and cfg.get("if_column"):
-            cols.update(_flat_cols(cfg["if_column"]))
+        elif rt == "CONDITIONAL":
+            cols.update(_flat_cols(cfg.get("if_column")))
+            # ``then`` / ``else`` may build the result from other columns.
+            cols |= _interpolated_columns(cfg.get("then"), cfg.get("else"))
         elif rt in ("CASE_WHEN", "SUFFIX_WHEN"):
             cols |= _branch_columns(cfg.get("branches"))
+            if rt == "CASE_WHEN":
+                # A branch's ``then`` (and the top-level ``default``) can name other
+                # columns via ``{Column}`` interpolation — the Taxpayer-ID rule maps
+                # each country to a DIFFERENT source column that way. Collect them or
+                # the frame prunes them and the literal ``{tax_id}`` token ships.
+                for _br in (cfg.get("branches") or []):
+                    if isinstance(_br, dict):
+                        cols |= _interpolated_columns(_br.get("then"))
+                cols |= _interpolated_columns(cfg.get("default"))
         elif rt == "CITY_COUNTRY_KEY":
             for spec in (cfg.get("country_column"), cfg.get("city_column")):
                 for c in (spec if isinstance(spec, (list, tuple)) else [spec]):
