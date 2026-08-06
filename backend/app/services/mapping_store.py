@@ -307,11 +307,20 @@ def _order(entry: Entry, *, client_id: Any, source_erp: str | None) -> tuple:
     exact_source = 0 if (entry.source_erp and source_erp
                          and normalise_source(entry.source_erp)
                          == normalise_source(source_erp)) else 1
+    # A keep-blank and a fixed value dated the SAME instant are the analyst saying
+    # two things about one field at once, and ship-blank is the safe reading of the
+    # tie. It is also what stopped Batch Identifier: a generated per-conversion value
+    # (CONV-<id>) that auto-capture kept re-stamping had been tying the seeded
+    # suppression and then winning on the string tie-breaks below, which favour a
+    # "default_value" over a "suppress". A STRICTLY newer value still wins — the date
+    # term dominates — so this only decides a genuine same-instant tie.
+    suppress_first = 0 if entry.decision == SUPPRESS else 1
     # Newest first, expressed as "how long before the end of time" so that an
     # undated entry (datetime.min) sorts last without going through a timestamp
     # — datetime.min.timestamp() is not representable in every timezone.
     return (
         datetime.max - (entry.effective_date or datetime.min),
+        suppress_first,
         exact_client,
         exact_source,
         str(getattr(entry.row, "id", "") or ""),

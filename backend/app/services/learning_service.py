@@ -197,7 +197,15 @@ async def capture_learnings_from_conversion(conversion: Conversion) -> dict:
                 n += 1
         elif _dv and (trustworthy or m.status == "not_applicable"):
             # An explicit default the analyst typed is a decision regardless of the
-            # mapping's confidence — capture it (issue #7).
+            # mapping's confidence — capture it (issue #7). EXCEPT a generated
+            # linkage/control value: Batch Identifier's per-conversion CONV-<id> and
+            # the ORIG_SYSTEM keys are invented for THIS conversion, so capturing them
+            # turns a one-conversion value into a client default that re-dates itself
+            # on every generate and outranks a keep-blank (06-Aug: CONV-E3F9D5 kept
+            # beating the approved suppression). Never learn those as reusable.
+            from app.services.customer_structure_service import generated_role
+            if generated_role(fname):
+                continue
             if await _upsert_learned("example_default", business_object, fname,
                                      original="(default)", resolved=_dv,
                                      rule_type="default", client_id=_cid,
@@ -314,6 +322,13 @@ async def record_learning_from_mapping(
     # Learnings are keyed by source system too — see source_scope.
     _src = await source_erp_for_conversion(conversion)
     if not mapping.source_column:
+        # A generated linkage/control field (Batch Identifier, the ORIG_SYSTEM keys)
+        # holds a value the tool invents per conversion — it must never be captured as
+        # a reusable default, or a per-conversion CONV-<id> becomes a client standard
+        # that outranks the analyst's keep-blank (06-Aug Batch Identifier bug).
+        from app.services.customer_structure_service import generated_role
+        if generated_role(target_field):
+            return None
         # Default-only decision → an example_default learning, so it shows up in
         # the Learning Centre's "Default values" tab immediately on save.
         return await _upsert(
