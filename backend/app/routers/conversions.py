@@ -222,6 +222,70 @@ async def apply_reference_standards_project(project_id: str, _: User = Depends(g
     return {"applied": total, "objects": objects}
 
 
+@router.get("/project/{project_id}/cross-reference")
+async def project_cross_reference(project_id: str, _: User = Depends(get_current_user)):
+    """Every conversion in the project with its source columns and its target fields
+    (each target's resolved source column + rule) — the data the rule author needs to
+    cross-reference one conversion's column from another, and the picker for a
+    CROSS_CONVERSION_LOOKUP rule (ref_conversion_id + match/value columns).
+
+    Read-only. One query per collection, so it stays cheap even with many
+    conversions: source columns and mappings are fetched in bulk and grouped in
+    memory rather than per conversion.
+    """
+    from app.models.dataset import DatasetColumnProfile
+    from app.models.mapping import MappingSuggestion
+
+    convs = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)
+    ).sort("planned_load_order").to_list()
+    if not convs:
+        return {"project_id": project_id, "conversions": []}
+
+    # Bulk-load source columns (by dataset) and mappings (by conversion), then group.
+    ds_ids, conv_ids = set(), [c.id for c in convs]
+    for c in convs:
+        for d in (getattr(c, "source_dataset_ids", None) or []):
+            ds_ids.add(d)
+    cols = await DatasetColumnProfile.find(
+        {"dataset_id": {"$in": list(ds_ids)}}).sort("+position").to_list() if ds_ids else []
+    cols_by_ds: dict = {}
+    for c in cols:
+        cols_by_ds.setdefault(c.dataset_id, []).append((c.column_name or "").strip())
+    maps = await MappingSuggestion.find(
+        {"conversion_id": {"$in": conv_ids}}).to_list() if conv_ids else []
+    maps_by_conv: dict = {}
+    for m in maps:
+        maps_by_conv.setdefault(m.conversion_id, []).append(m)
+
+    out = []
+    for c in convs:
+        src_cols, seen = [], set()
+        for d in (getattr(c, "source_dataset_ids", None) or []):
+            for name in cols_by_ds.get(d, []):
+                if name and name.lower() not in seen:
+                    seen.add(name.lower()); src_cols.append(name)
+        targets = []
+        for m in maps_by_conv.get(c.id, []):
+            st = getattr(m, "suggested_transformation", None) or {}
+            targets.append({
+                "target_field": getattr(m, "target_field_name", None),
+                "target_sheet": getattr(m, "target_sheet", None),
+                "source_column": getattr(m, "source_column", None),
+                "rule_type": st.get("rule_type"),
+                "status": getattr(m, "status", None),
+                "default_value": getattr(m, "default_value", None),
+            })
+        out.append({
+            "conversion_id": str(c.id),
+            "name": c.name,
+            "target_object": getattr(c, "target_object", None),
+            "source_columns": src_cols,
+            "targets": targets,
+        })
+    return {"project_id": project_id, "conversions": out}
+
+
 @router.get("", response_model=list[ConversionOut])
 async def list_conversions(
     project_id: Optional[str] = Query(None),

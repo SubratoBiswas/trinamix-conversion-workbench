@@ -1002,7 +1002,7 @@ const RULE_SPECS: Record<string, RuleSpec> = {
   CONSTANT: { label: "Constant value", description: "Always emit this value, ignoring the source", defaultConfig: () => ({ value: "" }), needsSourceColumn: false, Form: SingleValueForm("Always set to") },
   COMPUTED: { label: "Computed value", description: "Today, sequence number, UUID, current user", defaultConfig: () => ({ source: "today", format: "%Y/%m/%d" }), needsSourceColumn: false, Form: ComputedForm },
   // Mapping
-  VALUE_MAP: { label: "Value mapping", description: "Replace values using a from→to dictionary", defaultConfig: () => ({ active: "production", inactive: "discontinued", case_insensitive: true }), Form: ValueMapForm },
+  VALUE_MAP: { label: "Value mapping", description: "Replace values using a from→to dictionary", defaultConfig: () => ({ case_insensitive: true }), Form: ValueMapForm },
   CROSSWALK_LOOKUP: { label: "Crosswalk lookup", description: "Resolve via a named lookup table loaded for this conversion", defaultConfig: () => ({ crosswalk: "", default: "" }), Form: CrosswalkForm },
   // Date / number
   DATE_FORMAT: { label: "Date format", description: "Convert dates between formats", defaultConfig: () => ({ input_format: "%m/%d/%Y", output_format: "%Y/%m/%d" }), Form: DateFormatForm },
@@ -1033,6 +1033,7 @@ const RULE_SPECS: Record<string, RuleSpec> = {
   SUFFIX_WHEN: { label: "Suffix when", description: "Append a string only when a condition holds", defaultConfig: () => ({}), rowAware: true, Form: RawConfigOnly },
   SEQUENCE: { label: "Running sequence", description: "Unique running key with an optional variant form", defaultConfig: () => ({ prefix: "", width: 6, start: 1 }), needsSourceColumn: false, Form: RawConfigOnly },
   SELF_LOOKUP: { label: "Self lookup", description: "Resolve a value from another row of the same file", defaultConfig: () => ({}), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
+  CROSS_CONVERSION_LOOKUP: { label: "Cross-conversion lookup", description: "Resolve a value from another conversion in this project (ref_conversion_id + match/value columns)", defaultConfig: () => ({ ref_conversion_id: "", key_column: "", match_column: "", value_column: "", default: "" }), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
   CITY_COUNTRY_KEY: { label: "Country-city key", description: "Join an ISO country code and a city into one key", defaultConfig: () => ({}), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
   BLANK_IF_EQUALS: { label: "Blank if equals", description: "Clear the value when it duplicates another column", defaultConfig: () => ({ other_column: "" }), rowAware: true, Form: RawConfigOnly },
 };

@@ -762,6 +762,35 @@ def _apply_one_rule(
             return cfg.get("default", "")
         return index.get(want, cfg.get("default", ""))
 
+    if rt == "CROSS_CONVERSION_LOOKUP":
+        # SELF_LOOKUP across conversions: resolve a value from ANOTHER conversion of
+        # the same project. Same shape as SELF_LOOKUP, but the index is built from the
+        # referenced conversion's source rather than this one's — so e.g. Parent
+        # Supplier Name can pull legal_name from the Suppliers conversion when this
+        # file only carries the parent's id.
+        #   {"ref_conversion_id": "<id>", "key_column": "<this row's key>",
+        #    "match_column": "<other conv's key col>",
+        #    "value_column": "<other conv's value col>", "default": ""}
+        # The index is built once per generation and handed in via ctx.cross_index,
+        # keyed "<ref_conversion_id>:<match>-><value>", exactly as self_index is — a
+        # per-row scan of another whole extract would be O(n*m).
+        want = _to_str(row.get(_resolve_column(cfg.get("key_column"), row), "")
+                       if row else value).strip()
+        if not want:
+            return cfg.get("default", "")
+        ref = (cfg.get("ref_conversion_id") or cfg.get("ref_conversion")
+               or cfg.get("conversion_id") or "")
+        index = (ctx.get("cross_index") or {}).get(
+            f"{ref}:{cfg.get('match_column')}->{cfg.get('value_column')}")
+        if index is None:
+            # No index (preview, an unbuilt/unknown reference). Blank is the honest
+            # answer — an id where a name belongs looks populated but is wrong.
+            return cfg.get("default", "")
+        v = index.get(want)
+        if v is None and want.endswith(".0"):
+            v = index.get(want[:-2])
+        return v if v is not None else cfg.get("default", "")
+
     if rt == "SEQUENCE":
         # CW #23: a unique running key — NXT000001, and a "_C1" form for a PERSON.
         #   {"prefix": "NXT", "width": 6, "start": 1, "preserve_source": true,

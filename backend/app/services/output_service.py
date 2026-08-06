@@ -257,6 +257,69 @@ def _self_lookup_configs(pipelines: dict, target_object: str | None) -> list[dic
     return out
 
 
+def _cross_conversion_configs(pipelines: dict) -> list[dict]:
+    """Every CROSS_CONVERSION_LOOKUP config in play for this conversion.
+
+    Each names another conversion to resolve a value from — ref_conversion_id plus
+    the match/value columns of that OTHER conversion's source. Collected here so the
+    index can be built once, before the row loop, exactly as SELF_LOOKUP's is.
+    """
+    out: list[dict] = []
+    for _rules in (pipelines or {}).values():
+        for r in _rules or []:
+            if (r.get("rule_type") or "").upper() == "CROSS_CONVERSION_LOOKUP":
+                out.append(r.get("config") or {})
+    return out
+
+
+async def _build_cross_index(configs: list[dict]) -> dict:
+    """``{"<ref_conversion_id>:<match>-><value>": {match_value: value_value}}``.
+
+    Loads each REFERENCED conversion's source once and indexes match->value, so a
+    CROSS_CONVERSION_LOOKUP resolves against another conversion in the project the
+    same way SELF_LOOKUP resolves within this one. Built here (async, with DB + file
+    IO) rather than in the row-local transform, which is sync and must stay pure.
+    Any one reference that cannot be loaded is skipped, not fatal — its rule then
+    returns its default, which is the honest "not found".
+    """
+    if not configs:
+        return {}
+    from app.models.conversion import Conversion
+    from app.services.dataset_file_store import materialize_dataset_file
+
+    index: dict[str, dict[str, str]] = {}
+    frame_cache: dict[str, pd.DataFrame] = {}
+    for cfg in configs:
+        ref = str(cfg.get("ref_conversion_id") or cfg.get("ref_conversion")
+                  or cfg.get("conversion_id") or "").strip()
+        mk, vk = cfg.get("match_column"), cfg.get("value_column")
+        if not ref or not mk or not vk:
+            continue
+        key = f"{ref}:{mk}->{vk}"
+        if key in index:
+            continue
+        try:
+            if ref not in frame_cache:
+                conv = await Conversion.get(ref)
+                frames = []
+                for did in (getattr(conv, "source_dataset_ids", None) or []):
+                    ds = await Dataset.get(did)
+                    p = await materialize_dataset_file(ds) if ds else None
+                    if p:
+                        frames.append(parse_tabular(str(p), file_type=ds.file_type))
+                frame_cache[ref] = (pd.concat(frames, ignore_index=True)
+                                    if len(frames) > 1 else
+                                    (frames[0] if frames else pd.DataFrame()))
+            src = frame_cache[ref]
+            # Reuse the self-index builder — same match->value shape, one ref frame.
+            built = _build_self_index(src, [{"match_column": mk, "value_column": vk}])
+            index[key] = built.get(f"{mk}->{vk}", {})
+        except Exception:                                       # noqa: BLE001
+            log.exception("cross-conversion index for %s failed", key)
+            continue
+    return index
+
+
 def _sequence_key_configs(pipelines: dict, target_object: str | None) -> list[dict]:
     """Every SEQUENCE config carrying a ``key_column``, from both rule sources."""
     out: list[dict] = []
@@ -577,6 +640,7 @@ def _transform_frame(
     self_index: dict | None = None, city_country: dict | None = None,
     city_case: dict | None = None, row_offset: int = 0,
     sequence_index: dict | None = None, source_label: str = "",
+    cross_index: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -592,7 +656,8 @@ def _transform_frame(
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
     _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {},
-                 "city_case": city_case or {}, "sequence_index": sequence_index or {}}
+                 "city_case": city_case or {}, "sequence_index": sequence_index or {},
+                 "cross_index": cross_index or {}}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -1104,6 +1169,11 @@ async def build_converted_dataframe(
     except Exception:  # noqa: BLE001 — never fail generation over the overlay
         log.exception("could not collect strategy-overlay source columns")
 
+    # Cross-conversion lookups resolve against OTHER conversions, so the index is
+    # built ONCE for the whole conversion (independent of which source frame is being
+    # converted) and closed over by _convert_source. Empty when no rule needs it.
+    _cross_idx = await _build_cross_index(_cross_conversion_configs(pipelines))
+
     async def _convert_source(src: pd.DataFrame,
                               label: str = "") -> tuple[pd.DataFrame, dict]:
         """Prune to the mapped/referenced columns, then chunk-transform ONE source
@@ -1135,7 +1205,7 @@ async def build_converted_dataframe(
             return await asyncio.to_thread(
                 _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
                 _obj_name_for_overlay, _self_idx, _city_idx, _city_case, 0,
-                _seq_idx, label)
+                _seq_idx, label, _cross_idx)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
@@ -1143,7 +1213,7 @@ async def build_converted_dataframe(
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
                 _obj_name_for_overlay, _self_idx, _city_idx, _city_case, start,
-                _seq_idx, label)
+                _seq_idx, label, _cross_idx)
             parts.append(odf)
             if not lin0:
                 lin0 = lin
