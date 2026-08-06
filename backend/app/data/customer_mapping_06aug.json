@@ -1,9 +1,9 @@
 {
  "_label": "NXT Customer mapping — 01_Customer_Import.xlsx yellow columns (06-Aug-2026)",
  "_source": "01_Customer_Import 1.xlsx (Subrato, 06-Aug-2026). Every yellow column across the 15 sheets is a newly-mapped/changed rule; its row-4 note is the instruction. Most were already implemented on 03-Aug; this file carries the CHANGES and the genuinely new columns, dated 06-Aug so they beat the 03-Aug statements they revise.",
- "_effective_date": "2026-08-06",
+ "_effective_date": "2026-08-07",
  "_scope": "Client NextPower, source NetSuite, target object Customer. Each rule is scoped to the sheet the workbook flagged it on. Applies at generate time to every conversion, so it covers both the FBDI and CSV outputs (one transform pipeline feeds both).",
- "_precedence": "One dated store, effective_date 2026-08-06 — later than the 03-Aug customer document, so these win where they overlap and lose to any analyst edit made afterwards.",
+ "_precedence": "Dated 2026-08-07 ON PURPOSE, one day past the workbook's own date. The tool auto-captures its own generated output as dated learnings, so a field the workbook says to blank (Site Language) or re-rule (From Date) had a same-day (06-Aug) auto-capture that out-ranked a 06-Aug document by time-of-day and kept the old value. The analyst's document is the authority, so it is stamped one day later to beat those same-day captures. It still loses to a genuine HUMAN edit, which is protected by approver regardless of date.",
  "rules": [
   {
    "target_field": "Party Original System Reference",

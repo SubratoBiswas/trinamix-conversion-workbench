@@ -28,9 +28,13 @@ def _rules():
     return {r["target_field"]: r for r in json.loads(_DOC.read_text(encoding="utf-8"))["rules"]}
 
 
-def test_effective_date_supersedes_03aug():
+def test_effective_date_supersedes_same_day_autocaptures():
+    """Dated 07-Aug on purpose: one day past the workbook, so the document beats the
+    tool's own same-day (06-Aug) auto-captured learnings that otherwise out-rank it by
+    time-of-day. Human edits stay protected by approver regardless of date."""
     doc = json.loads(_DOC.read_text(encoding="utf-8"))
-    check("dated 06-Aug (beats 03-Aug)", doc["_effective_date"] == "2026-08-06")
+    check("dated 07-Aug (beats 03-Aug and same-day captures)",
+          doc["_effective_date"] == "2026-08-07")
 
 
 def test_party_original_system_reference_is_internalid_on_parties_only():
