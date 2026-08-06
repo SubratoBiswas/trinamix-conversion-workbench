@@ -960,7 +960,13 @@ async def seed_customer_mapping_03aug() -> dict:
         "blank": mapping_store.SUPPRESS,
         "rule": mapping_store.RULE,
     }
-    counts = {"column_mapping": 0, "default_value": 0, "suppress": 0, "rule": 0}
+    # Keyed by the stored `kind` vocabulary, because the tally below increments
+    # `counts[DECISION_TO_KIND[decision]]` and DECISION_TO_KIND yields the kinds
+    # ("example_default", "suppress_field"), NOT the decision names. Using the
+    # decision names here raised KeyError on the first `constant`/`blank` row,
+    # which aborted the whole seed — so no 03-Aug default or suppression ever
+    # reached the store, and the derived constants shipped only via the overlay.
+    counts = {"column_mapping": 0, "example_default": 0, "suppress_field": 0, "rule": 0}
     retired = skipped = 0
 
     for r in doc.get("rules") or []:
