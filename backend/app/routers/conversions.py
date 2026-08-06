@@ -525,6 +525,31 @@ async def reset_defaults(
         raise HTTPException(400, f"Reset failed: {exc}")
 
 
+def _should_forget_default(captured_from, target_field, want_fields: set, sources_ok: set) -> bool:
+    """Whether reset-defaults should forget one stored example_default learning.
+
+    TARGETED reset (the analyst named the field) forgets WHATEVER default feeds that
+    field, whatever its provenance. The old rule kept a source filter even for a
+    named field, so a default captured from a SIBLING conversion (``captured_from`` =
+    a conversion name, e.g. "Customer_Shipping_Address -> Customer Import") — neither
+    "gold example" nor "ai-inference" — survived the reset, and apply_learned then
+    re-applied it on the very next generate. That is the live "I removed Insert
+    Update Indicator but it keeps coming back in the file" bug: the clear looked
+    done on screen and the store put it right back. A named field is an explicit
+    "stop applying this here", so provenance must not gate it.
+
+    BLANKET reset (no field named) stays conservative — only gold-derived / AI
+    defaults, never a human-authored learning captured from a real mapping.
+
+    Pure so the rule is unit-testable without a database.
+    """
+    fld = (target_field or "").strip().lower()
+    if want_fields:
+        return fld in want_fields
+    cf = (captured_from or "")
+    return cf in sources_ok or "gold" in cf.lower()
+
+
 async def _reset_defaults_impl(conversion_id: str, body: "ResetDefaultsIn") -> dict:
     from app.models.fbdi import FBDIField
     from app.models.learned import LearnedMapping
@@ -557,11 +582,9 @@ async def _reset_defaults_impl(conversion_id: str, body: "ResetDefaultsIn") -> d
         LearnedMapping.kind == "example_default",
         LearnedMapping.target_object == obj,
     ).to_list()
-    rules = [
-        r for r in rules
-        if ((r.captured_from or "") in sources_ok or "gold" in (r.captured_from or "").lower())
-        and (not want_fields or (r.target_field or "").strip().lower() in want_fields)
-    ]
+
+    rules = [r for r in rules
+             if _should_forget_default(r.captured_from, r.target_field, want_fields, sources_ok)]
     forget_field_keys = {(r.target_field or "").strip().lower() for r in rules if r.target_field}
 
     rules_forgotten = 0
