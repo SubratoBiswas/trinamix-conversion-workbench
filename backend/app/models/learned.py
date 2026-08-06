@@ -13,6 +13,16 @@ class LearnedMapping(Document):
     resolved_value: str
     target_object: Optional[str] = None
     target_field: Optional[str] = None
+    # A persisted, normalised form of target_field — "Party Original System
+    # Reference", "PartyOriginalSystemReference" and "PARTY_ORIGINAL_SYSTEM_REFERENCE"
+    # all collapse to "partyoriginalsystemreference". INDEXED, so find_rows_for_key
+    # can pull one field's rows through an index instead of fetching the whole
+    # collection (~2,000 decision rows) and filtering in Python — the ~15s-per-call
+    # scan that starved the startup seed and slowed every generation. record_decision
+    # sets it on every write; a startup backfill populates legacy rows; and the
+    # resolver's query also matches rows where it is still null, so nothing disappears
+    # while the backfill is catching up.
+    field_key: Optional[str] = None
     rule_type: Optional[str] = None
     rule_config: Optional[dict] = None
     # Tenant scope. A client-scoped learning applies only to conversions of that
@@ -63,6 +73,13 @@ class LearnedMapping(Document):
 
     class Settings:
         name = "learned_mappings"
+        # find_rows_for_key resolves by (field, client, source). field_key is the
+        # normalised field and the high-selectivity term — one field is a handful of
+        # rows out of thousands — so indexing it turns the resolver's collection scan
+        # into an index seek. client_id narrows the tenant. Without these the store
+        # was a full scan per lookup (~15s on the shared instance), which is what made
+        # the seed unable to finish and every generation slow.
+        indexes = ["field_key", "client_id"]
 
     # ── Tombstone-aware queries ──────────────────────────────────────────
     # Retired learnings must disappear from EVERY read path — the Learning

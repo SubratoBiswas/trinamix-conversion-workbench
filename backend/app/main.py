@@ -253,6 +253,18 @@ async def _run_seeds_background() -> None:
         log.exception("item do-not-map seed failed")
 
     try:
+        # Stamp field_key on legacy rows BEFORE the customer seed runs, so the seed's
+        # find_rows_for_key calls resolve through the index rather than scanning the
+        # whole collection. This is the fix for the seed never finishing: the scan cost
+        # ~15s a call, 66+ calls timed the seed out before it reached the constants.
+        # One read + one bulk write, so it cannot itself become the slow step.
+        from app.services.mapping_store import backfill_field_key
+        r = await backfill_field_key()
+        log.info("startup — field_key backfill: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("field_key backfill failed")
+
+    try:
         # The two Customer documents of 03-Aug: the field-mapping workbook's green
         # rows plus customer_mapping.txt's transformation rules and defaults.
         # Seeded AFTER seed_customer_field_mappings and seed_customer_sheet_scope,

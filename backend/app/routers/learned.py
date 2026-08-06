@@ -621,6 +621,18 @@ async def reseed_customer_mapping(_: User = Depends(get_current_user)):
     return await seed_customer_mapping_03aug()
 
 
+@router.post("/backfill-field-key")
+async def backfill_field_key_endpoint(_: User = Depends(get_current_user)):
+    """Stamp field_key on legacy rows so the resolver's index can be used.
+
+    Also runs at startup; exposed so the one-time backfill can be forced (and its
+    count read) without a redeploy. Idempotent — only rows missing the key are touched.
+    Run this BEFORE reseed-customer-mapping on an already-running instance so the seed
+    resolves through the index instead of scanning."""
+    from app.services.mapping_store import backfill_field_key
+    return await backfill_field_key()
+
+
 @router.post("/backfill-dated-store")
 async def backfill_dated_store(_: User = Depends(get_current_user)):
     """Carry every decision made before the store existed into it.

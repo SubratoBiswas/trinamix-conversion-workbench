@@ -553,12 +553,20 @@ async def find_rows_for_key(*, target_field: str, client_id: Any = None,
     documented way for a decision to disappear.
     """
     from app.models.learned import LearnedMapping
+    want_field = normalise_field(target_field)
+    # Pull one field's rows through the field_key index instead of fetching every
+    # decision row and filtering in Python — the full-collection scan that cost ~15s
+    # a call on the shared instance, starved the seed and slowed generation. The
+    # ``field_key: None`` arm keeps legacy rows the startup backfill has not reached
+    # yet visible, so a decision cannot disappear mid-migration; once backfilled there
+    # are none and the query is a pure index seek. The Python filter below is
+    # unchanged and remains the authority on the match.
     rows = await LearnedMapping.find(
-        {"kind": {"$in": sorted(DECISION_KINDS)}},
-        {"target_field": {"$ne": None}},
+        {"kind": {"$in": sorted(DECISION_KINDS)},
+         "target_field": {"$ne": None},
+         "$or": [{"field_key": want_field}, {"field_key": None}]},
         include_deleted=include_deleted,
     ).to_list()
-    want_field = normalise_field(target_field)
     want_client = client_key(client_id)
     want_source = normalise_source(source_erp)
     out = []
@@ -571,6 +579,33 @@ async def find_rows_for_key(*, target_field: str, client_id: Any = None,
             continue
         out.append(row)
     return out
+
+
+async def backfill_field_key() -> dict:
+    """Populate ``field_key`` on legacy rows so find_rows_for_key's index can be used.
+
+    field_key is the normalised target_field, set on every write from now on. Rows
+    written before that column existed have it null, and while any remain null the
+    resolver still fetches them (the ``field_key: None`` arm of the query) — correct
+    but slow. This stamps them in ONE read + ONE bulk write rather than a row-at-a-time
+    loop, so it finishes in a couple of operations even on the shared instance and is
+    not the 30-minute crawl the per-row seed was. Idempotent: it only touches rows
+    whose key is missing, so a second run writes nothing.
+    """
+    from app.models.learned import LearnedMapping
+    from pymongo import UpdateOne
+
+    coll = LearnedMapping.get_motor_collection()
+    ops = []
+    cursor = coll.find({"$or": [{"field_key": None}, {"field_key": {"$exists": False}}]},
+                       {"target_field": 1})
+    async for doc in cursor:
+        ops.append(UpdateOne({"_id": doc["_id"]},
+                             {"$set": {"field_key": normalise_field(doc.get("target_field"))}}))
+    if ops:
+        await coll.bulk_write(ops, ordered=False)
+    log.info("field_key backfill: stamped %d row(s)", len(ops))
+    return {"backfilled": len(ops)}
 
 
 # What a write should do about the rows already stored. Pure, so that "an older
@@ -730,6 +765,8 @@ async def record_decision(*, decision: str, target_field: str,
             # holding a constant's value — a fallback hiding inside one document.
             "kind": kind,
             "category": category or _DEFAULT_CATEGORY[decision],
+            # Keep the indexed key in step with the field on every rewrite.
+            "field_key": normalise_field(target_field),
             "captured_from": captured_from,
             "captured_by": captured_by,
             "captured_at": now,
@@ -779,6 +816,7 @@ async def record_decision(*, decision: str, target_field: str,
         kind=kind,
         category=category or _DEFAULT_CATEGORY[decision],
         target_field=str(target_field),
+        field_key=normalise_field(target_field),
         target_object=target_object,
         client_id=client_id,
         source_erp=source_erp,
