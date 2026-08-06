@@ -219,6 +219,54 @@ def test_the_engines_own_suggestion_does_not_count_as_speaking():
     check("authored is captured BEFORE the suggestion is appended", i < j)
 
 
+def test_hdl_rule_dict_carries_config_the_pipeline_can_read():
+    """THE 06-Aug DEFECT. The HDL path built each rule dict with the key
+    ``rule_config`` (the model FIELD's name), but apply_pipeline reads
+    ``r.get("config", {})``. So every rule reached the engine with an EMPTY config:
+    a CASE_WHEN with no branches returns its input unchanged. Live: Country
+    (Saudi Arabia->SA) and OnMilitaryServiceFlag (0->N,1->Y) shipped the raw source
+    value. This runs a rule through the SAME dict shape the writer builds and proves
+    it transforms — the check the presence-only wiring test could never make."""
+    from app.transformations import apply_pipeline
+
+    # exactly the live OnMilitaryServiceFlag rule config
+    mil_cfg = {"branches": [
+        {"if_column": "Military_Service", "op": "eq", "value": "0", "then": "N"},
+        {"if_column": "Military_Service", "op": "eq", "value": "1", "then": "Y"}],
+        "default": ""}
+    good = [{"rule_type": "CASE_WHEN", "config": mil_cfg}]           # what the fix builds
+    bad = [{"rule_type": "CASE_WHEN", "rule_config": mil_cfg}]       # what the bug built
+    check("0 -> N with the config key",
+          apply_pipeline(good, "0", row={"Military_Service": "0"}) == "N")
+    check("1 -> Y with the config key",
+          apply_pipeline(good, "1", row={"Military_Service": "1"}) == "Y")
+    # the bug reproduced: wrong key -> empty config -> raw value passes through
+    check("wrong key ships the raw value (the bug)",
+          apply_pipeline(bad, "0", row={"Military_Service": "0"}) == "0")
+
+    # Country, the other reported field
+    ctry_cfg = {"branches": [
+        {"if_column": "Country", "op": "eq", "value": "Saudi Arabia", "then": "SA"},
+        {"if_column": "Country", "op": "eq", "value": "Israel", "then": "IL"}],
+        "default": ""}
+    country = [{"rule_type": "CASE_WHEN", "config": ctry_cfg}]
+    check("Saudi Arabia -> SA",
+          apply_pipeline(country, "Saudi Arabia", row={"Country": "Saudi Arabia"}) == "SA")
+
+
+def test_the_hdl_writer_appends_the_rule_under_the_config_key():
+    """Source guard so the key cannot silently revert to ``rule_config``. The dict
+    the writer appends must carry ``"config":`` — the key the pipeline reads — not
+    ``"rule_config":``, which would be an empty config to apply_pipeline."""
+    src = _src()
+    i = src.index("rules_by_field.setdefault")
+    block = src[i:i + 500]
+    check('the pipeline key "config" is used', '"config": _r.rule_config' in block,
+          block[:300])
+    check('the model-field key is not passed as the pipeline key',
+          '"rule_config": _r.rule_config' not in block)
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()

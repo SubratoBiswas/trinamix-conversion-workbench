@@ -233,8 +233,18 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             _rfn = fname_by_id.get(_r.target_field_id)
             if not _rfn or not _r.rule_type:
                 continue
+            # The pipeline DICT key is ``config``, not ``rule_config``. apply_pipeline
+            # reads ``r.get("config", {})`` (transformations/engine.py); the model
+            # FIELD is ``rule_config`` but the FBDI path passes it under ``config``.
+            # Built with the wrong key here, every rule reached apply_pipeline with an
+            # EMPTY config: a CASE_WHEN with no branches returns its input unchanged,
+            # a CONDITIONAL with no if_column returns its input unchanged — so every
+            # analyst rule on the Employee HDL path was a silent no-op. Measured live
+            # 06-Aug: Country CASE_WHEN (Saudi Arabia->SA) and OnMilitaryServiceFlag
+            # CASE_WHEN (0->N,1->Y) both shipped the raw source value; AssignmentNumber
+            # only looked right because of the schema's own _key("E") spec, not the rule.
             rules_by_field.setdefault(_rfn, []).append(
-                {"rule_type": _r.rule_type, "rule_config": _r.rule_config or {},
+                {"rule_type": _r.rule_type, "config": _r.rule_config or {},
                  # WHEN the rule was written. Carried so this path can rank a rule
                  # against a fixed value by DATE, the way the FBDI path does.
                  "as_of": getattr(_r, "created_at", None)})
