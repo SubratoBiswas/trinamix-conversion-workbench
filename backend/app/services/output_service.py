@@ -2346,10 +2346,20 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             # Batch Identifier after Keep blank, and the NETSUITE defaults on Party
             # Original System / Customer Account Source System / Account Site Source
             # System — were this one line missing.
-            _prot: set = set()
+            # The glue is a FALLBACK, never an override — its own docstring says so.
+            # Besides the analyst's per-sheet decisions, it must also stand off any
+            # field the strategy or analyst marked BLANK / suppressed. Batch Identifier
+            # is the proof: its mapping sits "approved" (empty) on the loaded sheets —
+            # not "not_applicable" — so it was NOT in the per-sheet `decided` set, and
+            # the glue regenerated CONV-<id> into it on every sheet despite
+            # blank_fields("Customer") == {"batch identifier"}. suppressed_keys /
+            # _strategy_blanks are label-form; the glue normalises, so they match its
+            # own column lookup. (Customer's blank set is Batch Identifier alone, so
+            # this cannot accidentally starve a linkage-reference column.)
+            _prot: set = set(suppressed_keys) | set(_strategy_blanks)
             if sfields:
-                _, _prot = _sheet_decisions(sfields)
-                _prot = {_header_label(f) for f in sfields if f.field_name in _prot} | _prot
+                _, _dec = _sheet_decisions(sfields)
+                _prot |= {_header_label(f) for f in sfields if f.field_name in _dec} | _dec
             apply_to_frame(frame, source_system=_cust_src, batch_id=_cust_batch,
                            ref=_ref_cache, level="account",
                            sheet_name=sheet_name, protected=_prot)
