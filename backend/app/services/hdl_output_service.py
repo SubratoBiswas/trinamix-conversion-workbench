@@ -196,22 +196,41 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
     # user-mapped source columns resolve regardless of spacing/case.
     col_by_norm = {_norm(c): c for c in src.columns}
 
-    # Per-field-name source override from the conversion's approved mappings
-    # (a human/AI mapping wins over the schema's canonical source hint).
+    # Per-(component, field) source override from the conversion's approved mappings
+    # (a human/AI mapping wins over the schema's canonical source hint). Keyed by the
+    # (normalised component, field name) pair, NOT by field name alone: the same
+    # attribute (EffectiveStartDate, WorkerType, …) lives on several HDL components,
+    # and one component's statement must not answer for another's.
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
-    override: dict[str, str] = {}
+    override: dict[tuple[str, str], str] = {}
     # What the analyst SET, as opposed to what they pointed at: fixed values and
-    # keep-blanks. Checked ahead of the schema's own constants.
-    const_override: dict[str, str] = {}
-    # field name -> when the analyst approved that fixed value. Only set for an
+    # keep-blanks. Checked ahead of the schema's own constants. (component, field).
+    const_override: dict[tuple[str, str], str] = {}
+    # (component, field) -> when the analyst approved that fixed value. Only set for an
     # approved/overridden row that carries a date; an undated one cannot be shown
     # to be later, so it does not get to outrank a rule.
-    const_at: dict[str, Any] = {}
-    # field name -> the analyst's rule pipeline, in sequence order.
-    rules_by_field: dict[str, list] = {}
+    const_at: dict[tuple[str, str], Any] = {}
+    # (component, field) -> the analyst's rule pipeline, in sequence order.
+    rules_by_field: dict[tuple[str, str], list] = {}
+    # Field-wide fallback for a fixed value with no per-component statement — kept
+    # only so a mapping that never names its component still behaves as before.
+    const_override_any: dict[str, str] = {}
     if template:
         fields = await FBDIField.find(FBDIField.template_id == template.id).to_list()
         fname_by_id = {f.id: f.field_name for f in fields}
+        # PER-COMPONENT scope. const_override / override are keyed by field NAME, which
+        # is SHARED across HDL components (EffectiveStartDate is on Location, Job AND
+        # every Worker component). So a fixed value / source set on ONE component's
+        # field landed on the same-named field of EVERY component — last write wins.
+        # Live 06-Aug: the 1900/1/1 the analyst wants on Location/Job EffectiveStartDate
+        # overwrote the Worker-family EffectiveStartDate, which is mapped to Hire Date
+        # (schema _date(_HIRE)) — so Worker/Assignment shipped 1900/1/1 instead of the
+        # hire date. Key by (component, field) so each component keeps its own statement.
+        from app.models.fbdi import FBDISheet as _FBDISheet
+        _sheets = await _FBDISheet.find(_FBDISheet.template_id == template.id).to_list()
+        _sheet_name_by_id = {s.id: (s.sheet_name or "") for s in _sheets}
+        fcomp_by_id = {f.id: _norm(_sheet_name_by_id.get(getattr(f, "sheet_id", None), ""))
+                       for f in fields}
         maps = await MappingSuggestion.find(
             MappingSuggestion.conversion_id == conversion.id
         ).to_list()
@@ -233,6 +252,10 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             _rfn = fname_by_id.get(_r.target_field_id)
             if not _rfn or not _r.rule_type:
                 continue
+            # Same per-component scope as the constants below: a rule authored on
+            # one component's field is keyed to THAT component, so a CASE_WHEN on
+            # WorkRelationship.WorkerType cannot also fire on Assignment.WorkerType.
+            _rcomp = fcomp_by_id.get(_r.target_field_id, "")
             # The pipeline DICT key is ``config``, not ``rule_config``. apply_pipeline
             # reads ``r.get("config", {})`` (transformations/engine.py); the model
             # FIELD is ``rule_config`` but the FBDI path passes it under ``config``.
@@ -243,7 +266,7 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             # 06-Aug: Country CASE_WHEN (Saudi Arabia->SA) and OnMilitaryServiceFlag
             # CASE_WHEN (0->N,1->Y) both shipped the raw source value; AssignmentNumber
             # only looked right because of the schema's own _key("E") spec, not the rule.
-            rules_by_field.setdefault(_rfn, []).append(
+            rules_by_field.setdefault((_rcomp, _rfn), []).append(
                 {"rule_type": _r.rule_type, "config": _r.rule_config or {},
                  # WHEN the rule was written. Carried so this path can rank a rule
                  # against a fixed value by DATE, the way the FBDI path does.
@@ -254,12 +277,23 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             fn = fname_by_id.get(_tid)
             if not fn:
                 continue
+            # The component this field belongs to. Keying every statement by
+            # (component, field) is the whole fix: EffectiveStartDate exists on
+            # Location, Job AND every Worker component, so a fixed value keyed by
+            # field NAME alone landed on all of them at once.
+            comp = fcomp_by_id.get(_tid, "")
             _dv = m.default_value
             _dv = str(_dv).strip() if _dv is not None else ""
             if _dv:
                 # A fixed value the analyst typed. The panel that sets it says it
                 # "overrides AI and clears the source column" — so it does.
-                const_override[fn] = _dv
+                const_override[(comp, fn)] = _dv
+                # A mapping whose component could not be resolved keeps its old
+                # field-wide reach (so nothing that worked before goes silent); a
+                # resolved one stays on its own component, which is what stops the
+                # Location/Job constant from overwriting Worker's Hire Date.
+                if not comp:
+                    const_override_any[fn] = _dv
                 # ...and WHEN they typed it, so a rule can be ranked against it.
                 # Employee is the only object that generates through this writer,
                 # and it had no date test at all: a fixed value beat every rule
@@ -267,19 +301,26 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                 # intent, two behaviours, decided by which loader the object uses.
                 _dv_at = getattr(m, "approved_at", None)
                 if _dv_at is not None and (m.status or "") in ("approved", "overridden"):
-                    const_at[fn] = _dv_at
+                    const_at[(comp, fn)] = _dv_at
                 continue
             if m.status in ("not_applicable", "rejected"):
                 # Keep blank. An explicit instruction to ship the column empty,
                 # which is not the same as having nothing to say about it.
-                const_override[fn] = ""
+                const_override[(comp, fn)] = ""
+                if not comp:
+                    const_override_any[fn] = ""
                 continue
             if getattr(m, "source_column", None):
-                override[fn] = m.source_column
+                override[(comp, fn)] = m.source_column
 
-    def _resolve_col(field_name: str, schema_source) -> str | None:
+    def _resolve_col(comp: str, field_name: str, schema_source) -> str | None:
         """Actual dataset column for a field: mapping override first, then the
         schema's canonical source (normalized match).
+
+        The override is looked up by (component, field) so a source column mapped on
+        one component's field does not answer for the same-named field of another;
+        the ("", field) entry is the field-wide fallback for a mapping whose
+        component could not be resolved.
 
         ``schema_source`` may be a LIST of candidate spellings — the first one present
         in the dataset wins. The client's real input file is not the extract tab the
@@ -288,7 +329,7 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
         value their own HDL template shows. One guessed spelling binds to nothing and
         fails silently, which is the whole class of "fields are not being reflected".
         """
-        ov = override.get(field_name)
+        ov = override.get((comp, field_name)) or override.get(("", field_name))
         if ov and ov in src.columns:
             return ov
         if ov and _norm(ov) in col_by_norm:
@@ -299,20 +340,36 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                 return col_by_norm[_norm(cand)]
         return None
 
-    def _analyst(field_name: str):
-        return const_override.get(field_name, NO_ANSWER) if field_name in const_override \
-            else NO_ANSWER
+    def _analyst(comp: str, field_name: str):
+        # Precedence, per component:
+        #   1. this component's own fixed value / keep-blank wins outright;
+        #   2. a source mapping ON this component means "resolve from the column
+        #      here", so the field-wide fallback must not answer for it — return
+        #      NO_ANSWER and let render_cell + _resolve_col read the source;
+        #   3. only then the field-wide fallback, which is populated ONLY for a
+        #      mapping whose component could not be resolved — so a constant on
+        #      Location/Job can no longer answer for Worker's EffectiveStartDate.
+        if (comp, field_name) in const_override:
+            return const_override[(comp, field_name)]
+        if (comp, field_name) in override or ("", field_name) in override:
+            return NO_ANSWER
+        if field_name in const_override_any:
+            return const_override_any[field_name]
+        return NO_ANSWER
 
-    def _cell(row: pd.Series, spec: dict) -> str:
+    def _cell(row: pd.Series, spec: dict, comp: str) -> str:
         def _resolve(field_name: str, source_name: str | None):
-            col = _resolve_col(field_name, source_name)
+            col = _resolve_col(comp, field_name, source_name)
             return row[col] if col else None
-        value = render_cell(spec, _resolve, _analyst)
+        value = render_cell(spec, _resolve, lambda _fn: _analyst(comp, _fn))
         # Rules run on whatever the field ended up holding — source value, schema
         # constant or the analyst's fixed value — which is the order the FBDI
         # generator uses. A rule is a transformation OF the value, so it has to
-        # see the value that was chosen rather than compete with it.
-        _rules = rules_by_field.get(spec.get("name"))
+        # see the value that was chosen rather than compete with it. Keyed by
+        # (component, field) like everything else, with the ("", field) fallback
+        # for a rule whose component could not be resolved.
+        _fn = spec.get("name")
+        _rules = rules_by_field.get((comp, _fn)) or rules_by_field.get(("", _fn))
         if not _rules:
             return value
         # LATEST DATE WINS, here too.
@@ -321,8 +378,7 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
         # later statement, so the rule does not get to transform it away. A rule
         # written after the value still runs, which is the FBDI behaviour and the
         # analyst's own precedence: "whichever is latest".
-        _fn = spec.get("name")
-        _at = const_at.get(_fn)
+        _at = const_at.get((comp, _fn))
         if _at is not None:
             _rule_dates = [r.get("as_of") for r in _rules if r.get("as_of")]
             if not _rule_dates or _at > max(_rule_dates):
@@ -433,8 +489,11 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
                     attrs = [f["name"] for f in comp_fields]
                     total_attrs += len(attrs)
                     lines.append("METADATA|" + comp_name + "|" + "|".join(attrs))
+                    # Normalised once per block; matches fcomp_by_id, which keyed the
+                    # analyst's statements by _norm(sheet_name) == _norm(comp_name).
+                    _cn = _norm(comp_name)
                     for r in rows:
-                        vals = [_cell(r, f) for f in comp_fields]
+                        vals = [_cell(r, f, _cn) for f in comp_fields]
                         lines.append("MERGE|" + comp_name + "|" + "|".join(vals))
                 if _as_book:
                     # One worksheet per object, named and ordered exactly as the

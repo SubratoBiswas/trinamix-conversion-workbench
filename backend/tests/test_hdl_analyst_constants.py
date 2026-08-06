@@ -142,8 +142,9 @@ def test_the_generator_actually_passes_the_analyst_answers():
     check("the generator calls it", calls)
     check("with the analyst answers", all(len(c.args) >= 3 for c in calls),
           "render_cell is still being called without the analyst lookup")
-    check("built from the mapping rows' fixed values", "const_override[fn] = _dv" in src)
-    check("and from keep-blank", 'const_override[fn] = ""' in src)
+    check("built from the mapping rows' fixed values",
+          "const_override[(comp, fn)] = _dv" in src)
+    check("and from keep-blank", 'const_override[(comp, fn)] = ""' in src)
 
 
 def test_the_hdl_path_picks_one_row_per_field_like_everywhere_else():
@@ -182,7 +183,7 @@ def test_a_rule_runs_on_the_value_the_field_ended_up_with():
     transforms THAT. A rule is a transformation of a value, not a competitor
     to it."""
     src = (_BACKEND / "app" / "services" / "hdl_output_service.py").read_text(encoding="utf-8")
-    i = src.index("value = render_cell(spec, _resolve, _analyst)")
+    i = src.index("value = render_cell(spec, _resolve,")
     j = src.index("apply_pipeline(_rules, value", i)
     check("render first, then the rule", j > i)
 
@@ -306,9 +307,9 @@ def test_the_hdl_writer_records_when_a_fixed_value_was_approved():
     check("there is a date map for constants", "const_at: dict" in src)
     # A generous window: the reasoning beside this line is long, and a short
     # slice would fail on the comment rather than on the code.
-    i = src.index("const_override[fn] = _dv")
+    i = src.index("const_override[(comp, fn)] = _dv")
     block = src[i:i + 1200]
-    check("it is stamped beside the value", "const_at[fn]" in block, block[:220])
+    check("it is stamped beside the value", "const_at[(comp, fn)]" in block, block[:220])
     check("only for an approved row",
           '("approved", "overridden")' in block or "'approved', 'overridden'" in block)
     check("and only when it carries a date", "_dv_at is not None" in block)
@@ -318,7 +319,7 @@ def test_a_fixed_value_newer_than_every_rule_is_not_transformed():
     """The alignment itself: the later statement wins, so the rule does not get to
     rewrite a value approved after it."""
     src = _src()
-    i = src.index("_rules = rules_by_field.get(spec.get(\"name\"))")
+    i = src.index("_rules = rules_by_field.get((comp, _fn))")
     j = src.index("apply_pipeline(_rules, value", i)
     block = src[i:j]
     check("the constant's date is consulted", "const_at.get(" in block, block[:300])
