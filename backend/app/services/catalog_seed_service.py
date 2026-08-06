@@ -317,18 +317,31 @@ from datetime import datetime as _dt
 
 
 def _effective_date_of(doc: dict) -> "_dt | None":
-    """The date the instruction in this file was GIVEN.
+    """When the instruction in this file was GIVEN — date AND, if stated, time.
 
     Stamped onto every learning the file seeds, because captured_at is the moment
     the row was written and every startup seed stamps utcnow — so on a redeploy the
     13-Jul strategy would look newer than the 30-Jul corrections and "latest wins"
     would invert itself on a restart.
+
+    Precedence is resolved on the full timestamp everywhere else in the store (a UI
+    edit and an auto-capture each carry a real time, and the resolver compares
+    datetimes, not dates). Documents were the one exception — pinned to midnight — so
+    a document lost to any same-day change made later in the day. Now the date string
+    may carry a time ("2026-08-06T14:30", "2026-08-06 14:30:00") and it is honoured,
+    so when there are several changes on one day the latest genuinely wins. A plain
+    date still parses to midnight, exactly as before, so nothing existing shifts.
     """
-    v = str((doc or {}).get("_effective_date") or "").strip()[:10]
-    if not v:
+    raw = str((doc or {}).get("_effective_date") or "").strip()
+    if not raw:
         return None
     try:
-        return _dt.strptime(v, "%Y-%m-%d")
+        # fromisoformat handles a plain date (-> midnight) and a full timestamp.
+        return _dt.fromisoformat(raw.replace(" ", "T"))
+    except ValueError:
+        pass
+    try:
+        return _dt.strptime(raw[:10], "%Y-%m-%d")
     except ValueError:
         return None
 

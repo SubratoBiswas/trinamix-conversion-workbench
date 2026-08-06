@@ -1,9 +1,9 @@
 {
  "_label": "NXT Supplier transforms (06-Aug-2026)",
  "_source": "Supplier issues raised by Subrato, 06-Aug-2026. #1 Parent Supplier Name and #3 Supplier Site are implemented here; #2 (taxpayer id by country) is deliberately NOT implemented — no supplier source carries the per-country tax columns it named, so it would only ship blanks.",
- "_effective_date": "2026-08-06",
+ "_effective_date": "2026-08-06T23:59:00",
  "_scope": "Client NextPower, supplier source systems (NetSuite tracker, All-Vendors Phoenix, eBOS). Each rule is scoped to the Supplier interface object it belongs to.",
- "_precedence": "One dated store. These entries carry effective_date 2026-08-06, so they beat earlier statements about the same field and lose to anything said later — including an analyst's own edit.",
+ "_precedence": "Dated with a TIME (06-Aug 23:59). The store resolves on the full timestamp — latest wins — so stamping this late on its own day makes it beat the tool's same-day auto-captures of prior output (e.g. Parent Supplier mapped to the raw id) while staying dated 06-Aug. It still loses to a later human edit, which is correct.",
  "rules": [
   {
    "target_field": "Parent Supplier",

@@ -1,9 +1,9 @@
 {
  "_label": "NXT Customer mapping — 01_Customer_Import.xlsx yellow columns (06-Aug-2026)",
  "_source": "01_Customer_Import 1.xlsx (Subrato, 06-Aug-2026). Every yellow column across the 15 sheets is a newly-mapped/changed rule; its row-4 note is the instruction. Most were already implemented on 03-Aug; this file carries the CHANGES and the genuinely new columns, dated 06-Aug so they beat the 03-Aug statements they revise.",
- "_effective_date": "2026-08-07",
+ "_effective_date": "2026-08-06T23:59:00",
  "_scope": "Client NextPower, source NetSuite, target object Customer. Each rule is scoped to the sheet the workbook flagged it on. Applies at generate time to every conversion, so it covers both the FBDI and CSV outputs (one transform pipeline feeds both).",
- "_precedence": "Dated 2026-08-07 ON PURPOSE, one day past the workbook's own date. The tool auto-captures its own generated output as dated learnings, so a field the workbook says to blank (Site Language) or re-rule (From Date) had a same-day (06-Aug) auto-capture that out-ranked a 06-Aug document by time-of-day and kept the old value. The analyst's document is the authority, so it is stamped one day later to beat those same-day captures. It still loses to a genuine HUMAN edit, which is protected by approver regardless of date.",
+ "_precedence": "Dated with a TIME (06-Aug 23:59), not just a day. The store resolves precedence on the full timestamp — latest wins — and the tool auto-captures its own generated output as timestamped learnings, so a plain 06-Aug (midnight) document lost to a same-day capture made at 15:59/20:52 and kept the old value. Stamping the document late on its own day makes it the latest 06-Aug statement, so it wins over those same-day captures while staying correctly dated 06-Aug. It still loses to a genuine HUMAN edit made later, which is what should happen (latest wins), and human edits are additionally protected by approver.",
  "rules": [
   {
    "target_field": "Party Original System Reference",

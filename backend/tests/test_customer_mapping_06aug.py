@@ -28,13 +28,13 @@ def _rules():
     return {r["target_field"]: r for r in json.loads(_DOC.read_text(encoding="utf-8"))["rules"]}
 
 
-def test_effective_date_supersedes_same_day_autocaptures():
-    """Dated 07-Aug on purpose: one day past the workbook, so the document beats the
-    tool's own same-day (06-Aug) auto-captured learnings that otherwise out-rank it by
-    time-of-day. Human edits stay protected by approver regardless of date."""
+def test_effective_date_carries_a_time_to_beat_same_day_captures():
+    """Dated with a TIME (06-Aug 23:59), not a bare day. The store resolves on the full
+    timestamp, so a late-in-the-day stamp beats the tool's same-day auto-captures while
+    staying correctly dated 06-Aug. A later human edit still wins (latest wins)."""
     doc = json.loads(_DOC.read_text(encoding="utf-8"))
-    check("dated 07-Aug (beats 03-Aug and same-day captures)",
-          doc["_effective_date"] == "2026-08-07")
+    check("effective date includes a time on 06-Aug",
+          doc["_effective_date"] == "2026-08-06T23:59:00", f"got {doc['_effective_date']}")
 
 
 def test_party_original_system_reference_is_internalid_on_parties_only():
