@@ -215,10 +215,18 @@ def test_the_resolved_customer_questions_carry_their_evidence():
 
 def test_closing_a_question_changed_no_rule():
     """The customer rules are the deliverable; the question list is bookkeeping.
-    Answering a question must not move a mapping."""
+    Answering a question must not move a mapping.
+
+    The 05-Aug question resolutions moved nothing (still the original 54). The count
+    then grew to 65 on 06-Aug when the Consolidated Customer mapping's eleven missing
+    'Oracle Derived' constants were added (Currency, Credit Hold, Payment terms are
+    already present — these are the ones that were shipping blank). That is a
+    deliberate mapping change, not a question-closing side effect, so the count moves
+    with it; the effective date is unchanged because these are new fields that compete
+    with nothing."""
     doc = _doc("customer_mapping_03aug.json")
-    check("all 54 rules are still there", len(doc["rules"]) == 54,
-          f"got {len(doc['rules'])}")
+    check("the 54 original rules plus the 06-Aug derived rows are present",
+          len(doc["rules"]) == 66, f"got {len(doc['rules'])}")
     check("the effective date is untouched", doc["_effective_date"] == "2026-08-03")
 
 

@@ -864,6 +864,15 @@
    "target_object": "Customer"
   },
   {
+   "target_field": "Insert Update Indicator",
+   "action": "blank",
+   "exclude_sheets": [
+    "RA_CUSTOMER_PROFILES_INT_ALL"
+   ],
+   "note": "The other half of 'I ONLY for profiles' (06-Aug): a durable per-sheet suppression on every sheet EXCEPT profiles, so no NextPower Customer conversion — current or future — can ship Insert Update Indicator anywhere but the profiles sheet. Recorded as a keep-blank in the store (client+object+sheet scoped); paired with the resolver rule that a same-dated keep-blank outranks a value, it also clears a stale 'I' left on HZ_IMP_PARTIES_T by an earlier state. The overlay is object-keyed and cannot express per-sheet, so this is deliberately store-only.",
+   "target_object": "Customer"
+  },
+  {
    "target_field": "Customer Account Source System",
    "action": "constant",
    "value": "NETSUITE",
@@ -951,6 +960,83 @@
    "target_field": "Batch Identifier",
    "action": "blank",
    "note": "customer_mapping.txt line 23: 'Blank (always)'. The same instruction the analyst gave for the supplier bundle on 30-Jul — a batch identifier the loader assigns is not ours to invent. Recorded as a suppression rather than a blank constant so the control-default pass cannot refill it, which is exactly how supplier Batch ID kept shipping 900001.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Party Usage Code",
+   "action": "constant",
+   "value": "CUSTOMER",
+   "note": "Consolidated Mapping for Customer from NetSuite (06-Aug-2026), 'Oracle Derived' row: Party Usage Code = CUSTOMER for the customer party (ORG_CONTACT is the contact-party value, handled on the contact sheets).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Account Type",
+   "action": "constant",
+   "value": "External",
+   "note": "Consolidated Mapping (06-Aug-2026): Account Type = 'External as Default'.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Customer Profile Class",
+   "action": "constant",
+   "value": "DEFAULT",
+   "note": "Consolidated Mapping (06-Aug-2026): Customer Profile Class = 'DEFAULT - At Account Level'.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Collector Name",
+   "action": "constant",
+   "value": "Default Collector",
+   "note": "Consolidated Mapping (06-Aug-2026): Collector Name = 'Default Collector'.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Include in Credit Check",
+   "action": "constant",
+   "value": "Y",
+   "note": "Consolidated Mapping (06-Aug-2026): Include in Credit Check = Y.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Currency",
+   "action": "constant",
+   "value": "USD",
+   "note": "Consolidated Mapping (06-Aug-2026): Currency = 'USD as Default'.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Credit Hold",
+   "action": "constant",
+   "value": "N",
+   "note": "Consolidated Mapping (06-Aug-2026): Credit Hold = N.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Organization ID",
+   "action": "constant",
+   "value": "-1",
+   "note": "Consolidated Mapping (06-Aug-2026): Organization ID = -1.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Responsibility Type",
+   "action": "constant",
+   "value": "BILL_TO",
+   "note": "Consolidated Mapping (06-Aug-2026): Responsibility Type = BILL_TO (Account Contact Role Responsibility).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Subject Party Type",
+   "action": "constant",
+   "value": "PERSON",
+   "note": "Consolidated Mapping (06-Aug-2026): Subject Party Type = PERSON (the contact) in the CONTACT_OF relationship.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Object Party Type",
+   "action": "constant",
+   "value": "ORGANIZATION",
+   "note": "Consolidated Mapping (06-Aug-2026): Object Party Type = ORGANIZATION (the customer) in the CONTACT_OF relationship.",
    "target_object": "Customer"
   }
  ],
