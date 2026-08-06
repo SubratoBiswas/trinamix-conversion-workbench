@@ -68,7 +68,12 @@ def test_generation_passes_the_drop_list_to_the_template_filler():
     """The seam. A drop list nothing passes is the inert-feature pattern again."""
     src = (_BACKEND / "app" / "services" / "output_service.py") \
         .read_text(encoding="utf-8")
-    assert "drop_sheets=_strategy_sheets_to_drop()" in src
+    # The strategy drop list is now folded into a `_drop` set (union'd with the four
+    # Customer out-of-scope interfaces so the filled .xlsm ships 15 tabs, not 19),
+    # and that set is what reaches fill_template. Assert both halves so neither can
+    # go inert: the strategy list is still gathered, and the set is still passed.
+    assert "_drop = set(_strategy_sheets_to_drop())" in src
+    assert "drop_sheets=_drop" in src
 
 
 def test_the_filler_removes_the_sheet_rather_than_blanking_it():

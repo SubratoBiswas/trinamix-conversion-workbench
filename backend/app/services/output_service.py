@@ -2469,8 +2469,29 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         if fmt == "template" and _template_src_path:
             from app.services.template_fill_service import fill_template
             frames: dict[str, pd.DataFrame] = {}
+            # Customer loads only 15 of the template's 19 interfaces (Tejaswini,
+            # 31-Jul — same scope the CSV package applies below). This filled-template
+            # path did NOT apply it, so the FBDI .xlsm shipped all 19 interface tabs
+            # (ACCOUNTRELS, CLASSIFICS_T, RA_CUST_PAY_METHOD, RA_CUSTOMER_BANKS filled
+            # too) while the CSV bundle had 15 — the two downloads of the same object
+            # disagreeing. Filter the frames to the in-scope sheets AND add the
+            # out-of-scope ones to drop_sheets, because the tab exists in Oracle's
+            # template whether or not we hand it a frame, so dropping the frame alone
+            # would still leave an (empty) tab.
+            _tpl_sheets = sheets_with_fields
+            _drop = set(_strategy_sheets_to_drop())
+            if _is_customer:
+                _tpl_sheets = [s for s in sheets_with_fields
+                               if _customer_in_scope(s.sheet_name)]
+                # fill_template matches drop_sheets on a NORMALISED name (punctuation
+                # stripped, lowercased), the same as _strategy_sheets_to_drop returns —
+                # so normalise here too, or "HZ_IMP_ACCOUNTRELS" would never match the
+                # workbook's tab and the drop would silently do nothing.
+                _drop |= {re.sub(r"[^a-z0-9]", "", s.sheet_name.lower())
+                          for s in sheets_with_fields
+                          if not _customer_in_scope(s.sheet_name)}
             if multi:
-                for s in sheets_with_fields:
+                for s in _tpl_sheets:
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
                         _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
@@ -2486,12 +2507,11 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 frames[_only] = fdf
                 total_rows, total_cols = len(fdf), len(fdf.columns)
             # Sheets the analyst has ruled out of this workbook entirely — see
-            # strategy_overlay.sheets_to_drop. Passed here rather than filtered
-            # out of `frames`, because the tab exists in Oracle's template
-            # whether or not we have a frame for it, so dropping the frame alone
-            # would still leave the tab.
-            _data = fill_template(_template_src_path, frames,
-                                  drop_sheets=_strategy_sheets_to_drop())
+            # strategy_overlay.sheets_to_drop — plus (for Customer) the 4 interfaces
+            # this client does not load. Passed here rather than filtered out of
+            # `frames`, because the tab exists in Oracle's template whether or not we
+            # have a frame for it, so dropping the frame alone would still leave the tab.
+            _data = fill_template(_template_src_path, frames, drop_sheets=_drop)
             _stem = Path(_template_src_path).stem
             name = f"{_stem}.xlsm" if _template_src_path.lower().endswith(".xlsm") else f"{_stem}.xlsx"
             path = out_dir / name
@@ -2501,9 +2521,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         if fmt == "xlsx":
             name = f"{obj_name}_{ts}.xlsx"
             path = out_dir / name
+            # Customer: the same 15-of-19 load scope the CSV/template paths use, so an
+            # .xlsx download does not carry the 4 interfaces this client never loads.
+            _xlsx_sheets = ([s for s in sheets_with_fields if _customer_in_scope(s.sheet_name)]
+                            if _is_customer else sheets_with_fields)
             with pd.ExcelWriter(path, engine="openpyxl") as xw:
                 if multi:
-                    for s in sheets_with_fields:
+                    for s in _xlsx_sheets:
                         if _sheet_carries_data(s):
                             sdf = _finalize(fields_by_sheet[s.id])
                             _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
