@@ -6,11 +6,12 @@ import {
 } from "lucide-react";
 import { ProjectsApi } from "@/api";
 import {
-  Card, CardBody, EmptyState, PageLoader,
+  Card, CardBody, EmptyState, ModuleSection, PageLoader,
   PageTitle, Pill,
 } from "@/components/ui/Primitives";
 import { SetupWizard } from "@/components/setup/SetupWizard";
 import { cn, formatDate } from "@/lib/utils";
+import { groupByModule } from "@/lib/modules";
 import type { Project } from "@/types";
 
 // Code → display label mapping for the source-system pill on each project
@@ -56,7 +57,15 @@ export const ProjectsPage: React.FC = () => {
   // engagements, and it is the one the list has never offered — the API returns
   // newest first, so the ones most likely to go were always at the bottom of 41.
   const [oldestFirst, setOldestFirst] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   useEffect(() => { ProjectsApi.list().then(setItems); }, []);
+
+  const toggle = (k: string) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
+    });
 
   const handleDeleted = (id: string | number) =>
     setItems((prev) => (prev ? prev.filter((p) => String(p.id) !== String(id)) : prev));
@@ -64,11 +73,14 @@ export const ProjectsPage: React.FC = () => {
   const sorted = items === null ? null : [...items].sort(
     (a, b) => (oldestFirst ? _created(a) - _created(b) : _created(b) - _created(a)));
 
+  const groups = sorted === null ? [] : groupByModule(
+    sorted, (p) => [p.name, p.description, ...((p.selected_modules as string[] | null | undefined) || [])]);
+
   return (
     <>
       <PageTitle
         title="Projects"
-        subtitle="Implementation engagements — each contains many conversion objects"
+        subtitle="Implementation engagements, grouped by module"
         right={
           <div className="flex items-center gap-2">
             <button
@@ -104,11 +116,25 @@ export const ProjectsPage: React.FC = () => {
             </CardBody>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {(sorted ?? items).map((p) => (
-              <ProjectCard key={p.id} project={p} onDeleted={handleDeleted} />
-            ))}
-          </div>
+          groups.map(({ module, items: mine }) => {
+            const Icon = module.icon;
+            return (
+              <ModuleSection
+                key={module.key}
+                icon={<Icon className={cn("h-4 w-4", module.accent)} />}
+                title={module.full}
+                count={mine.length}
+                collapsed={collapsed.has(module.key)}
+                onToggle={() => toggle(module.key)}
+              >
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {mine.map((p) => (
+                    <ProjectCard key={p.id} project={p} onDeleted={handleDeleted} />
+                  ))}
+                </div>
+              </ModuleSection>
+            );
+          })
         )
       }
     </>

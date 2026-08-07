@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X, ChevronRight } from "lucide-react";
 import { cn, confidenceTone } from "@/lib/utils";
 
 // ---------------- Card ----------------
@@ -137,6 +137,29 @@ export const Modal: React.FC<{
     </div>
   );
 };
+
+// ---------------- ModuleSection (collapsible group header) ----------------
+export const ModuleSection: React.FC<{
+  icon?: React.ReactNode;
+  title: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}> = ({ icon, title, count, collapsed, onToggle, children }) => (
+  <section className="mb-7">
+    <button
+      onClick={onToggle}
+      className="group mb-3 flex w-full items-center gap-2 border-b border-line pb-2 text-left"
+    >
+      <ChevronRight className={cn("h-4 w-4 shrink-0 text-ink-subtle transition-transform", !collapsed && "rotate-90")} />
+      {icon}
+      <span className="text-[13px] font-semibold uppercase tracking-wide text-ink">{title}</span>
+      <span className="rounded-full bg-canvas px-2 py-0.5 text-[11px] font-medium text-ink-muted tabular-nums">{count}</span>
+    </button>
+    {!collapsed && children}
+  </section>
+);
 
 // ---------------- Tabs (simple) ----------------
 export const Tabs: React.FC<{

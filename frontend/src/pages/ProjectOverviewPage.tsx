@@ -19,8 +19,6 @@ import {
 } from "@/components/ui/Primitives";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import type { Conversion, Dependency, Project } from "@/types";
-import { ExecSummaryCard } from "@/components/cutover/ExecSummaryCard";
-import { CutoverPanel } from "@/components/cutover/CutoverPanel";
 import { SourceConnectionCard } from "@/components/source/SourceConnectionCard";
 import { DiscoveryPanel } from "@/components/discovery/DiscoveryPanel";
 
@@ -155,15 +153,6 @@ export const ProjectOverviewPage: React.FC = () => {
   // Filled-in Oracle FBDI Excel template (data written into the real template, e.g.
   // the POZ_SUPPLIERS_INT sheet) — generated in the background then downloaded.
   const [dlT, setDlT] = useState<string | null>(null);
-  // Agentic plan (checkpoint preview) — read-only draft, nothing runs.
-  const [plan, setPlan] = useState<any>(null);
-  const [planLoading, setPlanLoading] = useState(false);
-  const loadPlan = async () => {
-    setPlanLoading(true);
-    try { setPlan(await OutputApi.agenticPlan(pid)); }
-    catch { setPlan({ objects: [], note: "Couldn't draft a plan right now." }); }
-    finally { setPlanLoading(false); }
-  };
   const downloadTemplate = async (c: Conversion) => {
     setDlT(String(c.id));
     try {
@@ -471,60 +460,6 @@ export const ProjectOverviewPage: React.FC = () => {
             <Link to={`/projects/${pid}/cutover`} className="btn-ghost">
               <Activity className="h-4 w-4" /> Migration Monitor
             </Link>
-            <Button
-              variant="secondary"
-              loading={busy === "load_order"}
-              onClick={async () => {
-                setBusy("load_order");
-                try {
-                  const r = await ProjectsApi.deriveLoadOrder(pid);
-                  flash(`Load order derived for ${r.load_order.length} object(s)`);
-                  refresh();
-                } finally { setBusy(null); }
-              }}
-            >
-              <GitBranch className="h-4 w-4" /> Derive Load Order
-            </Button>
-            <Button
-              variant="secondary"
-              loading={busy === "chain"}
-              onClick={async () => {
-                setBusy("chain");
-                try {
-                  const r = await ProjectsApi.chainLoadOrder(pid);
-                  flash(
-                    r.created.length
-                      ? `Mapped ${r.created.length} dependency link(s) across the load sequence`
-                      : "Load sequence already mapped",
-                  );
-                  refresh();
-                } catch {
-                  flash("Couldn't map the load sequence");
-                } finally { setBusy(null); }
-              }}
-            >
-              <Network className="h-4 w-4" /> Map Load Sequence
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => setShowModuleModal(true)}
-            >
-              <Wand2 className="h-4 w-4" /> Auto-populate
-            </Button>
-            <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("csv")}>
-              <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
-              {dlAll ? (dlStatus ?? "Working…") : allHdl ? "Download all DAT" : "Download all CSV"}
-            </Button>
-            <Button variant="secondary" disabled={dlAll} onClick={() => downloadAllFbdi("template")}
-              title="Merge each interface's sources and download the filled-in Oracle FBDI Excel templates (.xlsm)">
-              <FolderDown className={cn("h-4 w-4", dlAll && "animate-pulse")} />
-              {dlAll ? (dlStatus ?? "Working…") : allHdl ? "Download all (HDL templates)" : "Download all (FBDI Excel)"}
-            </Button>
-            <Button variant="secondary" disabled={dlReport} onClick={downloadReport}
-              title="An Excel report of what the tool did to the raw extract: every column mapping and who decided it, every cleansing rule that fired with before/after examples, what merged away as duplicate, what validation found, and any required field still short. Built from what the last run recorded, so it agrees with the files you downloaded.">
-              <ClipboardList className={cn("h-4 w-4", dlReport && "animate-pulse")} />
-              {dlReport ? "Building report…" : "Output report"}
-            </Button>
             <Button variant="primary" onClick={() => setShowAddModal(true)}>
               <Plus className="h-4 w-4" /> Add Conversion
             </Button>
@@ -555,70 +490,6 @@ export const ProjectOverviewPage: React.FC = () => {
             <div className="h-full rounded-full bg-success transition-all" style={{ width: `${pct}%` }} />
           </div>
         </CardBody>
-      </Card>
-
-      {/* Migration Readiness exec summary */}
-      <ExecSummaryCard projectId={pid} />
-
-      {/* Cutover Orchestration */}
-      <CutoverPanel projectId={pid} />
-
-      {/* Agentic plan (checkpoint preview) */}
-      <Card className="mt-4">
-        <CardHeader
-          title={<><Wand2 className="mr-2 inline h-4 w-4 text-brand" />Agentic conversion plan (preview)</>}
-          subtitle="Draft the map → generate → validate plan for every interface — review before anything runs"
-          actions={
-            <Button variant="secondary" disabled={planLoading} onClick={loadPlan}>
-              <Wand2 className={cn("h-4 w-4", planLoading && "animate-pulse")} />
-              {planLoading ? "Drafting…" : plan ? "Re-draft plan" : "Draft plan"}
-            </Button>
-          }
-        />
-        {plan && (
-          <CardBody>
-            <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
-              <Pill tone="neutral">{plan.object_count} objects</Pill>
-              <Pill tone="neutral">{plan.total_steps} planned steps</Pill>
-              <Pill tone="success">{plan.ready_count} ready</Pill>
-              {plan.blocked_objects?.length > 0 && <Pill tone="danger">{plan.blocked_objects.length} blocked</Pill>}
-              <span className="text-ink-muted">{plan.note}</span>
-            </div>
-            <div className="space-y-3">
-              {(plan.objects || []).map((o: any) => (
-                <div key={o.conversion_id} className="rounded-lg border border-line bg-white">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-ink">{o.target_object || o.name}</span>
-                      <Pill tone={o.status === "Ready" ? "success" : o.status.startsWith("Blocked") ? "danger" : "warning"}>{o.status}</Pill>
-                      {o.readiness && <span className="text-[11px] text-ink-muted">{o.readiness.score}/100</span>}
-                    </div>
-                    <span className="text-[11px] text-ink-subtle">{o.required_covered}/{o.required_total} required · {o.steps.length} step(s)</span>
-                  </div>
-                  <ol className="space-y-1 px-3 py-2">
-                    {o.steps.map((s: any, i: number) => (
-                      <li key={i} className="flex items-start gap-2 text-xs">
-                        <span className={cn("mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
-                          s.blocker ? "bg-danger-subtle text-danger" : "bg-brand-subtle text-brand-dark")}>{s.blocker ? "!" : i + 1}</span>
-                        <span>
-                          <span className="font-medium text-ink">{s.action}</span>
-                          <span className="text-ink-muted"> — {s.detail}</span>
-                          <span className="ml-1 rounded bg-canvas px-1 py-0.5 text-[10px] text-ink-subtle">{s.layer}</span>
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <Button variant="primary" disabled title="Plan execution with per-object approval is the next slice">
-                Approve &amp; run (coming soon)
-              </Button>
-              <span className="text-[11px] text-ink-muted">This is a checkpoint — nothing is mapped, generated or loaded until you approve.</span>
-            </div>
-          </CardBody>
-        )}
       </Card>
 
       {/* Conversion Objects + Source Connection + Load Order */}
@@ -804,7 +675,17 @@ export const ProjectOverviewPage: React.FC = () => {
               <EmptyState
                 icon={<Layers className="h-5 w-5" />}
                 title="No conversion objects yet"
-                description="Add the first conversion object to this engagement."
+                description="Add objects one at a time, or auto-populate them from the modules in scope."
+                action={
+                  <div className="flex items-center gap-2">
+                    <Button variant="secondary" onClick={() => setShowModuleModal(true)}>
+                      <Wand2 className="h-4 w-4" /> Auto-populate
+                    </Button>
+                    <Button onClick={() => setShowAddModal(true)}>
+                      <Plus className="h-4 w-4" /> Add Conversion
+                    </Button>
+                  </div>
+                }
               />
             </CardBody>
           ) : (
@@ -944,6 +825,46 @@ export const ProjectOverviewPage: React.FC = () => {
             <CardHeader
               title={<><Network className="mr-2 inline h-4 w-4 text-brand" />Load Order</>}
               subtitle="Conversion objects + cross-object dependencies"
+              actions={
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={async () => {
+                      setBusy("load_order");
+                      try {
+                        const r = await ProjectsApi.deriveLoadOrder(pid);
+                        flash(`Load order derived for ${r.load_order.length} object(s)`);
+                        refresh();
+                      } finally { setBusy(null); }
+                    }}
+                    disabled={busy === "load_order"}
+                    title="Derive the planned load sequence from cross-object dependencies"
+                    className="inline-flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-ink hover:bg-canvas disabled:opacity-50"
+                  >
+                    <GitBranch className={cn("h-3 w-3", busy === "load_order" && "animate-pulse")} /> Derive
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setBusy("chain");
+                      try {
+                        const r = await ProjectsApi.chainLoadOrder(pid);
+                        flash(
+                          r.created.length
+                            ? `Mapped ${r.created.length} dependency link(s) across the load sequence`
+                            : "Load sequence already mapped",
+                        );
+                        refresh();
+                      } catch {
+                        flash("Couldn't map the load sequence");
+                      } finally { setBusy(null); }
+                    }}
+                    disabled={busy === "chain"}
+                    title="Map cross-object dependency links across the load sequence"
+                    className="inline-flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-ink hover:bg-canvas disabled:opacity-50"
+                  >
+                    <Network className={cn("h-3 w-3", busy === "chain" && "animate-pulse")} /> Map
+                  </button>
+                </div>
+              }
             />
             <div className="h-[320px]">
               <ProjectDependencyGraph conversions={conversions} dependencies={deps} />
