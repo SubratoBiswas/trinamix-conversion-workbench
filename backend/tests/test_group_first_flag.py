@@ -17,7 +17,8 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.output_service import (_transform_frame,               # noqa: E402
-                                         _build_group_first_index)
+                                         _build_group_first_index,
+                                         _group_first_key_configs)
 
 
 def check(name, cond, detail=""):
@@ -81,17 +82,32 @@ def test_blank_key_and_unknown_key_yield_the_default():
     check("the sole real customer's first row -> Y", col[1] == "Y", col)
 
 
+class _MSugg:
+    """A MappingSuggestion stand-in carrying a SEEDED rule on suggested_transformation."""
+    def __init__(self, st):
+        self.suggested_transformation = st
+
+
+def test_seeded_rule_on_suggested_transformation_is_collected():
+    """The bug behind the blank Identifying Address: a seeded rule lands on the
+    mapping's suggested_transformation, not as a TransformationRule, so `pipelines`
+    never carries it — and without this the group-first index is never built and the
+    rule silently returns its default. The collector must scan the mappings too."""
+    m = _MSugg({"rule_type": "GROUP_FIRST_FLAG",
+                "config": {"key_column": ["entityid"], "flag": "Y"}})
+    cfgs = _group_first_key_configs({}, None, [m])   # empty pipelines, rule only on the mapping
+    check("the seeded rule is picked up from suggested_transformation",
+          len(cfgs) == 1 and cfgs[0]["key_column"] == ["entityid"], cfgs)
+
+
 def test_seed_doc_is_well_formed():
     doc = json.loads((Path(__file__).resolve().parent.parent / "app" / "data" /
                       "customer_mapping_07aug.json").read_text(encoding="utf-8"))
     by = {r["target_field"]: r for r in doc["rules"]}
     check("effective date is 07-Aug with a time",
           doc["_effective_date"] == "2026-08-07T23:59:00", doc["_effective_date"])
-    ad = by["Account Description"]
-    check("Account Description derives from companyname",
-          ad["action"] == "derive" and ad["source_column"] == "companyname")
-    check("Account Description scoped to the Accounts sheet",
-          ad["sheets"] == ["HZ_IMP_ACCOUNTS_T"], ad.get("sheets"))
+    check("Account Description is NOT seeded (no matching Oracle field)",
+          "Account Description" not in by, list(by))
     ia = by["Identifying Address"]
     check("Identifying Address is a GROUP_FIRST_FLAG rule",
           ia["action"] == "rule" and ia["rule_type"] == "GROUP_FIRST_FLAG")

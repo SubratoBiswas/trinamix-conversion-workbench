@@ -384,13 +384,27 @@ def _build_sequence_index(src: pd.DataFrame, configs: list[dict]) -> dict:
     return index
 
 
-def _group_first_key_configs(pipelines: dict, target_object: str | None) -> list[dict]:
-    """Every GROUP_FIRST_FLAG config carrying a ``key_column``, from both rule sources."""
+def _group_first_key_configs(pipelines: dict, target_object: str | None,
+                             mappings: list | None = None) -> list[dict]:
+    """Every GROUP_FIRST_FLAG config carrying a ``key_column``, from every rule source.
+
+    Includes the mappings' ``suggested_transformation``: a SEEDED/applied store rule
+    lands there (via apply_learned), NOT as a TransformationRule, so ``pipelines`` never
+    sees it. Without this the index for an index-based rule (GROUP_FIRST_FLAG, like the
+    Identifying Address flag) is never built and the rule silently returns its default —
+    which is exactly why Identifying Address shipped blank though the seed recorded.
+    """
     out: list[dict] = []
     for _rules in (pipelines or {}).values():
         for r in _rules or []:
             cfg = r.get("config") or {}
             if (r.get("rule_type") or "").upper() == "GROUP_FIRST_FLAG" and cfg.get("key_column"):
+                out.append(cfg)
+    for m in (mappings or []):
+        st = getattr(m, "suggested_transformation", None) or {}
+        if (st.get("rule_type") or "").upper() == "GROUP_FIRST_FLAG":
+            cfg = st.get("config") or {}
+            if cfg.get("key_column"):
                 out.append(cfg)
     try:
         from app.services.strategy_overlay import rule_configs_of_type
@@ -1280,7 +1294,7 @@ async def build_converted_dataframe(
         # First-appearance row per key, so GROUP_FIRST_FLAG marks one row per group
         # (the identifying address). Full-frame, first-appearance — same as sequence.
         _gf_idx = _build_group_first_index(
-            src, _group_first_key_configs(pipelines, _obj_name_for_overlay))
+            src, _group_first_key_configs(pipelines, _obj_name_for_overlay, sorted_mappings))
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
