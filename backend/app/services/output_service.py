@@ -1366,6 +1366,15 @@ async def build_converted_dataframe(
                     raise ValueError("Dataset source file not found; please re-upload the dataset")
                 continue  # skip an unreadable secondary source rather than fail the merge
             src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
+            # The source's OWN columns, captured BEFORE enrichment. Grain classification
+            # keys on these: the master has companyname, the address files have addr*,
+            # the contact file has firstname. Enrichment (below) JOINS the borrowable
+            # columns onto every frame, so classifying on the post-enrichment columns
+            # would see firstname on all four sources and tag them all CONTACT — which
+            # empties the party grain, so the parties sheet falls back to the whole
+            # 31k-row frame (no dedup) and the party ref stays entityid. Classify on the
+            # real source columns instead.
+            _orig_src_cols = [str(c) for c in src.columns]
             # Cross-grain enrichment (Customer): fill this source's missing/blank
             # borrowable columns from the other source files by entityid, BEFORE the
             # transform runs, so the rules and mappings that read them stop seeing
@@ -1387,10 +1396,10 @@ async def build_converted_dataframe(
                         odf["__" + _cc] = src[_cc].astype(str).str.strip().values
             frames.append(odf)
             if collect_frames is not None:
-                # Keep the source's own column list: sheet routing decides which
-                # source feeds an interface sheet by counting how many of that
-                # sheet's mapped source columns this file actually contains.
-                collect_frames[str(did)] = (odf, [str(c) for c in src.columns])
+                # Keep the source's own column list (PRE-enrichment): sheet routing and
+                # grain classification decide which source feeds an interface sheet by
+                # the columns the file actually contains, not the ones enrichment added.
+                collect_frames[str(did)] = (odf, _orig_src_cols)
             if not lineage:
                 lineage = lin
         if not frames:
