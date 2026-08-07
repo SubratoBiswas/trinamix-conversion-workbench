@@ -366,6 +366,77 @@ def _dedupe_party_grain(sub: "pd.DataFrame") -> "pd.DataFrame":
     return pd.concat([keyed, blank]) if len(blank) else keyed
 
 
+# ── First-per-customer flags (REC-09 / REC-23) ──────────────────────────────
+# Oracle's Primary / Identifying flag marks exactly ONE site row per customer as
+# the primary/identifying one. It cannot be expressed as a per-field transform
+# rule: "Primary Indicator" is a single column NAME shared across four sheets
+# (PARTYSITEUSES, ACCTSITEUSES, ACCTCONTACTS, CONTACTPTS), so the wide frame
+# carries one value for all of them and the last mapping wins — the flag came out
+# blank on the site sheets and could never differ per sheet. The reshape is the
+# only place each sheet already has its own rows AND the entityid, so the flag is
+# set here, per sheet, directly on that sheet's frame.
+#
+# The rule (analyst, REC-09): from the BILLING rows only, mark the first row per
+# entityid Y and every other site row (later billing rows AND all shipping rows)
+# N. "First" is deterministic — MIN(internalid) per entityid — so a regenerate
+# marks the same row every time (REC-09's LIMIT-1-else-MIN(internalid) fallback).
+# Contact sheets are excluded (REC-46 / REC-52 keep their Primary blank).
+#
+#   {sheet substring: (flag field name, use-type field-name candidates)}
+# A sheet with a use-type column restricts "first" to its BILL_TO rows; a sheet
+# without one (PARTYSITES identifying address, REC-23) considers every site row.
+_FIRST_FLAG_SHEETS = {
+    "partysiteuses": ("Primary Indicator", ("Part Site Use Type", "Site Use Type")),
+    "acctsiteuses": ("Primary Indicator", ("Purpose",)),
+    "partysites": ("Identifying Address", ()),
+}
+
+
+def _mark_first_per_entityid(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
+    """Set the sheet's primary/identifying flag ``Y`` on the first (MIN-internalid)
+    billing row per entityid and ``N`` on every other row (REC-09 / REC-23).
+
+    Pure and defensive: a sheet not in ``_FIRST_FLAG_SHEETS``, or one missing the
+    flag column / the entityid / the internalid, is returned untouched — a blank
+    flag beats a wrong one, and no other sheet's data is at risk."""
+    n = _norm(sheet_name)
+    spec = next((v for k, v in _FIRST_FLAG_SHEETS.items() if k in n), None)
+    if spec is None or sub is None or len(sub) == 0:
+        return sub
+    flag_name, use_candidates = spec
+    flag_col = _find_col_ci(sub.columns, flag_name)
+    if (flag_col is None or ENTITYID_COL not in sub.columns
+            or INTERNALID_COL not in sub.columns):
+        return sub
+
+    ent = sub[ENTITYID_COL].astype(str).str.strip()
+    iid = sub[INTERNALID_COL].astype(str).str.strip()
+    # Eligible rows: BILL_TO where the sheet distinguishes uses, else every site.
+    eligible = pd.Series(True, index=sub.index)
+    for cand in use_candidates:
+        uc = _find_col_ci(sub.columns, cand)
+        if uc is not None:
+            eligible = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
+            break
+
+    work = pd.DataFrame(
+        {"ent": ent, "iid_num": pd.to_numeric(iid, errors="coerce"), "iid_str": iid},
+        index=sub.index,
+    )
+    work = work[eligible.values & work["ent"].ne("")]
+    result = pd.Series("N", index=sub.index)
+    if len(work):
+        # Ascending MIN(internalid) per entityid; NaN internalids sort last so a
+        # real number always wins, ties broken by the string form then by
+        # first-seen (mergesort is stable).
+        winners = (work.sort_values(["ent", "iid_num", "iid_str"], kind="mergesort")
+                   .groupby("ent", sort=False).head(1).index)
+        result.loc[winners] = "Y"
+    sub = sub.copy()
+    sub[flag_col] = result.values
+    return sub
+
+
 def assign_party_numbers(sub: "pd.DataFrame") -> None:
     """Number the parties sheet in place: NXT000001, NXT000002 … per customer
     (entityid), the org taking the bare number and each of its contact people taking
@@ -449,6 +520,9 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
         sub = _dedupe_party_grain(sub)
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
+    # Primary / Identifying flag: Y on the first billing row per customer, N on the
+    # rest (REC-09 / REC-23). No-op on any sheet without such a flag.
+    sub = _mark_first_per_entityid(sub, sheet_name)
     return sub
 
 
