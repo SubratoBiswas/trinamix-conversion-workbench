@@ -815,19 +815,27 @@ export const MappingReviewPage: React.FC = () => {
   // fingerprint actually changed, so a screen with nothing new never re-renders, and
   // it never overwrites an in-progress edit because grid edits are saved-then-reloaded,
   // not buffered locally.
+  // One poll at a time. Without this, a slow list response (cold start, big
+  // conversion) lets the interval fire again before the last returned, so requests
+  // stack and pile onto an already-slow backend — which is how a single slow endpoint
+  // turned into a screen full of 60s timeouts.
+  const pollInFlight = useRef(false);
   const refreshMappingsQuiet = useCallback(async () => {
-    if (!pid || document.hidden) return;
+    if (!pid || document.hidden || pollInFlight.current) return;
+    pollInFlight.current = true;
     try {
       const fresh = await MappingApi.list(pid);
       setMappings((prev) => (mappingsSignature(prev) === mappingsSignature(fresh) ? prev : fresh));
     } catch {
       /* transient (cold start / network blip) — the next tick retries */
+    } finally {
+      pollInFlight.current = false;
     }
   }, [pid]);
 
   useEffect(() => {
     if (!pid) return;
-    const id = window.setInterval(refreshMappingsQuiet, 10000);
+    const id = window.setInterval(refreshMappingsQuiet, 15000);
     const onWake = () => refreshMappingsQuiet();
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);

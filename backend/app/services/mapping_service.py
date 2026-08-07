@@ -951,45 +951,27 @@ async def enrich_mapping_with_samples(
     _in_scope_cache: dict[str, bool] = {}
 
     # WHICH dated decision is in force for each field, so the grid can show the
-    # analyst the date-time behind a value instead of leaving them to guess which
-    # change won. A person's own edit IS the statement (its approved_at is the date);
-    # a value the library supplied is traced back to the winning store entry, whose
-    # effective_date is the instruction date and whose provenance names the source.
-    # Read once for the whole grid and wrapped so it can never break the screen.
-    from app.services import mapping_store
-    _entries: list = []
-    _cid = _src = None
-    try:
-        from app.services.client_service import client_id_for_conversion
-        from app.services.learning_service import source_erp_for_conversion
-        from app.models.learned import LearnedMapping
-        _cid = await client_id_for_conversion(conversion)
-        _src = await source_erp_for_conversion(conversion)
-        _rows = await LearnedMapping.find(
-            {"kind": {"$in": sorted(mapping_store.DECISION_KINDS)}}).to_list()
-        _entries = mapping_store.entries_of(_rows)
-    except Exception:  # noqa: BLE001 — provenance is a nicety, never a blocker
-        _entries = []
+    # analyst the date-time behind a value. Derived CHEAPLY from the row itself — a
+    # person's edit carries their email + approved_at; a value the library supplied is
+    # stamped learning-engine at apply time.
+    #
+    # It must NOT re-resolve the store here. An earlier version loaded every learned
+    # decision row and ran the resolver per field on EVERY grid load AND every single
+    # save (enrich is the return value of update_mapping too), which on a real library
+    # ran past the 60s axios timeout — the mapping screen and the Use/Save buttons
+    # hung and "nothing changed". The row already carries who decided and when; that
+    # is what the date line needs.
+    _ENGINE = "learning-engine"
 
     def _applied(m, tgt) -> tuple[Any, Optional[str]]:
         """(applied_at, applied_from): the date and origin of the value in force."""
         who = str(getattr(m, "approved_by", "") or "").strip()
-        # A person's own decision is the row itself — that is the statement.
-        if who and who != mapping_store.ENGINE:
-            return getattr(m, "approved_at", None), who
-        # Otherwise the value came from the library; trace it to the winning entry.
-        if _entries and tgt is not None:
-            try:
-                _sheet = sheet_name_by_id.get(getattr(tgt, "sheet_id", None))
-                w = mapping_store.resolve(_entries, target_field=tgt.field_name,
-                                          client_id=_cid, source_erp=_src, sheet=_sheet)
-                if w is not None:
-                    return (getattr(w, "effective_date", None),
-                            getattr(w, "captured_from", None) or "Learning library")
-            except Exception:  # noqa: BLE001
-                pass
-        return (getattr(m, "approved_at", None)
-                or getattr(m, "updated_at", None)), (who or None)
+        at = getattr(m, "approved_at", None) or getattr(m, "updated_at", None)
+        if who and who != _ENGINE:
+            return at, who                     # a person's own decision
+        if who == _ENGINE:
+            return at, "Learning library"      # applied from the shared library
+        return at, None
 
     def _scope_of(sheet: str | None) -> bool:
         # Only Customer carries a load scope today. Everything else is in scope,
