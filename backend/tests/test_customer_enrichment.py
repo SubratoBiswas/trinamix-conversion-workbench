@@ -33,6 +33,7 @@ def _master():
         "companyname": ["Acme Corp", ""],
         "startdate": ["2024-01-01", ""],
         "datecreated": ["2023-06-01", "2023-07-15"],
+        "title": ["Project Manager", ""],   # the customer's primary-contact job title
     })
 
 
@@ -53,13 +54,27 @@ def _addresses():
     })
 
 
-def test_enrichment_borrows_only_the_site_date_columns():
+def test_enrichment_borrows_site_dates_and_title_only():
     enr = CM.build_entity_enrichment([_master(), _contacts(), _addresses()])
     check("startdate gathered from master", enr["startdate"]["NT-1"] == "2024-01-01")
     check("datecreated gathered", enr["datecreated"]["NT-2"] == "2023-07-15")
+    # title IS borrowed (REC-62): the customer's job title, to reach its contact rows.
+    check("title gathered from master", enr["title"]["NT-1"] == "Project Manager")
     # Person names / companyname are NOT borrowed — the contact people carry their own.
     check("firstname NOT borrowed", "firstname" not in enr)
     check("companyname NOT borrowed", "companyname" not in enr)
+
+
+def test_title_is_borrowed_onto_contact_rows():
+    # REC-62: HZ_IMP_CONTACTS_T Job Title <- title. The contact extract has no title,
+    # so the customer's title (master) is joined onto its contact rows by entityid.
+    enr = CM.build_entity_enrichment([_master(), _contacts(), _addresses()])
+    c = CM.enrich_source_frame(_contacts(), enr)
+    check("contacts now carry a title column", "title" in list(c.columns))
+    nt1 = c[c["entityid"] == "NT-1"].iloc[0]
+    check("NT-1 contact gets the customer's title", nt1["title"] == "Project Manager", nt1["title"])
+    nt2 = c[c["entityid"] == "NT-2"].iloc[0]
+    check("NT-2 contact title blank (master had none)", str(nt2["title"]).strip() == "", nt2["title"])
 
 
 def test_addresses_get_startdate_and_datecreated():

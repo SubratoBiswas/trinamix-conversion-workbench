@@ -96,8 +96,16 @@ def _is_blank_series(s: "pd.Series") -> "pd.Series":
 # customer's company name and flip Party Type to ORGANIZATION; borrowing firstname onto
 # the master rows would stamp a person's name onto the ORG party. Each grain keeps its
 # own identity: master = companyname (ORGANIZATION), contact = names (PERSON). REC-05/07.
+#
+# ``title`` IS borrowed (REC-62). Job Title on HZ_IMP_CONTACTS_T must map to ``title``,
+# but the contact extract carries no per-contact title — the only title in the load is
+# on the customer master (its primary contact's job title, one per customer). Borrowing
+# it by entityid puts that title on the customer's contact rows so Job Title populates;
+# where the master has no title (it is ~99% blank) the contact's Job Title stays blank.
+# This is a customer-level value applied to the customer's contacts, which is as fine a
+# grain as the source data provides.
 BORROWABLE_SRC_COLS = (
-    "startdate", "datecreated",
+    "startdate", "datecreated", "title",
 )
 
 
