@@ -769,7 +769,6 @@ async def record_decision(*, decision: str, target_field: str,
             "field_key": normalise_field(target_field),
             "captured_from": captured_from,
             "captured_by": captured_by,
-            "captured_at": now,
             "client_id": client_id,
             "source_erp": source_erp,
             "project_id": project_id,
@@ -781,6 +780,16 @@ async def record_decision(*, decision: str, target_field: str,
             # REFRESH deliberately leaves the stored date alone — the file is
             # restating itself, not saying something new.
             patch["effective_date"] = when
+            # ...AND captured_at moves ONLY on a real new statement. This was the
+            # revert bug: REFRESH re-stamped captured_at to `now` on every boot, and
+            # effective_of() falls back to captured_at for an undated seed — so a
+            # startup seed re-running out-ranked an analyst's edit made earlier the
+            # same day, and the column reverted to the seeded value (D-U-N-S, 07-Aug).
+            # A seed restating itself is NOT newer than a human correction; freezing
+            # captured_at on REFRESH is what makes "the latest decision wins" hold
+            # across the deploys that re-run the seeds. First insert still stamps it
+            # (below); only re-runs leave it where it was.
+            patch["captured_at"] = now
         if sheets is not None:
             patch["sheets"] = _merge_sheets(getattr(row, "sheets", None), sheets)
         if exclude_sheets is not None:

@@ -282,11 +282,40 @@ async def seed_bom_field_mappings() -> dict:
     Idempotent: constants are find-or-upgraded, never duplicated.
     """
     import json as _json
+    from datetime import datetime as _dt
+    from app.models.learned import LearnedMapping as _LM
     nid = await _nextpower_client_id()
-    # (1) source→target column mappings (rows with a source_field)
-    res = await _seed_catalog_file(_BOM_MAPPINGS, "NXT BOM field mapping doc", client_id=nid)
-    # (2) constant defaults (rows with a "constant" and no source_field)
-    const_seeded = const_kept = 0
+    _OWN = "NXT BOM field mapping doc"
+    # A FIXED analyst date (Jithendran, 07-Aug) so these rows are DATED, not undated.
+    # BOM rows were seeded undated, and an undated statement can never WIN by date — so a
+    # source-agnostic correction (Structure Item Name <- Parent_item_number) could not
+    # override the old source-scoped rows, and the Organization Code = NXT_ITEM_ORG
+    # constant kept overwriting the input's real org code (IMO). With the store's
+    # captured_at re-stamp bug now fixed, a fixed PAST date is safe: a later human edit
+    # still wins, and re-runs no longer walk the date forward.
+    _BOM_EFF = _dt(2026, 8, 7, 9, 0, 0)
+    # PURGE the rows THIS seed owns before re-seeding, so the current JSON lands cleanly
+    # no matter what prior (undated, re-stamped) runs left behind — the retired
+    # NXT_ITEM_ORG constant and any stale source-agnostic rows included. Only rows this
+    # seed wrote (captured_from == _OWN) are removed; a human edit carries its own
+    # captured_from, and so does the conversion's own auto-capture, so neither is touched.
+    purged = 0
+    try:
+        for _lm in await _LM.find({"target_object": "BOM"},
+                                  include_deleted=True).to_list():
+            if getattr(_lm, "captured_from", None) == _OWN:
+                await _lm.delete()
+                purged += 1
+    except Exception:  # noqa: BLE001 — purge is best-effort; the seed below still runs
+        pass
+    # (1) source→target column mappings — DATED, so they actually apply. This now
+    # includes the source-agnostic rows (Structure Item Name / Item Name /
+    # Component Item Name / Organization Code passthrough) that fix BOM-02/03.
+    res = await _seed_catalog_file(_BOM_MAPPINGS, _OWN, client_id=nid,
+                                   effective_date=_BOM_EFF)
+    # (2) constant defaults (Transaction Type=SYNC, Structure Name=Primary — the
+    # Organization Code constant was removed from the JSON, so it is not re-seeded).
+    const_seeded = 0
     try:
         rows = _json.loads(_BOM_MAPPINGS.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
@@ -301,42 +330,13 @@ async def seed_bom_field_mappings() -> dict:
             kind="example_default", category="Default Value",
             original_value="(constant)", resolved_value=str(const),
             target_object=tgt_obj, target_field=tgt_field,
-            client_id=nid, captured_from="NXT BOM field mapping doc",
-            captured_by=None, undated=True,
+            client_id=nid, captured_from=_OWN, captured_by=None,
+            effective_date=_BOM_EFF,
         )
-        if row is None:
-            const_kept += 1    # retired by the analyst — do not resurrect
-            continue
-        const_seeded += 1
-    # BOM-02: retire the old Organization Code = NXT_ITEM_ORG constant. The input file
-    # carries the real org code (e.g. IMO) and the constant was overwriting it on every
-    # sheet. Removing the row from the JSON stops it being RE-seeded, but the learning
-    # already written has to be tombstoned or it keeps applying. Idempotent — once
-    # retired it stays retired, and it is scoped to this client + this field so nothing
-    # else is touched. A passthrough (Organization Code <- "Organization Code") is
-    # seeded above, so the column is not left blank.
-    org_retired = 0
-    try:
-        from datetime import datetime as _dt
-        from app.models.learned import LearnedMapping as _LM
-        _q = {"kind": "example_default", "target_object": "BOM",
-              "resolved_value": "NXT_ITEM_ORG"}
-        if nid is not None:
-            _q["client_id"] = nid
-        for _lm in await _LM.find(_q, include_deleted=True).to_list():
-            if getattr(_lm, "is_deleted", False):
-                continue
-            if mapping_store.normalise_field(_lm.target_field or "") != \
-                    mapping_store.normalise_field("Organization Code"):
-                continue
-            await _lm.set({"is_deleted": True, "deleted_at": _dt.utcnow(),
-                           "deleted_by": "bom-02-org-code-passthrough"})
-            org_retired += 1
-    except Exception as _exc:  # noqa: BLE001 — retirement is best-effort
-        res["org_constant_retire_error"] = f"{type(_exc).__name__}: {_exc}"[:200]
+        if row is not None:
+            const_seeded += 1
     res["constants_seeded"] = const_seeded
-    res["constants_kept"] = const_kept
-    res["org_constant_retired"] = org_retired
+    res["seed_owned_purged"] = purged
     return res
 
 

@@ -513,6 +513,20 @@ async def reseed_catalog(_: User = Depends(get_current_user)):
     return await seed_mapping_catalog()
 
 
+@router.post("/reseed-bom")
+async def reseed_bom(_: User = Depends(get_current_user)):
+    """Re-run the BOM (Item Structure) seed on demand and return its counts.
+
+    The BOM rows were undated and never overrode the old source-scoped/constant rows,
+    so Structure Item Name shipped blank and Organization Code shipped the NXT_ITEM_ORG
+    constant instead of the input value. The seed now purges its own rows and re-seeds
+    them DATED. Exposed here so 'did it land?' is answerable without a redeploy —
+    returns purged / seeded / constants_seeded.
+    """
+    from app.services.catalog_seed_service import seed_bom_field_mappings
+    return await seed_bom_field_mappings()
+
+
 @router.post("/reseed-supplier")
 async def reseed_supplier(_: User = Depends(get_current_user)):
     """Force the supplier field + transform seeds on demand (idempotent, additive,
