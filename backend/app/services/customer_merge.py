@@ -90,11 +90,14 @@ def sheet_grain(sheet_name: Optional[str]) -> Optional[str]:
 # contact file has person names — so the presence of a person name is decisive.
 _CONTACT_SRC = ("firstname", "lastname", "fullname", "contactname", "middlename",
                 "givenname", "surname")
-# Address / site: any real address field. `state`/`zip`/`county` are matched exactly
-# or as words so they do not fire on unrelated columns.
-_SITE_SRC = ("addr", "address", "street", "city", "postalcode", "postcode",
-             "zipcode")
-_SITE_SRC_EXACT = ("state", "zip", "county", "province")
+# Address / site: a real address-BLOCK column. Deliberately specific — a bare
+# "address" substring also matches a customer master's one-off DFF columns
+# (custentity_dsg_consignee_address …), which put the whole master on the address
+# sheets. A numbered address line, an address-line label, or a city do not appear on
+# the master, so they identify an address extract cleanly.
+_SITE_SRC = ("addr1", "addr2", "addr3", "addr4",
+             "address1", "address2", "address3", "address4",
+             "addressline", "streetaddress", "addressee", "addresslabel", "city")
 # Party / account: a company / customer identity column. Deliberately NOT "name"
 # alone (too broad) and NOT account-number/reference (the glue fills those).
 _PARTY_SRC = ("companyname", "company", "organizationname", "orgname",
@@ -103,7 +106,7 @@ _PARTY_SRC = ("companyname", "company", "organizationname", "orgname",
 
 def classify_source_columns(cols) -> Optional[str]:
     """The grain a source carries, from its raw column names. Contact (person names)
-    wins first, then an address/site column, then a company/customer identity;
+    wins first, then an address-block column, then a company/customer identity;
     otherwise None (left unclassified, never filtered out on a guess)."""
     names = {_norm(c) for c in (cols or [])}
     if not names:
@@ -114,7 +117,7 @@ def classify_source_columns(cols) -> Optional[str]:
 
     if has_sub(_CONTACT_SRC):
         return CONTACT
-    if has_sub(_SITE_SRC) or (names & set(_SITE_SRC_EXACT)):
+    if has_sub(_SITE_SRC):
         return SITE
     if has_sub(_PARTY_SRC):
         return PARTY

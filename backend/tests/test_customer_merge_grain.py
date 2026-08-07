@@ -83,6 +83,19 @@ def test_classify_source_columns_precedence_and_noise():
     check("empty columns -> None", cm.classify_source_columns([]) is None)
 
 
+def test_master_with_address_dff_columns_is_still_party():
+    # The real regression: the NextPower customer master carries one-off DFF columns
+    # whose NAME contains "address" (a consignee/notify-party address). A bare
+    # "address" substring put the whole master on the site sheets. It must read as
+    # party — it has companyname and none of the address-BLOCK columns.
+    master = ["internalid", "entityid", "companyname", "creditlimit",
+              "custentity_dsg_consignee_address", "custentity_dsg_notifyparty_address",
+              "toplevelparent", "territory", "subsidiary"]
+    check("master with *_address DFF columns still classifies as party",
+          cm.classify_source_columns(master) == cm.PARTY,
+          cm.classify_source_columns(master))
+
+
 # ── classify_frame_grain: fallback on the converted frame ───────────────────
 def _frame(cols_values):
     return pd.DataFrame(cols_values)
