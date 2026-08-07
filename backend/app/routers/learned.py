@@ -871,73 +871,78 @@ async def purge_gold_examples(
         return report
 
     now = datetime.utcnow()
-    # 1) Tombstone every match, collecting the (client, object, field, source) triples
-    #    whose auto-applied mappings must be reverted. Doing the revert per-row would
-    #    call Conversion.find_all() 1,676 times; instead collect the triples and revert
-    #    in ONE pass over the conversions below.
+    # 1) Tombstone every currently-active match.
     retired = 0
-    triples: set = set()              # (client_id|None, object_l, field_l, source_l)
     for m in gold:
         await m.set({"is_deleted": True, "deleted_at": now, "deleted_by": user.email})
         retired += 1
-        o = (m.target_object or "").strip().lower()
-        f = (m.target_field or "").strip().lower()
-        s = (m.original_value or "").strip().lower()
-        if o and f:
-            triples.add((m.client_id, o, f, s))
 
     reverted = stale = 0
-    if revert_applied and triples:
-        from app.models.fbdi import FBDIField as _F
-        from app.models.mapping import MappingSuggestion as _MS
-        from app.models.output import ConvertedOutput as _CO
-        from app.services.mapping_dedupe import stamp_edit
-        from app.services.client_service import client_id_for_conversion
-        objs_needed = {t[1] for t in triples}
-        # A field is reverted if a tombstoned learning matches it — scoped to the
-        # conversion's client OR global (client_id None), and matching the source
-        # column when the learning named one (so retiring one rule on a field does not
-        # revert a different rule on the same field). A learning that named no source
-        # matches the field regardless of the mapping's source.
-        keys_exact = triples                                          # (client, obj, field, source)
-        keys_nosrc = {(c, o, f) for (c, o, f, s) in triples if s == ""}
-        seen_conv: set = set()
-        for conv in await Conversion.find_all().to_list():
-            co = (conv.target_object or "").strip().lower()
-            if co not in objs_needed:
+    if revert_applied:
+        # 2) Revert the mappings those learnings auto-applied. Keyed at the FIELD level
+        #    (client, object, field) — NOT (…, source) — because a retired learning can
+        #    be a DEFAULT (its value sits in default_value, no source column) or a RULE
+        #    (its value sits in suggested_transformation), and the old source-only match
+        #    skipped both: that is why a stale constant (ACTIVE_PROCESS) or a stale
+        #    suggested_transformation kept shipping after the learning was retired.
+        #
+        #    The field keys come from EVERY gold-derived learning INCLUDING ones
+        #    tombstoned on an earlier run, so re-running this endpoint flushes what an
+        #    older, source-only revert left behind. Only ``learning-engine``-approved
+        #    mappings are touched (a human's edit is never reverted); each is reset to
+        #    ``suggested`` with its source/default/rule cleared, so the surviving
+        #    DOCUMENT learning re-applies cleanly on the next generate.
+        _all = await LearnedMapping.find(include_deleted=True).to_list()
+        if target_object:
+            _o = target_object.strip().lower()
+            _all = [m for m in _all if (m.target_object or "").strip().lower() == _o]
+        field_keys: set = set()            # (client_id|None, object_l, field_l)
+        for m in _all:
+            if not _is_gold_derived_learning(m):
                 continue
-            conv_client = await client_id_for_conversion(conv)
-            fields = {f.id: (f.field_name or "").strip().lower()
-                      for f in await _F.find(_F.template_id == conv.template_id).to_list()
-                      } if conv.template_id else {}
-            for mm in await _MS.find(_MS.conversion_id == conv.id).to_list():
-                if mm.approved_by != "learning-engine":
+            o = (m.target_object or "").strip().lower()
+            f = (m.target_field or "").strip().lower()
+            if o and f:
+                field_keys.add((m.client_id, o, f))
+        if field_keys:
+            from app.models.fbdi import FBDIField as _F
+            from app.models.mapping import MappingSuggestion as _MS
+            from app.models.output import ConvertedOutput as _CO
+            from app.services.mapping_dedupe import stamp_edit
+            from app.services.client_service import client_id_for_conversion
+            objs_needed = {k[1] for k in field_keys}
+            seen_conv: set = set()
+            for conv in await Conversion.find_all().to_list():
+                co = (conv.target_object or "").strip().lower()
+                if co not in objs_needed:
                     continue
-                fl = fields.get(mm.target_field_id, "")
-                if not fl:
-                    continue
-                sl = (mm.source_column or "").strip().lower()
-                hit = (
-                    (conv_client, co, fl, sl) in keys_exact
-                    or (None, co, fl, sl) in keys_exact
-                    or (conv_client, co, fl) in keys_nosrc
-                    or (None, co, fl) in keys_nosrc
-                )
-                if not hit:
-                    continue
-                await mm.set(stamp_edit({
-                    "status": "suggested", "approved_by": None, "approved_at": None,
-                    "review_required": 1,
-                    "comment": f"Reverted — the gold learning behind this was retired by {user.email}."}))
-                reverted += 1
-                seen_conv.add(conv.id)
-        for cid in seen_conv:
-            for o in await _CO.find(_CO.conversion_id == cid).to_list():
-                if o.status != "stale":
-                    await o.set({"status": "stale",
-                                 "stale_reason": "A learning it was built on was retired",
-                                 "stale_since": now})
-                    stale += 1
+                conv_client = await client_id_for_conversion(conv)
+                fields = {f.id: (f.field_name or "").strip().lower()
+                          for f in await _F.find(_F.template_id == conv.template_id).to_list()
+                          } if conv.template_id else {}
+                for mm in await _MS.find(_MS.conversion_id == conv.id).to_list():
+                    if mm.approved_by != "learning-engine":
+                        continue
+                    fl = fields.get(mm.target_field_id, "")
+                    if not fl:
+                        continue
+                    if (conv_client, co, fl) not in field_keys and (None, co, fl) not in field_keys:
+                        continue
+                    await mm.set(stamp_edit({
+                        "status": "suggested", "approved_by": None, "approved_at": None,
+                        "review_required": 1,
+                        "source_column": None, "default_value": None,
+                        "suggested_transformation": None,
+                        "comment": f"Reverted — a gold learning on this field was retired by {user.email}."}))
+                    reverted += 1
+                    seen_conv.add(conv.id)
+            for cid in seen_conv:
+                for o in await _CO.find(_CO.conversion_id == cid).to_list():
+                    if o.status != "stale":
+                        await o.set({"status": "stale",
+                                     "stale_reason": "A learning it was built on was retired",
+                                     "stale_since": now})
+                        stale += 1
     report.update({"retired": retired, "mappings_reverted": reverted,
                    "outputs_marked_stale": stale})
     return report
