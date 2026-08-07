@@ -405,33 +405,38 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             logger.exception("HDL rule failed for %s", spec.get("name"))
             return value
 
-    # ── Scope: active employees only (strategy assumptions A-02 / A-03) ──────
-    # "An employee is active and in scope if ActiveStatus = Active"; inactive and
-    # terminated employees are excluded from the load file. Every row was going in.
+    # ── Scope: exclude only terminated / left employees (strategy A-02 / A-03) ──
+    # "In scope if ActiveStatus = Active" was implemented as an ALLOWLIST of
+    # {active,a,y,...}. That drops every current employee whose status is a normal
+    # in-service value the list does not happen to name — most importantly "OnLeave".
+    # An employee on leave is a CURRENT employee, not a leaver, so excluding them lost
+    # 27 real workers (HCM-02: 2,206 -> 2,179). The strategy excludes people who have
+    # actually LEFT (inactive / terminated), so match on THAT: drop only the statuses
+    # that mean the person is gone, and keep active, on-leave and anything else.
     #
-    # Fails OPEN: if the column is absent or nothing matches, NOTHING is dropped.
-    # Silently emitting an empty load file because a column was renamed would be
-    # far worse than loading a few leavers, and the count below makes the
-    # exclusion visible either way.
-    _ACTIVE_VALUES = {"active", "a", "y", "yes", "true", "1"}
+    # Fails OPEN: if the column is absent, or if (implausibly) every row reads as
+    # terminated, NOTHING is dropped — shipping a few leavers beats an empty file.
+    _INACTIVE_VALUES = {"terminated", "term", "inactive", "leaver", "left",
+                        "exemployee", "resigned", "retired", "deceased", "separated",
+                        "n", "no", "false", "0"}
     _excluded_inactive = 0
     _active_col = col_by_norm.get(_norm("Active Status")) or col_by_norm.get(_norm("ActiveStatus"))
     if _active_col is not None:
-        _mask = src[_active_col].map(lambda v: _clean(v).lower() in _ACTIVE_VALUES)
+        _mask = src[_active_col].map(
+            lambda v: _norm(_clean(v)) not in _INACTIVE_VALUES)
         _kept = int(_mask.sum())
         if _kept:
             _excluded_inactive = int(len(src) - _kept)
             src = src[_mask]
             if _excluded_inactive:
-                logger.info("HDL: excluded %d inactive/terminated employee row(s) "
-                         "per strategy A-02/A-03", _excluded_inactive)
+                logger.info("HDL: excluded %d terminated/left employee row(s) "
+                         "per strategy A-02/A-03 (on-leave kept)", _excluded_inactive)
         else:
-            logger.warning("HDL: no row matched ActiveStatus=Active in %r — keeping "
-                        "ALL rows rather than shipping an empty load file",
-                        _active_col)
+            logger.warning("HDL: every row read as terminated in %r — keeping ALL "
+                        "rows rather than shipping an empty load file", _active_col)
     else:
         logger.warning("HDL: no Active Status column found — every row kept; "
-                    "strategy A-03 expects inactive employees to be excluded")
+                    "strategy A-03 expects terminated employees to be excluded")
 
     def _rows_for(scope: str, dedup_source):
         if scope == "none":
