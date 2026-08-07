@@ -429,6 +429,28 @@ export const ConversionsApi = {
     api.get<{ source_type: string; table: string | null; columns: import("@/types").DatasetColumnProfile[]; debug?: Record<string, any> | null }>(
       `/conversions/${id}/source-columns`
     ).then(r => r.data),
+  /** Every conversion in the project with its source columns and target fields
+   *  (each target's resolved source column + rule) — the data the rule-author
+   *  cross-conversion picker needs to reference one conversion's column from
+   *  another (CROSS_CONVERSION_LOOKUP). Read-only. */
+  crossReference: (projectId: string) =>
+    api.get<{
+      project_id: string;
+      conversions: {
+        conversion_id: string;
+        name: string;
+        target_object: string | null;
+        source_columns: string[];
+        targets: {
+          target_field: string | null;
+          target_sheet: string | null;
+          source_column: string | null;
+          rule_type: string | null;
+          status: string | null;
+          default_value: string | null;
+        }[];
+      }[];
+    }>(`/conversions/project/${projectId}/cross-reference`).then(r => r.data),
   /** Values Generate Output writes for unmapped target fields (control
    *  constants, sequence keys, learned + AI-inferred defaults). Used by the
    *  mapping-review UI to show "defaulted -> value" instead of a required gap.

@@ -3,7 +3,7 @@ import {
   Plus, Trash2, Wand2, Check, AlertTriangle, Code2, Eye,
   Sparkles, MessageSquare, ChevronDown, ChevronRight,
 } from "lucide-react";
-import { MappingApi } from "@/api";
+import { MappingApi, ConversionsApi } from "@/api";
 import { Button, Modal, Pill } from "@/components/ui/Primitives";
 import { cn } from "@/lib/utils";
 import type { DatasetDetail, FBDIField, TransformationRule } from "@/types";
@@ -30,6 +30,12 @@ interface FormProps {
   config: Cfg;
   setConfig: (c: Cfg) => void;
   sources: { name: string }[];
+  // Set for rules that reference OTHER conversions of the same project
+  // (the cross-conversion picker). `conversionId` is used to exclude the
+  // current conversion from the reference list and, if `projectId` is not
+  // supplied, to resolve it.
+  projectId?: string;
+  conversionId?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -984,6 +990,153 @@ const CrosswalkForm: React.FC<FormProps> = ({ config, setConfig }) => (
 // Spec registry
 // ─────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────
+// Cross-conversion lookup — pull a value from ANOTHER conversion of the
+// project (e.g. Parent Supplier Name <- the Suppliers conversion's legal_name).
+// A picker over the project's conversions and their columns, plus a read-only
+// reference of what each conversion maps, so the analyst can SEE what is
+// available to reference. Backed by GET /conversions/project/{id}/cross-reference.
+// ─────────────────────────────────────────────────────────────────────
+type CrossConv = {
+  conversion_id: string;
+  name: string;
+  target_object: string | null;
+  source_columns: string[];
+  targets: {
+    target_field: string | null; target_sheet: string | null;
+    source_column: string | null; rule_type: string | null;
+    status: string | null; default_value: string | null;
+  }[];
+};
+
+const CrossConversionForm: React.FC<FormProps> = ({ config, setConfig, sources, projectId, conversionId }) => {
+  const [convs, setConvs] = useState<CrossConv[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showRef, setShowRef] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        let pid = projectId;
+        if (!pid && conversionId) {
+          const c = await ConversionsApi.get(String(conversionId));
+          pid = (c as any)?.project_id ? String((c as any).project_id) : undefined;
+        }
+        if (!pid) { setError("No project context — open this from a conversion inside a project."); return; }
+        const res = await ConversionsApi.crossReference(pid);
+        if (alive) setConvs(res.conversions || []);
+      } catch (e: any) {
+        if (alive) setError(e?.response?.data?.detail || "Could not load the project's conversions.");
+      }
+    })();
+    return () => { alive = false; };
+  }, [projectId, conversionId]);
+
+  const others = (convs || []).filter((c) => String(c.conversion_id) !== String(conversionId));
+  const ref = others.find((c) => c.conversion_id === config.ref_conversion_id) || null;
+  const refCols = ref?.source_columns || [];
+  const set = (patch: Cfg) => setConfig({ ...config, ...patch });
+
+  if (error) {
+    return <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">{error} You can still set it manually under Advanced (raw JSON).</div>;
+  }
+  if (convs === null) {
+    return <div className="text-xs text-ink-muted">Loading the project's conversions…</div>;
+  }
+  if (others.length === 0) {
+    return <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">This project has no other conversions to reference yet.</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-brand/30 bg-brand-subtle/40 p-2 text-[11px] text-ink-muted">
+        Pull a value from another conversion in this project. Match THIS row's key against a column in the other conversion, and bring back one of its columns — e.g. Parent Supplier Name ← the Suppliers conversion's legal_name.
+      </div>
+
+      <Field label="Look up in conversion" required>
+        <select className="input" value={config.ref_conversion_id || ""}
+          onChange={(e) => set({ ref_conversion_id: e.target.value, match_column: "", value_column: "" })}>
+          <option value="">— pick a conversion —</option>
+          {others.map((c) => (
+            <option key={c.conversion_id} value={c.conversion_id}>
+              {c.name}{c.target_object ? ` (${c.target_object})` : ""}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="This row's key column" hint="the value to look up" required>
+          <select className="input" value={config.key_column || ""}
+            onChange={(e) => set({ key_column: e.target.value })}>
+            <option value="">— pick a column —</option>
+            {sources.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Default if not found" hint="optional">
+          <input className="input" value={config.default ?? ""}
+            onChange={(e) => set({ default: e.target.value })}
+            placeholder="Leave blank to pass through" />
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Match against — other conversion's column" required>
+          <select className="input" value={config.match_column || ""} disabled={!ref}
+            onChange={(e) => set({ match_column: e.target.value })}>
+            <option value="">{ref ? "— pick a column —" : "pick a conversion first"}</option>
+            {refCols.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="Bring back — other conversion's column" required>
+          <select className="input" value={config.value_column || ""} disabled={!ref}
+            onChange={(e) => set({ value_column: e.target.value })}>
+            <option value="">{ref ? "— pick a column —" : "pick a conversion first"}</option>
+            {refCols.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <button type="button" onClick={() => setShowRef((v) => !v)}
+        className="flex items-center gap-1 text-[11px] font-medium text-brand hover:underline">
+        {showRef ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {showRef ? "Hide" : "Show"} what each conversion maps (source → destination)
+      </button>
+      {showRef && (
+        <div className="max-h-56 overflow-auto rounded-md border border-line">
+          {others.map((c) => {
+            const rows = c.targets.filter((t) => t.source_column || t.rule_type);
+            return (
+              <div key={c.conversion_id} className="border-b border-line/60 last:border-0">
+                <div className="sticky top-0 bg-canvas px-2 py-1 text-[11px] font-semibold text-ink">
+                  {c.name}{c.target_object ? ` · ${c.target_object}` : ""}
+                  <span className="ml-1 font-normal text-ink-subtle">({c.source_columns.length} source cols)</span>
+                </div>
+                <table className="w-full text-[10.5px]">
+                  <tbody>
+                    {rows.slice(0, 60).map((t, i) => (
+                      <tr key={i} className="border-t border-line/40">
+                        <td className="px-2 py-0.5 font-mono text-ink-muted">{t.source_column || "—"}</td>
+                        <td className="px-1 py-0.5 text-ink-subtle">→</td>
+                        <td className="px-2 py-0.5 text-ink">{t.target_field || "—"}</td>
+                        <td className="px-2 py-0.5 text-brand">{t.rule_type || ""}</td>
+                      </tr>
+                    ))}
+                    {rows.length === 0 && (
+                      <tr><td className="px-2 py-1 text-ink-subtle" colSpan={4}>No mappings yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const RULE_SPECS: Record<string, RuleSpec> = {
   // Format
   TRIM: { label: "Trim whitespace", description: "Strip leading/trailing spaces", defaultConfig: () => ({}), Form: NoConfig },
@@ -1033,7 +1186,7 @@ const RULE_SPECS: Record<string, RuleSpec> = {
   SUFFIX_WHEN: { label: "Suffix when", description: "Append a string only when a condition holds", defaultConfig: () => ({}), rowAware: true, Form: RawConfigOnly },
   SEQUENCE: { label: "Running sequence", description: "Unique running key with an optional variant form", defaultConfig: () => ({ prefix: "", width: 6, start: 1 }), needsSourceColumn: false, Form: RawConfigOnly },
   SELF_LOOKUP: { label: "Self lookup", description: "Resolve a value from another row of the same file", defaultConfig: () => ({}), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
-  CROSS_CONVERSION_LOOKUP: { label: "Cross-conversion lookup", description: "Resolve a value from another conversion in this project (ref_conversion_id + match/value columns)", defaultConfig: () => ({ ref_conversion_id: "", key_column: "", match_column: "", value_column: "", default: "" }), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
+  CROSS_CONVERSION_LOOKUP: { label: "Cross-conversion lookup", description: "Resolve a value from another conversion in this project (e.g. Parent Supplier Name ← Suppliers.legal_name)", defaultConfig: () => ({ ref_conversion_id: "", key_column: "", match_column: "", value_column: "", default: "" }), rowAware: true, needsSourceColumn: false, Form: CrossConversionForm },
   CITY_COUNTRY_KEY: { label: "Country-city key", description: "Join an ISO country code and a city into one key", defaultConfig: () => ({}), rowAware: true, needsSourceColumn: false, Form: RawConfigOnly },
   BLANK_IF_EQUALS: { label: "Blank if equals", description: "Clear the value when it duplicates another column", defaultConfig: () => ({ other_column: "" }), rowAware: true, Form: RawConfigOnly },
 };
@@ -1065,6 +1218,7 @@ const RULE_GROUPS: { label: string; types: string[] }[] = [
   { label: "Date & number", types: ["DATE_FORMAT", "NUMBER_FORMAT", "ARITHMETIC"] },
   { label: "Multi-column", types: ["CONCAT", "SPLIT", "COALESCE"] },
   { label: "Conditional", types: ["CONDITIONAL", "CASE_WHEN"] },
+  { label: "Cross-reference", types: ["CROSS_CONVERSION_LOOKUP"] },
 ];
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1076,6 +1230,10 @@ interface RuleAuthorModalProps {
   onClose: () => void;
   // Conversion ids are ObjectId hex strings; number is tolerated for older callers.
   conversionId: string | number;
+  // The project this conversion belongs to — lets the cross-conversion picker
+  // list the project's other conversions. Optional: the picker falls back to
+  // resolving it from the conversion when not supplied.
+  projectId?: string;
   fields: FBDIField[];
   sourceColumns: DatasetDetail["columns"];
   defaultTargetFieldId?: number | null;
@@ -1089,6 +1247,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   open,
   onClose,
   conversionId,
+  projectId,
   fields,
   sourceColumns,
   defaultTargetFieldId,
@@ -1835,6 +1994,8 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
                   config={config}
                   setConfig={setConfig}
                   sources={sourceColumns.map((c) => ({ name: c.column_name }))}
+                  projectId={projectId}
+                  conversionId={String(conversionId)}
                 />
               </>
             )}
