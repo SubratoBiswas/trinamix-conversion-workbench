@@ -105,7 +105,7 @@ def _is_blank_series(s: "pd.Series") -> "pd.Series":
 # This is a customer-level value applied to the customer's contacts, which is as fine a
 # grain as the source data provides.
 BORROWABLE_SRC_COLS = (
-    "startdate", "datecreated", "title",
+    "startdate", "datecreated", "title", "language",
 )
 
 

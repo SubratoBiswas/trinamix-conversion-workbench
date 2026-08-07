@@ -34,6 +34,7 @@ def _master():
         "startdate": ["2024-01-01", ""],
         "datecreated": ["2023-06-01", "2023-07-15"],
         "title": ["Project Manager", ""],   # the customer's primary-contact job title
+        "language": ["English", ""],        # borrowed onto account sites (REC-35)
     })
 
 
@@ -60,6 +61,8 @@ def test_enrichment_borrows_site_dates_and_title_only():
     check("datecreated gathered", enr["datecreated"]["NT-2"] == "2023-07-15")
     # title IS borrowed (REC-62): the customer's job title, to reach its contact rows.
     check("title gathered from master", enr["title"]["NT-1"] == "Project Manager")
+    # language IS borrowed (REC-35): the customer's language, to reach its account sites.
+    check("language gathered from master", enr["language"]["NT-1"] == "English")
     # Person names / companyname are NOT borrowed — the contact people carry their own.
     check("firstname NOT borrowed", "firstname" not in enr)
     check("companyname NOT borrowed", "companyname" not in enr)
