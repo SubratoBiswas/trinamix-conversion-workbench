@@ -789,6 +789,104 @@ async def delete_learned(
     return {"deleted": learned_id, "purged": False, **reverted}
 
 
+def _is_gold_derived_learning(m: LearnedMapping) -> bool:
+    """Whether a learning came from a previously-uploaded GOLD EXAMPLE file (or the
+    auto-capture that runs after Generate, an AI-inferred default, or a capture stamped
+    with a specific conversion) — as opposed to an analyst MAPPING DOCUMENT or a HUMAN
+    edit.
+
+    Analyst, 07-Aug: the old gold files are stale; the mapping documents (uploaded in
+    the tool or authored via Claude) and the user's own edits are the source of truth,
+    so ignore the gold-derived records.
+
+    KEPT (returns False):
+      * anything a person authored — ``captured_by`` is set (an analyst or Claude),
+        or the provenance is a manual edit ("(manual)");
+      * an analyst mapping DOCUMENT — its ``captured_from`` is a plain label with no
+        conversion/field markers, and it is re-seeded on startup anyway.
+
+    RETIRED (returns True): "gold example", "auto-capture", "ai-inference", an
+    "(input file)" capture, or a per-conversion capture whose ``captured_from`` carries
+    a "<conversion> -- <field>" or "<source> -> <target>" marker.
+    """
+    if getattr(m, "captured_by", None):
+        return False                        # a person (analyst or Claude) authored it
+    cf = m.captured_from or ""
+    low = cf.lower()
+    if "(manual)" in low:
+        return False                        # a human edit captured from a conversion
+    return (
+        "gold" in low
+        or low == "auto-capture"
+        or low == "ai-inference"
+        or "(input file)" in low
+        or " -- " in cf                     # "<conversion> -- <field>" gold/example capture
+        or " → " in cf or " -> " in cf      # "<source> -> <target>" conversion capture
+    )
+
+
+@router.post("/purge-gold-examples")
+async def purge_gold_examples(
+    dry_run: bool = Query(True, description="Report what would be retired without changing anything"),
+    target_object: Optional[str] = Query(None, description="Limit to one Oracle object; omit for all"),
+    revert_applied: bool = Query(True, description="Also revert the mappings each learning had auto-applied"),
+    user: User = Depends(get_current_user),
+):
+    """Retire every learning that came from a previously-uploaded GOLD example file
+    (or auto-capture / AI inference / a specific conversion), leaving the analyst
+    MAPPING DOCUMENTS and HUMAN edits as the only source of truth.
+
+    ``dry_run`` (default true) reports what WOULD be retired without touching anything.
+    A real run tombstones each row (restorable via /retired) and reverts the mappings
+    the learning had auto-applied, so its value stops shipping in the next generate.
+    The startup mapping-document seeds are untouched and continue to re-apply.
+    """
+    items = await LearnedMapping.find_all().to_list()
+    if target_object:
+        _o = target_object.strip().lower()
+        items = [m for m in items if (m.target_object or "").strip().lower() == _o]
+    gold = [m for m in items
+            if not getattr(m, "is_deleted", False) and _is_gold_derived_learning(m)]
+
+    by_object: dict = {}
+    by_kind: dict = {}
+    by_source: dict = {}
+    for m in gold:
+        o = m.target_object or "(none)"
+        by_object[o] = by_object.get(o, 0) + 1
+        by_kind[m.kind or "(none)"] = by_kind.get(m.kind or "(none)", 0) + 1
+        by_source[m.captured_from or "(none)"] = by_source.get(m.captured_from or "(none)", 0) + 1
+    report = {
+        "scanned": len(items),
+        "matched": len(gold),
+        "by_object": dict(sorted(by_object.items(), key=lambda kv: -kv[1])),
+        "by_kind": dict(sorted(by_kind.items(), key=lambda kv: -kv[1])),
+        "top_sources": dict(sorted(by_source.items(), key=lambda kv: -kv[1])[:20]),
+        "samples": [{"object": m.target_object, "field": m.target_field, "kind": m.kind,
+                     "value": (m.resolved_value or m.original_value or "")[:40],
+                     "from": m.captured_from} for m in gold[:20]],
+        "dry_run": dry_run,
+    }
+    if dry_run:
+        return report
+
+    retired = reverted = stale = 0
+    now = datetime.utcnow()
+    for m in gold:
+        if revert_applied:
+            try:
+                r = await _revert_applied_mappings(m, user.email)
+                reverted += int(r.get("mappings_reverted", 0) or 0)
+                stale += int(r.get("outputs_marked_stale", 0) or 0)
+            except Exception:  # noqa: BLE001 — one bad revert must not stop the purge
+                pass
+        await m.set({"is_deleted": True, "deleted_at": now, "deleted_by": user.email})
+        retired += 1
+    report.update({"retired": retired, "mappings_reverted": reverted,
+                   "outputs_marked_stale": stale})
+    return report
+
+
 async def _revert_applied_mappings(item: LearnedMapping, actor: str) -> dict:
     """Undo the mappings this learning wrote, and stale the outputs built on them.
 
