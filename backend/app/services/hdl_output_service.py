@@ -100,7 +100,20 @@ def _iso_country(v: Any) -> str:
         return ""
     if len(s) == 2 and s.isalpha():
         return s.upper()
-    return COUNTRY_ISO2.get(s.lower(), s)
+    # The local COUNTRY_ISO2 covered ~22 countries, so Saudi Arabia / United Arab
+    # Emirates / Israel / Chile / South Africa (SA/AE/IL/CL/ZA) fell through and
+    # shipped their full name. Fall back to the comprehensive COUNTRY_TO_ISO crosswalk
+    # (the same table the FBDI COUNTRY_ISO2 rule uses) so EVERY country resolves; an
+    # unknown one is still left as-is rather than guessed.
+    hit = COUNTRY_ISO2.get(s.lower())
+    if hit:
+        return hit
+    try:
+        from app.services.deterministic import COUNTRY_TO_ISO
+        key = "".join(ch for ch in s.lower() if ch.isalnum())
+        return COUNTRY_TO_ISO.get(key, s)
+    except Exception:  # noqa: BLE001 — never fail a cell over the crosswalk import
+        return s
 
 
 # Returned by an ``analyst`` lookup that has nothing to say about a field. A

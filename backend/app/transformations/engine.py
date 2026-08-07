@@ -141,7 +141,17 @@ def _interpolate(template: Any, row: Any) -> Any:
         return None
 
     def _sub(match: "re.Match") -> str:
-        name = match.group(1).strip()
+        raw = match.group(1).strip()
+        # Optional modifier: ``{Column|digits}`` inserts only the DIGITS of the cell.
+        # Needed for AssignmentNumber: a contingent worker's Employee_ID already
+        # carries a letter prefix (C12345), so "C{Employee_ID}" doubled it to CC12345 —
+        # the analyst wants "C" + the digits (C12345). Employees (numeric ids) are
+        # unaffected. Extensible: |alnum keeps letters+digits, |upper/|lower fold case.
+        mod = ""
+        name = raw
+        if "|" in raw:
+            name, mod = raw.split("|", 1)
+            name, mod = name.strip(), mod.strip().lower()
         val = _lookup(name)
         if val is None or _to_str(val).strip() == "":
             # Unknown column -> leave the token untouched (do not blank a result).
@@ -155,7 +165,16 @@ def _interpolate(template: Any, row: Any) -> Any:
             if _lookup(name) is not None:
                 return ""
             return match.group(0)
-        return _to_str(val)
+        s = _to_str(val)
+        if mod == "digits":
+            s = re.sub(r"\D", "", s)
+        elif mod == "alnum":
+            s = re.sub(r"[^A-Za-z0-9]", "", s)
+        elif mod == "upper":
+            s = s.upper()
+        elif mod == "lower":
+            s = s.lower()
+        return s
 
     return _PLACEHOLDER.sub(_sub, template)
 
