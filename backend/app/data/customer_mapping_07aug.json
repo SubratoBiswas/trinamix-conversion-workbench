@@ -1,10 +1,18 @@
 {
  "_label": "NXT Customer mapping — 07-Aug additions (Account Description, Identifying Address)",
- "_source": "01_Customer_Import 1.xlsx yellow columns confirmed still blank by a live test on the Customer 03082026 output (Subrato, 07-Aug-2026). Identifying Address is carried here. Account Description was requested too but the Oracle Customer template has NO 'Account Description' field on HZ_IMP_ACCOUNTS_T (the only 'Description' field is on HZ_IMP_LOCATIONS_T) — so it is intentionally NOT seeded here; the correct target field needs confirming before it can be mapped.",
+ "_source": "01_Customer_Import 1.xlsx yellow columns confirmed still blank by a live test on the Customer 03082026 output (Subrato, 07-Aug-2026): Account Description (HZ_IMP_ACCOUNTS_T <- companyname) and Identifying Address (HZ_IMP_PARTYSITES_T, Y for the first row per entityid).",
  "_effective_date": "2026-08-07T23:59:00",
  "_scope": "Client NextPower, source NetSuite, target object Customer. Each rule is scoped to the sheet the workbook flagged it on, so it resolves at generate time for both the FBDI and CSV output.",
  "_precedence": "Dated 07-Aug 23:59 — later than the 03-/06-Aug documents and stamped late in its own day so it beats the tool's same-day auto-captures, while still losing to any later human edit.",
  "rules": [
+  {
+   "target_field": "Account Description",
+   "action": "derive",
+   "source_column": "companyname",
+   "sheets": ["HZ_IMP_ACCOUNTS_T"],
+   "note": "01_Customer_Import, HZ_IMP_ACCOUNTS_T: 'should be mapped to companyname source field'. Account Description IS a real field on HZ_IMP_ACCOUNTS_T (confirmed against the live template). Same source column as Organization Name, scoped to the Accounts sheet.",
+   "target_object": "Customer"
+  },
   {
    "target_field": "Identifying Address",
    "action": "rule",

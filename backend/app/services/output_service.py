@@ -1146,6 +1146,7 @@ def route_frame(wanted: Any, src_frames: dict | None,
 async def build_converted_dataframe(
     conversion: Conversion, max_rows: int | None = None,
     collect_frames: dict | None = None,
+    carry_source_cols: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """``collect_frames``: when a dict is passed, it is populated with
     ``{dataset_id: (converted_frame, source_columns)}`` for every bound source —
@@ -1154,6 +1155,13 @@ async def build_converted_dataframe(
     express when the sources have different row grains (e.g. 5,489 customers vs
     22,505 addresses in one workbook). All other callers ignore it and keep the
     existing merged-frame behaviour.
+
+    ``carry_source_cols``: source column names to thread through onto the converted
+    frame as ``__<name>`` (e.g. ``entityid``). The transform is row-local, so the
+    converted frame is 1:1 with the source in order; the raw source value is copied
+    across by position. Used by the multi-source Customer merge to keep the customer
+    key for grain-aware sheet splitting and entityid linkage. Off by default, so
+    every other object is byte-for-byte unchanged.
     """
     # Source rows come from the uploaded file(s) (dataset mode) or are streamed
     # live from Oracle EBS (EBS mode — no dataset). A module/target object can now
@@ -1187,6 +1195,11 @@ async def build_converted_dataframe(
                 [{"rule_type": _st.get("rule_type"), "config": _st.get("config", {})}]
             )
     needed_src = {m.source_column for m in mappings if m.source_column} | _ref_from_sugg
+    # Columns to thread through verbatim (the customer key for the merge) must
+    # survive the wide-source pruning below even when no mapping/rule reads them.
+    _carry = [str(c) for c in (carry_source_cols or []) if c]
+    if _carry:
+        needed_src |= set(_carry)
 
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
     fields_by_id = {f.id: f for f in fields}
@@ -1330,6 +1343,13 @@ async def build_converted_dataframe(
             odf, lin = await _convert_source(
                 src, str(getattr(dataset, "name", "") or
                          getattr(dataset, "file_name", "") or ""))
+            # Thread the customer key through by POSITION — the transform is
+            # row-local so odf is 1:1 with src in order. Guarded on equal length so a
+            # shape surprise never mis-aligns the key onto the wrong rows.
+            if _carry and len(src) == len(odf):
+                for _cc in _carry:
+                    if _cc in src.columns:
+                        odf["__" + _cc] = src[_cc].astype(str).str.strip().values
             frames.append(odf)
             if collect_frames is not None:
                 # Keep the source's own column list: sheet routing decides which
@@ -2096,6 +2116,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         df = (await build_converted_dataframe(conversion, collect_frames=_src_frames))[0]
     if len(_src_frames) < 2:
         _src_frames = {}          # single source — nothing to route
+    # Multi-source Customer merge: the frame carries a per-row grain tag and the
+    # customer key (see customer_merge). When present, each interface sheet is given
+    # only its own grain's rows and is linked by entityid — set up here, consumed by
+    # `_frame_for` and the linkage glue below. Any other object leaves this off and
+    # keeps the merged-frame behaviour unchanged.
+    from app.services import customer_merge as _cm
+    _grain_merge = _cm.GRAIN_COL in getattr(df, "columns", [])
+    _sheet_ref_holder: dict = {"ref": None}   # this sheet's entityid linkage refs
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
     # What this object is called. Prefer the template's business object (the
@@ -2289,6 +2317,15 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             _src_by_field.setdefault(_m.target_field_id, str(_m.source_column))
 
     def _frame_for(sfields: list) -> pd.DataFrame:
+        # Multi-source Customer merge: give this sheet only its own grain's rows
+        # (party/account sheets deduped to one row per customer), and remember the
+        # rows' entityid so the linkage glue points every child at its customer's
+        # party. Falls back to the full frame for a sheet whose grain is unknown or
+        # absent (customer_merge.sheet_rows), so no sheet is emptied on a guess.
+        if _grain_merge:
+            sub = _cm.sheet_rows(df, _sheet_name_of(sfields))
+            _sheet_ref_holder["ref"] = _cm.sheet_reference(sub)
+            return sub
         wanted = {_src_by_field.get(f.id) for f in sfields}
         wanted.discard(None)
         return route_frame(wanted, _src_frames, df)
@@ -2501,7 +2538,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
 
     def _cust_apply(frame, sheet_name: str | None = None,
                     sfields: list | None = None) -> None:
-        if not _is_customer or not _ref_cache:
+        # The multi-source merge links by the CUSTOMER key: `_frame_for` left this
+        # sheet's per-row entityid in the holder, and it becomes the Party/Account
+        # Source System Reference so a child row points at its customer's one party
+        # row. Without the merge (single source) the positional `_ref_cache` is used,
+        # exactly as before.
+        _ref = _sheet_ref_holder["ref"] if _grain_merge else _ref_cache
+        if not _is_customer or not _ref:
             return
         try:
             from app.services.customer_structure_service import apply_to_frame
@@ -2526,7 +2569,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 _, _dec = _sheet_decisions(sfields)
                 _prot |= {_header_label(f) for f in sfields if f.field_name in _dec} | _dec
             apply_to_frame(frame, source_system=_cust_src, batch_id=_cust_batch,
-                           ref=_ref_cache, level="account",
+                           ref=_ref, level="account",
                            sheet_name=sheet_name, protected=_prot)
         except Exception:  # noqa: BLE001
             pass
@@ -2667,7 +2710,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         total_rows = 0
         total_cols = 0
         multi = bool(sheets_with_fields)
-        _ref_cache = _cust_ref()
+        # The positional reference series is the single-source linkage. The
+        # multi-source merge links by entityid per sheet instead (see _cust_apply),
+        # so skip building it — and skip the extra party-sheet finalize it costs.
+        _ref_cache = [] if _grain_merge else _cust_ref()
         # Header row inclusion. The user toggle always wins. Otherwise the default
         # follows the FORMAT, not the object: an Excel/filled-template download is
         # for humans and keeps its header row, while CSV (and the zipped CSV
@@ -2984,13 +3030,34 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
              getattr(c, "source_type", "") == "ebs")]
     if not convs:
         return None, None, []
+    # A Customer load is several files describing the SAME customers at different
+    # grains (master, addresses, contacts), all keyed by `entityid`. Carry that key
+    # and tag each source's grain so generation can give every interface sheet its
+    # own rows and link them by customer instead of by row position. Other objects
+    # keep the plain converge + de-dup.
+    from app.services import customer_merge as _cm
+    _is_customer = "customer" in (target_object or "").lower()
     frames, names = [], []
     for c in convs:
         try:
-            f, _ = await build_converted_dataframe(c, max_rows=max_rows)
+            f, _ = await build_converted_dataframe(
+                c, max_rows=max_rows,
+                carry_source_cols=(["entityid"] if _is_customer else None))
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
             continue
         if f is not None and len(f.columns):
+            if _is_customer:
+                f = f.copy()
+                _g = _cm.classify_frame_grain(f)
+                if not _g:
+                    # A source we could not place by grain still ships (it falls back
+                    # to the whole-frame sheets), but log it — an unrecognised
+                    # customer source is worth seeing rather than silently thinning a
+                    # sheet's rows.
+                    log.warning("customer merge: could not classify grain for a "
+                                "source of %s (%d rows) — its rows fall back to the "
+                                "un-reshaped sheets", target_object, len(f))
+                f[_cm.GRAIN_COL] = _g or ""
             frames.append(f)
             for did in c.source_dataset_ids:
                 ds = await _DS.get(did)
@@ -2998,7 +3065,15 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                     names.append(ds.name)
     if not frames:
         return None, convs[0], names
-    merged = _merge_dedupe(frames, target_object, REFERENCE_KEY_FIELDS) if len(frames) > 1 else frames[0]
+    if _is_customer and len(frames) > 1:
+        # Keep EVERY row — the grain-aware sheet split (and the per-sheet entityid
+        # dedup) does the reduction, so a blanket survivorship de-dup here would
+        # wrongly collapse a customer's many addresses/contacts before they reach
+        # their sheets. Order preserved (master first) so party dedup keeps the
+        # named master row.
+        merged = pd.concat(frames, ignore_index=True)
+    else:
+        merged = _merge_dedupe(frames, target_object, REFERENCE_KEY_FIELDS) if len(frames) > 1 else frames[0]
     return merged, convs[0], names
 
 

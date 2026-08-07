@@ -106,8 +106,10 @@ def test_seed_doc_is_well_formed():
     by = {r["target_field"]: r for r in doc["rules"]}
     check("effective date is 07-Aug with a time",
           doc["_effective_date"] == "2026-08-07T23:59:00", doc["_effective_date"])
-    check("Account Description is NOT seeded (no matching Oracle field)",
-          "Account Description" not in by, list(by))
+    ad = by["Account Description"]
+    check("Account Description derives from companyname on the Accounts sheet",
+          ad["action"] == "derive" and ad["source_column"] == "companyname"
+          and ad["sheets"] == ["HZ_IMP_ACCOUNTS_T"], ad)
     ia = by["Identifying Address"]
     check("Identifying Address is a GROUP_FIRST_FLAG rule",
           ia["action"] == "rule" and ia["rule_type"] == "GROUP_FIRST_FLAG")

@@ -293,6 +293,11 @@ async def merged_preview(conversion_id: str, limit: int = 50, _: User = Depends(
         p["sources"] = names
         return p
     head = merged.head(limit)
+    # Internal merge bookkeeping columns (grain tag + customer key) never belong in
+    # the preview — they are dropped from the file by the per-sheet reindex too.
+    _internal = [col for col in head.columns if str(col).startswith("__")]
+    if _internal:
+        head = head.drop(columns=_internal)
     if "supplier" in (c.target_object or "").lower():
         try:
             head = _mask_supplier_emails(head.copy())
