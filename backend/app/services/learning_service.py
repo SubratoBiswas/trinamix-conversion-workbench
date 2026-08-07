@@ -1140,6 +1140,14 @@ async def apply_learned_to_conversion(
         from app.services import customer_merge as _cm_enr
         for _bc in _cm_enr.BORROWABLE_SRC_COLS:
             src_index.setdefault(_normalize(_bc), _bc)
+        # ``__source_sheet`` is the pseudo-column the generator injects to say WHICH
+        # source file a row came from (Customer_Billing_Address vs Customer_Shipping_
+        # Address). The 03-Aug document's BILL_TO/SHIP_TO and _B/_S rules read ONLY it,
+        # so without treating it as available the gate below skips them as "column not
+        # in the extract" and Part Site Use Type / Purpose / Site Use Code fall back to
+        # an AI guess (all BILL_TO). It is always present at generate time for a
+        # Customer conversion, so it is legitimately available here.
+        src_index.setdefault(_normalize("__source_sheet"), "__source_sheet")
     fields_map: dict = {}
     # Which SHEET each target field belongs to. Needed because a learning is
     # keyed by field NAME and Oracle repeats names across sheets, so without this
