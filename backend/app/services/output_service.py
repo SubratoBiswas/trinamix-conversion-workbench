@@ -1155,7 +1155,14 @@ async def build_converted_dataframe(
     conversion: Conversion, max_rows: int | None = None,
     collect_frames: dict | None = None,
     carry_source_cols: list[str] | None = None,
+    enrich_by_entityid: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
+    # ``enrich_by_entityid``: {source col -> {entityid -> value}} joined onto the raw
+    # source by entityid before conversion, so a column that lives on a DIFFERENT
+    # customer source file (person names in the contact file, startdate/datecreated in
+    # the master) is present where a rule needs it. Only fills a column the frame lacks
+    # or has entirely blank — see customer_merge.enrich_source_frame. Customer-only; off
+    # for every other object.
     """``collect_frames``: when a dict is passed, it is populated with
     ``{dataset_id: (converted_frame, source_columns)}`` for every bound source —
     BEFORE they are merged. Generation uses this to route each Oracle interface
@@ -1208,6 +1215,13 @@ async def build_converted_dataframe(
     _carry = [str(c) for c in (carry_source_cols or []) if c]
     if _carry:
         needed_src |= set(_carry)
+    # Cross-grain enrichment columns (Customer only: person names from the contact
+    # file, startdate/datecreated from the master) are JOINED onto the raw source by
+    # entityid below. Keep them through the wide-source pruning even when nothing on
+    # THIS conversion names them yet, so a mapping/rule that consumes them (Person
+    # First/Middle/Last, Party Site From Date) actually finds a populated column.
+    if enrich_by_entityid:
+        needed_src |= {str(k) for k in enrich_by_entityid.keys()}
 
     fields = await FBDIField.find(FBDIField.template_id == template.id).to_list() if template else []
     fields_by_id = {f.id: f for f in fields}
@@ -1245,6 +1259,10 @@ async def build_converted_dataframe(
     _ctx_cols: set[str] = set(_ref_from_sugg)
     for _rules in pipelines.values():
         _ctx_cols |= _rule_referenced_columns(_rules)
+    # The enriched columns must also reach the per-row rule dict (Party Type reads
+    # firstname/lastname; Party Site From Date reads startdate/datecreated).
+    if enrich_by_entityid:
+        _ctx_cols |= {str(k) for k in enrich_by_entityid.keys()}
 
     # Order mappings by target field sequence once (metadata — cheap, row-count
     # independent). The heavy per-column transform runs on row CHUNKS in a worker
@@ -1348,6 +1366,15 @@ async def build_converted_dataframe(
                     raise ValueError("Dataset source file not found; please re-upload the dataset")
                 continue  # skip an unreadable secondary source rather than fail the merge
             src = parse_tabular(str(src_path), file_type=dataset.file_type, nrows=max_rows)
+            # Cross-grain enrichment (Customer): fill this source's missing/blank
+            # borrowable columns from the other source files by entityid, BEFORE the
+            # transform runs, so the rules and mappings that read them stop seeing
+            # blanks. Only fills what the frame lacks — real source values are never
+            # overwritten (see customer_merge.enrich_source_frame). Off for every
+            # other object (enrich_by_entityid is None).
+            if enrich_by_entityid:
+                from app.services import customer_merge as _cm_enrich
+                src = _cm_enrich.enrich_source_frame(src, enrich_by_entityid)
             odf, lin = await _convert_source(
                 src, str(getattr(dataset, "name", "") or
                          getattr(dataset, "file_name", "") or ""))
@@ -3045,14 +3072,41 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     # keep the plain converge + de-dup.
     from app.services import customer_merge as _cm
     _is_customer = "customer" in (target_object or "").lower()
+    # Cross-grain enrichment lookup (Customer only). A Customer load's columns live on
+    # DIFFERENT source files — person names in the contact file, companyname/startdate/
+    # datecreated in the master — but the rules that read them run on a different grain.
+    # Build a {borrowable col -> {entityid -> value}} map across ALL raw sources up
+    # front, so each source can be filled by entityid before it is converted. Reads only
+    # entityid + the borrowable columns, so this pre-pass stays cheap. REC-05/07/08.
+    _enrich: dict | None = None
+    if _is_customer:
+        from app.services.dataset_file_store import materialize_dataset_file as _mat
+        _keep_norm = {_cm._norm(x) for x in (("entityid",) + _cm.BORROWABLE_SRC_COLS)}
+        _raw_small: list = []
+        for c in convs:
+            for did in c.source_dataset_ids:
+                _ds = await _DS.get(did)
+                _p = await _mat(_ds) if _ds else None
+                if not _p:
+                    continue
+                try:
+                    _rf = parse_tabular(str(_p), file_type=_ds.file_type, nrows=max_rows)
+                except Exception:  # noqa: BLE001 — an unreadable source contributes nothing
+                    continue
+                _cols = [col for col in _rf.columns if _cm._norm(col) in _keep_norm]
+                if _cols:
+                    _raw_small.append(_rf[_cols].copy())
+                del _rf
+        _enrich = _cm.build_entity_enrichment(_raw_small) or None
     frames, names = [], []
     for c in convs:
         _cf: dict = {}
         try:
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
-                carry_source_cols=(["entityid"] if _is_customer else None),
-                collect_frames=(_cf if _is_customer else None))
+                carry_source_cols=(["entityid", "internalid"] if _is_customer else None),
+                collect_frames=(_cf if _is_customer else None),
+                enrich_by_entityid=_enrich)
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
             continue
         if f is not None and len(f.columns):
@@ -3094,6 +3148,11 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
         merged = pd.concat(frames, ignore_index=True)
     else:
         merged = _merge_dedupe(frames, target_object, REFERENCE_KEY_FIELDS) if len(frames) > 1 else frames[0]
+    # REC-04: stamp the CUSTOMER's internalid (from the master rows, by entityid) onto
+    # every row so Party Original System Reference becomes the customer's internalid,
+    # consistent across the party and its children. No-op for non-customer / single
+    # source — the threaded grain/entityid/internalid columns are absent.
+    merged = _cm.set_party_ref_from_master(merged)
     return merged, convs[0], names
 
 

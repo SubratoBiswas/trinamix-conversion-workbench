@@ -39,6 +39,15 @@ import pandas as pd
 # per-sheet reindex before anything is written, so they never reach the file.
 GRAIN_COL = "__grain"
 ENTITYID_COL = "__entityid"
+# Each row's OWN internalid, carried verbatim from the source (like ENTITYID_COL).
+# On a master/party row this IS the customer's internalid; on a child row it is the
+# address/contact record's own internalid, which is NOT what a party link wants.
+INTERNALID_COL = "__internalid"
+# The CUSTOMER's internalid, resolved by entityid from the master rows and stamped on
+# EVERY row (party and children). This is what Party Original System Reference must
+# carry so a customer's party, addresses and contacts all point at the same key
+# (REC-04). Falls back to the entityid for a customer that has no master row.
+PARTYREF_COL = "__partyref"
 
 # The three source grains a Customer load is built from.
 PARTY = "party"      # the customer master — one row per customer
@@ -48,6 +57,94 @@ CONTACT = "contact"  # contact file — many rows per customer
 
 def _norm(s) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s or "").strip().lower())
+
+
+def _find_col_ci(cols, name: str) -> Optional[str]:
+    """First column whose normalised name matches ``name`` (case/punct-insensitive)."""
+    want = _norm(name)
+    for c in cols:
+        if _norm(c) == want:
+            return c
+    return None
+
+
+def _is_blank_series(s: "pd.Series") -> "pd.Series":
+    t = s.astype(str).str.strip()
+    return t.eq("") | t.str.lower().isin(["nan", "none", "null", "na", "<na>"])
+
+
+# ── Cross-grain enrichment by entityid ──────────────────────────────────────
+# A Customer load is several source FILES at different grains, all keyed by
+# ``entityid``, and each converted on its own. So a column lives only on the file
+# that carries it: person names are in the CONTACT file, companyname/startdate/
+# datecreated in the MASTER, addresses in the ADDRESS files. But rules and mappings
+# need them on a DIFFERENT grain than they live on:
+#   * Party Type ("PERSON if a name is present and companyname is blank, else
+#     ORGANIZATION") and the Person Name fields are evaluated on the MASTER/party rows,
+#     yet firstname/middlename/lastname are only in the contact file;
+#   * Party Site From Date = COALESCE(startdate, datecreated) is on the ADDRESS/site
+#     rows, yet startdate/datecreated are only in the master.
+# Because every file shares entityid, we JOIN these few columns across the files by
+# entityid BEFORE conversion, so each source frame carries what its rules read. Only a
+# column the frame LACKS (or has entirely blank) is filled — real source data is never
+# overwritten. This is what makes Party Type / Person names / Party Site From Date
+# reflect in the output (REC-05 / REC-07 / REC-08).
+BORROWABLE_SRC_COLS = (
+    "firstname", "middlename", "lastname",
+    "companyname", "startdate", "datecreated",
+)
+
+
+def build_entity_enrichment(frames) -> dict:
+    """``{borrowable col -> {entityid -> first non-blank value}}`` across the raw
+    customer source frames. First non-blank wins (sources arrive master-first)."""
+    enr: dict[str, dict] = {}
+    for f in frames or []:
+        if f is None or len(getattr(f, "columns", [])) == 0 or len(f) == 0:
+            continue
+        ecol = _find_col_ci(f.columns, "entityid")
+        if not ecol:
+            continue
+        eids = f[ecol].astype(str).str.strip()
+        for want in BORROWABLE_SRC_COLS:
+            col = _find_col_ci(f.columns, want)
+            if not col:
+                continue
+            vals = f[col].astype(str).str.strip()
+            d = enr.setdefault(want, {})
+            for e, v in zip(eids.tolist(), vals.tolist()):
+                if not e:
+                    continue
+                if v and v.lower() not in ("nan", "none", "null") and e not in d:
+                    d[e] = v
+    return enr
+
+
+def enrich_source_frame(src, enrichment: dict):
+    """Add the borrowable columns to a RAW source frame from the cross-source
+    ``enrichment`` (keyed by entityid). A column the frame already carries with real
+    values is left untouched; only an absent or entirely-blank one is filled, so a
+    rule/mapping that reads it stops seeing blanks. Returns the frame (copied only if
+    changed)."""
+    if src is None or not enrichment:
+        return src
+    ecol = _find_col_ci(src.columns, "entityid")
+    if not ecol:
+        return src
+    eids = src[ecol].astype(str).str.strip()
+    changed = False
+    for col, mapping in enrichment.items():
+        if not mapping:
+            continue
+        existing = _find_col_ci(src.columns, col)
+        if existing is not None and not bool(_is_blank_series(src[existing]).all()):
+            continue                      # real values already present — leave it
+        if not changed:
+            src = src.copy()
+            changed = True
+        target = existing or col
+        src[target] = eids.map(lambda e: mapping.get(e, ""))
+    return src
 
 
 # ── Which grain an interface SHEET belongs to ───────────────────────────────
@@ -166,6 +263,50 @@ def classify_frame_grain(frame: pd.DataFrame) -> Optional[str]:
     return grain if score >= 0.10 else None
 
 
+# ── The customer's internalid, resolved by entityid ─────────────────────────
+def set_party_ref_from_master(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Stamp ``PARTYREF_COL`` = the CUSTOMER's internalid on every row, resolved from
+    the master/party-grain rows by ``entityid`` (REC-04).
+
+    Every source carries an ``internalid``, but it is the record's OWN id — a
+    customer, each of its addresses and each of its contacts have different ones.
+    The Party Original System Reference must be the CUSTOMER's internalid, the same
+    on the party row and all its children, or the child points at a party that does
+    not exist. So we take the internalid from the master rows only, key it by
+    ``entityid``, and map it onto every row. A customer with no master row (or a row
+    with no key) falls back to its ``entityid`` so the link is still internally
+    consistent. No-op unless the frame carries the grain + entityid + internalid the
+    merge threads through."""
+    if df is None or GRAIN_COL not in getattr(df, "columns", []):
+        return df
+    if ENTITYID_COL not in df.columns or INTERNALID_COL not in df.columns:
+        return df
+    g = df[GRAIN_COL].astype(str).str.strip().str.lower()
+    eid = df[ENTITYID_COL].astype(str).str.strip()
+    iid = df[INTERNALID_COL].astype(str).str.strip()
+    master = g.eq(PARTY)
+    id_by_entity: dict[str, str] = {}
+    for e, i in zip(eid[master].tolist(), iid[master].tolist()):
+        if not e or e in id_by_entity:
+            continue
+        if i and i.lower() not in ("nan", "none", "null"):
+            id_by_entity[e] = i
+    df = df.copy()
+    df[PARTYREF_COL] = [id_by_entity.get(e, e) for e in eid.tolist()]
+    return df
+
+
+def _party_link_series(sub: "pd.DataFrame"):
+    """The value a row uses for its Party Original System Reference — the customer's
+    internalid (``PARTYREF_COL``) when the REC-04 resolve has run, else the customer
+    key ``entityid`` (the previous behaviour)."""
+    if PARTYREF_COL in sub.columns:
+        return sub[PARTYREF_COL].astype(str).str.strip()
+    if ENTITYID_COL in sub.columns:
+        return sub[ENTITYID_COL].astype(str).str.strip()
+    return None
+
+
 # ── The per-sheet reshape ───────────────────────────────────────────────────
 def _set_party_link(sub: pd.DataFrame) -> None:
     """Point every row's PARTY link at its customer, in place.
@@ -173,13 +314,16 @@ def _set_party_link(sub: pd.DataFrame) -> None:
     Party Original System Reference is the column a child row uses to say which party
     it belongs to. In these extracts it is mapped to the record's OWN ``internalid``
     — different for a customer, its addresses and its contacts — so a child pointed
-    at a party that did not exist. Overwrite it with the customer key ``entityid`` so
-    the child resolves to the one deduped party row. The site-level keys (…Site
-    Source System Reference, already the unique ``entityid_internalid``) are left
-    untouched — only the party link is retargeted."""
-    if ENTITYID_COL not in sub.columns:
+    at a party that did not exist. Overwrite it with the CUSTOMER's internalid
+    (``PARTYREF_COL``, resolved from the master by entityid — REC-04), falling back to
+    the customer key ``entityid`` when the resolve has not run, so the child resolves
+    to the one deduped party row. The site-level keys (…Site Source System Reference,
+    already the unique ``entityid_internalid``) are left untouched — only the party
+    link is retargeted."""
+    key = _party_link_series(sub)
+    if key is None:
         return
-    eid = sub[ENTITYID_COL].astype(str).str.strip()
+    keyv = key.tolist()
     for c in sub.columns:
         nc = _norm(c)
         if "site" in nc:
@@ -187,7 +331,7 @@ def _set_party_link(sub: pd.DataFrame) -> None:
         if all(w in nc for w in ("party", "original", "system", "reference")):
             # Only where we actually have a key; keep any existing value on a
             # key-less row rather than blanking it.
-            sub[c] = [e if e else v for e, v in zip(eid, sub[c].astype(str))]
+            sub[c] = [e if e else v for e, v in zip(keyv, sub[c].astype(str))]
 
 
 def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
@@ -226,10 +370,13 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
 
 
 def sheet_reference(sub: pd.DataFrame) -> Optional[list]:
-    """The customer linkage reference for each row of a reshaped sheet — the row's
+    """The customer linkage reference for each row of a reshaped sheet — the
+    customer's internalid (``PARTYREF_COL``, REC-04) when resolved, else the row's
     ``entityid``. Fed to the structural glue as the Party/Account Source System
-    Reference so every child row points at its customer's party. None when the
-    frame does not carry the key (non-customer or single-source paths)."""
-    if sub is None or ENTITYID_COL not in getattr(sub, "columns", []):
+    Reference so every child row points at its customer's party AND carries the same
+    key the party row does. None when the frame does not carry the key (non-customer
+    or single-source paths)."""
+    if sub is None:
         return None
-    return sub[ENTITYID_COL].astype(str).str.strip().tolist()
+    key = _party_link_series(sub)
+    return key.tolist() if key is not None else None

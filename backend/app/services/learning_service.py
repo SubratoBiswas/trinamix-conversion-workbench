@@ -1126,6 +1126,20 @@ async def apply_learned_to_conversion(
         ).to_list()
         for c in cols:
             src_index[_normalize(c.column_name)] = c.column_name
+    # A Customer load's columns live on DIFFERENT source files — person names in the
+    # contact file, companyname/startdate/datecreated in the master — and the merge
+    # JOINS them onto every source by entityid at GENERATE time (customer_merge
+    # enrichment). So a derive/rule that reads firstname or startdate is legitimate
+    # even when THIS conversion's own extract does not carry the column. Without this,
+    # the gate below skips those bindings as "column not in the extract" and the fields
+    # the analyst mapped (Person First/Middle/Last Name, the site From Dates) ship
+    # blank — REC-05 / REC-07 / REC-08. Treat the cross-grain columns as available for
+    # a Customer conversion; a column no source actually supplies just enriches to
+    # blank, exactly as before.
+    if "customer" in (business_object or "").lower():
+        from app.services import customer_merge as _cm_enr
+        for _bc in _cm_enr.BORROWABLE_SRC_COLS:
+            src_index.setdefault(_normalize(_bc), _bc)
     fields_map: dict = {}
     # Which SHEET each target field belongs to. Needed because a learning is
     # keyed by field NAME and Oracle repeats names across sheets, so without this
