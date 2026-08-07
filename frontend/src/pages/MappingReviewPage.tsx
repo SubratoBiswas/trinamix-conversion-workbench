@@ -211,7 +211,19 @@ export const MappingReviewPage: React.FC = () => {
   const [layerFilter, setLayerFilter] = useState<LayerKey | null>(null);
   // Canvas (drag-to-map graph) vs Table (row-per-field detail: required, how it
   // was mapped, transform, confidence, lower-probability alternatives, notes).
-  const [viewMode, setViewMode] = useState<"canvas" | "table">("canvas");
+  // DEFAULT is the TABLE — the detailed, scannable view analysts asked to land on
+  // (Subrato, 07-Aug). Canvas is one click away, and whichever the analyst picks is
+  // remembered so their choice sticks across visits rather than resetting each load.
+  const [viewMode, setViewMode] = useState<"canvas" | "table">(() => {
+    try {
+      const saved = localStorage.getItem("trinamix.mappingViewMode");
+      if (saved === "canvas" || saved === "table") return saved;
+    } catch { /* storage blocked — fall through to the default */ }
+    return "table";
+  });
+  useEffect(() => {
+    try { localStorage.setItem("trinamix.mappingViewMode", viewMode); } catch { /* ignore */ }
+  }, [viewMode]);
   const [search, setSearch] = useState("");
   // FBDI load-sequence shown at the top of the mapping screen (Req 2).
   const [seqSteps, setSeqSteps] = useState<{ label: string; load_order: number }[]>([]);
