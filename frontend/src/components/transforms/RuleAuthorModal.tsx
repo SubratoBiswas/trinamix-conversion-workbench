@@ -207,7 +207,9 @@ const SingleValueForm = (label: string, hint?: string): React.FC<FormProps> =>
   };
 
 const ValueMapForm: React.FC<FormProps> = ({ config, setConfig }) => {
-  const reserved = new Set(["case_insensitive", "default"]);
+  // `_prompt` is a reserved META key (the authoring sentence rides in the config so
+  // it propagates) — never surface it as an editable from→to pair.
+  const reserved = new Set(["case_insensitive", "default", "_prompt"]);
 
   // THE PAIRS LIVE HERE, AS A LIST — not as keys on `config`.
   //
@@ -243,6 +245,8 @@ const ValueMapForm: React.FC<FormProps> = ({ config, setConfig }) => {
     const out: Cfg = {
       case_insensitive: config.case_insensitive ?? true,
       ...(config.default !== undefined ? { default: config.default } : {}),
+      // Preserve the reserved meta prompt so editing pairs never strips it.
+      ...(config._prompt !== undefined ? { _prompt: config._prompt } : {}),
     };
     next.forEach(([k, v]) => {
       if (k) out[k] = v;
@@ -1249,6 +1253,20 @@ interface RuleAuthorModalProps {
   onSaved: () => void;
   /** target_field_id -> mapping id, so a mapping-change intent can be applied. */
   mappingIdForField?: (targetFieldId: string) => string | undefined;
+  /** target_field_id -> the transform ALREADY LIVE on that field's mapping. This is
+   *  where a rule inherited from the Rule Library lands (approved_by=learning-engine),
+   *  not as a per-conversion rule row — so the modal can show it instead of a blank
+   *  form. Undefined when the field carries no applied transform. */
+  appliedTransformForField?: (targetFieldId: string) => AppliedTransform | undefined;
+}
+
+export interface AppliedTransform {
+  rule_type: string;
+  config: Record<string, any>;
+  source_column: string | null;
+  reason: string | null;
+  approved_by: string | null;
+  derived_from: string | null;
 }
 
 export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
@@ -1262,6 +1280,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   defaultSourceColumn,
   onSaved,
   mappingIdForField,
+  appliedTransformForField,
 }) => {
   const [type, setType] = useState<string>("VALUE_MAP");
   // FBDI field ids are ObjectId hex strings, not numbers — keep them as-is.
@@ -1273,6 +1292,11 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   );
   const [config, setConfig] = useState<Cfg>(RULE_SPECS.VALUE_MAP.defaultConfig());
   const [description, setDescription] = useState<string>("");
+  // The plain-English (or SQL) prompt that AUTHORED the rule now loaded in the form.
+  // Persisted with the rule and shown back so it can be reviewed and re-used — the
+  // screenshot request. It also carries across projects on the learning's config, so
+  // an inherited rule can explain itself instead of reading as a blank form.
+  const [savedPrompt, setSavedPrompt] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [advancedRaw, setAdvancedRaw] = useState<string>("{}");
   const [advancedError, setAdvancedError] = useState<string | null>(null);
@@ -1339,6 +1363,8 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
       setAdvancedRaw(JSON.stringify(res.config || {}, null, 2));
       setSqlExplanation(res.explanation || null);
       setSqlSource(res.source || "ai-sql");
+      // The SQL the analyst pasted is the prompt for this rule — keep it for reuse.
+      setSavedPrompt(sqlText.trim() || null);
     } catch (e: any) {
       setSqlError(e?.response?.data?.detail || e?.message || "Could not parse the SQL");
     } finally {
@@ -1354,6 +1380,9 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     setAdvancedRaw(JSON.stringify(cfg, null, 2));
     setSourceColumn(r.source_column || "");
     setDescription(r.description || "");
+    // The prompt lives on the rule; a rule that came from the library instead carries
+    // it under a reserved `_prompt` key in its config.
+    setSavedPrompt((r.prompt || (cfg as any)?._prompt || "").trim() || null);
     if (r.target_field_id != null) setTargetFieldId(String(r.target_field_id));
   };
 
@@ -1365,6 +1394,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     setAdvancedRaw(JSON.stringify(cfg, null, 2));
     setSourceColumn(defaultSourceColumn ?? "");
     setDescription("");
+    setSavedPrompt(null);
   };
 
   // Reset on open, then load any rule already saved for this target field.
@@ -1375,6 +1405,7 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     setSourceColumn(defaultSourceColumn ?? "");
     setConfig(RULE_SPECS.VALUE_MAP.defaultConfig());
     setDescription("");
+    setSavedPrompt(null);
     setAdvanced(false);
     setAdvancedRaw("{}");
     setAdvancedError(null);
@@ -1435,6 +1466,38 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
     [existingRules, targetFieldId],
   );
 
+  // The transform ALREADY LIVE on this field's mapping. A rule inherited from the
+  // Rule Library lands here (approved_by=learning-engine), not as a per-conversion
+  // rule row — so without surfacing it, a field that a propagated rule already drives
+  // reads as "no rule saved" and invites re-authoring the thing that already works.
+  const appliedTransform = useMemo(
+    () =>
+      targetFieldId != null && appliedTransformForField
+        ? appliedTransformForField(String(targetFieldId))
+        : undefined,
+    [targetFieldId, appliedTransformForField],
+  );
+  // Show the inherited banner only when there is no per-conversion rule to edit AND
+  // the applied transform came from the library (not something a person set here).
+  const inheritedFromLibrary =
+    rulesForField.length === 0 &&
+    !!appliedTransform &&
+    (appliedTransform.approved_by === "learning-engine" ||
+      /learning library|Re-applied from learned|Derived by a stored rule|Auto-applied/i.test(
+        appliedTransform.reason || "",
+      ));
+  const inheritedPrompt =
+    (appliedTransform?.config?._prompt as string | undefined)?.trim() || null;
+  const inheritedFrom =
+    appliedTransform?.derived_from ||
+    (appliedTransform?.reason || "").replace(/^.*captured from ["“]?/i, "").replace(/["”)\.]+\s*$/,'') ||
+    null;
+
+  const reusePrompt = (p: string) => {
+    setNlDescription(p);
+    setNlOpen(true);
+  };
+
   const translateNL = async () => {
     if (!nlDescription.trim()) return;
     setNlBusy(true);
@@ -1488,6 +1551,9 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
           : (res.explanation || null));
       setNlAmbiguities(res.ambiguities || []);
       setNlSource(res.source || "ai");
+      // The sentence that produced this rule IS the prompt — remember it so Save
+      // persists it and it can be reviewed/re-used later.
+      setSavedPrompt(nlDescription.trim() || null);
     } catch (e: any) {
       const detail = e?.response?.data?.detail || e?.message || "Translation failed";
       setNlError(detail);
@@ -1596,12 +1662,17 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
         setSaving(false);
         return;
       }
+      // The prompt to persist: whatever is live in the NL box, else the sentence that
+      // authored the rule we loaded. Stored so it can be reviewed and re-used, and so
+      // it travels with the rule into other projects via the library.
+      const _prompt = nlDescription.trim() || savedPrompt || undefined;
       const body = {
         target_field_id: targetFieldId != null ? String(targetFieldId) : undefined,
         source_column: sourceColumn || undefined,
         rule_type: type,
         rule_config: activeCfg,
         description: description || undefined,
+        prompt: _prompt,
       };
       // Editing a rule that already exists updates it in place; only a genuinely
       // new rule is inserted. Previously every save inserted, so reopening and
@@ -1619,6 +1690,22 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
         setLoadError(
           `Mapping updated: this field now reads "${_sync.source_column}" `
           + `(was "${_sync.previous_source_column}").`);
+      }
+      // Did it reach the shared, client+source-scoped library? If not, the rule runs
+      // on THIS conversion only and will NOT propagate to other/future projects —
+      // exactly the "my rule does not show in the Rule Library / does not carry over"
+      // symptom, which used to happen silently. Say so, and keep the modal open so the
+      // message is seen (the rule itself is already saved on this conversion).
+      if ((_saved as any)?.learned === false) {
+        // Keep the modal OPEN (do not call onSaved) so this is actually read. The
+        // rule is already saved on this conversion; only propagation failed.
+        setSaveError(
+          "Saved on this conversion, but it could NOT be added to the shared Rule "
+          + "Library — so it will not propagate to other or future projects. This "
+          + "usually means the target field or its business object could not be "
+          + "resolved. Re-pick the target FBDI field and save again.");
+        setSaving(false);
+        return;
       }
       onSaved();
     } catch (e: any) {
@@ -1842,6 +1929,74 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Inherited from the Rule Library — a rule that propagated from another
+              project lands on this field's mapping, not as a rule row here. Showing it
+              is what stops a propagated rule from reading as "nothing came across". */}
+          {inheritedFromLibrary && appliedTransform && (
+            <div className="rounded-md border border-brand/40 bg-brand-subtle/25">
+              <div className="flex items-center justify-between gap-2 px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand-dark">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  This field already has a rule — inherited from the Rule Library
+                </span>
+                <span className="shrink-0 rounded bg-brand-subtle px-1.5 py-0.5 font-mono text-[10px] text-brand-dark">
+                  {RULE_SPECS[appliedTransform.rule_type]?.label ?? appliedTransform.rule_type}
+                </span>
+              </div>
+              <div className="space-y-1 border-t border-brand/30 px-3 py-2 text-[11.5px] text-ink">
+                <div>
+                  It runs on this field at <em>Generate Output</em> even though no rule is
+                  saved on <span className="font-medium">this</span> conversion
+                  {appliedTransform.source_column
+                    ? <> (reads <span className="font-mono">{appliedTransform.source_column}</span>)</>
+                    : null}.
+                  {inheritedFrom ? <> Captured from <span className="font-medium">{inheritedFrom}</span>.</> : null}
+                </div>
+                {inheritedPrompt && (
+                  <div className="rounded-md border border-brand/30 bg-white px-2 py-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-brand-dark">
+                        Original prompt
+                      </span>
+                      <button
+                        onClick={() => reusePrompt(inheritedPrompt)}
+                        className="text-[10.5px] font-medium text-brand-dark hover:underline"
+                      >
+                        Reuse
+                      </button>
+                    </div>
+                    <div className="mt-0.5 whitespace-pre-wrap leading-snug">{inheritedPrompt}</div>
+                  </div>
+                )}
+                <div className="text-[10.5px] text-ink-muted">
+                  Saving a rule here overrides the inherited one for this conversion only.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* The plain-English/SQL prompt that AUTHORED the rule now loaded — kept so
+              it can be reviewed and re-used on another field or project (#78). */}
+          {savedPrompt && (
+            <div className="rounded-md border border-brand/30 bg-brand-subtle/20 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-brand-dark">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Previously applied prompt
+                </span>
+                <button
+                  onClick={() => reusePrompt(savedPrompt)}
+                  className="text-[11px] font-medium text-brand-dark hover:underline"
+                >
+                  Reuse in translator
+                </button>
+              </div>
+              <div className="mt-1 whitespace-pre-wrap text-[11.5px] leading-snug text-ink">
+                {savedPrompt}
+              </div>
             </div>
           )}
 

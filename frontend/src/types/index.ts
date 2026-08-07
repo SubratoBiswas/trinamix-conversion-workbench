@@ -690,10 +690,14 @@ export interface TransformationRule {
   rule_type: string;
   rule_config: Record<string, any>;
   description: string | null;
+  /** The plain-English / SQL instruction the analyst typed to author this rule. */
+  prompt?: string | null;
   sequence: number;
   created_at: string;
   /** What saving the rule did to the mapping row. */
   mapping_sync?: Record<string, any> | null;
+  /** Whether the save also reached the shared client+source-scoped library. */
+  learned?: boolean | null;
 }
 
 export interface ValidationIssue {

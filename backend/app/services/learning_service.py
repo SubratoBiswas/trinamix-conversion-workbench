@@ -393,6 +393,16 @@ async def record_learning_from_rule(
     _cid = await client_id_for_conversion(conversion)
     # Learnings are keyed by source system too — see source_scope.
     _src = await source_erp_for_conversion(conversion)
+    # The PROMPT the analyst typed to author this rule travels WITH it. It is stashed
+    # under a reserved `_prompt` key in the stored config so it rides the same
+    # propagation path as everything else — a rule that lands on a newer project's
+    # mapping then still carries the sentence that explains it, which is what turns an
+    # inherited derivation from "no rule saved" into "here is the rule, and why".
+    # The engine ignores unknown config keys, so this changes nothing about execution.
+    _cfg = dict(rule.rule_config or {})
+    _prompt = (getattr(rule, "prompt", None) or getattr(rule, "description", None) or "").strip()
+    if _prompt:
+        _cfg["_prompt"] = _prompt
     # A CLIENT RULE, like every other decision the analyst makes by hand. The custom
     # transformation box is the SECOND plain-text place a rule gets written — the
     # analyst named both on 31-Jul, "one is the yellow global location, one is inside
@@ -403,7 +413,7 @@ async def record_learning_from_rule(
         kind="rule", category=_category_for(rule.rule_type),
         original_value=rule.source_column or "", resolved_value=target_field,
         target_object=CLIENT_RULE, target_field=target_field,
-        rule_type=rule.rule_type, rule_config=rule.rule_config or {},
+        rule_type=rule.rule_type, rule_config=_cfg,
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
     )

@@ -820,8 +820,14 @@ async def add_rule(
     _sync = await _sync_mapping_to_rule(r, user.email)
     # Learning capture is best-effort — a failure here must not fail the save
     # (and previously surfaced as an opaque "Failed to save rule" with no CORS).
+    # BUT the outcome is now REPORTED (`learned`), because a rule that saved on this
+    # conversion and did NOT reach the shared library is exactly the "my rule does not
+    # show in the Rule Library / does not propagate" complaint — and it used to fail
+    # in silence, indistinguishable from success.
+    _learned = False
     try:
-        await record_learning_from_rule(r, conv, captured_by=user.email)
+        _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
+        _learned = _lm is not None
     except Exception as exc:
         log.warning(f"add_rule: learning capture failed for rule {r.id}: {exc}")
     # Serialize explicitly so ObjectId fields become strings (model_dump leaves
@@ -834,11 +840,15 @@ async def add_rule(
         "rule_type": r.rule_type,
         "rule_config": r.rule_config or {},
         "description": r.description,
+        "prompt": r.prompt,
         "sequence": r.sequence,
         "created_at": r.created_at,
         # What the save did to the MAPPING row, so a retarget is visible rather
         # than something the analyst has to spot.
         "mapping_sync": _sync,
+        # Did this rule reach the shared, client+source-scoped library? If false, it
+        # runs on THIS conversion only and will not propagate — the UI says so.
+        "learned": _learned,
     }
 
 
@@ -1152,8 +1162,10 @@ async def update_rule(
     _sync = await _sync_mapping_to_rule(r, user.email)
     # Re-learn so the edited definition (not the superseded one) is what future
     # conversions inherit. Best-effort, exactly as in add_rule.
+    _learned = False
     try:
-        await record_learning_from_rule(r, conv, captured_by=user.email)
+        _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
+        _learned = _lm is not None
     except Exception as exc:
         log.warning(f"update_rule: learning capture failed for rule {r.id}: {exc}")
     return {
@@ -1164,11 +1176,13 @@ async def update_rule(
         "rule_type": r.rule_type,
         "rule_config": r.rule_config or {},
         "description": r.description,
+        "prompt": r.prompt,
         "sequence": r.sequence,
         "created_at": r.created_at,
         # What the save did to the MAPPING row, so a retarget is visible rather
         # than something the analyst has to spot.
         "mapping_sync": _sync,
+        "learned": _learned,
     }
 
 

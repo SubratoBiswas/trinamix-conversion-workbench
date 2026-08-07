@@ -1577,6 +1577,24 @@ export const MappingReviewPage: React.FC = () => {
             mappings.find((m) => String(m.target_field_id) === String(tfid))?.id != null
               ? String(mappings.find((m) => String(m.target_field_id) === String(tfid))!.id)
               : undefined}
+          /* The transform ALREADY LIVE on this field's mapping — which is where a
+             rule inherited from the Rule Library lands (approved_by=learning-engine),
+             not as a per-conversion rule row. Passing it lets the modal show "this
+             field already has a rule, inherited from the library" instead of a blank
+             form, so a propagated rule stops reading as "nothing came across". */
+          appliedTransformForField={(tfid) => {
+            const m = mappings.find((x) => String(x.target_field_id) === String(tfid));
+            const st = (m?.suggested_transformation as any) || null;
+            if (!m || !st?.rule_type) return undefined;
+            return {
+              rule_type: st.rule_type as string,
+              config: (st.config || {}) as Record<string, any>,
+              source_column: m.source_column ?? null,
+              reason: (m as any).reason ?? null,
+              approved_by: (m as any).approved_by ?? null,
+              derived_from: (m as any).derived_from ?? null,
+            };
+          }}
           /* RELOAD. This closed the modal and flashed a message without refetching
              anything, so the grid and the inspector kept showing their in-memory copy
              — SOURCE "(none)", "Required field with no source and no default" — for a

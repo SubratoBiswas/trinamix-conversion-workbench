@@ -29,6 +29,13 @@ class TransformationRule(Document):
     rule_type: str
     rule_config: dict = Field(default_factory=dict)
     description: Optional[str] = None
+    # The plain-English (or SQL) instruction the analyst typed into the rule
+    # author's "Describe this rule" box, kept verbatim so it can be shown back for
+    # review and re-used on another field/project. The structured rule_config is
+    # what runs; this is what it MEANT, in the words of the person who wrote it —
+    # and a rule that came across from the library reads as "no rule saved" without
+    # it, because config alone does not say why the field is derived the way it is.
+    prompt: Optional[str] = None
     sequence: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

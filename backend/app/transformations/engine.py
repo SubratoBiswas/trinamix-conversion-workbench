@@ -379,8 +379,13 @@ def _apply_one_rule(
         s = _to_str(value)
         case_insensitive = cfg.get("case_insensitive", True)
         default = cfg.get("default")
+        # `_prompt` is a reserved META key: the authoring sentence is stashed under it
+        # so it travels with the rule, and it must NEVER be read as a from→to pair.
+        # Without this a VALUE_MAP that carried its prompt would gain a phantom
+        # "_prompt" -> "<the sentence>" mapping.
         mapping = {
-            k: v for k, v in cfg.items() if k not in ("case_insensitive", "default")
+            k: v for k, v in cfg.items()
+            if k not in ("case_insensitive", "default", "_prompt")
         }
         if case_insensitive:
             for k, v in mapping.items():

@@ -55,19 +55,37 @@ export const RuleLibraryPage: React.FC = () => {
           <table className="table-shell">
             <thead>
               <tr>
-                <th>Rule</th><th>Type</th><th>Original</th><th>Resolved</th>
-                <th>Object</th><th>Captured</th><th></th>
+                <th>Rule</th><th>Type</th><th>Field</th><th>Source&nbsp;→&nbsp;Target</th>
+                <th>System</th><th>Captured</th><th></th>
               </tr>
             </thead>
             <tbody>
-              {items.map((m) => (
+              {items.map((m) => {
+                // The plain-English prompt that authored the rule travels with it under
+                // a reserved key in the config, so it can be shown for reference/reuse.
+                const prompt = (m.rule_config?._prompt as string | undefined)?.trim();
+                return (
                 <tr key={m.id}>
-                  <td className="font-medium">{m.category}</td>
+                  <td className="font-medium">
+                    {m.category}
+                    {prompt && (
+                      <div className="mt-0.5 max-w-[280px] truncate text-[11px] font-normal italic text-ink-muted"
+                           title={prompt}>
+                        “{prompt}”
+                      </div>
+                    )}
+                  </td>
                   <td>{m.rule_type ? <Pill tone="brand">{m.rule_type}</Pill> : "—"}</td>
-                  <td className="font-mono text-danger">{m.original_value}</td>
-                  <td className="font-mono text-success">{m.resolved_value}</td>
-                  <td className="text-ink-muted">{m.target_object || "—"}</td>
-                  <td className="text-[11px] text-ink-muted">{formatDate(m.captured_at)}</td>
+                  <td className="text-ink">{m.target_field || m.resolved_value || "—"}</td>
+                  <td className="text-[11px]">
+                    <span className="font-mono text-danger">{m.original_value || "(derived)"}</span>
+                    <span className="text-ink-subtle"> → </span>
+                    <span className="font-mono text-success">{m.resolved_value}</span>
+                  </td>
+                  <td className="text-ink-muted">{m.source_erp || "any"}</td>
+                  <td className="text-[11px] text-ink-muted" title={m.captured_from || ""}>
+                    {formatDate(m.captured_at)}
+                  </td>
                   <td className="text-right">
                     <div className="flex items-center justify-end gap-1">
                       <button onClick={() => openEdit(m)} title="Edit rule"
@@ -81,7 +99,7 @@ export const RuleLibraryPage: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         )}

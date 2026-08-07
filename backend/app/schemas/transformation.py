@@ -12,6 +12,9 @@ class TransformationRuleCreate(BaseModel):
     rule_type: str
     rule_config: dict[str, Any] = {}
     description: str | None = None
+    # The plain-English/SQL instruction the analyst typed to author this rule,
+    # persisted so it can be reviewed and re-used later (screenshot request).
+    prompt: str | None = None
 
 
 class TransformationRuleOut(ApiOut):
@@ -22,6 +25,7 @@ class TransformationRuleOut(ApiOut):
     rule_type: str
     rule_config: dict[str, Any]
     description: str | None = None
+    prompt: str | None = None
     sequence: int
     created_at: datetime
     # What saving the rule did to the MAPPING row — e.g. {"synced": true,
@@ -29,6 +33,9 @@ class TransformationRuleOut(ApiOut):
     # HERE because response_model silently strips keys it does not know about: the
     # router can return it all it likes and FastAPI will drop it on the way out.
     mapping_sync: dict[str, Any] | None = None
+    # Whether the save also reached the shared client+source-scoped library (so it
+    # will propagate to other/future projects). False = this conversion only.
+    learned: bool | None = None
 
     class Config:
         from_attributes = True
