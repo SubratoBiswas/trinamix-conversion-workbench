@@ -1001,6 +1001,26 @@ def _transform_frame(
                                              row=_RowWithTargets(records[i], out_cols, i),
                                              ctx={**_rule_ctx, "row_index": row_offset + i})
                               for i in range(n_rows)]
+        # COLLISION GUARD — one bare field name, many interface sheets.
+        #
+        # out_cols is keyed by field NAME, but Oracle repeats a field name across
+        # sheets and each sheet is a SEPARATE target field with its OWN pipeline:
+        # "Relationship Source System Reference" is on many Customer tabs, and only
+        # the PARTYSITES copy carries the CONCAT rule (entityid_internalid_RS). A
+        # sheet whose copy of the field is UNMAPPED produces a blank column; if it is
+        # processed AFTER the one that computed the real value, `out_cols[name] =
+        # blank` erased the value and the field shipped empty although the UI showed
+        # the rule — the reported "mapped in the UI, blank in the output".
+        #
+        # So a blank, unmapped same-named field must not overwrite a value another
+        # sheet's mapping or rule already produced. A real value still wins normally
+        # (the test below is only "new is entirely blank AND something populated is
+        # already there"), so a sheet with its own populated mapping is unaffected,
+        # and last-populated-wins is preserved between two real values.
+        _new_blank = all(v is None or str(v).strip() == "" for v in col_values)
+        _prev = out_cols.get(tgt.field_name)
+        if _new_blank and _prev is not None and any(str(v).strip() for v in _prev):
+            continue
         out_cols[tgt.field_name] = col_values
         lineage[tgt.field_name] = {"source_column": m.source_column, "default_value": m.default_value,
                                    "rules": rules, "status": m.status, "confidence": m.confidence,
