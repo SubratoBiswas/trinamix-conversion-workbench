@@ -2826,6 +2826,17 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                     if _sheet_carries_data(s):
                         sdf = _finalize(fields_by_sheet[s.id])
                         _cust_apply(sdf, s.sheet_name, fields_by_sheet[s.id])
+                        # BOM: apply the SAME grain reshape + Item Sequence renumber the
+                        # CSV package applies (below), so the filled .xlsm agrees with the
+                        # CSV bundle instead of shipping un-deduped rows with a blank Item
+                        # Sequence. Without this, BOM-01 fanned out to the CSV but not the
+                        # template. Defensive: never fail the workbook on a reshape error.
+                        if _is_bom and _is_bom_sheet(s.sheet_name):
+                            try:
+                                from app.services.bom_structure_service import reshape_for_sheet
+                                sdf = reshape_for_sheet(sdf, s.sheet_name)
+                            except Exception:  # noqa: BLE001
+                                log.exception("BOM reshape (template) failed for %s", s.sheet_name)
                     else:
                         sdf = _headers_only(fields_by_sheet[s.id])
                     frames[s.sheet_name] = sdf
@@ -3139,7 +3150,11 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
                 carry_source_cols=(["entityid", "internalid", "email", "altemail",
-                                    "phone", "mobilephone"] if _is_customer else None),
+                                    "phone", "mobilephone",
+                                    # Identity stamped deterministically by the merge,
+                                    # by grain (customer_merge.set_party_identity):
+                                    "companyname", "firstname", "middlename", "lastname"]
+                                   if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest

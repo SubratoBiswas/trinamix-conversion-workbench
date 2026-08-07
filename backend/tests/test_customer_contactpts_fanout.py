@@ -86,8 +86,13 @@ def test_merge_owned_fields_cover_the_right_sheets():
           {"Email Address", "Phone Number", "Phone Line Type"} <= cp, cp)
     psu = cm.merge_owned_fields("HZ_IMP_PARTYSITEUSES_T")
     check("PARTYSITEUSES owns Primary Indicator", psu == {"Primary Indicator"}, psu)
-    check("PARTIES owns nothing", cm.merge_owned_fields("HZ_IMP_PARTIES_T") == set(),
-          cm.merge_owned_fields("HZ_IMP_PARTIES_T"))
+    # PARTIES now owns the party-identity fields the merge stamps by grain
+    # (REC-02/05/07/12/15/17) — Party Type, Organization Name, Person First/Middle/Last.
+    parties = cm.merge_owned_fields("HZ_IMP_PARTIES_T")
+    check("PARTIES owns Party Type + identity",
+          parties == {"Party Type", "Organization Name",
+                      "Person First Name", "Person Middle Name", "Person Last Name"},
+          parties)
 
 
 if __name__ == "__main__":

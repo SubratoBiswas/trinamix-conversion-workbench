@@ -426,6 +426,65 @@ _CONTACTPTS_OWNED = (
     "Contact Point Original System Reference",
 )
 
+# Party identity the merge stamps deterministically on HZ_IMP_PARTIES_T, by grain:
+# the customer master rows are ORGANIZATION and take ``companyname``; the contact
+# rows are PERSON and take their own first/middle/last name (REC-02/05/07/12/15/17).
+# Owned so the value never depends on a per-conversion Party Type rule / name mapping
+# that may sit at not_applicable or come back only "suggested" in a fresh project.
+_PARTIES_OWNED = (
+    "Party Type", "Organization Name",
+    "Person First Name", "Person Middle Name", "Person Last Name",
+)
+
+
+# ── Sheet-scoped constants / blanks / reference-copies the merge stamps ──────────
+# Open tracker items that are pure per-sheet decisions (a constant, a forced blank,
+# or "same value as a sibling reference"). Expressed here in the engine — and owned —
+# so they hold for every project instead of riding on a per-conversion mapping that a
+# fresh project won't reproduce. Keyed by normalised-sheet substring.
+_SHEET_CONST = {
+    # RELSHIPS Subject/Object Original System = NETSUITE (REC-67/69)
+    "relship": {"Subject Relationship Party Original System": "NETSUITE",
+                "Object Relationship Party Original System": "NETSUITE"},
+    # ROLERESP Role Responsibility Original System = NETSUITE (REC-75)
+    "roleresp": {"Account Contact Role Responsibility Original System": "NETSUITE"},
+}
+# Forced-blank fields (REC-80/81/82/83/84/88 on RA_CUSTOMER_PROFILES; REC-25 on PARTYSITES).
+_SHEET_BLANK = {
+    "profile": ("Party Original System", "Party Original System Reference",
+                "Account Site Source System", "Account Site Source System Reference",
+                "Credit Rating", "Party Number"),
+    "partysites": ("Relationship Source System Reference",),
+}
+def _sheet_rule_fields(n: str) -> set:
+    """All field names any sheet-scoped rule touches on this (normalised) sheet."""
+    out: set = set()
+    for key, d in _SHEET_CONST.items():
+        if key in n:
+            out.update(d.keys())
+    for key, flds in _SHEET_BLANK.items():
+        if key in n and not (key == "partysites" and "partysiteuses" in n):
+            out.update(flds)
+    return out
+
+
+def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
+    """Apply the sheet-scoped constants / forced blanks (owned)."""
+    if sub is None or len(sub) == 0:
+        return sub
+    n = _norm(sheet_name)
+    for key, d in _SHEET_CONST.items():
+        if key in n:
+            for fld, val in d.items():
+                _set_owned_col(sub, fld, pd.Series([val] * len(sub), index=sub.index))
+    for key, flds in _SHEET_BLANK.items():
+        if key in n and not (key == "partysites" and "partysiteuses" in n):
+            for fld in flds:
+                col = _find_col_ci(sub.columns, fld)
+                if col is not None:
+                    sub[col] = ""
+    return sub
+
 
 def merge_owned_fields(sheet_name: Optional[str]) -> set:
     """Field names the merge authoritatively populates on ``sheet_name`` — the ones
@@ -433,13 +492,23 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
     default so the merge's value survives regardless of a project's mapping state.
 
     First-flag sheets contribute their Primary/Identifying field; the contact-points
-    sheet contributes the fan-out fields it fills per contact point."""
+    sheet contributes the fan-out fields it fills per contact point; the parties
+    backbone contributes the party-identity fields; the accounts sheet contributes
+    Account Description (REC-30)."""
     owned: set = set()
     flag = first_flag_field(sheet_name)
     if flag:
         owned.add(flag)
-    if "contactpt" in _norm(sheet_name):
+    n = _norm(sheet_name)
+    if "contactpt" in n:
         owned.update(_CONTACTPTS_OWNED)
+    if "parties" in n:
+        owned.update(_PARTIES_OWNED)
+    # "account" (a-c-c-o-u-n-t) only appears in HZ_IMP_ACCOUNTS_T; ACCTSITES /
+    # ACCTCONTACTS normalise to "acct…", so this does not leak to the child sheets.
+    if "account" in n and "site" not in n and "contact" not in n:
+        owned.add("Account Description")
+    owned.update(_sheet_rule_fields(n))    # constants / blanks / ref-copies
     return owned
 
 
@@ -595,6 +664,71 @@ def assign_party_numbers(sub: "pd.DataFrame") -> None:
     sub[pn_col] = [n if n else old[i] for i, n in enumerate(out)]
 
 
+def _carried(sub: "pd.DataFrame", name: str) -> "Optional[pd.Series]":
+    """The threaded-through source column ``__name`` as a stripped string Series, or
+    None when the merge did not carry it (see output_service carry_source_cols)."""
+    col = "__" + name
+    if col in sub.columns:
+        return sub[col].astype(str).str.strip()
+    return None
+
+
+def _set_owned_col(sub: "pd.DataFrame", field_name: str, series: "pd.Series") -> None:
+    """Write a target field on the reshaped sheet, matching an existing column name
+    case/punct-insensitively or creating it under the plain field name (which the
+    per-sheet reindex maps to the template header)."""
+    col = _find_col_ci(sub.columns, field_name) or field_name
+    sub[col] = list(series.values)
+
+
+def set_party_identity(sub: "pd.DataFrame") -> "pd.DataFrame":
+    """Stamp party identity on the PARTIES backbone deterministically, by grain.
+
+    The customer master rows are ORGANIZATION and carry ``companyname`` as the
+    Organization Name; the contact rows are PERSON and carry their own first/middle/
+    last name. Done in the engine (and owned via ``merge_owned_fields``) so it holds
+    for every current and future project without depending on a Party Type derivation
+    rule or firstname/lastname mapping being applied per conversion — the exact fan-out
+    gap the regression surfaced (REC-02/05/07/10/12/15/17)."""
+    if GRAIN_COL not in sub.columns or len(sub) == 0:
+        return sub
+    g = sub[GRAIN_COL].astype(str).str.strip().str.lower()
+    is_contact = g.eq(CONTACT)
+    is_org = ~is_contact
+
+    pt = pd.Series(["ORGANIZATION"] * len(sub), index=sub.index)
+    pt[is_contact] = "PERSON"
+    _set_owned_col(sub, "Party Type", pt)
+
+    cn = _carried(sub, "companyname")
+    if cn is not None:
+        on = pd.Series([""] * len(sub), index=sub.index)
+        on[is_org] = cn[is_org]                 # org name only on the org party
+        _set_owned_col(sub, "Organization Name", on)
+
+    for fld, src in (("Person First Name", "firstname"),
+                     ("Person Middle Name", "middlename"),
+                     ("Person Last Name", "lastname")):
+        sc = _carried(sub, src)
+        if sc is None:
+            continue
+        pv = pd.Series([""] * len(sub), index=sub.index)
+        pv[is_contact] = sc[is_contact]         # person name only on the contact party
+        _set_owned_col(sub, fld, pv)
+    return sub
+
+
+def _stamp_account_description(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
+    """Account Description <- companyname on HZ_IMP_ACCOUNTS_T (REC-30). Owned, so it
+    survives regardless of the per-conversion mapping state."""
+    n = _norm(sheet_name)
+    if "account" in n and "site" not in n and "contact" not in n:
+        cn = _carried(sub, "companyname")
+        if cn is not None:
+            _set_owned_col(sub, "Account Description", cn)
+    return sub
+
+
 def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     """The subset of the merged frame that belongs on ``sheet_name``.
 
@@ -632,6 +766,7 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
             parts.append(contact_sub)             # one PERSON party per contact, not deduped
         sub = (pd.concat(parts, ignore_index=True) if len(parts) > 1
                else parts[0]).reset_index(drop=True)
+        set_party_identity(sub)                    # Party Type / Org Name / Person names
         _set_party_link(sub, own_internalid=True)  # each party's ref is its OWN internalid
         assign_party_numbers(sub)                  # NXT / _C{n} per customer (REC-06)
         return sub
@@ -644,6 +779,8 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
         sub = _dedupe_party_grain(sub)
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
+    sub = _stamp_account_description(sub, sheet_name)   # Account Description <- companyname (REC-30)
+    sub = stamp_sheet_rules(sub, sheet_name)            # NETSUITE constants / PROFILES blanks / ref-copies
     # Contact points: fan each contact into its e-mail and phone points (REC-48/53/54/
     # 56/57). Only the contact-points sheet; every other contact sheet stays one row
     # per contact.

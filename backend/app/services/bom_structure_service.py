@@ -119,15 +119,25 @@ def _renumber_item_sequence(df: pd.DataFrame) -> pd.DataFrame:
     safer old behaviour is kept: fill blanks, don't renumber, so a genuinely-authored
     sequence is not clobbered when there is nothing to group it by.
     """
-    seq_col = _find_col(df, "Item Sequence")
-    if seq_col is None or df.empty:
+    if df.empty:
         return df
+    seq_col = _find_col(df, "Item Sequence")
     # A REAL parent key is Structure Item Name (the parent item number). Structure
     # Name alone is the constant "Primary", which is not a per-parent grouping.
     parent_key = _find_col(df, "Structure Item Name")
     org = _find_col(df, "Organization Code")
 
+    # BOM-01 fan-out fix: when Item Sequence was never mapped the column is absent, so
+    # the renumber used to no-op and ship a blank sequence. Generate the column here
+    # (per-parent 10/20/30) whenever there is a real parent key to group by, so the
+    # numbering holds for ANY project without the field being mapped. Named exactly as
+    # the interface field so the per-sheet reindex keeps it.
     out = df.copy()
+    if seq_col is None:
+        if parent_key is None:
+            return df                      # nothing to number by — leave as-is
+        seq_col = "Item Sequence"
+        out[seq_col] = ""
 
     def _is_num(v: str) -> bool:
         return bool(re.fullmatch(r"\d+", str(v).strip()))
