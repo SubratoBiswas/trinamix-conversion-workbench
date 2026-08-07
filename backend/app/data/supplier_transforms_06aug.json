@@ -23,10 +23,11 @@
    "action": "rule",
    "rule_type": "CITY_COUNTRY_KEY",
    "rule_config": {
-    "country_column": ["Billing Country Code", "country", "Country Code", "Country"],
+    "country_column": ["Billing Country Code", "country", "Country Code", "Country", "taxpayer_country", "Taxpayer Country", "supplier_country"],
     "city_column": ["city", "City"],
     "separator": "-",
     "resolve_country_from_city": true,
+    "country_to_iso": true,
     "country_map": {}
    },
    "target_object": "Supplier Site",

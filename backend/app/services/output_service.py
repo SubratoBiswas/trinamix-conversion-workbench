@@ -171,6 +171,14 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
                 cols |= _rule_referenced_columns([_nxt])
         if rt in ("CONCAT", "COALESCE"):
             cols.update(_flat_cols(cfg.get("columns")))
+            # Literal-segment CONCAT: the column pieces live under `parts` as
+            # {"col": name} entries — declare them too, or a parts-based CONCAT has
+            # its own columns pruned out of the frame and reads blank.
+            for _seg in (cfg.get("parts") or []):
+                if isinstance(_seg, dict) and "literal" not in _seg and _seg.get("col"):
+                    cols.update(_flat_cols(_seg.get("col")))
+                elif isinstance(_seg, str):
+                    cols.update(_flat_cols(_seg))
         elif rt == "CONDITIONAL":
             cols.update(_flat_cols(cfg.get("if_column")))
             # ``then`` / ``else`` may build the result from other columns.

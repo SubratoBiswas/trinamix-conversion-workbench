@@ -308,8 +308,35 @@ async def seed_bom_field_mappings() -> dict:
             const_kept += 1    # retired by the analyst — do not resurrect
             continue
         const_seeded += 1
+    # BOM-02: retire the old Organization Code = NXT_ITEM_ORG constant. The input file
+    # carries the real org code (e.g. IMO) and the constant was overwriting it on every
+    # sheet. Removing the row from the JSON stops it being RE-seeded, but the learning
+    # already written has to be tombstoned or it keeps applying. Idempotent — once
+    # retired it stays retired, and it is scoped to this client + this field so nothing
+    # else is touched. A passthrough (Organization Code <- "Organization Code") is
+    # seeded above, so the column is not left blank.
+    org_retired = 0
+    try:
+        from datetime import datetime as _dt
+        from app.models.learned import LearnedMapping as _LM
+        _q = {"kind": "example_default", "target_object": "BOM",
+              "resolved_value": "NXT_ITEM_ORG"}
+        if nid is not None:
+            _q["client_id"] = nid
+        for _lm in await _LM.find(_q, include_deleted=True).to_list():
+            if getattr(_lm, "is_deleted", False):
+                continue
+            if mapping_store.normalise_field(_lm.target_field or "") != \
+                    mapping_store.normalise_field("Organization Code"):
+                continue
+            await _lm.set({"is_deleted": True, "deleted_at": _dt.utcnow(),
+                           "deleted_by": "bom-02-org-code-passthrough"})
+            org_retired += 1
+    except Exception as _exc:  # noqa: BLE001 — retirement is best-effort
+        res["org_constant_retire_error"] = f"{type(_exc).__name__}: {_exc}"[:200]
     res["constants_seeded"] = const_seeded
     res["constants_kept"] = const_kept
+    res["org_constant_retired"] = org_retired
     return res
 
 
@@ -1222,7 +1249,15 @@ async def seed_supplier_transforms_06aug() -> dict:
     nid = await _nextpower_client_id()
     eff = _effective_date_of(doc)
     label = doc.get("_label") or "NXT Supplier transforms (06-Aug-2026)"
-    erp = "netsuite"
+    # SOURCE-AGNOSTIC (was "netsuite"). Tagging these to one source ERP is exactly the
+    # "the fix only applied to one project and the issue came back on another" failure:
+    # the eBOS supplier project resolves a different source and never received the
+    # netsuite-tagged Parent Supplier / Supplier Site rules. These are CLIENT standards
+    # for NextPower supplier data regardless of which system it was extracted from, so
+    # they are scoped by CLIENT only and reach every current and future supplier
+    # conversion. They are safe cross-source: a rule whose columns a given extract does
+    # not carry (e.g. Parent Vendor Id on eBOS) simply resolves to its default.
+    erp = None
 
     _ACTIONS = {
         "derive": mapping_store.SOURCE_COLUMN,

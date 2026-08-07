@@ -11,7 +11,11 @@
   { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Item Sequence", "source_field": "lineNumber", "confidence": "High" },
   { "source_system": "arena_ebos", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Quantity", "source_field": "quantity", "confidence": "High" },
 
+  { "_note": "SOURCE-AGNOSTIC rows (no source_system) so a BOM file whose columns are neither the Tracker nor the eBOS spelling still maps. The NextPower BOM extract uses Parent_item_number / Child_item_number / Organization Code.", "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Structure Item Name", "source_field": "Parent_item_number", "confidence": "High" },
+  { "target_object": "BOM", "fbdi_sheet": "EGP_STRUCTURES_INTERFACE", "target_field": "Item Name", "source_field": "Parent_item_number", "confidence": "High" },
+  { "target_object": "BOM", "fbdi_sheet": "EGP_COMPONENTS_INTERFACE", "target_field": "Component Item Name", "source_field": "Child_item_number", "confidence": "High" },
+  { "_note": "PROC/BOM: the input carries the real Org Code (e.g. IMO). Pass it through instead of overwriting with a constant — BOM-02.", "target_object": "BOM", "target_field": "Organization Code", "source_field": "Organization Code", "confidence": "High" },
+
   { "_constants": "Analyst-fixed constant defaults on EGP_STRUCTURES_INTERFACE, applied regardless of source system", "target_object": "BOM", "target_field": "Transaction Type", "constant": "SYNC" },
-  { "target_object": "BOM", "target_field": "Structure Name", "constant": "Primary" },
-  { "target_object": "BOM", "target_field": "Organization Code", "constant": "NXT_ITEM_ORG" }
+  { "target_object": "BOM", "target_field": "Structure Name", "constant": "Primary" }
 ]

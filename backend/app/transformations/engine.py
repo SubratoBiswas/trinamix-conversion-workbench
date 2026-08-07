@@ -466,9 +466,39 @@ def _apply_one_rule(
 
     if rt == "CONCAT":
         sep = cfg.get("separator", " ")
-        cols = cfg.get("columns", [])
         if not row:
             return value
+        # LITERAL SEGMENTS. A CONCAT often ends in a fixed tag — "col1_col2_RS" — and
+        # the only way to express it used to be to drop "RS" into `columns`, where it
+        # was read as a COLUMN name: `row.get("RS")` is empty, so the tag vanished
+        # (and under `require_all` the empty part blanked the whole key). Reported as
+        # "the last suffix (_RS) is not reflecting in the rules". A literal piece is
+        # now first-class, three compatible ways:
+        #   * `parts`: an ordered list of {"col": name} / {"literal": text} — full
+        #     control over where literals sit; joined with NO auto-separator so the
+        #     literals carry their own (e.g. "_RS"). require_all gates on COLUMN parts.
+        #   * `prefix` / `suffix`: literal strings placed around the joined columns —
+        #     the simple "append _RS" case without re-modelling the whole rule.
+        # The plain `columns` list is unchanged.
+        _parts_spec = cfg.get("parts")
+        if isinstance(_parts_spec, list) and _parts_spec:
+            col_vals: list[str] = []          # the column pieces, for the blank tests
+            rendered: list[str] = []          # every piece, in order, for the output
+            for seg in _parts_spec:
+                if isinstance(seg, dict) and "literal" in seg:
+                    rendered.append(_to_str(seg.get("literal", "")))
+                else:
+                    name = seg.get("col") if isinstance(seg, dict) else seg
+                    v = _to_str(row.get(_resolve_column(name, row), ""))
+                    col_vals.append(v)
+                    rendered.append(v)
+            if not any(p.strip() for p in col_vals):
+                return value                  # no real column data — see note below
+            if cfg.get("require_all") and not all(p.strip() for p in col_vals):
+                return ""                     # a half key is a wrong key
+            out = "".join(rendered)
+            return out
+        cols = cfg.get("columns", [])
         parts = [_to_str(row.get(_resolve_column(c, row), "")) for c in cols]
         # A CONCAT whose every input is missing must not emit the separator alone.
         # Supplier Site was configured as CONCAT("Country Code", "-", "City"); neither
@@ -489,8 +519,14 @@ def _apply_one_rule(
             return ""
         if cfg.get("omit_blank"):
             kept = [p for p in parts if p.strip()]
-            return sep.join(kept)
-        return sep.join(parts)
+            joined = sep.join(kept)
+        else:
+            joined = sep.join(parts)
+        # Literal book-ends. Only wrap when there is real content, so an all-blank
+        # CONCAT (handled above) never turns into a bare "PFX-SFX".
+        _pfx = _to_str(cfg.get("prefix", ""))
+        _sfx = _to_str(cfg.get("suffix", ""))
+        return f"{_pfx}{joined}{_sfx}"
 
     if rt == "SPLIT":
         sep = cfg.get("separator", " ")
@@ -795,6 +831,21 @@ def _apply_one_rule(
         if not cc and city and cfg.get("resolve_country_from_city"):
             idx = (ctx or {}).get("city_country") or {}
             cc = idx.get(re.sub(r"[^a-z]", "", city.lower()), "")
+        # BU(2-letter country code). The key is meant to read "US-Texas", but a source
+        # whose country column holds the full NAME ("United States") shipped
+        # "United States-Texas" — the exact PROC-03 report. Normalise the resolved
+        # country to its ISO 3166-1 alpha-2 code, reusing the same COUNTRY_TO_ISO table
+        # COUNTRY_ISO2 uses so the layers cannot disagree. A value already a valid
+        # 2-char code passes through (upper-cased); an unresolvable one is left as-is so
+        # a bad country is visible rather than silently wrong. Opt out with
+        # country_to_iso:false for a source with bespoke codes.
+        if cc and cfg.get("country_to_iso", True):
+            from app.services.deterministic import COUNTRY_TO_ISO, _ISO_SET
+            if len(cc) == 2 and cc.upper() in _ISO_SET:
+                cc = cc.upper()
+            else:
+                _isok = "".join(ch for ch in cc.lower() if ch.isalnum())
+                cc = COUNTRY_TO_ISO.get(_isok, cc)
         # BU(country code): optionally map the resolved code through a lookup before
         # joining, so Supplier Site becomes "<BU>-City" (e.g. US -> US-PROC) instead
         # of the raw "<code>-City". The lookup is case/punctuation-insensitive on the

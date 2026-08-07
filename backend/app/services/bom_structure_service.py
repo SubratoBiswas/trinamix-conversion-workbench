@@ -103,29 +103,55 @@ def _blank(series: pd.Series) -> pd.Series:
 
 
 def _renumber_item_sequence(df: pd.DataFrame) -> pd.DataFrame:
-    """Item Sequence numeric, 10/20/30 within each structure.
+    """Item Sequence numeric, 10/20/30 restarting within EACH parent item.
 
-    "Item Sequence should be a numeric value (Eg: 10,20,30)." A blank or
-    non-numeric cell is assigned the next unused multiple of ten inside its
-    structure; a value that is already numeric is kept, so an extract that carried
-    a good sequence is not renumbered out from under the analyst.
+    NextPower validation (Jithendran, 07-Aug): "The sequence should be generated
+    based on each Parent Item, not continuously for the entire file … once the
+    Parent Item is populated, group the components under that Parent Item and assign
+    Item Sequence values" — A's components 10,20; B's components 10,20.
+
+    So when there is a real per-parent key (Structure Item Name — the parent item
+    number, populated by the source-agnostic BOM mapping), the sequence is REGENERATED
+    per group in row order: 10, 20, 30 … regardless of whatever the extract carried.
+    The old behaviour kept an already-numeric cell, which preserved the source's
+    single continuous Find_number/lineNumber across the whole file — the exact bug
+    reported. With only the constant Structure Name to group on (no parent key), the
+    safer old behaviour is kept: fill blanks, don't renumber, so a genuinely-authored
+    sequence is not clobbered when there is nothing to group it by.
     """
     seq_col = _find_col(df, "Item Sequence")
     if seq_col is None or df.empty:
         return df
-    struct = _find_col(df, "Structure Item Name") or _find_col(df, "Structure Name")
+    # A REAL parent key is Structure Item Name (the parent item number). Structure
+    # Name alone is the constant "Primary", which is not a per-parent grouping.
+    parent_key = _find_col(df, "Structure Item Name")
     org = _find_col(df, "Organization Code")
-    group_cols = [c for c in (struct, org) if c]
-    if not group_cols:
-        # No structure to group by — one running sequence for the whole tab.
-        df["_g"] = 0
-        group_cols = ["_g"]
 
     out = df.copy()
-    new_vals = out[seq_col].astype(str).tolist()
+
     def _is_num(v: str) -> bool:
         return bool(re.fullmatch(r"\d+", str(v).strip()))
 
+    if parent_key is not None and not out[parent_key].map(_is_blank_scalar).all():
+        # Regenerate 10,20,30 within each parent, in the rows' current order.
+        new_vals = out[seq_col].astype(str).tolist()
+        group_cols = [c for c in (parent_key, org) if c]
+        for _, idx in out.groupby(group_cols, sort=False).groups.items():
+            nxt = 10
+            for i in idx:
+                new_vals[out.index.get_loc(i)] = str(nxt)
+                nxt += 10
+        out[seq_col] = new_vals
+        return out
+
+    # Fallback: no parent key to group by — fill blanks per (Structure Name, Org)
+    # without renumbering existing values (the previous, conservative behaviour).
+    struct = _find_col(df, "Structure Name")
+    group_cols = [c for c in (struct, org) if c]
+    if not group_cols:
+        out["_g"] = 0
+        group_cols = ["_g"]
+    new_vals = out[seq_col].astype(str).tolist()
     for _, idx in out.groupby(group_cols, sort=False).groups.items():
         used = set()
         for i in idx:
@@ -139,14 +165,18 @@ def _renumber_item_sequence(df: pd.DataFrame) -> pd.DataFrame:
                 continue
             while nxt in used:
                 nxt += 10
-            new_vals_i = out.index.get_loc(i)
-            new_vals[new_vals_i] = str(nxt)
+            new_vals[out.index.get_loc(i)] = str(nxt)
             used.add(nxt)
             nxt += 10
     out[seq_col] = new_vals
     if "_g" in out.columns:
         out = out.drop(columns=["_g"])
     return out
+
+
+def _is_blank_scalar(v) -> bool:
+    s = str(v).strip().lower()
+    return s == "" or s in {"nan", "none", "null", "na", "<na>"}
 
 
 def reshape_for_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:

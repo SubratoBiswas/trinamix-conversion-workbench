@@ -72,9 +72,12 @@ def test_components_dedups_and_numbers_the_sequence():
     check("first structure sequenced 10/20/30",
           first["Item Sequence"].tolist() == ["10", "20", "30"],
           f"got {first['Item Sequence'].tolist()}")
+    # Per-parent RESET (Jithendran, 07-Aug): each parent restarts at 10 — the source
+    # Find_number (50) is regenerated, not carried through, so the sequence is
+    # per-parent and not continuous across the file.
     second = r[r["Structure Item Name"] == "2.2.2.2"]
-    check("a source Find_number of 50 is kept, not overwritten",
-          second["Item Sequence"].tolist() == ["50"],
+    check("second structure restarts at 10 (source 50 regenerated)",
+          second["Item Sequence"].tolist() == ["10"],
           f"got {second['Item Sequence'].tolist()}")
 
 
