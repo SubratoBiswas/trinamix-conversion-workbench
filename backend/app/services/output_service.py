@@ -2407,15 +2407,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         """
         consts: dict = {}          # field_name -> (value, fill_blank_only)
         decided: set = set()
-        _owned = _cm.first_flag_field(_sheet_name_of(sfields)) if _grain_merge else None
+        _owned = (_cm.merge_owned_fields(_sheet_name_of(sfields))
+                  if _grain_merge else set())
         for f in sfields:
             m = _mbyfield.get(f.id)
             if m is None:
                 continue
-            if _owned and f.field_name == _owned:
-                # The merge reshape authoritatively populates this flag (REC-09 / REC-23);
-                # a not_applicable keep-blank left on the mapping must not override it.
-                # Mark it decided so the linkage glue leaves it alone too.
+            if f.field_name in _owned:
+                # The merge authoritatively populates this field (Primary/Identifying
+                # flag — REC-09/23; contact-point fields — REC-48/53/54/56/57). Neither
+                # a not_applicable keep-blank nor a stray analyst constant (Contact
+                # Point Type=EMAIL on every row) may override it. Mark it decided so the
+                # linkage glue leaves it alone too.
                 decided.add(f.field_name)
                 continue
             if _analyst_keeps_blank(m):
@@ -2491,19 +2494,21 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
         sdf = _frame_for(sfields).reindex(columns=cols, fill_value="")
-        # A flag the customer merge OWNS (Primary Indicator / Identifying Address, set
-        # per-sheet from the customer key — REC-09 / REC-23). Its value is the merge's
-        # to decide, so it must survive suppression and control defaults regardless of
-        # whether this project's mapping for the field sits at not_applicable (which a
-        # gold-purge revert can leave behind). Excluded from `suppressed`, added to
-        # `explicitly_mapped`, and skipped by the keep-blank in _sheet_decisions.
-        _owned_flag = _cm.first_flag_field(_sheet_name_of(sfields)) if _grain_merge else None
-        _owned_key = _owned_flag.strip().lower().rstrip("*").strip() if _owned_flag else None
+        # Fields the customer merge OWNS on this sheet (Primary/Identifying flag set
+        # per-sheet from the customer key — REC-09/23; the CONTACTPTS fan-out fields —
+        # REC-48/53/54/56/57). Their value is the merge's to decide, so it must survive
+        # suppression and control defaults regardless of whether this project's mapping
+        # for the field sits at not_applicable or carries a stray constant. Excluded
+        # from `suppressed`, added to `explicitly_mapped`, and skipped by the keep-blank
+        # and the analyst-constant in _sheet_decisions.
+        _owned_keys = ({f.strip().lower().rstrip("*").strip()
+                        for f in _cm.merge_owned_fields(_sheet_name_of(sfields))}
+                       if _grain_merge else set())
         _supp = suppressed_keys | _strategy_blanks
         _expl = explicitly_mapped_keys
-        if _owned_key:
-            _supp = _supp - {_owned_key}
-            _expl = explicitly_mapped_keys | {_owned_key}
+        if _owned_keys:
+            _supp = _supp - _owned_keys
+            _expl = explicitly_mapped_keys | _owned_keys
         # Blank legacy null sentinels BEFORE control defaults so a column the
         # source filled entirely with "NULL" is treated as empty and gets its
         # standard default, not the literal text.
@@ -3133,7 +3138,8 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
         try:
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
-                carry_source_cols=(["entityid", "internalid"] if _is_customer else None),
+                carry_source_cols=(["entityid", "internalid", "email", "altemail",
+                                    "phone", "mobilephone"] if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest

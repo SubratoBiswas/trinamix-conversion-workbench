@@ -417,6 +417,105 @@ def first_flag_field(sheet_name: Optional[str]) -> Optional[str]:
     return None
 
 
+# Fields the CONTACTPTS fan-out populates per contact-point row (REC-48/53/54/56/57).
+# Protected the same way the first-flag fields are: the merge decides them from the
+# contact's own phone/email, so a stray default (Contact Point Type = EMAIL on every
+# row) or a suppression must not override the fanned value.
+_CONTACTPTS_OWNED = (
+    "Contact Point Type", "Email Address", "Phone Number", "Phone Line Type",
+    "Contact Point Original System Reference",
+)
+
+
+def merge_owned_fields(sheet_name: Optional[str]) -> set:
+    """Field names the merge authoritatively populates on ``sheet_name`` — the ones
+    output generation must protect from the per-sheet keep-blank / suppression / control
+    default so the merge's value survives regardless of a project's mapping state.
+
+    First-flag sheets contribute their Primary/Identifying field; the contact-points
+    sheet contributes the fan-out fields it fills per contact point."""
+    owned: set = set()
+    flag = first_flag_field(sheet_name)
+    if flag:
+        owned.add(flag)
+    if "contactpt" in _norm(sheet_name):
+        owned.update(_CONTACTPTS_OWNED)
+    return owned
+
+
+def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
+    """One row per contact POINT, not per contact (REC-48/53/54/56/57).
+
+    A NetSuite contact carries an e-mail and a phone in one row, but Oracle's
+    HZ_IMP_CONTACTPTS_T is one row per contact point. So each contact fans out into an
+    EMAIL row (Contact Point Type=EMAIL, Email Address set) and a PHONE row (Type=PHONE,
+    Phone Number set, Phone Line Type=MOBILE) — only for the points the source actually
+    has. The point's Original System Reference gets the matching _EMAIL / _PHONE tag.
+    A contact with neither keeps a single row unchanged, so no contact is dropped.
+    Reads the raw e-mail/phone values threaded through as ``__email`` / ``__phone`` …"""
+    if sub is None or len(sub) == 0:
+        return sub
+    cpt = _find_col_ci(sub.columns, "Contact Point Type")
+    email_f = _find_col_ci(sub.columns, "Email Address")
+    phone_f = _find_col_ci(sub.columns, "Phone Number")
+    plt_f = _find_col_ci(sub.columns, "Phone Line Type")
+    osr_f = _find_col_ci(sub.columns, "Contact Point Original System Reference")
+    if cpt is None and email_f is None and phone_f is None:
+        return sub                              # not the contact-points shape — leave it
+    e_col = "__email" if "__email" in sub.columns else None
+    ae_col = "__altemail" if "__altemail" in sub.columns else None
+    p_col = "__phone" if "__phone" in sub.columns else None
+    m_col = "__mobilephone" if "__mobilephone" in sub.columns else None
+    have_ent = ENTITYID_COL in sub.columns
+    have_iid = INTERNALID_COL in sub.columns
+
+    def _v(row, col):
+        if not col:
+            return ""
+        s = str(row.get(col, "")).strip()
+        return "" if s.lower() in ("nan", "none", "null") else s
+
+    rows: list = []
+    for _, r in sub.iterrows():
+        email = _v(r, e_col) or _v(r, ae_col)
+        phone = _v(r, p_col) or _v(r, m_col)
+        base = ""
+        if have_ent or have_iid:
+            base = f"{_v(r, ENTITYID_COL)}_{_v(r, INTERNALID_COL)}"
+        made = False
+        if email:
+            row = r.copy()
+            if cpt is not None:
+                row[cpt] = "EMAIL"
+            if email_f is not None:
+                row[email_f] = email
+            if phone_f is not None:
+                row[phone_f] = ""
+            if plt_f is not None:
+                row[plt_f] = ""
+            if osr_f is not None:
+                row[osr_f] = f"{base}_EMAIL" if base.strip("_") else ""
+            rows.append(row)
+            made = True
+        if phone:
+            row = r.copy()
+            if cpt is not None:
+                row[cpt] = "PHONE"
+            if phone_f is not None:
+                row[phone_f] = phone
+            if email_f is not None:
+                row[email_f] = ""
+            if plt_f is not None:
+                row[plt_f] = "MOBILE"
+            if osr_f is not None:
+                row[osr_f] = f"{base}_PHONE" if base.strip("_") else ""
+            rows.append(row)
+            made = True
+        if not made:
+            rows.append(r)                       # keep the contact even with no points
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
 def _mark_first_per_entityid(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
     """Set the sheet's primary/identifying flag ``Y`` on the first (MIN-internalid)
     billing row per entityid and ``N`` on every other row (REC-09 / REC-23).
@@ -545,6 +644,11 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
         sub = _dedupe_party_grain(sub)
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
+    # Contact points: fan each contact into its e-mail and phone points (REC-48/53/54/
+    # 56/57). Only the contact-points sheet; every other contact sheet stays one row
+    # per contact.
+    if grain == CONTACT and "contactpt" in _norm(sheet_name):
+        sub = _fanout_contact_points(sub)
     # Primary / Identifying flag: Y on the first billing row per customer, N on the
     # rest (REC-09 / REC-23). No-op on any sheet without such a flag.
     sub = _mark_first_per_entityid(sub, sheet_name)
