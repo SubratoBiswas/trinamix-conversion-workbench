@@ -1,0 +1,30 @@
+{
+ "_label": "NXT Customer mapping — 07-Aug additions (Account Description, Identifying Address)",
+ "_source": "01_Customer_Import 1.xlsx yellow columns confirmed still blank by a live test on the Customer 03082026 output (Subrato, 07-Aug-2026). Two newly-mapped columns that were not carried by the 03-/06-Aug documents: Account Description and Identifying Address.",
+ "_effective_date": "2026-08-07T23:59:00",
+ "_scope": "Client NextPower, source NetSuite, target object Customer. Each rule is scoped to the sheet the workbook flagged it on, so it resolves at generate time for both the FBDI and CSV output.",
+ "_precedence": "Dated 07-Aug 23:59 — later than the 03-/06-Aug documents and stamped late in its own day so it beats the tool's same-day auto-captures, while still losing to any later human edit.",
+ "rules": [
+  {
+   "target_field": "Account Description",
+   "action": "derive",
+   "source_column": "companyname",
+   "sheets": ["HZ_IMP_ACCOUNTS_T"],
+   "note": "01_Customer_Import, HZ_IMP_ACCOUNTS_T: 'should be mapped to companyname source field'. Live test on Customer 03082026 showed it blank in the output while Organization Name (also companyname) was populated — the mapping was never applied. Same source column as Organization Name, scoped to the Accounts sheet.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Identifying Address",
+   "action": "rule",
+   "rule_type": "GROUP_FIRST_FLAG",
+   "rule_config": {
+    "key_column": ["entityid", "Entity ID", "entity_id", "Customer ID"],
+    "flag": "Y",
+    "default": ""
+   },
+   "sheets": ["HZ_IMP_PARTYSITES_T"],
+   "note": "01_Customer_Import, HZ_IMP_PARTYSITES_T: 'group by entityid, mark as Y for the first row (the identifying/primary address), from the billing address sheet'. GROUP_FIRST_FLAG marks exactly one row per entityid — the first appearance — with Y and blanks the customer's other addresses. First-appearance is decided once over the whole extract so the same row wins on every regenerate.",
+   "target_object": "Customer"
+  }
+ ]
+}

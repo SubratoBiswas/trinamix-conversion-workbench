@@ -1018,11 +1018,19 @@ const CrossConversionForm: React.FC<FormProps> = ({ config, setConfig, sources, 
     let alive = true;
     (async () => {
       try {
-        let pid = projectId;
-        if (!pid && conversionId) {
-          const c = await ConversionsApi.get(String(conversionId));
-          pid = (c as any)?.project_id ? String((c as any).project_id) : undefined;
+        // The CONVERSION's own project is authoritative. Resolve it from the
+        // conversion being mapped rather than trusting a passed project id — the
+        // engagement FILTER can point at a different project, which once made this
+        // picker list another project's (Supplier) conversions. The passed projectId
+        // is only a fallback if the conversion lookup fails.
+        let pid: string | undefined;
+        if (conversionId) {
+          try {
+            const c = await ConversionsApi.get(String(conversionId));
+            pid = (c as any)?.project_id ? String((c as any).project_id) : undefined;
+          } catch { /* fall back to the prop below */ }
         }
+        if (!pid) pid = projectId;
         if (!pid) { setError("No project context — open this from a conversion inside a project."); return; }
         const res = await ConversionsApi.crossReference(pid);
         if (alive) setConvs(res.conversions || []);

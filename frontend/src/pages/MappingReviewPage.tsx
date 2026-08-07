@@ -1568,7 +1568,7 @@ export const MappingReviewPage: React.FC = () => {
           open={ruleAuthorOpen}
           onClose={() => setRuleAuthorOpen(false)}
           conversionId={pid}
-          projectId={engagementId ?? (project?.project_id != null ? String(project.project_id) : undefined)}
+          projectId={project?.project_id != null ? String(project.project_id) : undefined}
           fields={targetFields}
           sourceColumns={sourceColumns}
           defaultTargetFieldId={ruleAuthorMapping?.target_field_id ?? null}

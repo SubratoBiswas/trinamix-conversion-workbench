@@ -384,6 +384,63 @@ def _build_sequence_index(src: pd.DataFrame, configs: list[dict]) -> dict:
     return index
 
 
+def _group_first_key_configs(pipelines: dict, target_object: str | None) -> list[dict]:
+    """Every GROUP_FIRST_FLAG config carrying a ``key_column``, from both rule sources."""
+    out: list[dict] = []
+    for _rules in (pipelines or {}).values():
+        for r in _rules or []:
+            cfg = r.get("config") or {}
+            if (r.get("rule_type") or "").upper() == "GROUP_FIRST_FLAG" and cfg.get("key_column"):
+                out.append(cfg)
+    try:
+        from app.services.strategy_overlay import rule_configs_of_type
+        out.extend(c for c in rule_configs_of_type(target_object, "GROUP_FIRST_FLAG")
+                   if c.get("key_column"))
+    except Exception:                                           # noqa: BLE001
+        pass
+    return out
+
+
+def _build_group_first_index(src: pd.DataFrame, configs: list[dict]) -> dict:
+    """``{normalised key column: {key value: first 0-based row index}}`` over the WHOLE
+    extract.
+
+    The FIRST APPEARANCE of each key, so GROUP_FIRST_FLAG can mark exactly one row per
+    group — the identifying/primary row — and blank the rest. Built once on the full
+    frame for the same reason the sequence index is: a customer's other rows are usually
+    in another chunk, and first-appearance ordering makes the same row win on every
+    regenerate.
+    """
+    if src is None or not configs or not len(src.columns):
+        return {}
+    by_norm: dict[str, str] = {}
+    for c in src.columns:
+        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
+
+    index: dict[str, dict[str, int]] = {}
+    for cfg in configs:
+        spec = cfg.get("key_column")
+        names = spec if isinstance(spec, (list, tuple)) else [spec]
+        for name in names:
+            key = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+            if not key or key in index:
+                continue
+            col = by_norm.get(key)
+            if col is None:
+                continue
+            first: dict[str, int] = {}
+            for i, v in enumerate(src[col].tolist()):
+                kv = "" if v is None else str(v).strip()
+                if not kv or kv.lower() in ("nan", "none"):
+                    continue
+                if kv not in first:
+                    first[kv] = i
+                    if kv.endswith(".0"):
+                        first.setdefault(kv[:-2], i)
+            index[key] = first
+    return index
+
+
 def _build_city_country_index(src: pd.DataFrame, configs: list[dict]) -> dict:
     """``{normalised city: ISO2}`` learned from the extract's OWN rows.
 
@@ -640,7 +697,7 @@ def _transform_frame(
     self_index: dict | None = None, city_country: dict | None = None,
     city_case: dict | None = None, row_offset: int = 0,
     sequence_index: dict | None = None, source_label: str = "",
-    cross_index: dict | None = None,
+    cross_index: dict | None = None, group_first_index: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
     """Pure, row-local transform of one source (chunk) frame → target columns.
 
@@ -657,7 +714,7 @@ def _transform_frame(
     lineage: dict[str, dict[str, Any]] = {}
     _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {},
                  "city_case": city_case or {}, "sequence_index": sequence_index or {},
-                 "cross_index": cross_index or {}}
+                 "cross_index": cross_index or {}, "group_first_index": group_first_index or {}}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -1220,12 +1277,16 @@ async def build_converted_dataframe(
         _city_case = _build_city_case_index(src, _ccfg)
         _seq_idx = _build_sequence_index(
             src, _sequence_key_configs(pipelines, _obj_name_for_overlay))
+        # First-appearance row per key, so GROUP_FIRST_FLAG marks one row per group
+        # (the identifying address). Full-frame, first-appearance — same as sequence.
+        _gf_idx = _build_group_first_index(
+            src, _group_first_key_configs(pipelines, _obj_name_for_overlay))
         n_total = len(src)
         if n_total <= _TRANSFORM_CHUNK_ROWS:
             return await asyncio.to_thread(
                 _transform_frame, src, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
                 _obj_name_for_overlay, _self_idx, _city_idx, _city_case, 0,
-                _seq_idx, label, _cross_idx)
+                _seq_idx, label, _cross_idx, _gf_idx)
         parts: list[pd.DataFrame] = []
         lin0: dict = {}
         for start in range(0, n_total, _TRANSFORM_CHUNK_ROWS):
@@ -1233,7 +1294,7 @@ async def build_converted_dataframe(
             odf, lin = await asyncio.to_thread(
                 _transform_frame, chunk, sorted_mappings, fields_by_id, pipelines, _ctx_cols,
                 _obj_name_for_overlay, _self_idx, _city_idx, _city_case, start,
-                _seq_idx, label, _cross_idx)
+                _seq_idx, label, _cross_idx, _gf_idx)
             parts.append(odf)
             if not lin0:
                 lin0 = lin

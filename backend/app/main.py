@@ -291,6 +291,16 @@ async def _run_seeds_background() -> None:
         log.exception("customer 06-Aug mapping seed failed")
 
     try:
+        # The 07-Aug additions a live test on Customer 03082026 surfaced: Account
+        # Description <- companyname, and Identifying Address (Y for the first row per
+        # entityid). Dated later than the 06-Aug document, so they win where they overlap.
+        from app.services.catalog_seed_service import seed_customer_mapping_07aug
+        r = await seed_customer_mapping_07aug()
+        log.info("startup seed — customer mapping 07-Aug: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer 07-Aug mapping seed failed")
+
+    try:
         # Supplier transform rules of 06-Aug: #1 Parent Supplier Name (self-lookup)
         # and #3 Supplier Site = BU(country code)-City. Client + object scoped, so they
         # reach every NextPower supplier conversion at generate time.

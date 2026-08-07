@@ -800,6 +800,33 @@ def _apply_one_rule(
             v = index.get(want[:-2])
         return v if v is not None else cfg.get("default", "")
 
+    if rt == "GROUP_FIRST_FLAG":
+        # "group by <key>, mark the FIRST row of each group with <flag>, blank the
+        # rest" — e.g. Identifying Address = Y on the first billing-address row per
+        # entityid (the identifying/primary address), blank on that customer's other
+        # addresses. Which row is "first" is decided ONCE over the whole extract
+        # (first appearance), handed in via ctx.group_first_index keyed exactly like
+        # sequence_index — because it cannot be known from a single row, and a
+        # per-chunk index would flag one row per chunk instead of one per customer.
+        #   {"key_column": "entityid", "flag": "Y", "default": ""}
+        key_spec = cfg.get("key_column")
+        flag = cfg.get("flag", "Y")
+        default = cfg.get("default", "")
+        if not key_spec or row is None:
+            return default
+        col = _resolve_column(key_spec, row)
+        kv = _to_str(row.get(col)).strip() if col else ""
+        if not kv:
+            return default
+        table = (ctx.get("group_first_index") or {}).get(
+            re.sub(r"[^a-z0-9]", "", str(col or "").lower())) or {}
+        first_idx = table.get(kv)
+        if first_idx is None and kv.endswith(".0"):
+            first_idx = table.get(kv[:-2])
+        if first_idx is None:
+            return default
+        return flag if int(ctx.get("row_index", 0) or 0) == int(first_idx) else default
+
     if rt == "SEQUENCE":
         # CW #23: a unique running key — NXT000001, and a "_C1" form for a PERSON.
         #   {"prefix": "NXT", "width": 6, "start": 1, "preserve_source": true,
