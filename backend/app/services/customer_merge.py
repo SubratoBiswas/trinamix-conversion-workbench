@@ -87,11 +87,17 @@ def _is_blank_series(s: "pd.Series") -> "pd.Series":
 # Because every file shares entityid, we JOIN these few columns across the files by
 # entityid BEFORE conversion, so each source frame carries what its rules read. Only a
 # column the frame LACKS (or has entirely blank) is filled — real source data is never
-# overwritten. This is what makes Party Type / Person names / Party Site From Date
-# reflect in the output (REC-05 / REC-07 / REC-08).
+# overwritten. This is what makes Party Site From Date reflect on the site rows (REC-08).
+#
+# Person names and companyname are DELIBERATELY NOT borrowed. The contact people are
+# now materialised as PERSON party rows on HZ_IMP_PARTIES_T in their own right (see
+# sheet_rows), so their names come from the contact file directly — the grain they
+# live on. Borrowing companyname onto the contact rows would give every contact its
+# customer's company name and flip Party Type to ORGANIZATION; borrowing firstname onto
+# the master rows would stamp a person's name onto the ORG party. Each grain keeps its
+# own identity: master = companyname (ORGANIZATION), contact = names (PERSON). REC-05/07.
 BORROWABLE_SRC_COLS = (
-    "firstname", "middlename", "lastname",
-    "companyname", "startdate", "datecreated",
+    "startdate", "datecreated",
 )
 
 
@@ -296,10 +302,24 @@ def set_party_ref_from_master(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
-def _party_link_series(sub: "pd.DataFrame"):
-    """The value a row uses for its Party Original System Reference — the customer's
-    internalid (``PARTYREF_COL``) when the REC-04 resolve has run, else the customer
-    key ``entityid`` (the previous behaviour)."""
+def _party_link_series(sub: "pd.DataFrame", own_internalid: bool = False):
+    """The value a row uses for its Party Original System Reference.
+
+    On a CHILD sheet (a site/account row) it is the CUSTOMER's internalid
+    (``PARTYREF_COL``, resolved from the master — REC-04), so the child points at its
+    customer's org party. On the PARTIES sheet itself (``own_internalid=True``) it is
+    the row's OWN internalid, because that sheet holds one row per party and each
+    party's reference is its own key — the org master's internalid for an ORGANIZATION,
+    the contact's internalid for a PERSON — so the contact people get unique party
+    references instead of all sharing their customer's. Falls back to entityid when the
+    resolve has not run (previous behaviour)."""
+    if own_internalid and INTERNALID_COL in sub.columns:
+        s = sub[INTERNALID_COL].astype(str).str.strip()
+        # A row with no own internalid falls back to the customer ref, then entityid.
+        if PARTYREF_COL in sub.columns:
+            pr = sub[PARTYREF_COL].astype(str).str.strip()
+            s = s.where(s.ne("") & ~s.str.lower().isin(["nan", "none"]), pr)
+        return s
     if PARTYREF_COL in sub.columns:
         return sub[PARTYREF_COL].astype(str).str.strip()
     if ENTITYID_COL in sub.columns:
@@ -308,7 +328,7 @@ def _party_link_series(sub: "pd.DataFrame"):
 
 
 # ── The per-sheet reshape ───────────────────────────────────────────────────
-def _set_party_link(sub: pd.DataFrame) -> None:
+def _set_party_link(sub: pd.DataFrame, own_internalid: bool = False) -> None:
     """Point every row's PARTY link at its customer, in place.
 
     Party Original System Reference is the column a child row uses to say which party
@@ -317,10 +337,11 @@ def _set_party_link(sub: pd.DataFrame) -> None:
     at a party that did not exist. Overwrite it with the CUSTOMER's internalid
     (``PARTYREF_COL``, resolved from the master by entityid — REC-04), falling back to
     the customer key ``entityid`` when the resolve has not run, so the child resolves
-    to the one deduped party row. The site-level keys (…Site Source System Reference,
-    already the unique ``entityid_internalid``) are left untouched — only the party
-    link is retargeted."""
-    key = _party_link_series(sub)
+    to the one deduped party row. ``own_internalid`` (the PARTIES sheet) instead uses
+    each row's OWN internalid, so a contact PERSON party gets its own unique reference.
+    The site-level keys (…Site Source System Reference, already the unique
+    ``entityid_internalid``) are left untouched — only the party link is retargeted."""
+    key = _party_link_series(sub, own_internalid=own_internalid)
     if key is None:
         return
     keyv = key.tolist()
@@ -334,6 +355,51 @@ def _set_party_link(sub: pd.DataFrame) -> None:
             sub[c] = [e if e else v for e, v in zip(keyv, sub[c].astype(str))]
 
 
+def _dedupe_party_grain(sub: "pd.DataFrame") -> "pd.DataFrame":
+    """One row per customer for the party grain — first occurrence (master) wins,
+    blank-key rows kept as-is."""
+    if ENTITYID_COL not in sub.columns:
+        return sub
+    key = sub[ENTITYID_COL].astype(str).str.strip()
+    keyed = sub[key.ne("")].drop_duplicates(subset=[ENTITYID_COL], keep="first")
+    blank = sub[key.eq("")]
+    return pd.concat([keyed, blank]) if len(blank) else keyed
+
+
+def assign_party_numbers(sub: "pd.DataFrame") -> None:
+    """Number the parties sheet in place: NXT000001, NXT000002 … per customer
+    (entityid), the org taking the bare number and each of its contact people taking
+    ``_C1``, ``_C2`` … in row order (REC-06). Runs AFTER the fan-out so an org and its
+    contacts — which arrive from different source files — share ONE base number, which
+    a per-source SEQUENCE rule cannot do. A row whose Party Type is not PERSON is the
+    organization; blank-keyed rows are left with whatever number they had."""
+    pn_col = _find_col_ci(sub.columns, "Party Number")
+    pt_col = _find_col_ci(sub.columns, "Party Type")
+    if pn_col is None or ENTITYID_COL not in sub.columns:
+        return
+    eids = sub[ENTITYID_COL].astype(str).str.strip().tolist()
+    ptypes = (sub[pt_col].astype(str).str.strip().str.upper().tolist()
+              if pt_col is not None else [""] * len(sub))
+    ordinal: dict[str, int] = {}
+    person_seq: dict[str, int] = {}
+    out: list[str] = []
+    for e, pt in zip(eids, ptypes):
+        if not e:
+            out.append("")                       # nothing to key on; leave blank
+            continue
+        if e not in ordinal:
+            ordinal[e] = len(ordinal) + 1
+        base = f"NXT{ordinal[e]:06d}"
+        if pt == "PERSON":
+            person_seq[e] = person_seq.get(e, 0) + 1
+            out.append(f"{base}_C{person_seq[e]}")
+        else:
+            out.append(base)
+    # Keep an existing value only where we produced none (blank key).
+    old = sub[pn_col].astype(str).tolist()
+    sub[pn_col] = [n if n else old[i] for i, n in enumerate(out)]
+
+
 def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     """The subset of the merged frame that belongs on ``sheet_name``.
 
@@ -343,6 +409,11 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     is unknown, or whose grain has no rows in this load, is given the whole frame back
     (the previous behaviour) rather than an empty sheet — an empty backbone sheet
     would break the load, and a slightly over-full one will not.
+
+    HZ_IMP_PARTIES_T is special: it holds EVERY party. It gets the customer orgs (the
+    party grain, de-duplicated) AND the contact people (the contact grain), so a
+    contact becomes a PERSON party with its own name, type and number (REC-05/06/07/13),
+    while every other party-grain sheet stays one row per customer.
     """
     if df is None or GRAIN_COL not in df.columns or len(df) == 0:
         return df
@@ -352,18 +423,30 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     # Case/space-insensitive so a client cleansing profile that touches the tag can
     # never silently turn the reshape off (grain constants are lower-case).
     g = df[GRAIN_COL].astype(str).str.strip().str.lower()
+
+    # ── The parties backbone: orgs (deduped party grain) + contact PERSON parties ──
+    if grain == PARTY and "parties" in _norm(sheet_name):
+        party_sub = df[g == PARTY]
+        contact_sub = df[g == CONTACT]
+        if len(party_sub) == 0 and len(contact_sub) == 0:
+            return df
+        parts = []
+        if len(party_sub):
+            parts.append(_dedupe_party_grain(party_sub))
+        if len(contact_sub):
+            parts.append(contact_sub)             # one PERSON party per contact, not deduped
+        sub = (pd.concat(parts, ignore_index=True) if len(parts) > 1
+               else parts[0]).reset_index(drop=True)
+        _set_party_link(sub, own_internalid=True)  # each party's ref is its OWN internalid
+        assign_party_numbers(sub)                  # NXT / _C{n} per customer (REC-06)
+        return sub
+
     sub = df[g == grain]
     if len(sub) == 0:
         # No source of this grain in the load — don't empty the sheet.
         return df
     if grain == PARTY and ENTITYID_COL in sub.columns:
-        key = sub[ENTITYID_COL].astype(str).str.strip()
-        # Keep blank-key rows as-is (nothing to collapse them on); collapse the rest
-        # to one row per customer, first occurrence winning (sources arrive in load
-        # order, master first).
-        keyed = sub[key.ne("")].drop_duplicates(subset=[ENTITYID_COL], keep="first")
-        blank = sub[key.eq("")]
-        sub = pd.concat([keyed, blank]) if len(blank) else keyed
+        sub = _dedupe_party_grain(sub)
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
     return sub

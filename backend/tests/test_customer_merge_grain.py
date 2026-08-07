@@ -153,13 +153,19 @@ def _merged():
     return pd.DataFrame(rows)
 
 
-def test_party_sheet_dedupes_to_one_row_per_customer():
+def test_party_sheet_has_org_masters_plus_contact_people():
+    # The parties sheet holds EVERY party: the customer orgs (party grain, deduped to
+    # one per entityid) AND the contact people (contact grain), each a PERSON party.
     out = cm.sheet_rows(_merged(), "HZ_IMP_PARTIES_T")
-    check("party sheet has one row per customer (2), not all 6", len(out) == 2, len(out))
-    check("both customers present",
-          set(out["__entityid"]) == {"NT-1", "NT-2"}, list(out["__entityid"]))
+    check("party sheet = 2 org masters + 1 contact = 3 rows", len(out) == 3, len(out))
     check("named master rows survived",
-          set(out["Organization Name"]) == {"Alpha", "Beta"}, list(out["Organization Name"]))
+          {"Alpha", "Beta"}.issubset(set(out["Organization Name"])),
+          list(out["Organization Name"]))
+    check("the contact person is on the parties sheet",
+          "Ann" in list(out.get("Person First Name", [])),
+          list(out.get("Person First Name", [])))
+    # sites (3 address rows) are NOT folded into the parties sheet
+    check("no address rows leaked into parties", len(out) == 3, len(out))
 
 
 def test_site_sheet_gets_only_address_rows():
@@ -193,7 +199,7 @@ def test_party_link_retargeted_to_entityid_on_every_sheet():
           list(contacts["Party Original System Reference"]))
 
 
-def test_row_count_total_matches_grains_not_the_stacked_sum():
+def test_row_count_per_sheet_is_its_own_grain_not_the_stacked_sum():
     df = _merged()
     total_stacked = len(df)  # 6 — the "every sheet gets everything" number
     parties = len(cm.sheet_rows(df, "HZ_IMP_PARTIES_T"))
@@ -202,8 +208,12 @@ def test_row_count_total_matches_grains_not_the_stacked_sum():
     check("no sheet carries the full stacked sum",
           parties < total_stacked and sites < total_stacked and contacts < total_stacked,
           f"{parties}/{sites}/{contacts} vs {total_stacked}")
-    check("grains partition the rows (2 + 3 + 1 = 6)",
-          parties + sites + contacts == total_stacked)
+    # The parties sheet is the ONE exception to a clean partition: it holds the org
+    # masters (2, deduped) PLUS the contact people (1) = 3, because a contact is both
+    # a PERSON party AND an account contact. Sites = 3 addresses, contacts = 1.
+    check("parties = 2 orgs + 1 contact = 3", parties == 3, parties)
+    check("sites = 3 addresses", sites == 3, sites)
+    check("contacts = 1", contacts == 1, contacts)
 
 
 def test_unknown_sheet_returns_all_rows_unchanged():
