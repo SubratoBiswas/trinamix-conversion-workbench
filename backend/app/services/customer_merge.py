@@ -400,6 +400,23 @@ _FIRST_FLAG_SHEETS = {
 }
 
 
+def first_flag_field(sheet_name: Optional[str]) -> Optional[str]:
+    """The Primary/Identifying flag field-name the merge sets on ``sheet_name`` (REC-09
+    / REC-23), or ``None`` for a sheet the merge does not flag.
+
+    Output generation calls this to PROTECT the reshape-owned value from the per-sheet
+    keep-blank / suppression: the merge decides this flag from the customer key on the
+    sheet's own rows, so it must not depend on whether a project's mapping for the field
+    happens to sit at ``not_applicable`` (which a gold-purge revert can leave behind).
+    Returning None for the contact sheets is deliberate — their Primary stays blank
+    (REC-46 / REC-52)."""
+    n = _norm(sheet_name)
+    for key, (flag_name, _uses) in _FIRST_FLAG_SHEETS.items():
+        if key in n:
+            return flag_name
+    return None
+
+
 def _mark_first_per_entityid(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
     """Set the sheet's primary/identifying flag ``Y`` on the first (MIN-internalid)
     billing row per entityid and ``N`` on every other row (REC-09 / REC-23).

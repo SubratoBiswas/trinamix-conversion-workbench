@@ -2407,9 +2407,16 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         """
         consts: dict = {}          # field_name -> (value, fill_blank_only)
         decided: set = set()
+        _owned = _cm.first_flag_field(_sheet_name_of(sfields)) if _grain_merge else None
         for f in sfields:
             m = _mbyfield.get(f.id)
             if m is None:
+                continue
+            if _owned and f.field_name == _owned:
+                # The merge reshape authoritatively populates this flag (REC-09 / REC-23);
+                # a not_applicable keep-blank left on the mapping must not override it.
+                # Mark it decided so the linkage glue leaves it alone too.
+                decided.add(f.field_name)
                 continue
             if _analyst_keeps_blank(m):
                 consts[f.field_name] = ("", False)
@@ -2484,14 +2491,27 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
         sdf = _frame_for(sfields).reindex(columns=cols, fill_value="")
+        # A flag the customer merge OWNS (Primary Indicator / Identifying Address, set
+        # per-sheet from the customer key — REC-09 / REC-23). Its value is the merge's
+        # to decide, so it must survive suppression and control defaults regardless of
+        # whether this project's mapping for the field sits at not_applicable (which a
+        # gold-purge revert can leave behind). Excluded from `suppressed`, added to
+        # `explicitly_mapped`, and skipped by the keep-blank in _sheet_decisions.
+        _owned_flag = _cm.first_flag_field(_sheet_name_of(sfields)) if _grain_merge else None
+        _owned_key = _owned_flag.strip().lower().rstrip("*").strip() if _owned_flag else None
+        _supp = suppressed_keys | _strategy_blanks
+        _expl = explicitly_mapped_keys
+        if _owned_key:
+            _supp = _supp - {_owned_key}
+            _expl = explicitly_mapped_keys | {_owned_key}
         # Blank legacy null sentinels BEFORE control defaults so a column the
         # source filled entirely with "NULL" is treated as empty and gets its
         # standard default, not the literal text.
         sdf = _blank_null_sentinels(sdf)
         sdf = _format_date_columns(sdf, sfields)
-        sdf = _apply_control_defaults(sdf, suppressed=suppressed_keys | _strategy_blanks,
+        sdf = _apply_control_defaults(sdf, suppressed=_supp,
                                       effective=_eff_for_sheet(sfields),
-                                      explicitly_mapped=explicitly_mapped_keys)
+                                      explicitly_mapped=_expl)
         # THIS sheet's own analyst decisions, re-applied after the shared frame and
         # the control defaults. The frame is keyed by field name and cannot hold a
         # per-sheet decision; these rows can, and they are the analyst speaking

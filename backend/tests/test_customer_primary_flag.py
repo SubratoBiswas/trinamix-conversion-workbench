@@ -107,6 +107,20 @@ def test_missing_internalid_is_a_noop():
           set(sub["Primary Indicator"].astype(str)) == {""}, list(sub["Primary Indicator"]))
 
 
+def test_first_flag_field_names_the_owned_flag_per_sheet():
+    # Output generation uses this to protect the reshape-owned flag from a
+    # not_applicable keep-blank, so it must name exactly the flagged sheets.
+    check("PARTYSITEUSES -> Primary Indicator",
+          cm.first_flag_field("HZ_IMP_PARTYSITEUSES_T") == "Primary Indicator")
+    check("ACCTSITEUSES -> Primary Indicator",
+          cm.first_flag_field("HZ_IMP_ACCTSITEUSES_T") == "Primary Indicator")
+    check("PARTYSITES -> Identifying Address",
+          cm.first_flag_field("HZ_IMP_PARTYSITES_T") == "Identifying Address")
+    # Contact sheets are NOT flagged — their Primary stays blank (REC-46 / REC-52).
+    check("ACCTCONTACTS -> None", cm.first_flag_field("HZ_IMP_ACCTCONTACTS_T") is None)
+    check("CONTACTPTS -> None", cm.first_flag_field("HZ_IMP_CONTACTPTS_T") is None)
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         print(fn.__name__); fn()
