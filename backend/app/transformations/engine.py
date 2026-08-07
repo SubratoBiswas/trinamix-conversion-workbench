@@ -45,6 +45,51 @@ def _is_blank(v: Any) -> bool:
     return v is None or _to_str(v).strip() == ""
 
 
+# Oracle/ISO date TOKENS (as written in FORMAT_DATE's from_format/to_format, e.g.
+# "YYYY-MM-DD HH:MM:SS") translated to Python strftime directives. Longest tokens
+# first so YYYY is consumed before YY and HH24 before HH. Only ever applied to an
+# OUTPUT format, which is date-only in practice, so MM is month (never the minutes
+# spelling some extracts use).
+_ORACLE_DATE_TOKENS = [
+    ("YYYY", "%Y"), ("YY", "%y"), ("MON", "%b"), ("MONTH", "%B"),
+    ("DD", "%d"), ("HH24", "%H"), ("HH", "%H"), ("MI", "%M"), ("SS", "%S"), ("MM", "%m"),
+]
+
+# The input spellings a date value actually arrives in. Tried in order; the first
+# that parses wins. A FORMAT_DATE rule names a from_format, but extracts are not
+# reliably in it (Workday hands "2024-02-12" where the rule says
+# "YYYY-MM-DD HH:MM:SS"), so the value is parsed by probing rather than by trusting
+# the declared format — the same forgiving approach the date column pass uses.
+_DATE_IN_FORMATS = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y",
+    "%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%d-%B-%Y",
+)
+
+
+def _oracle_date_to_py(fmt: Any) -> str | None:
+    """An Oracle/ISO date format string -> Python strftime, or None if not given."""
+    s = _to_str(fmt).strip()
+    if not s:
+        return None
+    for tok, py in _ORACLE_DATE_TOKENS:
+        s = s.replace(tok, py)
+    return s
+
+
+def _parse_any_date(s: str) -> "datetime | None":
+    """Parse a date value written in any of the common spellings, else None."""
+    s = s.strip()
+    if not s:
+        return None
+    for fmt in _DATE_IN_FORMATS:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 # ``{Column_Name}`` inside a rule's result string, so a CASE/WHEN "then" can build
 # a value out of OTHER columns on the row.
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
@@ -345,6 +390,22 @@ def _apply_one_rule(
             if s in mapping:
                 return mapping[s]
         return default if default is not None else value
+
+    if rt == "FORMAT_DATE":
+        # Same intent as DATE_FORMAT, but the config is written in Oracle/ISO tokens
+        # (from_format / to_format, e.g. "YYYY-MM-DD HH:MM:SS" -> "YYYY/MM/DD"). This
+        # rule_type existed on Customer/Employee mappings with NO handler, so it was
+        # an unknown rule and passed the value straight through — which is why an
+        # Employee EffectiveStartDate shipped "2024-02-12" (hyphens) instead of the
+        # "YYYY/MM/DD" its own rule asked for. Parse the value forgivingly (extracts
+        # do not honour the declared from_format) and emit the requested output,
+        # defaulting to the standard yyyy/mm/dd.
+        s = _to_str(value).strip()
+        if not s:
+            return s
+        to_fmt = _oracle_date_to_py(cfg.get("to_format")) or _OUT_DATE_FORMAT
+        dt = _parse_any_date(s)
+        return dt.strftime(to_fmt) if dt else value
 
     if rt == "DATE_FORMAT":
         in_fmt = cfg.get("input_format", "%m/%d/%Y")
