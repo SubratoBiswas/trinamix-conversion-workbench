@@ -3039,24 +3039,36 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     _is_customer = "customer" in (target_object or "").lower()
     frames, names = [], []
     for c in convs:
+        _cf: dict = {}
         try:
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
-                carry_source_cols=(["entityid"] if _is_customer else None))
+                carry_source_cols=(["entityid"] if _is_customer else None),
+                collect_frames=(_cf if _is_customer else None))
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
             continue
         if f is not None and len(f.columns):
             if _is_customer:
                 f = f.copy()
-                _g = _cm.classify_frame_grain(f)
+                # Classify by the RAW SOURCE columns (companyname / addr / firstname),
+                # which are unambiguous — the converted frame carries the glue's
+                # reference columns and would mis-score every source the same. Fall
+                # back to the converted-frame anchors only if the source columns are
+                # somehow unavailable.
+                _src_cols: set = set()
+                for _entry in _cf.values():
+                    _cols = _entry[1] if isinstance(_entry, tuple) and len(_entry) > 1 else None
+                    _src_cols |= {str(x) for x in (_cols or [])}
+                _g = _cm.classify_source_columns(_src_cols) or _cm.classify_frame_grain(f)
                 if not _g:
                     # A source we could not place by grain still ships (it falls back
                     # to the whole-frame sheets), but log it — an unrecognised
                     # customer source is worth seeing rather than silently thinning a
                     # sheet's rows.
                     log.warning("customer merge: could not classify grain for a "
-                                "source of %s (%d rows) — its rows fall back to the "
-                                "un-reshaped sheets", target_object, len(f))
+                                "source of %s (%d rows, cols=%s) — its rows fall back "
+                                "to the un-reshaped sheets", target_object, len(f),
+                                sorted(_src_cols)[:12])
                 f[_cm.GRAIN_COL] = _g or ""
             frames.append(f)
             for did in c.source_dataset_ids:

@@ -75,20 +75,58 @@ def sheet_grain(sheet_name: Optional[str]) -> Optional[str]:
     return None
 
 
-# ── Which grain a SOURCE frame carries ──────────────────────────────────────
-# Decided from which anchor target columns the converted frame actually populates:
-# a customer master fills Party/Organization Name, an address file fills the address
-# lines, a contact file fills the person name. The frame is keyed by target FIELD
-# name at this point (the Oracle header rename happens later), so the anchors are
-# matched loosely against those names.
-_PARTY_ANCHORS = ("partyname", "organizationname", "accountname", "accountnumber")
-# Address anchors, broad on purpose: the customer master carries none of city /
-# postal / address-line, so any of them signals an address (site) source even when
-# the address-line mapping itself is sparse.
-_SITE_ANCHORS = ("addressline", "addressee", "partysite", "locationorig",
-                 "city", "postalcode", "postcode", "county")
-_CONTACT_ANCHORS = ("personfirstname", "personlastname", "personname",
-                    "contactfirstname", "contactlastname")
+# ── Which grain a SOURCE carries ────────────────────────────────────────────
+# Decided from the RAW SOURCE columns, not the converted frame. The converted frame
+# is the wrong place to look: the structural glue fills reference columns (Party Site
+# Original System Reference, Location Original System Reference, account references)
+# on EVERY row of EVERY source, so a "site"/"party" anchor matched on the converted
+# frame scores 1.0 for all four files and the grains collapse to one. The source
+# columns are unambiguous — the master has `companyname`, the address files have
+# `addr*`/`city`/`zip`, the contact file has `firstname`/`lastname` — and carry no
+# generated linkage. Matched loosely (normalised substring) so a NetSuite `addr1`
+# and a friendlier `Address 1` both read as an address.
+
+# Contact FIRST: a contact extract can also carry an e-mail-ish column, but only a
+# contact file has person names — so the presence of a person name is decisive.
+_CONTACT_SRC = ("firstname", "lastname", "fullname", "contactname", "middlename",
+                "givenname", "surname")
+# Address / site: any real address field. `state`/`zip`/`county` are matched exactly
+# or as words so they do not fire on unrelated columns.
+_SITE_SRC = ("addr", "address", "street", "city", "postalcode", "postcode",
+             "zipcode")
+_SITE_SRC_EXACT = ("state", "zip", "county", "province")
+# Party / account: a company / customer identity column. Deliberately NOT "name"
+# alone (too broad) and NOT account-number/reference (the glue fills those).
+_PARTY_SRC = ("companyname", "company", "organizationname", "orgname",
+              "legalname", "customername", "partyname")
+
+
+def classify_source_columns(cols) -> Optional[str]:
+    """The grain a source carries, from its raw column names. Contact (person names)
+    wins first, then an address/site column, then a company/customer identity;
+    otherwise None (left unclassified, never filtered out on a guess)."""
+    names = {_norm(c) for c in (cols or [])}
+    if not names:
+        return None
+
+    def has_sub(subs):
+        return any(any(s in n for s in subs) for n in names)
+
+    if has_sub(_CONTACT_SRC):
+        return CONTACT
+    if has_sub(_SITE_SRC) or (names & set(_SITE_SRC_EXACT)):
+        return SITE
+    if has_sub(_PARTY_SRC):
+        return PARTY
+    return None
+
+
+# Fallback anchors on the CONVERTED frame, used only when the source columns are
+# unavailable. Kept narrow — the real DATA columns a source fills, never the glue's
+# reference columns — so they do not all light up at once the way the broad set did.
+_PARTY_ANCHORS = ("organizationname",)
+_SITE_ANCHORS = ("addressline1", "addressline2", "addressee", "addressline")
+_CONTACT_ANCHORS = ("personfirstname", "personlastname")
 
 
 def _nonblank_fraction(frame: pd.DataFrame, anchors: tuple[str, ...]) -> float:

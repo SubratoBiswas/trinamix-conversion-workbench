@@ -56,7 +56,34 @@ def test_unknown_sheet_is_none():
     check("empty sheet name -> None", cm.sheet_grain("") is None)
 
 
-# ── classify_frame_grain: which grain a source frame carries ────────────────
+# ── classify_source_columns: grain from the RAW source columns ──────────────
+# The real fix — the converted frame carries the glue's reference columns and scored
+# every source the same; the source columns do not.
+def test_classify_source_columns_by_raw_names():
+    master = ["internalid", "entityid", "companyname", "creditlimit", "subsidiary"]
+    shipping = ["internalid", "entityid", "addressee", "addr1", "addr2", "city",
+                "state", "zip", "country", "addresslabel"]
+    contact = ["internalid", "entityid", "firstname", "middlename", "lastname",
+               "fullname", "email", "phone"]
+    check("master (companyname) -> party", cm.classify_source_columns(master) == cm.PARTY)
+    check("shipping (addr/city/zip) -> site", cm.classify_source_columns(shipping) == cm.SITE)
+    check("contact (firstname/lastname) -> contact",
+          cm.classify_source_columns(contact) == cm.CONTACT)
+
+
+def test_classify_source_columns_precedence_and_noise():
+    # A master that happens to carry a "tax_contact" column must NOT be read as a
+    # contact source — only real person-name columns count.
+    master_noisy = ["entityid", "companyname", "custentity_tax_contact", "fax", "title"]
+    check("tax_contact noise does not make the master a contact source",
+          cm.classify_source_columns(master_noisy) == cm.PARTY)
+    # An address file with an 'addressee' but no person-name column stays site.
+    addr = ["entityid", "addressee", "attention", "addr1", "city", "zip"]
+    check("addressee alone is still a site source", cm.classify_source_columns(addr) == cm.SITE)
+    check("empty columns -> None", cm.classify_source_columns([]) is None)
+
+
+# ── classify_frame_grain: fallback on the converted frame ───────────────────
 def _frame(cols_values):
     return pd.DataFrame(cols_values)
 
