@@ -19,6 +19,7 @@ import {
 import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
 import { buildRecommendations, type Recommendation } from "@/lib/recommendations";
 import { confidenceTone, cn, formatNumber, statusTone } from "@/lib/utils";
+import { useAuth } from "@/store/authStore";
 import type {
   Conversion,
   DatasetColumnProfile,
@@ -100,10 +101,41 @@ function seqKeyForTarget(target?: string | null): string | null {
   return null;
 }
 
+// "When was the value in force decided, and by whom" — rendered under each row's
+// status so the analyst can see which dated change won instead of guessing.
+// applied_at is an ISO string; applied_from is an email (a person) or a library
+// provenance label. Formats to the minute because precedence resolves to the minute.
+function fmtAppliedWhen(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const day = d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return `${day} ${time}`;
+}
+function appliedWhoLabel(from?: string | null, meEmail?: string | null): string | null {
+  const f = (from || "").trim();
+  if (!f) return null;
+  if (meEmail && f.toLowerCase() === meEmail.toLowerCase()) return "you";
+  // An email → show the name part; a provenance phrase → show as-is.
+  return f.includes("@") ? f.split("@")[0] : f;
+}
+
+// A cheap fingerprint of the grid's decision-bearing state, so a background poll
+// only triggers a re-render when another analyst actually changed something —
+// not on every tick. Covers what the row shows: the value, the decision, and the
+// date-time in force.
+function mappingsSignature(ms: MappingSuggestion[]): string {
+  return ms
+    .map((m) => `${m.id}:${m.status}:${m.source_column ?? ""}:${m.default_value ?? ""}:${m.approved_at ?? ""}:${m.applied_at ?? ""}`)
+    .join("|");
+}
+
 export const MappingReviewPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const projParam = params.get("conversion");
+  const me = useAuth((s) => s.user);
 
   const [projects, setProjects] = useState<Conversion[]>([]);  // all conversions
   const [pid, setPid] = useState<string | null>(projParam ?? null);
@@ -762,6 +794,38 @@ export const MappingReviewPage: React.FC = () => {
     }
   };
 
+  // LIVE cross-analyst reflection. Two admins on the same client/project should see
+  // each other's saved changes without a manual refresh (Subrato, 06-Aug: "changes
+  // done by an admin should be reflected to another admin ... immediately after
+  // changes made"). Every grid edit is saved server-side the instant it is made and
+  // written to the shared library, so this only has to RE-READ: poll on a short
+  // interval and whenever the tab regains focus. It replaces state only when the
+  // fingerprint actually changed, so a screen with nothing new never re-renders, and
+  // it never overwrites an in-progress edit because grid edits are saved-then-reloaded,
+  // not buffered locally.
+  const refreshMappingsQuiet = useCallback(async () => {
+    if (!pid || document.hidden) return;
+    try {
+      const fresh = await MappingApi.list(pid);
+      setMappings((prev) => (mappingsSignature(prev) === mappingsSignature(fresh) ? prev : fresh));
+    } catch {
+      /* transient (cold start / network blip) — the next tick retries */
+    }
+  }, [pid]);
+
+  useEffect(() => {
+    if (!pid) return;
+    const id = window.setInterval(refreshMappingsQuiet, 10000);
+    const onWake = () => refreshMappingsQuiet();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+    };
+  }, [pid, refreshMappingsQuiet]);
+
   // ── Apply & (optionally) Learn a recommendation ──
   const applyRecommendation = async (rec: Recommendation, learn: boolean) => {
     if (!pid || !rec.ruleType) {
@@ -1412,6 +1476,7 @@ export const MappingReviewPage: React.FC = () => {
             onReload={loadAll}
             objectName={project?.target_object || project?.name || undefined}
             sourceName={(project as any)?.dataset_name || (project as any)?.ebs_table_hint || undefined}
+            meEmail={me?.email}
           />
         ) : (
         /* Mapping canvas */
@@ -2270,10 +2335,11 @@ const MappingTableView: React.FC<{
   onReload?: () => void | Promise<void>;
   objectName?: string;
   sourceName?: string;
+  meEmail?: string | null;
 }> = ({
   conversionId, sourceColumns, targetFields, mappings, visibleTargetIds,
   effectiveDefaults, defaultsBySheet, suppressedFields, ruleTargetIds, selectedMappingId, setSelectedMappingId, onOverride, loading,
-  aiVerdicts, onAiVerdicts, onReload, objectName, sourceName,
+  aiVerdicts, onAiVerdicts, onReload, objectName, sourceName, meEmail,
 }) => {
   // Ranked alternatives for every target field (one round-trip), so each row can
   // show the runner-up source columns the matcher scored lower.
@@ -2836,6 +2902,19 @@ const MappingTableView: React.FC<{
                       <Pill tone={statusTone(m.status)}>{m.status.replace("_", " ")}</Pill>
                     </div>
                   )}
+                  {(() => {
+                    const when = fmtAppliedWhen(m?.applied_at);
+                    if (!when) return null;
+                    const who = appliedWhoLabel(m?.applied_from, meEmail);
+                    return (
+                      <div
+                        className="mt-0.5 text-[9.5px] leading-tight text-ink-subtle"
+                        title={`This value is the decision in force as of ${when}${who ? ` (${who})` : ""}. Mappings resolve by date-time — the latest change wins.`}
+                      >
+                        {when}{who ? <span className="text-ink-subtle/80"> · {who}</span> : null}
+                      </div>
+                    );
+                  })()}
                 </td>
                 {/* Confidence */}
                 <td className="px-3 py-2">

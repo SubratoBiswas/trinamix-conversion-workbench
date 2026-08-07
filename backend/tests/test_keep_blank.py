@@ -144,6 +144,10 @@ def test_the_endpoint_still_does_what_this_file_mirrors():
     src = open(os.path.join(here, "..", "app", "routers", "mapping.py"),
                encoding="utf-8").read()
     body = src.split("async def keep_blank(")[1].split("\n@router.")[0]
+    # The suppression learning now lives in a shared helper so an ordinary grid edit
+    # that clears a mapping records the SAME decision — read its body too.
+    suppress = src.split("async def _record_suppression_learning(")[1].split(
+        "\n@router.")[0].split("\nasync def ")[0]
 
     check("endpoint exists", "/keep-blank" in src)
     for needed, why in (
@@ -151,10 +155,17 @@ def test_the_endpoint_still_does_what_this_file_mirrors():
         ('"source_column": None', "clears the source"),
         ('"default_value": None', "clears the default"),
         ("_mark_outputs_stale", "marks built files stale"),
+    ):
+        check(f"keep_blank {why}", needed in body, f"missing {needed!r}")
+    # The learning is recorded through the shared helper the endpoint calls.
+    check("keep_blank records the suppression via the shared helper",
+          "_record_suppression_learning(" in body)
+    for needed, why in (
         ('kind="suppress_field"', "records the learning"),
         ("revive=True", "may revive a retired suppression"),
     ):
-        check(f"keep_blank {why}", needed in body, f"missing {needed!r}")
+        check(f"the suppression helper {why}", needed in suppress,
+              f"missing {needed!r}")
 
     # The sibling sweep — the fix this file's second test exists for.
     check("keep_blank blanks sibling rows for the same target field",

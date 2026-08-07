@@ -448,8 +448,8 @@ async def update_mapping(
     # `status` is absent when someone edits a column or a default without re-pressing
     # Approve, so the stamps used to stay at the ORIGINAL approval — an edit made
     # today could lose to a rule file dated yesterday.
-    _DECISION_FIELDS = {"source_column", "default_value", "status",
-                        "suggested_transformation"}
+    from app.services.mapping_edit import CONTENT_FIELDS, finalize_content_edit
+    _DECISION_FIELDS = CONTENT_FIELDS | {"status"}
     _is_decision = bool(_DECISION_FIELDS & set(data))
     if _is_decision:
         data["approved_by"] = user.email
@@ -458,31 +458,46 @@ async def update_mapping(
         # it is a statement in its own right, carrying its own date, and it goes
         # into the store beside every other one.
         data["derived"] = False
+        # ANY content edit is FINAL — there is no separate Approve click (Subrato,
+        # 06-Aug: "user should not click on approve, any edit should be considered
+        # final"). Not only about clicks: apply_learned_to_conversion treats a row
+        # still marked "suggested" as fair game and overwrites it from the library on
+        # the next generate/refresh — no matter who last touched it — which is the
+        # "I saved it, refreshed, it's gone" bug. A DECIDED status makes it a
+        # protected human decision (its approver is a person, so the library can only
+        # win by being dated later). Set only when the UI sent no status of its own,
+        # so Approve / Reject / override keep saying exactly what they mean.
+        data.update(finalize_content_edit(
+            data, cur_source=m.source_column, cur_default=m.default_value,
+            cur_transform=m.suggested_transformation))
     await m.set(stamp_edit(data))
     await _mark_outputs_stale(m.conversion_id)
     conv = await Conversion.get(m.conversion_id)
-    # LEARN ON ANY DELIBERATE EDIT — not only on an approved one.
+    # LEARN + PROPAGATE ON ANY DELIBERATE EDIT — not only on an approved one.
     #
     # This used to require status in (approved, overridden), and `status` is absent
     # from the payload unless the UI sends it. So changing the source column of a row
     # still sitting in "suggested" and saving captured NOTHING: the conversion in
     # front of the analyst was right, the library never heard about it, and nothing
     # propagated. The sibling Approve endpoint had no such gate, which is why Approve
-    # propagated and Save silently did not — one screen, two behaviours.
-    #
-    # A rejected/not_applicable edit is a decision too — "remove this mapping" — and
-    # is captured through the keep-blank path, which now propagates as well.
-    if _is_decision and (m.source_column
-                         or (m.default_value and str(m.default_value).strip())):
-        _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
-        if _lm is not None:
-            # ACROSS THE LOAD SEQUENCE, and AFTER the response is sent. The fan-out
-            # reaches the whole bundle (correcting Supplier Name on the Import tab
-            # has to reach Address, Site, Site Assignment, Contacts and Banks, not
-            # just other Import conversions), which means walking the fleet — too
-            # slow to hold a Save behind. The edited row is already saved above; the
-            # rest catches up off the request. See _propagate_in_background.
-            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
+    # propagated and Save silently did not — one screen, two behaviours. Now every
+    # edit is final, so every edit reaches the shared library and fans out.
+    _lm = None
+    if _is_decision:
+        if m.source_column or (m.default_value and str(m.default_value).strip()):
+            _lm = await record_learning_from_mapping(m, conv, captured_by=user.email)
+        elif m.status == "not_applicable":
+            # A cleared mapping is "remove this / leave it blank" — a decision like
+            # any other, recorded as a suppression so it applies everywhere too.
+            _lm = await _record_suppression_learning(m, conv, user.email)
+    if _lm is not None:
+        # ACROSS THE LOAD SEQUENCE, and AFTER the response is sent. The fan-out
+        # reaches the whole bundle (correcting Supplier Name on the Import tab
+        # has to reach Address, Site, Site Assignment, Contacts and Banks, not
+        # just other Import conversions), which means walking the fleet — too
+        # slow to hold a Save behind. The edited row is already saved above; the
+        # rest catches up off the request. See _propagate_in_background.
+        background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
     out = (await enrich_mapping_with_samples(conv, [m]))[0]
     return out
 
@@ -581,6 +596,56 @@ async def _propagate_in_background(lm, conv: Conversion, captured_by: str) -> No
                       getattr(lm, "id", "?"))
 
 
+async def _record_suppression_learning(m: MappingSuggestion, conv, actor: str):
+    """Record 'leave this field blank' as a client-scoped suppression, or None.
+
+    Lifted out of ``keep_blank`` so ANY path that ends in a cleared mapping — the
+    Keep-blank button, or an ordinary grid edit that removes the source and default
+    — records the same decision and reaches every current/future conversion through
+    the fan-out. A suppression that only reached the row it was made on is the same
+    "saved here, missing everywhere else" complaint arriving through a different door.
+    """
+    try:
+        from app.models.fbdi import FBDIField, FBDISheet
+        from app.services.client_service import client_id_for_conversion
+        from app.services.learning_service import (_upsert, source_erp_for_conversion,
+                                                   _business_object_for)
+        f = await FBDIField.get(m.target_field_id) if m.target_field_id else None
+        obj = await _business_object_for(conv)
+        # THE INTERFACE THIS KEEP-BLANK IS ABOUT. Without it, the suppression is
+        # field-wide and blanks the column on every one of the 19 sheets that
+        # carries the name — the exact opposite of "blank on THIS sheet, I on
+        # another". Oracle repeats field names across interfaces, so a keep-blank
+        # has to name the interface it was pressed on, the same way a fixed value
+        # already does (record_learning_from_mapping scopes its default by sheet).
+        _sheet_name = None
+        if f is not None and getattr(f, "sheet_id", None) is not None:
+            _sh = await FBDISheet.get(f.sheet_id)
+            _sheet_name = getattr(_sh, "sheet_name", None) if _sh else None
+        if f is not None and obj:
+            return await _upsert(
+                kind="suppress_field", category="Left blank on purpose",
+                original_value="(blank)", resolved_value="",
+                target_object=obj, target_field=f.field_name, rule_type="suppress",
+                rule_config={"note": f"Kept blank by {actor}"},
+                project_id=getattr(conv, "project_id", None),
+                client_id=await client_id_for_conversion(conv),
+                source_erp=await source_erp_for_conversion(conv),
+                captured_from="kept blank in Mapping Review",
+                captured_by=actor,
+                # Scoped to the interface it was pressed on — the fourth key
+                # dimension. A None sheet stays field-wide (old behaviour), which
+                # is the right fallback when the field lives on only one sheet.
+                sheets=[_sheet_name] if _sheet_name else None,
+                # An analyst pressing this IS an explicit action, so it may revive a
+                # suppression they previously retired.
+                revive=True,
+            )
+    except Exception:  # noqa: BLE001 — the decision is saved either way
+        log.exception("keep-blank: could not record the suppression learning")
+    return None
+
+
 @router.put("/mappings/{mapping_id}/keep-blank", response_model=MappingOut)
 async def keep_blank(mapping_id: str, background_tasks: BackgroundTasks,
                      user: User = Depends(get_current_user)):
@@ -628,47 +693,8 @@ async def keep_blank(mapping_id: str, background_tasks: BackgroundTasks,
 
     await _mark_outputs_stale(m.conversion_id)
 
-    learned = False
-    lm = None
-    try:
-        from app.models.fbdi import FBDIField, FBDISheet
-        from app.services.client_service import client_id_for_conversion
-        from app.services.learning_service import (_upsert, source_erp_for_conversion,
-                                                   _business_object_for)
-        f = await FBDIField.get(m.target_field_id) if m.target_field_id else None
-        obj = await _business_object_for(conv)
-        # THE INTERFACE THIS KEEP-BLANK IS ABOUT. Without it, the suppression is
-        # field-wide and blanks the column on every one of the 19 sheets that
-        # carries the name — the exact opposite of "blank on THIS sheet, I on
-        # another". Oracle repeats field names across interfaces, so a keep-blank
-        # has to name the interface it was pressed on, the same way a fixed value
-        # already does (record_learning_from_mapping scopes its default by sheet).
-        _sheet_name = None
-        if f is not None and getattr(f, "sheet_id", None) is not None:
-            _sh = await FBDISheet.get(f.sheet_id)
-            _sheet_name = getattr(_sh, "sheet_name", None) if _sh else None
-        if f is not None and obj:
-            lm = await _upsert(
-                kind="suppress_field", category="Left blank on purpose",
-                original_value="(blank)", resolved_value="",
-                target_object=obj, target_field=f.field_name, rule_type="suppress",
-                rule_config={"note": f"Kept blank by {user.email}"},
-                project_id=getattr(conv, "project_id", None),
-                client_id=await client_id_for_conversion(conv),
-                source_erp=await source_erp_for_conversion(conv),
-                captured_from="kept blank in Mapping Review",
-                captured_by=user.email,
-                # Scoped to the interface it was pressed on — the fourth key
-                # dimension. A None sheet stays field-wide (old behaviour), which
-                # is the right fallback when the field lives on only one sheet.
-                sheets=[_sheet_name] if _sheet_name else None,
-                # An analyst pressing this IS an explicit action, so it may revive a
-                # suppression they previously retired.
-                revive=True,
-            )
-            learned = lm is not None
-    except Exception:  # noqa: BLE001 — the decision is saved either way
-        log.exception("keep-blank: could not record the suppression learning")
+    lm = await _record_suppression_learning(m, conv, user.email)
+    learned = lm is not None
 
     # "Remove this mapping" is a decision like any other and has to reach the
     # conversions that already exist. It reaches them AFTER this response is sent —

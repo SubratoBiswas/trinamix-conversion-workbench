@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from beanie import PydanticObjectId
 
@@ -950,6 +950,47 @@ async def enrich_mapping_with_samples(
     _is_customer = "customer" in str(getattr(conversion, "target_object", "") or "").lower()
     _in_scope_cache: dict[str, bool] = {}
 
+    # WHICH dated decision is in force for each field, so the grid can show the
+    # analyst the date-time behind a value instead of leaving them to guess which
+    # change won. A person's own edit IS the statement (its approved_at is the date);
+    # a value the library supplied is traced back to the winning store entry, whose
+    # effective_date is the instruction date and whose provenance names the source.
+    # Read once for the whole grid and wrapped so it can never break the screen.
+    from app.services import mapping_store
+    _entries: list = []
+    _cid = _src = None
+    try:
+        from app.services.client_service import client_id_for_conversion
+        from app.services.learning_service import source_erp_for_conversion
+        from app.models.learned import LearnedMapping
+        _cid = await client_id_for_conversion(conversion)
+        _src = await source_erp_for_conversion(conversion)
+        _rows = await LearnedMapping.find(
+            {"kind": {"$in": sorted(mapping_store.DECISION_KINDS)}}).to_list()
+        _entries = mapping_store.entries_of(_rows)
+    except Exception:  # noqa: BLE001 — provenance is a nicety, never a blocker
+        _entries = []
+
+    def _applied(m, tgt) -> tuple[Any, Optional[str]]:
+        """(applied_at, applied_from): the date and origin of the value in force."""
+        who = str(getattr(m, "approved_by", "") or "").strip()
+        # A person's own decision is the row itself — that is the statement.
+        if who and who != mapping_store.ENGINE:
+            return getattr(m, "approved_at", None), who
+        # Otherwise the value came from the library; trace it to the winning entry.
+        if _entries and tgt is not None:
+            try:
+                _sheet = sheet_name_by_id.get(getattr(tgt, "sheet_id", None))
+                w = mapping_store.resolve(_entries, target_field=tgt.field_name,
+                                          client_id=_cid, source_erp=_src, sheet=_sheet)
+                if w is not None:
+                    return (getattr(w, "effective_date", None),
+                            getattr(w, "captured_from", None) or "Learning library")
+            except Exception:  # noqa: BLE001
+                pass
+        return (getattr(m, "approved_at", None)
+                or getattr(m, "updated_at", None)), (who or None)
+
     def _scope_of(sheet: str | None) -> bool:
         # Only Customer carries a load scope today. Everything else is in scope,
         # rather than asking a Customer spec about a Supplier tab and trusting its
@@ -1020,6 +1061,7 @@ async def enrich_mapping_with_samples(
             "review_required": m.review_required, "status": m.status,
             "default_value": m.default_value, "comment": m.comment,
             "approved_by": m.approved_by, "approved_at": m.approved_at,
+            **(lambda ap: {"applied_at": ap[0], "applied_from": ap[1]})(_applied(m, tgt)),
             "target_sheet": sheet_name_by_id.get(getattr(tgt, "sheet_id", None)) if tgt else None,
             "target_in_load_scope": _scope_of(
                 sheet_name_by_id.get(getattr(tgt, "sheet_id", None)) if tgt else None),

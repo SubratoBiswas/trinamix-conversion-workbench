@@ -26,6 +26,16 @@ class MappingOut(ApiOut):
     comment: Optional[str] = None
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
+    # WHICH dated decision is currently in force for this field, and where it came
+    # from. The store resolves precedence by date-time (latest wins), so a value on
+    # screen is the newest statement about the field — but nothing said WHICH one.
+    # Surfaced so the analyst can read "this is the 06-Aug workbook rule" or "you set
+    # this on 04-Aug 14:32", instead of guessing which change won. `applied_at` is the
+    # instruction's effective date (a person's edit-time, or the store entry's
+    # effective date for a value the library supplied); `applied_from` is a short
+    # provenance label (the person's email, or where the library learned it).
+    applied_at: Optional[datetime] = None
+    applied_from: Optional[str] = None
     # This row is a VIEW of the one dated store, not a decision in its own right.
     # Declared here because response_model strips whatever it does not name, and a
     # field the screen never receives is a field the analyst cannot be shown —

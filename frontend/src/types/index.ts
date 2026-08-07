@@ -607,6 +607,16 @@ export interface MappingSuggestion {
   comment: string | null;
   approved_by: string | null;
   approved_at: string | null;
+  /**
+   * Which dated decision is currently in force for this field, and where it came
+   * from. `applied_at` is the instruction's effective date (a person's edit-time,
+   * or the store entry's effective date when the library supplied the value);
+   * `applied_from` is a short provenance label (the person's email, or where the
+   * library learned it). Shown on the row so the analyst can see the date-time
+   * behind a value rather than guessing which change won.
+   */
+  applied_at?: string | null;
+  applied_from?: string | null;
   // P6 — dual-cert state. When `requires_dual_approval = 1`, the row
   // needs two distinct approvers before it flips to `approved`. The
   // first sign-off lands on `approved_by`; the second on

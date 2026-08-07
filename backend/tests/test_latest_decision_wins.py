@@ -80,12 +80,21 @@ def check(name, cond, detail=""):
 # ── 1. capture on any deliberate edit ───────────────────────────────────────
 def test_any_deliberate_edit_is_captured_and_dated():
     m = _SRC["mapping.py"]
+    # A decision is defined by WHAT changed (a content field), not by whether the
+    # analyst also pressed Approve. The content set now lives in mapping_edit as
+    # CONTENT_FIELDS and the decision set is that plus an explicit status.
     check("a decision is defined by WHAT changed, not by the status",
-          '_DECISION_FIELDS = {"source_column", "default_value", "status",' in m)
-    check("and it re-stamps the date", '_is_decision:\n        data["approved_by"]' in m
-          or 'if _is_decision:' in m)
+          "_DECISION_FIELDS = CONTENT_FIELDS | {\"status\"}" in m)
+    check("and it re-stamps the date", 'if _is_decision:' in m
+          and 'data["approved_at"] = datetime.utcnow()' in m)
+    # A content edit is made FINAL with no Approve click — finalize_content_edit
+    # gives it a decided status so the library cannot overwrite it on refresh.
+    check("any content edit is finalized without an Approve click",
+          "data.update(finalize_content_edit(" in m)
+    # Capture runs on ANY deliberate edit, gated on _is_decision — never on an
+    # approved status.
     check("capture no longer requires an approved status",
-          'if _is_decision and (m.source_column' in m)
+          "if _is_decision:\n        if m.source_column or (m.default_value" in m)
     check("the old status gate is gone",
           'if m.status in ("approved", "overridden") and (\n        m.source_column' not in m)
 
