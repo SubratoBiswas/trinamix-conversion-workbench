@@ -870,18 +870,74 @@ async def purge_gold_examples(
     if dry_run:
         return report
 
-    retired = reverted = stale = 0
     now = datetime.utcnow()
+    # 1) Tombstone every match, collecting the (client, object, field, source) triples
+    #    whose auto-applied mappings must be reverted. Doing the revert per-row would
+    #    call Conversion.find_all() 1,676 times; instead collect the triples and revert
+    #    in ONE pass over the conversions below.
+    retired = 0
+    triples: set = set()              # (client_id|None, object_l, field_l, source_l)
     for m in gold:
-        if revert_applied:
-            try:
-                r = await _revert_applied_mappings(m, user.email)
-                reverted += int(r.get("mappings_reverted", 0) or 0)
-                stale += int(r.get("outputs_marked_stale", 0) or 0)
-            except Exception:  # noqa: BLE001 — one bad revert must not stop the purge
-                pass
         await m.set({"is_deleted": True, "deleted_at": now, "deleted_by": user.email})
         retired += 1
+        o = (m.target_object or "").strip().lower()
+        f = (m.target_field or "").strip().lower()
+        s = (m.original_value or "").strip().lower()
+        if o and f:
+            triples.add((m.client_id, o, f, s))
+
+    reverted = stale = 0
+    if revert_applied and triples:
+        from app.models.fbdi import FBDIField as _F
+        from app.models.mapping import MappingSuggestion as _MS
+        from app.models.output import ConvertedOutput as _CO
+        from app.services.mapping_dedupe import stamp_edit
+        from app.services.client_service import client_id_for_conversion
+        objs_needed = {t[1] for t in triples}
+        # A field is reverted if a tombstoned learning matches it — scoped to the
+        # conversion's client OR global (client_id None), and matching the source
+        # column when the learning named one (so retiring one rule on a field does not
+        # revert a different rule on the same field). A learning that named no source
+        # matches the field regardless of the mapping's source.
+        keys_exact = triples                                          # (client, obj, field, source)
+        keys_nosrc = {(c, o, f) for (c, o, f, s) in triples if s == ""}
+        seen_conv: set = set()
+        for conv in await Conversion.find_all().to_list():
+            co = (conv.target_object or "").strip().lower()
+            if co not in objs_needed:
+                continue
+            conv_client = await client_id_for_conversion(conv)
+            fields = {f.id: (f.field_name or "").strip().lower()
+                      for f in await _F.find(_F.template_id == conv.template_id).to_list()
+                      } if conv.template_id else {}
+            for mm in await _MS.find(_MS.conversion_id == conv.id).to_list():
+                if mm.approved_by != "learning-engine":
+                    continue
+                fl = fields.get(mm.target_field_id, "")
+                if not fl:
+                    continue
+                sl = (mm.source_column or "").strip().lower()
+                hit = (
+                    (conv_client, co, fl, sl) in keys_exact
+                    or (None, co, fl, sl) in keys_exact
+                    or (conv_client, co, fl) in keys_nosrc
+                    or (None, co, fl) in keys_nosrc
+                )
+                if not hit:
+                    continue
+                await mm.set(stamp_edit({
+                    "status": "suggested", "approved_by": None, "approved_at": None,
+                    "review_required": 1,
+                    "comment": f"Reverted — the gold learning behind this was retired by {user.email}."}))
+                reverted += 1
+                seen_conv.add(conv.id)
+        for cid in seen_conv:
+            for o in await _CO.find(_CO.conversion_id == cid).to_list():
+                if o.status != "stale":
+                    await o.set({"status": "stale",
+                                 "stale_reason": "A learning it was built on was retired",
+                                 "stale_since": now})
+                    stale += 1
     report.update({"retired": retired, "mappings_reverted": reverted,
                    "outputs_marked_stale": stale})
     return report
