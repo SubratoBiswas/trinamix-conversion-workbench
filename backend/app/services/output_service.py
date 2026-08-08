@@ -2141,9 +2141,14 @@ def _sup_sheet_kind(sheet_name: str | None) -> str:
     return ""
 
 
-def _apply_supplier_rules(df: pd.DataFrame, sheet_name: str | None) -> pd.DataFrame:
+def _apply_supplier_rules(df: pd.DataFrame, sheet_name: str | None,
+                          src: "pd.DataFrame | None" = None) -> pd.DataFrame:
     """Force the analyst-confirmed constants / blanks / value-maps for one supplier
-    interface sheet. Additive and column-guarded: only touches columns that exist."""
+    interface sheet. Additive and column-guarded: only touches columns that exist.
+
+    ``src`` is the pre-reindex frame (row-aligned with ``df``) that still carries the
+    threaded source columns — e-mail / fax — which the Communication Method
+    derivation needs but the interface reindex has already dropped from ``df``."""
     n = len(df)
     if n == 0:
         return df
@@ -2198,10 +2203,28 @@ def _apply_supplier_rules(df: pd.DataFrame, sheet_name: str | None) -> pd.DataFr
         ccols = _cols("Communication Method")
         if not ccols:
             return
-        ecols = _cols("Email", "E-Mail", "Email Address")
-        fcols = _cols("Fax", "Fax Number")
-        ev = df[ecols[0]].astype(str).tolist() if ecols else [""] * n
-        fv = df[fcols[0]].astype(str).tolist() if fcols else [""] * n
+        # Read the source e-mail / fax from the carried columns on the pre-reindex
+        # frame (issue #14): the Site interface has no e-mail column of its own, so
+        # without this every row could only be FAX or NONE. Fall back to any e-mail /
+        # fax column that did survive onto df.
+        def _srccol(frame, *names):
+            if frame is None:
+                return None
+            want = {_norm_hdr(x) for x in names}
+            for c in frame.columns:
+                if _norm_hdr(c) in want:
+                    return frame[c].astype(str).tolist()
+            return None
+        ev = (_srccol(src, "email", "altemail", "external_email_addr")
+              or (df[_cols("Email", "E-Mail", "Email Address")[0]].astype(str).tolist()
+                  if _cols("Email", "E-Mail", "Email Address") else [""] * n))
+        fv = (_srccol(src, "fax")
+              or (df[_cols("Fax", "Fax Number")[0]].astype(str).tolist()
+                  if _cols("Fax", "Fax Number") else [""] * n))
+        if len(ev) != n:
+            ev = (ev + [""] * n)[:n]
+        if len(fv) != n:
+            fv = (fv + [""] * n)[:n]
 
         def _has(x):
             return str(x).strip().lower() not in _SUP_NULL_VALUES
@@ -2680,7 +2703,12 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # LAST step renames columns to Oracle's exact header labels (with the
         # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
-        sdf = _frame_for(sfields).reindex(columns=cols, fill_value="")
+        # Keep the pre-reindex frame: it still carries the threaded source columns
+        # (e.g. supplier e-mail/fax) that the reindex to interface columns drops but
+        # _apply_supplier_rules needs to derive Communication Method. Row-aligned
+        # with sdf, since reindex only changes columns.
+        _pre_reindex = _frame_for(sfields)
+        sdf = _pre_reindex.reindex(columns=cols, fill_value="")
         # Fields the customer merge OWNS on this sheet (Primary/Identifying flag set
         # per-sheet from the customer key — REC-09/23; the CONTACTPTS fan-out fields —
         # REC-48/53/54/56/57). Their value is the merge's to decide, so it must survive
@@ -2726,7 +2754,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # Communication-Method derivation reads the un-masked e-mail column, and
         # after control defaults so these values are authoritative.
         if _sup_rules_on:
-            sdf = _apply_supplier_rules(sdf, _sheet_name_of(sfields))
+            sdf = _apply_supplier_rules(sdf, _sheet_name_of(sfields), _pre_reindex)
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
         # field_name (before the header rename below).
@@ -3340,6 +3368,7 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     # keep the plain converge + de-dup.
     from app.services import customer_merge as _cm
     _is_customer = "customer" in (target_object or "").lower()
+    _is_supplier_obj = "supplier" in (target_object or "").lower()
     # Cross-grain enrichment lookup (Customer only). A Customer load's columns live on
     # DIFFERENT source files — person names in the contact file, companyname/startdate/
     # datecreated in the master — but the rules that read them run on a different grain.
@@ -3370,20 +3399,28 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     for c in convs:
         _cf: dict = {}
         try:
+            _carry_cols = None
+            if _is_customer:
+                _carry_cols = (["entityid", "internalid", "email", "altemail",
+                                "phone", "mobilephone",
+                                # Identity stamped deterministically by the merge,
+                                # by grain (customer_merge.set_party_identity):
+                                "companyname", "firstname", "middlename", "lastname"]
+                               # DFF source columns the ACCOUNTS / RA_PROFILES DFF
+                               # stamp reads (customer_merge.apply_dff_udcp).
+                               + list(_cm.DFF_SOURCE_COLS)
+                               # LOCATIONS address block source columns
+                               # (customer_merge.apply address stamp, NEW-03/04).
+                               + list(_cm.ADDR_SOURCE_COLS))
+            elif _is_supplier_obj:
+                # Communication Method on the Supplier Site sheet is derived from the
+                # source e-mail / fax presence (issue #14). Those source columns do
+                # not otherwise reach the Site interface, so carry them through the
+                # fan-out — _apply_supplier_rules._derive_comm reads them.
+                _carry_cols = ["email", "altemail", "external_email_addr", "fax"]
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
-                carry_source_cols=(["entityid", "internalid", "email", "altemail",
-                                    "phone", "mobilephone",
-                                    # Identity stamped deterministically by the merge,
-                                    # by grain (customer_merge.set_party_identity):
-                                    "companyname", "firstname", "middlename", "lastname"]
-                                   # DFF source columns the ACCOUNTS / RA_PROFILES DFF
-                                   # stamp reads (customer_merge.apply_dff_udcp).
-                                   + list(_cm.DFF_SOURCE_COLS)
-                                   # LOCATIONS address block source columns
-                                   # (customer_merge.apply address stamp, NEW-03/04).
-                                   + list(_cm.ADDR_SOURCE_COLS)
-                                   if _is_customer else None),
+                carry_source_cols=_carry_cols,
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
