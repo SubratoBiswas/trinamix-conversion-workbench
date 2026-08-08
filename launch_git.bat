@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Supplier Communication Method carry FIX: the carried source column was matched by exact name, but a NetSuite supplier extract names columns Email and Fax while the carry list is lower case, so nothing threaded and EMAIL never fired. The carry now resolves the real source column by normalised match, so the e-mail reaches the Site frame and Communication Method derives EMAIL Fax NONE. Compiled and unit tested. REGENERATE the supplier project and confirm Communication Method now shows EMAIL for vendors with an e-mail."
+set "DEPLOY_NOTE=Supplier PROC-02 and PROC-04. PROC-02 Taxpayer ID conditional by country on Supplier Import: Country Code IN or Country India gives Permanent Account Number PAN, US gives Tax ID, CA gives Tax Id Canada, every other country blank; country and the three tax columns are carried through the fan-out and the derivation is guarded so any non NetSuite supplier source is untouched. PROC-04 D-U-N-S Number is forced blank on Supplier Import, overriding the External ID mapping. Compiled and unit tested. REGENERATE the supplier project and confirm Taxpayer ID per country and D-U-N-S blank."
 
 echo Checking the deploy set...
 set "MISSING="

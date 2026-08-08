@@ -2243,11 +2243,52 @@ def _apply_supplier_rules(df: pd.DataFrame, sheet_name: str | None,
         for c in ccols:
             df[c] = out
 
+    def _derive_taxpayer():                 # PROC-02: Taxpayer ID conditional by country
+        tcols = _cols("Taxpayer ID")
+        if not tcols or src is None:
+            return
+
+        def _find(*names):
+            want = [_norm_hdr(x) for x in names]
+            for w in want:
+                for c in src.columns:
+                    if _norm_hdr(c) == w:
+                        return src[c].astype(str).tolist()
+            return None
+        cc = _find("__Country Code", "__Country")
+        pan = _find("__Permanent Account Number ( PAN)")
+        caid = _find("__Tax Id Canada")
+        # Only act on the NetSuite tax layout (country signal + the country-specific
+        # tax columns present). Any other supplier source keeps its own mapping.
+        if cc is None or (pan is None and caid is None):
+            return
+        usid = _find("__Tax ID") or [""] * n
+        pan = pan or [""] * n
+        caid = caid or [""] * n
+
+        def _g(lst, i):
+            return str(lst[i]).strip() if i < len(lst) else ""
+        out = []
+        for i in range(n):
+            c = _g(cc, i).lower()
+            if c in ("in", "ind", "india"):
+                out.append(_g(pan, i))
+            elif c in ("us", "usa", "unitedstates", "unitedstatesofamerica"):
+                out.append(_g(usid, i))
+            elif c in ("ca", "can", "canada"):
+                out.append(_g(caid, i))
+            else:
+                out.append("")                # other countries: blank (per analyst)
+        for c in tcols:
+            df[c] = out
+
     if kind == "SUPPLIER":
         force("Supplier Type", "Supplier")
         force("Business Relationship", "SPEND_AUTHORIZED")
         vmap("Federal Reportable", _yn)
         blank("Pay Each Document Alone")
+        blank("D-U-N-S Number")             # PROC-04: blank on Supplier Import (overrides External ID mapping)
+        _derive_taxpayer()
     elif kind == "ADDRESS":
         blank("Address Name New")           # NOT "Address Name" (that stays = City)
         blank("RFQ Or Bidding")
@@ -3424,10 +3465,15 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                + list(_cm.ADDR_SOURCE_COLS))
             elif _is_supplier_obj:
                 # Communication Method on the Supplier Site sheet is derived from the
-                # source e-mail / fax presence (issue #14). Those source columns do
-                # not otherwise reach the Site interface, so carry them through the
-                # fan-out — _apply_supplier_rules._derive_comm reads them.
-                _carry_cols = ["email", "altemail", "external_email_addr", "fax"]
+                # source e-mail / fax presence (issue #14), and Taxpayer ID on the
+                # Supplier Import sheet is derived per-country (PROC-02). Neither set of
+                # source columns otherwise reaches those interfaces, so carry them
+                # through the fan-out — _apply_supplier_rules reads them.
+                _carry_cols = ["email", "altemail", "external_email_addr", "fax",
+                               # PROC-02 conditional Taxpayer ID by country:
+                               "Country Code", "Country",
+                               "Permanent Account Number ( PAN)", "Tax ID",
+                               "Tax Id Canada"]
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
                 carry_source_cols=_carry_cols,
