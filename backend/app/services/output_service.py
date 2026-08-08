@@ -3237,6 +3237,9 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                     # Identity stamped deterministically by the merge,
                                     # by grain (customer_merge.set_party_identity):
                                     "companyname", "firstname", "middlename", "lastname"]
+                                   # DFF source columns the ACCOUNTS / RA_PROFILES DFF
+                                   # stamp reads (customer_merge.apply_dff_udcp).
+                                   + list(_cm.DFF_SOURCE_COLS)
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)

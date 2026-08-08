@@ -440,6 +440,7 @@ def first_flag_field(sheet_name: Optional[str]) -> Optional[str]:
 _CONTACTPTS_OWNED = (
     "Contact Point Type", "Email Address", "Phone Number", "Phone Line Type",
     "Contact Point Original System Reference",
+    "Party Original System Reference",   # the contact's own internalid (analyst)
 )
 
 # Party identity the merge stamps deterministically on HZ_IMP_PARTIES_T, by grain:
@@ -472,11 +473,9 @@ _SHEET_CONST = {
                  "Account Contact Source System": "NETSUITE"},
 }
 # Forced-blank fields (REC-80/81/82/83/84/88 on RA_CUSTOMER_PROFILES; REC-25 on PARTYSITES).
-# DFF-segment blanks: the 08-Aug batch seeded these as learned suppressions, but the
-# RELSHIPS ones were scoped to "HZ_IMP_RELATIONSHIPS_T" (real sheet is HZ_IMP_RELSHIPS_T)
-# so they never matched — owned here on the real "relship" key instead. Primary Indicator
-# is now BLANK on both site-use sheets (analyst re-test), replacing the old first-flag.
-_DFF_BLANK_RELSHIP = tuple(f"Descriptive Flexfield Segment{i}" for i in (1, 2, 3, 6, 7, 8, 9, 11))
+# Primary Indicator is BLANK on both site-use sheets (analyst re-test), replacing the old
+# first-flag. DFF-segment / UDCP blanks are NOT here — they are handled by the DFF/UDCP
+# policy below, which blanks them on every sheet except the two value sheets.
 _SHEET_BLANK = {
     "profile": ("Party Original System", "Party Original System Reference",
                 "Account Site Source System", "Account Site Source System Reference",
@@ -484,8 +483,74 @@ _SHEET_BLANK = {
     "partysites": ("Relationship Source System Reference",),
     "partysiteuses": ("Primary Indicator",),
     "acctsiteuses": ("Primary Indicator",),
-    "relship": _DFF_BLANK_RELSHIP,
 }
+
+# ── Descriptive Flexfield + User Defined Context Prompt policy ────────────────────
+# Analyst "Output Mappings Customer": the DFF segments and the User Defined Context
+# Prompt carry values on ONLY these two sheets — from the source columns / defaults
+# below — and are BLANK on every other customer sheet. Applied as an owned post-reshape
+# stamp so it holds regardless of a base mapping or the cross-sheet collision-guard that
+# was leaking the ACCOUNTS DFF onto RA_CUSTOMER_PROFILES and elsewhere.
+_UDCP_FIELD = "User Defined Context Prompt"
+_DFF_MAX = 30
+_ACCOUNTS_DFF = {
+    1: "comments", 2: "custentity_upaya_sf_account_id", 3: "custentity_parent_guarantee",
+    4: "cseg1", 5: "externalid", 6: "custentity_esc_industry",
+    7: "custentitynx_account_manger", 8: "salesrep", 9: "custentity_sales_region",
+    10: "territory", 11: "custentity_nxt_customer_tier", 12: "custentity_enl_legalname",
+    13: "dateprospect",
+}
+_PROFILE_DFF = {
+    1: "custentity_requested_credit_limit", 2: "custentity_last_credit_review_subdate_2",
+    3: "custentity_nxt_hold_reason", 4: "custentity_nxt_cust_due_date",
+    5: "custentity_nxt_credit_fore_pay_terms", 6: "custentity_nxt_sid_trade_box_link",
+    7: "custentity_dsg_credit_approval",
+}
+# Source columns the DFF stamp reads — must be threaded through the merge (output_service
+# build_merged_frame_for_object carry_source_cols) so they reach the party-grain rows.
+DFF_SOURCE_COLS = tuple(dict.fromkeys(list(_ACCOUNTS_DFF.values()) + list(_PROFILE_DFF.values())))
+
+
+def _dff_value_spec(n: str):
+    """(udcp_default, {segment#: source_column}) for the two DFF value sheets, else None.
+    ACCOUNTS matches 'account' but not its acct-site / acct-contact children; RA_CUSTOMER_
+    PROFILES matches 'profile'."""
+    if "account" in n and "site" not in n and "contact" not in n:
+        return "NETSUITE", _ACCOUNTS_DFF
+    if "profile" in n:
+        return "NETSUITE_CREDIT", _PROFILE_DFF
+    return None
+
+
+def _dff_udcp_field_names() -> list:
+    return [_UDCP_FIELD] + [f"Descriptive Flexfield Segment{i}" for i in range(1, _DFF_MAX + 1)]
+
+
+def apply_dff_udcp(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
+    """Set the DFF segments + User Defined Context Prompt on the two value sheets from
+    the carried source columns; blank both on every other customer sheet. Owned."""
+    if sub is None or len(sub) == 0:
+        return sub
+    n = _norm(sheet_name)
+    spec = _dff_value_spec(n)
+    if spec is not None:
+        udcp, seg_map = spec
+        _set_owned_col(sub, _UDCP_FIELD, pd.Series([udcp] * len(sub), index=sub.index))
+        for i in range(1, _DFF_MAX + 1):
+            fld = f"Descriptive Flexfield Segment{i}"
+            src = seg_map.get(i)
+            if src:
+                sc = _carried(sub, src)
+                val = sc if sc is not None else pd.Series([""] * len(sub), index=sub.index)
+                _set_owned_col(sub, fld, val)
+            elif _find_col_ci(sub.columns, fld) is not None:
+                # a segment this sheet does not map -> blank
+                _set_owned_col(sub, fld, pd.Series([""] * len(sub), index=sub.index))
+    else:
+        for fld in _dff_udcp_field_names():
+            if _find_col_ci(sub.columns, fld) is not None:
+                _set_owned_col(sub, fld, pd.Series([""] * len(sub), index=sub.index))
+    return sub
 def _sheet_rule_fields(n: str) -> set:
     """All field names any sheet-scoped rule touches on this (normalised) sheet."""
     out: set = set()
@@ -509,6 +574,11 @@ def sheet_blank_fields(sheet_name: Optional[str]) -> set:
     for key, flds in _SHEET_BLANK.items():
         if key in n and not (key == "partysites" and "partysiteuses" in n):
             out.update(flds)
+    # Re-assert DFF + UDCP blank on every sheet that is NOT a DFF value sheet, so a
+    # learned default whose stored name diverges from the header cannot re-fill them
+    # (the same guard REC-80 needed for the profile blanks).
+    if _dff_value_spec(n) is None:
+        out.update(_dff_udcp_field_names())
     return out
 
 
@@ -565,6 +635,28 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             _set_owned_col(sub, "Subject Relationship Party Original System Reference", _subj)
         if _org is not None:
             _set_owned_col(sub, "Object Relationship Party Original System Reference", _org)
+        # Relationship Source System Reference = entityid_internalid_RS, built from the
+        # contact row's OWN keys (analyst: from the contact sheet, not the customer).
+        if ENTITYID_COL in sub.columns and INTERNALID_COL in sub.columns:
+            _re = sub[ENTITYID_COL].astype(str).str.strip()
+            _ri = sub[INTERNALID_COL].astype(str).str.strip()
+
+            def _mk_rs(a, b):
+                a = "" if a.lower() in ("nan", "none", "null") else a
+                b = "" if b.lower() in ("nan", "none", "null") else b
+                return f"{a}_{b}_RS" if (a and b) else ""
+            _rs = [_mk_rs(a, b) for a, b in zip(_re.tolist(), _ri.tolist())]
+            _set_owned_col(sub, "Relationship Source System Reference",
+                           pd.Series(_rs, index=sub.index))
+    # CONTACTPTS Party Original System Reference must point at the CONTACT (person)
+    # party — the contact's OWN internalid, the same ref PARTIES gives the person party
+    # (own_internalid=True). _set_party_link stamped the customer PARTYREF instead, so
+    # every contact point pointed at the customer org party (analyst: "shows wrong
+    # values"). Owned here on the contact's own internalid.
+    if "contactpt" in n and INTERNALID_COL in sub.columns:
+        _cid = sub[INTERNALID_COL].astype(str).str.strip()
+        if _find_col_ci(sub.columns, "Party Original System Reference") is not None:
+            _set_owned_col(sub, "Party Original System Reference", _cid)
     # REC-35 / REC-79: the language transform en_US -> US was seeded as a VALUE_MAP
     # learned rule, but at generation an auto-captured column-mapping for the same
     # field outranks the dated rule (and PERSONLANG's real sheet name has no _T), so
@@ -576,6 +668,9 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
         _map_en_us(sub, "Site Language")
     if "personlang" in n:                        # HZ_IMP_PERSONLANG
         _map_en_us(sub, "Language Name")
+    # DFF segments + User Defined Context Prompt: values on ACCOUNTS / RA_PROFILES,
+    # blank on every other sheet (analyst "Output Mappings Customer").
+    sub = apply_dff_udcp(sub, sheet_name)
     return sub
 
 
@@ -620,10 +715,14 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
     if "relship" in n:                     # REC-68/70 computed subject/object refs
         owned.add("Subject Relationship Party Original System Reference")
         owned.add("Object Relationship Party Original System Reference")
+        owned.add("Relationship Source System Reference")   # entityid_internalid_RS
     if "acctsite" in n and "use" not in n:  # REC-35 owned en_US->US Site Language
         owned.add("Site Language")
     if "personlang" in n:                   # REC-79 owned en_US->US Language Name
         owned.add("Language Name")
+    # DFF segments + User Defined Context Prompt are owned on EVERY customer sheet
+    # (value on ACCOUNTS/RA_PROFILES, blank elsewhere) — see apply_dff_udcp.
+    owned.update(_dff_udcp_field_names())
     owned.update(_sheet_rule_fields(n))    # constants / blanks / ref-copies
     return owned
 
@@ -927,6 +1026,7 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
         set_party_identity(sub)                    # Party Type / Org Name / Person names
         _set_party_link(sub, own_internalid=True)  # each party's ref is its OWN internalid
         assign_party_numbers(sub)                  # NXT / _C{n} per customer (REC-06)
+        sub = apply_dff_udcp(sub, sheet_name)      # DFF + UDCP blank on PARTIES
         return sub
 
     sub = df[g == grain]

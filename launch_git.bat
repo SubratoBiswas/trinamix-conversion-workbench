@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Customer engine fixes (verified against a real generated file - the first attempt used wrong sheet names). RELSHIPS routed to contact grain with distinct Subject/Object OSRs and DFF blanks, ROLERESP source system, Site Language and Language Name en_US-US, Identifying Address billing-first, Party Usage Code ORG_CONTACT/CUSTOMER, Primary Indicator blank on site-use sheets. All engine-owned. REGENERATE customer outputs after this."
+set "DEPLOY_NOTE=Customer engine fixes + DFF/UDCP two-sheet policy. DFF segments and User Defined Context Prompt carry values ONLY on HZ_IMP_ACCOUNTS_T (UDCP=NETSUITE) and RA_CUSTOMER_PROFILES (UDCP=NETSUITE_CREDIT) from the analyst source-column mapping, blank on every other sheet. Plus RELSHIPS contact-grain OSRs + _RS, ROLERESP source system + _RR, CONTACTPTS Party OSR = contact internalid, Site/Language en_US-US, Identifying Address billing-first, Party Usage Code, Primary Indicator blank. Touches customer_merge.py AND output_service.py. REGENERATE after this."
 
 echo Checking the deploy set...
 set "MISSING="
