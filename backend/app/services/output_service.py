@@ -760,11 +760,26 @@ def _transform_frame(
         m.source_column for m in sorted_mappings
         if m.source_column and m.source_column in src.columns
     }
-    ctx_all = list(needed_cols | {c for c in (context_cols or set()) if c in src.columns})
     # Case/punctuation-insensitive column lookup — the analyst types "City", the
     # extract may say "city" or "Bill To City", and losing a whole rule to one
     # capital letter is not a failure worth having.
     _norm_col_lookup = {_norm_hdr(c): c for c in src.columns}
+    # A referenced context column (a CASE_WHEN {token} result, a CONCAT/COALESCE
+    # column, a SELF_LOOKUP key) is named on the rule in the ANALYST's spelling
+    # ("tax_id"), which routinely differs from the extract header ("Tax ID"). Match
+    # each to the REAL column through the normalised lookup above, not an exact-name
+    # test — otherwise it is left out of the per-row record and an interpolation like
+    # {tax_id} finds no column and ships the LITERAL token to the file (PROC-02:
+    # NextPower Taxpayer ID shipped "{tax_id}" / "{tax_id_canada}" on US/Canada rows).
+    _ctx_actual: set[str] = set()
+    for _cc in (context_cols or set()):
+        if _cc in src.columns:
+            _ctx_actual.add(_cc)
+        else:
+            _real = _norm_col_lookup.get(_norm_hdr(_cc))
+            if _real:
+                _ctx_actual.add(_real)
+    ctx_all = list(needed_cols | _ctx_actual)
     col_cache: dict[str, list[Any]] = {c: src[c].tolist() for c in needed_cols}
     records: list[dict] | None = None
 
