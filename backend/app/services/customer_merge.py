@@ -520,7 +520,9 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
     EMAIL row (Contact Point Type=EMAIL, Email Address set) and a PHONE row (Type=PHONE,
     Phone Number set, Phone Line Type=MOBILE) — only for the points the source actually
     has. The point's Original System Reference gets the matching _EMAIL / _PHONE tag.
-    A contact with neither keeps a single row unchanged, so no contact is dropped.
+    A contact with neither e-mail nor phone produces NO contact-point row — an Oracle
+    contact point must have a type, so a typeless row is invalid; the contact itself
+    still exists on HZ_IMP_CONTACTS_T and is not lost (REC-48).
     Reads the raw e-mail/phone values threaded through as ``__email`` / ``__phone`` …"""
     if sub is None or len(sub) == 0:
         return sub
@@ -581,7 +583,16 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
             rows.append(row)
             made = True
         if not made:
-            rows.append(r)                       # keep the contact even with no points
+            # A contact with neither e-mail nor phone has NO contact point. Emitting a
+            # typeless row (Contact Point Type blank; Original System Reference falling
+            # back to the source system "NETSUITE") is an invalid HZ_IMP_CONTACTPTS_T
+            # row Oracle rejects — REC-48: 199 such rows shipped. The contact still
+            # exists on HZ_IMP_CONTACTS_T, so drop only the empty contact-point row.
+            continue
+    if not rows:
+        # every contact in this chunk was point-less — return an empty frame that keeps
+        # the columns, so downstream concatenation/alignment is unaffected.
+        return sub.iloc[0:0]
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
