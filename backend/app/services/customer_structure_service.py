@@ -173,10 +173,16 @@ def apply_to_frame(
 
     setcol(_find(cols, "batch"), batch_id)
 
+    _is_profile = "profile" in _norm(sheet_name or "")
     setcol(_find(cols, "party", "original", "system", "reference"), rref)
     po = _find(cols, "party", "original", "system")
     if po and _norm(po) == _norm("Party Original System"):
-        setcol(po, source_system)
+        # RA_CUSTOMER_PROFILES_INT_ALL wants Party Original System BLANK (REC-80); the
+        # merge blanks it, but this glue stamped the source system on top by header —
+        # past the owned-field guard, because the field's stored field_name differs
+        # from its Oracle header. Gate the stamp here, at the write site, where the
+        # column is matched by header. Every other sheet still takes the stamp.
+        setcol(po, "" if _is_profile else source_system)
 
     ca_ref = _find(cols, "customer", "account", "source", "system", "reference")
     ca_os = _find(cols, "customer", "account", "source", "system")
