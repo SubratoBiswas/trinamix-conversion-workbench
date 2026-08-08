@@ -250,13 +250,31 @@ def _conversion_rule_wins(rules: list[dict] | None, directive_asof) -> bool:
     return False
 
 
-def _self_lookup_configs(pipelines: dict, target_object: str | None) -> list[dict]:
-    """Every SELF_LOOKUP config in play for this conversion, from both sources."""
+def _self_lookup_configs(pipelines: dict, target_object: str | None,
+                         mappings: list | None = None) -> list[dict]:
+    """Every SELF_LOOKUP config in play for this conversion, from every rule source.
+
+    Includes the mappings' ``suggested_transformation``: a SEEDED/applied store rule
+    (the 06-Aug Parent Supplier self-join is one) lands there via apply_learned, NOT as
+    a TransformationRule, so ``pipelines`` never sees it. Without this the Internal ID ->
+    Legal Name index is never built and the SELF_LOOKUP rule silently returns its
+    default — which is exactly why Parent Supplier shipped blank on every NetSuite
+    supplier row. Same shape of gap, and the same fix, as ``_group_first_key_configs``
+    gave the Identifying Address flag. Cross-source safe: a config whose match/value
+    columns a given extract does not carry (e.g. eBOS has no Internal ID / Parent Vendor
+    Id) builds no index and the rule stays blank there — so this only ever populates the
+    NetSuite supplier source, which is the only one that carries the columns."""
     out: list[dict] = []
     for _rules in (pipelines or {}).values():
         for r in _rules or []:
             if (r.get("rule_type") or "").upper() == "SELF_LOOKUP":
                 out.append(r.get("config") or {})
+    for m in (mappings or []):
+        st = getattr(m, "suggested_transformation", None) or {}
+        if (st.get("rule_type") or "").upper() == "SELF_LOOKUP":
+            cfg = st.get("config") or {}
+            if cfg:
+                out.append(cfg)
     try:
         from app.services.strategy_overlay import self_lookup_configs
         out.extend(self_lookup_configs(target_object))
@@ -1324,7 +1342,7 @@ async def build_converted_dataframe(
         # Built on the FULL frame before chunking — a child's parent is usually in
         # another chunk, so a per-chunk index would resolve some rows and not others.
         _self_idx = _build_self_index(
-            src, _self_lookup_configs(pipelines, _obj_name_for_overlay))
+            src, _self_lookup_configs(pipelines, _obj_name_for_overlay, sorted_mappings))
         _ccfg = _city_country_configs(pipelines, _obj_name_for_overlay)
         _city_idx = _build_city_country_index(src, _ccfg)
         _city_case = _build_city_case_index(src, _ccfg)
