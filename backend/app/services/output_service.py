@@ -2725,7 +2725,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # blanks and value-maps per interface sheet. BEFORE the e-mail mask so the
         # Communication-Method derivation reads the un-masked e-mail column, and
         # after control defaults so these values are authoritative.
-        if _sup_is_netsuite:
+        if _sup_rules_on:
             sdf = _apply_supplier_rules(sdf, _sheet_name_of(sfields))
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
@@ -2783,18 +2783,15 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         or "supplier" in _safe_sheet_name(s.sheet_name).lower()
         for s in sheets_with_fields
     )
-    # The 08-Aug forced constants / value-maps are the NetSuite supplier spec.
-    # Scope them to a NetSuite source so the already-signed-off eBOS supplier flow
-    # (tester regression) is left exactly as it is; e-mail masking still applies to
-    # every supplier source.
-    _sup_is_netsuite = _is_supplier and (
-        "netsuite" in str(
-            getattr(conversion, "source_system_code", None)
-            or getattr(conversion, "source_erp", None)
-            or getattr(conversion, "source_system", None)
-            or ""
-        ).lower()
-    )
+    # The 08-Aug forced constants / value-maps are Fusion TARGET-side supplier
+    # requirements (Business Relationship = SPEND_AUTHORIZED, Supplier Type =
+    # Supplier, Receipt Routing = 3, Payment Method = G Treas ACH, Bill-to BU =
+    # NX US BU, …) — the target config is one config, so they apply to every
+    # supplier source, not just NetSuite. The source ERP is not tracked on the
+    # conversion here, so a source gate could never fire reliably anyway. The
+    # fields these touch do not overlap the signed-off eBOS fixes (Parent Supplier,
+    # Tax Registration Number-Obsoleted, Alternate Name, D-U-N-S).
+    _sup_rules_on = _is_supplier
     # BOM Import — the four EGP_*_INTERFACE structure tables. The sheet test comes
     # first and is the one that matters: the same object arrives as BOM, Bill of
     # Materials or Item Structure depending on who created it, and a bare substring
