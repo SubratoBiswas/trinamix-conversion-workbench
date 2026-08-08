@@ -468,6 +468,20 @@ def _sheet_rule_fields(n: str) -> set:
     return out
 
 
+def sheet_blank_fields(sheet_name: Optional[str]) -> set:
+    """Just the _SHEET_BLANK force-blank field names for this sheet — used by
+    output_service._finalize to RE-ASSERT the blanks as the last step, keyed on the
+    Oracle header. Needed because an approved learned default (Party Original System
+    -> NETSUITE) re-fills the field after stamp_sheet_rules blanks it, and its stored
+    field_name diverges from the header so the ownership guard misses it (REC-80)."""
+    n = _norm(sheet_name)
+    out: set = set()
+    for key, flds in _SHEET_BLANK.items():
+        if key in n and not (key == "partysites" and "partysiteuses" in n):
+            out.update(flds)
+    return out
+
+
 def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
     """Apply the sheet-scoped constants / forced blanks (owned)."""
     if sub is None or len(sub) == 0:

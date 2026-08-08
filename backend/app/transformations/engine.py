@@ -248,6 +248,29 @@ def _resolve_column(spec: Any, row: Any) -> Any:
     return present[0] if present else (names[0] if names else None)
 
 
+def _row_value_ci(row: Any, name: Any) -> Any:
+    """This row's value for ``name``, resolving the column case/space-insensitively.
+
+    ``_resolve_column`` returns a single-string spec verbatim, so a config spelling
+    ("Parent Vendor Id") that differs from the extract's raw header (parent_vendor_id)
+    read a blank — the reason SELF_LOOKUP (Parent Supplier) returned empty on every
+    row (PROC-01 Gap B). Try the resolved name, then fall back to a normalised match
+    over the row's own keys. Works for a dict or a pandas Series (both expose keys())."""
+    if row is None:
+        return ""
+    col = _resolve_column(name, row)
+    if col is not None and col in row:
+        return row.get(col)
+    target = re.sub(r"[^a-z0-9]", "", str(col if col is not None else name).lower())
+    try:
+        for k in (row.keys() if hasattr(row, "keys") else row):
+            if re.sub(r"[^a-z0-9]", "", str(k).lower()) == target:
+                return row.get(k)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def _branch_holds(br: dict, value: Any, row: Any) -> bool:
     """Does one CASE_WHEN / SUFFIX_WHEN branch fire?
 
@@ -895,7 +918,9 @@ def _apply_one_rule(
         # The index is built once per generation and handed in via ctx, because doing
         # it per row is O(n squared) — 7,495 vendors would be 56 million comparisons.
         cfg_key = cfg.get("key_column")
-        want = _to_str(row.get(cfg_key, "") if row else value).strip()
+        # PROC-01 Gap B: resolve the key column case/space-insensitively — the config
+        # says "Parent Vendor Id", the extract says parent_vendor_id.
+        want = _to_str(_row_value_ci(row, cfg_key) if row is not None else value).strip()
         if not want:
             return cfg.get("default", "")
         index = (ctx.get("self_index") or {}).get(

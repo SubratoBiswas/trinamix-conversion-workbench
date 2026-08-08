@@ -1334,7 +1334,15 @@ async def build_converted_dataframe(
         """
         try:
             if needed_src and len(src.columns) > len(needed_src) + 4:
-                keep = [c for c in src.columns if c in needed_src]
+                # PROC-01 Gap A: keep a column when its RAW name matches OR its
+                # normalised form matches a normalised needed name. A SELF_LOOKUP's
+                # key_column comes from the rule config in the analyst's spelling
+                # ("Parent Vendor Id") while the extract's column is raw
+                # (parent_vendor_id); the exact-match filter pruned the raw column out
+                # of the row context, so the self-join read a blank on every row.
+                _need_norm = {_norm_hdr(n) for n in needed_src}
+                keep = [c for c in src.columns
+                        if c in needed_src or _norm_hdr(c) in _need_norm]
                 if keep:
                     src = src[keep].copy()
         except Exception:  # noqa: BLE001 — pruning is an optimization, never fatal
@@ -2573,6 +2581,19 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         for f in sfields:
             hdr.setdefault(f.field_name, _header_label(f))
         sdf.columns = [hdr.get(c, c) for c in sdf.columns]
+        # REC-80: re-assert the sheet's force-blanks as the LAST step, keyed on the
+        # Oracle header. An approved learned default (Party Original System -> NETSUITE)
+        # re-fills the field inside _apply_sheet_decisions after stamp_sheet_rules blanks
+        # it, and its stored field_name diverges from the header so the ownership guard
+        # misses it. Matching on the header here finally catches it — and only touches
+        # the _SHEET_BLANK fields (REC-80/81/82/83/84/88 on PROFILES; REC-25 on
+        # PARTYSITES), never the RELSHIPS/ROLERESP constants.
+        if _grain_merge:
+            _need = {_norm_hdr(n) for n in _cm.sheet_blank_fields(_sheet_name_of(sfields))}
+            if _need:
+                for _c in list(sdf.columns):
+                    if _norm_hdr(_c) in _need:
+                        sdf[_c] = ""
         return sdf
 
     # Customer Import is a linked 19-table load: children point at parents through
