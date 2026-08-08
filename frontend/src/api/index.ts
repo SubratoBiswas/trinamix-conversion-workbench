@@ -556,8 +556,29 @@ export const MappingApi = {
     ).then(r => r.data),
   propagationCandidates: (conversionId: string) =>
     api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
-  suggest: (conversionId: string) =>
-    api.post<MappingSuggestion[]>(`/conversions/${conversionId}/suggest-mapping`).then(r => r.data),
+  /** AI Auto Map. Heavy fan-out templates (Item ~1365 fields, Customer ~1250) run
+   *  the deterministic + learning pass plus a bounded AI residual; the backend is
+   *  capped near the ~100s gateway, so the client must wait well past the 60s
+   *  default or it reports "timeout of 60000ms exceeded" on a run that actually
+   *  finished server-side. A cold free-tier backend is woken and retried once
+   *  (POSTs are not auto-retried) — but never after a genuine client timeout, which
+   *  would just wait another 180s on a request the server is still processing. */
+  suggest: async (conversionId: string) => {
+    const call = () => api.post<MappingSuggestion[]>(
+      `/conversions/${conversionId}/suggest-mapping`, undefined, { timeout: 180_000 },
+    ).then(r => r.data);
+    try {
+      return await call();
+    } catch (e: any) {
+      const isTimeout = e?.code === "ECONNABORTED";
+      const s = e?.response?.status;
+      if (!isTimeout && (!e?.response || s === 502 || s === 503 || s === 504)) {
+        await new Promise((r) => setTimeout(r, 3500));
+        return await call();
+      }
+      throw e;
+    }
+  },
   /** Ranked alternative source-column candidates per target field. */
   candidates: (conversionId: string, opts?: { topN?: number; targetFieldId?: string }) =>
     api.get<MappingCandidateGroup[]>(`/conversions/${conversionId}/mapping-candidates`, {
