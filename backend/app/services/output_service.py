@@ -1296,6 +1296,15 @@ async def build_converted_dataframe(
     # firstname/lastname; Party Site From Date reads startdate/datecreated).
     if enrich_by_entityid:
         _ctx_cols |= {str(k) for k in enrich_by_entityid.keys()}
+    # A referenced context column must ALSO survive the source-column prune in
+    # _convert_source — `needed_src` is that keep-list. A column a rule READS but no
+    # cell MAPS (a CASE_WHEN {token} result like {tax_id}, a CONCAT column, a
+    # SELF_LOOKUP key) is only in `_ctx_cols`, so the prune dropped it before the
+    # transform ran and the interpolation shipped the LITERAL token to the file
+    # (PROC-02: Taxpayer ID US/Canada rows shipped "{tax_id}" / "{tax_id_canada}").
+    # The overlay already merges its refs into `needed_src`; the pipeline refs must
+    # do the same so the whole context survives pruning.
+    needed_src |= _ctx_cols
 
     # Order mappings by target field sequence once (metadata — cheap, row-count
     # independent). The heavy per-column transform runs on row CHUNKS in a worker
