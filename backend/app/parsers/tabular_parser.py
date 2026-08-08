@@ -5,11 +5,78 @@ min/max for numeric/date, and a pattern summary.
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# Header keywords, highest priority first, for the column most likely to hold an
+# UNescaped delimiter — a free-text field. Used to recover over-length rows (see
+# _repair_overlong_delimited) rather than silently dropping them.
+_FREETEXT_PRIORITY = ("title", "description", "comment", "note", "remark",
+                      "address", "name")
+
+
+def _freetext_overflow_col(header: list[str]) -> int | None:
+    """Index of the free-text column an unescaped delimiter most likely landed in, or
+    None when the header has no plausible free-text column (then an over-length row is
+    left for on_bad_lines to skip rather than risk corrupting a structured column)."""
+    low = [str(h).lower() for h in header]
+    for kw in _FREETEXT_PRIORITY:
+        for i, h in enumerate(low):
+            if kw in h:
+                return i
+    return None
+
+
+def _repair_overlong_delimited(text: str, sep: str) -> str:
+    """Recover rows a delimited export broke by leaving an unescaped ``sep`` inside a
+    free-text field — e.g. a Workday job title "Planner (Modules | Dampers | Motors)"
+    in a pipe file. Such a row has MORE fields than the header, so pandas'
+    ``on_bad_lines='skip'`` DROPS a real record (observed: 3 employees vanished from a
+    2,206-row extract). When the surplus can be attributed to ONE free-text column, the
+    extra pieces are merged back into it so the row parses. Rows containing a quote are
+    left untouched (pandas handles quoted delimiters); rows that cannot be repaired to
+    exactly the header width are left as-is."""
+    lines = text.split("\n")
+    hi = next((i for i, ln in enumerate(lines) if ln.strip() != ""), None)
+    if hi is None:
+        return text
+    header = lines[hi].split(sep)
+    ncol = len(header)
+    if ncol < 2:
+        return text
+    idx = _freetext_overflow_col(header)
+    if idx is None:
+        return text
+    out = lines[:hi + 1]
+    repaired = 0
+    for ln in lines[hi + 1:]:
+        if ln.strip() == "" or '"' in ln:
+            out.append(ln)
+            continue
+        parts = ln.split(sep)
+        surplus = len(parts) - ncol
+        if surplus > 0 and idx + surplus + 1 <= len(parts):
+            merged = sep.join(parts[idx: idx + surplus + 1])
+            # The merged value STILL contains ``sep``, so it must be QUOTED or a
+            # re-parse just re-splits it into the same surplus fields. Quote it (and
+            # escape any inner quotes) so pandas' default quotechar reads it as one
+            # field. Quote-bearing lines were skipped above, so this cannot clash.
+            merged = '"' + merged.replace('"', '""') + '"'
+            parts = parts[:idx] + [merged] + parts[idx + surplus + 1:]
+            if len(parts) == ncol:
+                ln = sep.join(parts)
+                repaired += 1
+        out.append(ln)
+    if repaired:
+        logger.info("tabular_parser: recovered %d over-length row(s) by merging an "
+                    "unescaped %r back into column %r", repaired, sep, header[idx])
+    return "\n".join(out)
 
 
 def _looks_html(head: bytes) -> bool:
@@ -228,11 +295,21 @@ def _read_csv_robust(file_path: Path, raw: bytes, nrows: int | None = None) -> p
             continue
         first_line = head.split("\n", 1)[0]
         sep = _sniff_delimiter(first_line + "\n" + head[:8192])
-        # Fast path — C engine with an explicit delimiter.
+        # Fast path — C engine with an explicit delimiter. Repair over-length rows
+        # (an unescaped delimiter inside a free-text field) FIRST, so a real record is
+        # recovered instead of dropped by on_bad_lines. Repairs on the decoded text and
+        # reads from it; only the non-comma delimited exports hit this (comma CSVs are
+        # normally quoted, and repairing them could fight pandas' quote handling).
         try:
-            df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False,
-                             encoding=enc, sep=sep, nrows=nrows,
-                             on_bad_lines="skip", low_memory=False)
+            if sep != ",":
+                _full = _repair_overlong_delimited(raw.decode(enc, errors="replace"), sep)
+                df = pd.read_csv(io.StringIO(_full), dtype=str, keep_default_na=False,
+                                 sep=sep, nrows=nrows, on_bad_lines="skip",
+                                 low_memory=False)
+            else:
+                df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False,
+                                 encoding=enc, sep=sep, nrows=nrows,
+                                 on_bad_lines="skip", low_memory=False)
             if df.shape[1] > 1 or sep == ",":
                 return df.astype(str)
         except (UnicodeDecodeError, UnicodeError):

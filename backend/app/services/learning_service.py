@@ -349,12 +349,17 @@ async def record_learning_from_mapping(
     # CLIENT_RULE row says it once: this client maps this field from this column, in
     # every project and every conversion, existing or created next month.
     #
-    # COLUMN MAPPINGS ONLY. A default carries the sheet it was set on (Oracle repeats
-    # field names across sheets — Customer has 19), and a sheet name means nothing
-    # outside the template it came from, so a client-level default would either bind
-    # to nothing or spray across every sheet with a column of that name. Defaults stay
-    # object-scoped and reach existing conversions through the fan-out, where sheet
-    # scope is evaluated per template.
+    # SHEET-SCOPED. Oracle repeats a field name across sheets (Customer has 19), so a
+    # column mapping captured WITHOUT the sheet was applied to EVERY sheet with a
+    # column of that name: an analyst who re-pointed one tab's column saw the change
+    # spray across all tabs in the output AND — because apply_learned_to_conversion
+    # re-writes each field's row from the store — back into the UI on the next open.
+    # Reported as a major bug. The sheet is part of what the analyst said ("this
+    # column, ON THIS TAB"), exactly as the default above already carries it. resolve()
+    # evaluates the sheet per template, so a mapping still fans out to the SAME sheet in
+    # every other conversion of the same object; it just no longer bleeds sideways onto
+    # the sibling sheets. A field whose sheet cannot be resolved falls back to unscoped
+    # (single-sheet interfaces, where there are no siblings to bleed onto).
     lm = await _upsert(
         kind="column_mapping", category="Column Mapping Alias",
         original_value=mapping.source_column, resolved_value=target_field,
@@ -362,6 +367,7 @@ async def record_learning_from_mapping(
         rule_type=rule_type, rule_config=rule_config,
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
+        sheets=[_sheet_name] if _sheet_name else None,
     )
     if rule_type and _is_master_key_field(business_object, target_field):
         await _upsert(
@@ -382,12 +388,25 @@ async def record_learning_from_rule(
     if not business_object:
         return None
     target_field = None
+    _sheet_id = None
     if rule.target_field_id:
         f = await FBDIField.get(rule.target_field_id)
         if f:
             target_field = f.field_name
+            _sheet_id = getattr(f, "sheet_id", None)
     if not target_field:
         return None
+    # The sheet this rule was authored ON — so a rule on a field Oracle repeats across
+    # sheets (Customer has 19) does not spray to every sibling tab, the same major bug
+    # the column-mapping capture above had.
+    _sheet_name = None
+    if _sheet_id is not None:
+        try:
+            from app.models.fbdi import FBDISheet
+            _sh = await FBDISheet.get(_sheet_id)
+            _sheet_name = getattr(_sh, "sheet_name", None) if _sh else None
+        except Exception:  # noqa: BLE001 — scope is a refinement, never a blocker
+            _sheet_name = None
     captured_from = f"{conversion.name} -- {target_field} (manual)"
     from app.services.client_service import client_id_for_conversion
     _cid = await client_id_for_conversion(conversion)
@@ -416,6 +435,7 @@ async def record_learning_from_rule(
         rule_type=rule.rule_type, rule_config=_cfg,
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
+        sheets=[_sheet_name] if _sheet_name else None,
     )
     if _is_master_key_field(business_object, target_field):
         await _upsert(
