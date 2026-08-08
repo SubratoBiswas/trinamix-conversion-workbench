@@ -2114,6 +2114,131 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
     return df
 
 
+# ── NetSuite Supplier rule batch (08-Aug) ────────────────────────────────────
+# Analyst-confirmed, per-interface forced values / blanks / value-maps for the
+# Supplier fan-out. Runs in _finalize (columns still keyed by field_name), AFTER
+# control defaults so it is authoritative, and ONLY on the sheet it names. Column
+# match is by normalised header (alnum, lower) so "Fax", "Fax*" and "  Fax "
+# all hit. A rule that names a column the sheet does not have is a silent no-op,
+# so the same table can be applied without per-sheet column lists.
+_SUP_NULL_VALUES = {"", "nan", "none", "null", "na", "<na>"}
+
+
+def _sup_sheet_kind(sheet_name: str | None) -> str:
+    n = _norm_hdr(sheet_name or "")
+    if "assignment" in n:
+        return "ASSIGN"
+    if "contact" in n:
+        return "CONTACT"
+    if "bank" in n:
+        return "BANK"
+    if "site" in n:                       # after ASSIGN, since "siteassignment" contains "site"
+        return "SITE"
+    if "address" in n:
+        return "ADDRESS"
+    if "supplier" in n or n.startswith("poz"):
+        return "SUPPLIER"
+    return ""
+
+
+def _apply_supplier_rules(df: pd.DataFrame, sheet_name: str | None) -> pd.DataFrame:
+    """Force the analyst-confirmed constants / blanks / value-maps for one supplier
+    interface sheet. Additive and column-guarded: only touches columns that exist."""
+    n = len(df)
+    if n == 0:
+        return df
+    kind = _sup_sheet_kind(sheet_name)
+    if not kind:
+        return df
+
+    def _cols(*names):
+        want = {_norm_hdr(x) for x in names}
+        return [c for c in df.columns if _norm_hdr(c) in want]
+
+    def force(names, value):
+        for c in _cols(*([names] if isinstance(names, str) else names)):
+            df[c] = value
+
+    def blank(names):
+        for c in _cols(*([names] if isinstance(names, str) else names)):
+            df[c] = ""
+
+    def vmap(names, fn):
+        for c in _cols(*([names] if isinstance(names, str) else names)):
+            df[c] = [fn(str(v)) for v in df[c].tolist()]
+
+    def _yn(v: str) -> str:                # Federal Reportable: Yes->Y, No->N
+        s = v.strip().lower()
+        if s in _SUP_NULL_VALUES:
+            return ""
+        if s in ("yes", "y", "true", "1", "t"):
+            return "Y"
+        if s in ("no", "n", "false", "0", "f"):
+            return "N"
+        return v.strip()
+
+    def _b2b(v: str) -> str:                # Enable B2B: No->None, Yes->CMK, else blank
+        s = v.strip().lower()
+        if s in ("no", "n", "false", "0"):
+            return "None"
+        if s in ("yes", "y", "true", "1"):
+            return "CMK"
+        return ""
+
+    def _faxnum(v: str) -> str:             # keep only the local fax number
+        s = v.strip()
+        if s.lower() in _SUP_NULL_VALUES:
+            return ""
+        digits = re.sub(r"\D", "", s)
+        # Drop leading country (+area) code groups; keep the trailing 7-digit local
+        # number when the value carries more than that (e.g. "+1 602 555-1234").
+        return digits[-7:] if len(digits) > 7 else digits
+
+    def _derive_comm():                     # Communication Method from Email/Fax presence
+        ccols = _cols("Communication Method")
+        if not ccols:
+            return
+        ecols = _cols("Email", "E-Mail", "Email Address")
+        fcols = _cols("Fax", "Fax Number")
+        ev = df[ecols[0]].astype(str).tolist() if ecols else [""] * n
+        fv = df[fcols[0]].astype(str).tolist() if fcols else [""] * n
+
+        def _has(x):
+            return str(x).strip().lower() not in _SUP_NULL_VALUES
+        out = ["EMAIL" if _has(ev[i]) else ("FAX" if _has(fv[i]) else "NONE")
+               for i in range(n)]
+        for c in ccols:
+            df[c] = out
+
+    if kind == "SUPPLIER":
+        force("Supplier Type", "Supplier")
+        force("Business Relationship", "SPEND_AUTHORIZED")
+        vmap("Federal Reportable", _yn)
+        blank("Pay Each Document Alone")
+    elif kind == "ADDRESS":
+        blank("Address Name New")           # NOT "Address Name" (that stays = City)
+        blank("RFQ Or Bidding")
+        force("Ordering", "Y")
+        force("Pay", "Y")
+    elif kind == "SITE":
+        force("Pay", "Y")
+        force("Ordering", "Y")              # purpose flags may live on the site sheet
+        blank("RFQ Or Bidding")
+        vmap("Enable B2B Messaging", _b2b)
+        _derive_comm()
+        vmap("Fax", _faxnum)
+        force("Receipt Routing", "3")
+        blank("Invoice Amount Limit")
+        force("Invoice Match Option", "R")
+        force("Match Approval Level", "3")
+        force("Payment Method", "G Treas ACH")
+    elif kind == "ASSIGN":
+        force("Bill-to BU", "NX US BU")
+    elif kind == "CONTACT":
+        vmap("Fax", _faxnum)                # e-mail xx-prefix handled by _mask_supplier_emails
+    return df
+
+
 def _strategy_sheets_to_drop() -> set:
     """Interface sheets that must not appear in a generated workbook at all.
 
@@ -2596,6 +2721,12 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # duplicates Supplier Name. Runs AFTER control defaults so a default that
         # re-creates the duplicate is caught too.
         sdf = _strategy_frame_rules(sdf, obj_name)
+        # NetSuite Supplier rule batch (08-Aug): analyst-confirmed constants,
+        # blanks and value-maps per interface sheet. BEFORE the e-mail mask so the
+        # Communication-Method derivation reads the un-masked e-mail column, and
+        # after control defaults so these values are authoritative.
+        if _sup_is_netsuite:
+            sdf = _apply_supplier_rules(sdf, _sheet_name_of(sfields))
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
         # field_name (before the header rename below).
@@ -2651,6 +2782,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         _safe_sheet_name(s.sheet_name).lower().startswith("poz_")
         or "supplier" in _safe_sheet_name(s.sheet_name).lower()
         for s in sheets_with_fields
+    )
+    # The 08-Aug forced constants / value-maps are the NetSuite supplier spec.
+    # Scope them to a NetSuite source so the already-signed-off eBOS supplier flow
+    # (tester regression) is left exactly as it is; e-mail masking still applies to
+    # every supplier source.
+    _sup_is_netsuite = _is_supplier and (
+        "netsuite" in str(
+            getattr(conversion, "source_system_code", None)
+            or getattr(conversion, "source_erp", None)
+            or getattr(conversion, "source_system", None)
+            or ""
+        ).lower()
     )
     # BOM Import — the four EGP_*_INTERFACE structure tables. The sheet test comes
     # first and is the one that matters: the same object arrives as BOM, Bill of

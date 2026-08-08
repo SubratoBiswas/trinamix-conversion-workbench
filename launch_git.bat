@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Priority 1: LOCATIONS address block was empty in the merged output although the per-source conversion produced Address Line 1 and 2 - the per-sheet finalize blanked the collision-shared value. The address block is now engine-owned on LOCATIONS, stamped from the carried source columns addr1/addr2/addr3, city, state, zip, country, which also fills City State Postal Code Country that were never mapped. Verified in isolation. REGENERATE the customer output to confirm the LOCATIONS address is populated."
+set "DEPLOY_NOTE=NetSuite Supplier rule batch: engine-owned forced constants, blanks and value-maps per POZ interface sheet in output_service _apply_supplier_rules, scoped to a NetSuite source so the eBOS flow is untouched. Supplier Type Supplier, Business Relationship SPEND_AUTHORIZED, Federal Reportable Yes to Y No to N, Pay Each Document Alone blank, Address Name New blank, RFQ Or Bidding blank, Ordering Y, Pay Y, Enable B2B No to None Yes to CMK, Communication Method from Email Fax presence, Fax local number only, Receipt Routing 3, Invoice Amount Limit blank, Invoice Match Option R, Match Approval Level 3, Payment Method G Treas ACH, Bill-to BU NX US BU. Compiled and unit tested. REGENERATE a NetSuite supplier project to verify."
 
 echo Checking the deploy set...
 set "MISSING="
