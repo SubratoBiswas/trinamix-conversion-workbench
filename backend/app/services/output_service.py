@@ -2409,30 +2409,28 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         decided: set = set()
         _owned = (_cm.merge_owned_fields(_sheet_name_of(sfields))
                   if _grain_merge else set())
-        # Normalised membership — the field's stored name may differ from the merge's
-        # literal by punctuation / case / a required-'*' (which is why an EXACT `in`
-        # protected Party Original System Reference but not Party Original System, so
-        # the glue re-stamped NETSUITE — REC-80). _finalize already matches owned keys
-        # normalised; do the same here.
         _owned_n = {re.sub(r"[^a-z0-9]", "", str(x).lower()) for x in _owned}
 
-        def _is_owned(fn) -> bool:
-            return re.sub(r"[^a-z0-9]", "", str(fn).lower()) in _owned_n
+        def _own(name) -> bool:
+            return bool(name) and re.sub(r"[^a-z0-9]", "", str(name).lower()) in _owned_n
 
         for f in sfields:
-            if _is_owned(f.field_name):
+            m = _mbyfield.get(f.id)
+            # Owned check matches the field's STORED name AND the mapping's DISPLAY
+            # name (target_field_name) — they differ for some fields (the PROFILES
+            # Party Original System is one: its stored field_name is not "Party
+            # Original System", so an approved NETSUITE default slipped past this guard
+            # and shipped — REC-80). Normalised so punctuation / '*' / case never breaks
+            # the match, and run BEFORE the `m is None` skip so a forced-blank field a
+            # fresh project never mapped is still owned.
+            if _own(f.field_name) or (m is not None and _own(getattr(m, "target_field_name", ""))):
                 # The merge authoritatively populates this field (Primary/Identifying
                 # flag — REC-09/23; contact-point fields — REC-48/53/54/56/57; party
-                # identity and the PROFILES forced-blanks). Neither a not_applicable
-                # keep-blank nor a stray analyst constant (Contact Point Type=EMAIL on
-                # every row) nor the source-system linkage glue (NETSUITE on a PROFILES
-                # field the merge blanked) may override it. Marked decided REGARDLESS of
-                # whether a mapping row exists — a forced-blank field the fresh project
-                # never mapped has no MappingSuggestion, so this must run before the
-                # `m is None` skip or the glue re-stamps it (REC-80).
+                # identity; the PROFILES forced-blanks). Neither a not_applicable keep-
+                # blank, a stray analyst constant, an approved default, nor the source-
+                # system linkage glue may override it.
                 decided.add(f.field_name)
                 continue
-            m = _mbyfield.get(f.id)
             if m is None:
                 continue
             if _analyst_keeps_blank(m):
@@ -2651,13 +2649,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             if sfields:
                 _, _dec = _sheet_decisions(sfields)
                 _prot |= {_header_label(f) for f in sfields if f.field_name in _dec} | _dec
-            # Also guard EVERY field the merge owns on this sheet, by its Oracle
-            # header name directly — apply_to_frame matches `protected` normalised, so
-            # this holds even when a field's stored field_name differs from its header
-            # (the reason REC-80's Party Original System slipped past the field_name
-            # route and the glue re-stamped NETSUITE on the PROFILES sheet).
-            if _grain_merge and sheet_name:
-                _prot |= set(_cm.merge_owned_fields(sheet_name))
             apply_to_frame(frame, source_system=_cust_src, batch_id=_cust_batch,
                            ref=_ref, level="account",
                            sheet_name=sheet_name, protected=_prot)
