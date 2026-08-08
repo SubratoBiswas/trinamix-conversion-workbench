@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Supplier Communication Method carry: the source e-mail and fax are now threaded through the supplier fan-out and read at finalize so Communication Method derives EMAIL Fax NONE correctly on the Site sheet. This completes the supplier rule batch. Applies to all supplier sources. Compiled and unit tested. REGENERATE the supplier project to verify Communication Method now shows EMAIL where the vendor has an e-mail."
+set "DEPLOY_NOTE=Supplier Communication Method carry FIX: the carried source column was matched by exact name, but a NetSuite supplier extract names columns Email and Fax while the carry list is lower case, so nothing threaded and EMAIL never fired. The carry now resolves the real source column by normalised match, so the e-mail reaches the Site frame and Communication Method derives EMAIL Fax NONE. Compiled and unit tested. REGENERATE the supplier project and confirm Communication Method now shows EMAIL for vendors with an e-mail."
 
 echo Checking the deploy set...
 set "MISSING="

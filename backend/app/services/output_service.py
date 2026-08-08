@@ -1441,9 +1441,19 @@ async def build_converted_dataframe(
             # row-local so odf is 1:1 with src in order. Guarded on equal length so a
             # shape surprise never mis-aligns the key onto the wrong rows.
             if _carry and len(src) == len(odf):
+                # Resolve each carry name to the real source column by NORMALISED
+                # match (alnum, lower) — not exact string. A NetSuite supplier extract
+                # names columns "Email"/"Fax" while the carry list is lower-case, so an
+                # exact test threaded nothing and Communication Method could never see
+                # the e-mail. Customer sources are already lower-case, so this is a
+                # no-op there.
+                _src_by_norm = {re.sub(r"[^a-z0-9]", "", str(_c).lower()): _c
+                                for _c in src.columns}
                 for _cc in _carry:
-                    if _cc in src.columns:
-                        odf["__" + _cc] = src[_cc].astype(str).str.strip().values
+                    _real = (_cc if _cc in src.columns
+                             else _src_by_norm.get(re.sub(r"[^a-z0-9]", "", str(_cc).lower())))
+                    if _real is not None:
+                        odf["__" + _cc] = src[_real].astype(str).str.strip().values
             frames.append(odf)
             if collect_frames is not None:
                 # Keep the source's own column list (PRE-enrichment): sheet routing and
