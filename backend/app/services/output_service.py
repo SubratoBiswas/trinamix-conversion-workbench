@@ -2594,6 +2594,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for _c in list(sdf.columns):
                     if _norm_hdr(_c) in _need:
                         sdf[_c] = ""
+        # PROC-07: blank every supplier "…-Obsoleted" column here too. apply_supplier_layout
+        # already does this for the CSV package, but the filled .xlsm template path does NOT
+        # call it, so Tax Registration Number-Obsoleted still shipped populated on the
+        # NetSuite template. Enforcing it in _finalize (used by every path) closes that gap.
+        if _is_supplier:
+            for _c in list(sdf.columns):
+                if "obsolete" in _norm_hdr(_c):
+                    sdf[_c] = ""
         return sdf
 
     # Customer Import is a linked 19-table load: children point at parents through
