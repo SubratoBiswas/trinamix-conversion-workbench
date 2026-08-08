@@ -1,22 +1,5 @@
 [
   {
-    "source_system": "netsuite",
-    "target_object": "Supplier",
-    "target_field": "Taxpayer ID",
-    "source_field": "country",
-    "confidence": "High",
-    "rule_type": "CASE_WHEN",
-    "rule_config": {
-      "branches": [
-        { "if_column": "country", "op": "eq", "value": "India", "then": "{pan}" },
-        { "if_column": "country", "op": "eq", "value": "United States", "then": "{tax_id}" },
-        { "if_column": "country", "op": "eq", "value": "Canada", "then": "{tax_id_canada}" }
-      ],
-      "default": ""
-    },
-    "note": "PROC-02 (08-Aug-2026): Taxpayer ID is country-conditional. NetSuite-scoped so eBOS keeps its own taxpayer mapping. Reads country and pulls the matching per-country id column (pan / tax_id / tax_id_canada)."
-  },
-  {
     "source_system": "arena_ebos",
     "target_object": "Supplier",
     "target_field": "Delivery Channel",
