@@ -510,6 +510,17 @@ _PROFILE_DFF = {
 # build_merged_frame_for_object carry_source_cols) so they reach the party-grain rows.
 DFF_SOURCE_COLS = tuple(dict.fromkeys(list(_ACCOUNTS_DFF.values()) + list(_PROFILE_DFF.values())))
 
+# HZ_IMP_LOCATIONS_T address block, owned from the carried source columns (NEW-03/04).
+# {Oracle target field: source column} — the billing/shipping extracts carry
+# addr1/addr2/addr3/city/state/zip/country.
+_ADDR_MAP = {
+    "Address Line 1": "addr1", "Address Line 2": "addr2", "Address Line 3": "addr3",
+    "City": "city", "State": "state", "Postal Code": "zip", "Country": "country",
+}
+# Threaded through the merge (output_service carry_source_cols) so they reach the
+# site-grain rows.
+ADDR_SOURCE_COLS = tuple(_ADDR_MAP.values())
+
 
 def _dff_value_spec(n: str):
     """(udcp_default, {segment#: source_column}) for the two DFF value sheets, else None.
@@ -668,6 +679,19 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
         _map_en_us(sub, "Site Language")
     if "personlang" in n:                        # HZ_IMP_PERSONLANG
         _map_en_us(sub, "Language Name")
+    # HZ_IMP_LOCATIONS_T address block (NEW-03/04). The address is site-grain data
+    # (addr1/2/3, city, state, zip, country from the billing/shipping extracts). The
+    # per-sheet mapping loses it in the multi-source merge — LOCATIONS' own address
+    # fields are unmapped, so the per-sheet keep-blank blanks the collision-shared
+    # value and the whole block shipped empty even though the per-source conversion
+    # produced Address Line 1/2. Owned here from the carried source columns so it holds
+    # regardless of per-sheet mapping state; also fills City/State/Postal/Country which
+    # were never mapped at all.
+    if "location" in n:
+        for fld, src in _ADDR_MAP.items():
+            sc = _carried(sub, src)
+            if sc is not None and _find_col_ci(sub.columns, fld) is not None:
+                _set_owned_col(sub, fld, sc)
     # DFF segments + User Defined Context Prompt: values on ACCOUNTS / RA_PROFILES,
     # blank on every other sheet (analyst "Output Mappings Customer").
     sub = apply_dff_udcp(sub, sheet_name)
@@ -718,6 +742,8 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Relationship Source System Reference")   # entityid_internalid_RS
     if "acctsite" in n and "use" not in n:  # REC-35 owned en_US->US Site Language
         owned.add("Site Language")
+    if "location" in n:                     # NEW-03/04 owned LOCATIONS address block
+        owned.update(_ADDR_MAP.keys())
     if "personlang" in n:                   # REC-79 owned en_US->US Language Name
         owned.add("Language Name")
     # DFF segments + User Defined Context Prompt are owned on EVERY customer sheet

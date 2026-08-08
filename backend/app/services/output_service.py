@@ -3240,6 +3240,9 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                    # DFF source columns the ACCOUNTS / RA_PROFILES DFF
                                    # stamp reads (customer_merge.apply_dff_udcp).
                                    + list(_cm.DFF_SOURCE_COLS)
+                                   # LOCATIONS address block source columns
+                                   # (customer_merge.apply address stamp, NEW-03/04).
+                                   + list(_cm.ADDR_SOURCE_COLS)
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)

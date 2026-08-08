@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Two fixes. MAJOR: a mapping or rule edited on one tab sprayed to every tab with the same column name - the column-mapping and rule captures now carry the sheet they were made on, like the default already did, so an edit no longer bleeds onto sibling sheets. Plus: Employee HDL was dropping 3 of 2206 employees whose BusinessTitle contains a pipe character; the parser now recovers them. REGENERATE customer and Employee outputs after this."
+set "DEPLOY_NOTE=Priority 1: LOCATIONS address block was empty in the merged output although the per-source conversion produced Address Line 1 and 2 - the per-sheet finalize blanked the collision-shared value. The address block is now engine-owned on LOCATIONS, stamped from the carried source columns addr1/addr2/addr3, city, state, zip, country, which also fills City State Postal Code Country that were never mapped. Verified in isolation. REGENERATE the customer output to confirm the LOCATIONS address is populated."
 
 echo Checking the deploy set...
 set "MISSING="
