@@ -2651,6 +2651,13 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             if sfields:
                 _, _dec = _sheet_decisions(sfields)
                 _prot |= {_header_label(f) for f in sfields if f.field_name in _dec} | _dec
+            # Also guard EVERY field the merge owns on this sheet, by its Oracle
+            # header name directly — apply_to_frame matches `protected` normalised, so
+            # this holds even when a field's stored field_name differs from its header
+            # (the reason REC-80's Party Original System slipped past the field_name
+            # route and the glue re-stamped NETSUITE on the PROFILES sheet).
+            if _grain_merge and sheet_name:
+                _prot |= set(_cm.merge_owned_fields(sheet_name))
             apply_to_frame(frame, source_system=_cust_src, batch_id=_cust_batch,
                            ref=_ref, level="account",
                            sheet_name=sheet_name, protected=_prot)
