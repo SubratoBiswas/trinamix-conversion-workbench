@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Customer yellow re-test fixes REC-23/35/68/70/76/79. Language VALUE_MAPs read source column, ROLERESP OSR gets _RR suffix, RELATIONSHIPS routed to contact grain with distinct Subject/Object party OSRs and the NETSUITE constants now actually stamped, Identifying Address scoped to the first billing site. Verified with a synthetic-frame unit test. REGENERATE customer outputs after this."
+set "DEPLOY_NOTE=Customer engine fixes (verified against a real generated file - the first attempt used wrong sheet names). RELSHIPS routed to contact grain with distinct Subject/Object OSRs and DFF blanks, ROLERESP source system, Site Language and Language Name en_US-US, Identifying Address billing-first, Party Usage Code ORG_CONTACT/CUSTOMER, Primary Indicator blank on site-use sheets. All engine-owned. REGENERATE customer outputs after this."
 
 echo Checking the deploy set...
 set "MISSING="

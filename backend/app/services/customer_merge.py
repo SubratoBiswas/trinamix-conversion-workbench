@@ -171,15 +171,15 @@ def sheet_grain(sheet_name: Optional[str]) -> Optional[str]:
     if not n:
         return None
     # Contact grain: contacts, contact points/roles, role-responsibility, person
-    # language — all one row per contact person. RELATIONSHIPS belongs here too: an
-    # HZ relationship row is one CONTACT-to-org link (subject = the person, object =
+    # language — all one row per contact person. RELSHIPS belongs here too: an HZ
+    # relationship row is one CONTACT-to-org link (subject = the person, object =
     # the customer org), so the sheet is one row per contact, not one per customer
-    # (REC-68/70). NOTE the substring is "relationship", not "relship" — the real
-    # sheet is HZ_IMP_RELATIONSHIPS_T, whose normalised name is "hzimprelationshipst"
-    # and does NOT contain "relship" (it contains "relationship"); the old key matched
-    # nothing, so relationships fell through to grain=None and got the WHOLE frame.
+    # (REC-68/70). The real sheet is HZ_IMP_RELSHIPS_T — normalised "hzimprelshipst",
+    # which contains "relship" (NOT "relationship"). It used to sit in the PARTY
+    # branch below (one row per customer, subject == object); moved here so subject
+    # and object can be the contact and the org respectively.
     if ("contact" in n or "personlang" in n or "roleresp" in n
-            or "personprofile" in n or "relationship" in n):
+            or "personprofile" in n or "relship" in n):
         return CONTACT
     # Site / address grain: party sites, account sites, their uses, and locations.
     if "site" in n or "location" in n:
@@ -396,20 +396,23 @@ def _dedupe_party_grain(sub: "pd.DataFrame") -> "pd.DataFrame":
 # marks the same row every time (REC-09's LIMIT-1-else-MIN(internalid) fallback).
 # Contact sheets are excluded (REC-46 / REC-52 keep their Primary blank).
 #
-#   {sheet substring: (flag field name, use-type field-name candidates)}
-# A sheet with a use-type column restricts "first" to its BILL_TO rows; a sheet
-# without one (PARTYSITES identifying address, REC-23) considers every site row.
+#   {sheet substring: (flag field name, use-type field-name candidates, prefer_else_any)}
+# ``prefer_else_any`` = False → strict: only BILL_TO rows are eligible, and a customer
+# with no BILL_TO row gets no flag (the site-USE sheets — a primary billing use only
+# exists where there is a billing use). True → the flag is required on exactly one row
+# per customer, so a BILL_TO row is PREFERRED but, failing one, the first site is used.
+# NOTE: partysiteuses / acctsiteuses used to receive a Primary Indicator here
+# (first BILL_TO per customer). The analyst's re-test now wants Primary Indicator
+# BLANK on both of those sheets, so they are gone from this table and blanked via
+# _SHEET_BLANK instead. Only PARTYSITES keeps a first-flag (its Identifying Address).
 _FIRST_FLAG_SHEETS = {
-    "partysiteuses": ("Primary Indicator", ("Part Site Use Type", "Site Use Type")),
-    "acctsiteuses": ("Primary Indicator", ("Purpose",)),
-    # REC-23: the Identifying Address must be the FIRST BILLING site per customer, not
-    # the first of ANY site. The billing/shipping split survives the reshape as the
-    # converted "Party Site Use Type" column (BILL_TO/SHIP_TO, derived from the source
-    # sheet), the same signal partysiteuses keys on — so scope eligibility to BILL_TO.
-    # If that column is absent (a project that never mapped it), _mark_first_per_entityid
-    # keeps every site row eligible, i.e. the prior behaviour — a safe degrade.
+    # REC-23: the Identifying Address is the FIRST BILLING site per customer, not the
+    # first of ANY site. The billing/shipping split survives the reshape as the
+    # converted "Party Site Use Type" column (BILL_TO/SHIP_TO). But every party that
+    # has sites needs exactly one identifying address, so a customer with only shipping
+    # sites still gets one (its first site) — prefer_else_any=True.
     "partysites": ("Identifying Address",
-                   ("Party Site Use Type", "Part Site Use Type", "Site Use Type")),
+                   ("Party Site Use Type", "Part Site Use Type", "Site Use Type"), True),
 }
 
 
@@ -424,9 +427,9 @@ def first_flag_field(sheet_name: Optional[str]) -> Optional[str]:
     Returning None for the contact sheets is deliberate — their Primary stays blank
     (REC-46 / REC-52)."""
     n = _norm(sheet_name)
-    for key, (flag_name, _uses) in _FIRST_FLAG_SHEETS.items():
+    for key, spec in _FIRST_FLAG_SHEETS.items():
         if key in n:
-            return flag_name
+            return spec[0]
     return None
 
 
@@ -445,7 +448,7 @@ _CONTACTPTS_OWNED = (
 # Owned so the value never depends on a per-conversion Party Type rule / name mapping
 # that may sit at not_applicable or come back only "suggested" in a fresh project.
 _PARTIES_OWNED = (
-    "Party Type", "Organization Name",
+    "Party Type", "Organization Name", "Party Usage Code",
     "Person First Name", "Person Middle Name", "Person Last Name",
 )
 
@@ -456,20 +459,32 @@ _PARTIES_OWNED = (
 # so they hold for every project instead of riding on a per-conversion mapping that a
 # fresh project won't reproduce. Keyed by normalised-sheet substring.
 _SHEET_CONST = {
-    # RELATIONSHIPS Subject/Object Original System = NETSUITE (REC-67/69).
-    # Key is "relationship" (the normalised HZ_IMP_RELATIONSHIPS_T), NOT "relship" —
-    # the old key never matched, so these constants were silently never stamped.
-    "relationship": {"Subject Relationship Party Original System": "NETSUITE",
-                     "Object Relationship Party Original System": "NETSUITE"},
-    # ROLERESP Role Responsibility Original System = NETSUITE (REC-75)
-    "roleresp": {"Account Contact Role Responsibility Original System": "NETSUITE"},
+    # RELSHIPS Subject/Object Original System = NETSUITE (REC-67/69). Key "relship"
+    # matches the real sheet HZ_IMP_RELSHIPS_T ("hzimprelshipst").
+    "relship": {"Subject Relationship Party Original System": "NETSUITE",
+                "Object Relationship Party Original System": "NETSUITE"},
+    # ROLERESP: Role Responsibility Original System = NETSUITE (REC-75) AND Account
+    # Contact Source System = NETSUITE (REC-73). REC-73 was seeded as a learned
+    # default scoped to "HZ_IMP_ROLERESP_T", but the real sheet is HZ_IMP_ROLERESP
+    # (no _T) so it never matched and shipped blank — owned here instead, keyed on
+    # "roleresp" which matches the real sheet.
+    "roleresp": {"Account Contact Role Responsibility Original System": "NETSUITE",
+                 "Account Contact Source System": "NETSUITE"},
 }
 # Forced-blank fields (REC-80/81/82/83/84/88 on RA_CUSTOMER_PROFILES; REC-25 on PARTYSITES).
+# DFF-segment blanks: the 08-Aug batch seeded these as learned suppressions, but the
+# RELSHIPS ones were scoped to "HZ_IMP_RELATIONSHIPS_T" (real sheet is HZ_IMP_RELSHIPS_T)
+# so they never matched — owned here on the real "relship" key instead. Primary Indicator
+# is now BLANK on both site-use sheets (analyst re-test), replacing the old first-flag.
+_DFF_BLANK_RELSHIP = tuple(f"Descriptive Flexfield Segment{i}" for i in (1, 2, 3, 6, 7, 8, 9, 11))
 _SHEET_BLANK = {
     "profile": ("Party Original System", "Party Original System Reference",
                 "Account Site Source System", "Account Site Source System Reference",
                 "Credit Rating", "Party Number"),
     "partysites": ("Relationship Source System Reference",),
+    "partysiteuses": ("Primary Indicator",),
+    "acctsiteuses": ("Primary Indicator",),
+    "relship": _DFF_BLANK_RELSHIP,
 }
 def _sheet_rule_fields(n: str) -> set:
     """All field names any sheet-scoped rule touches on this (normalised) sheet."""
@@ -529,9 +544,9 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
         _ref = [_mk(a, b) for a, b in zip(_e.tolist(), _i.tolist())]
         _set_owned_col(sub, "Account Contact Role Responsibility Original System Reference",
                        pd.Series(_ref, index=sub.index))
-    # REC-68/70: on HZ_IMP_RELATIONSHIPS_T (one row per CONTACT), the Subject party is
-    # the contact/person and the Object party is the customer org. Their OSRs must be
-    # the SAME references the PARTIES sheet assigns each party:
+    # REC-68/70: on HZ_IMP_RELSHIPS_T (one row per CONTACT), the Subject party is the
+    # contact/person and the Object party is the customer org. Their OSRs must be the
+    # SAME references the PARTIES sheet assigns each party:
     #   Subject Relationship Party Original System Reference  = the contact's OWN
     #       internalid (the PERSON party's ref, matching PARTIES own_internalid=True);
     #   Object  Relationship Party Original System Reference  = the customer org's
@@ -539,7 +554,7 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
     # _set_party_link already set BOTH to PARTYREF (org); we override the Subject with
     # the contact's own id. Blank contact id falls back to the org ref so the link is
     # never dangling.
-    if "relationship" in n:
+    if "relship" in n:
         _org = (sub[PARTYREF_COL].astype(str).str.strip()
                 if PARTYREF_COL in sub.columns else None)
         if INTERNALID_COL in sub.columns:
@@ -550,7 +565,32 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             _set_owned_col(sub, "Subject Relationship Party Original System Reference", _subj)
         if _org is not None:
             _set_owned_col(sub, "Object Relationship Party Original System Reference", _org)
+    # REC-35 / REC-79: the language transform en_US -> US was seeded as a VALUE_MAP
+    # learned rule, but at generation an auto-captured column-mapping for the same
+    # field outranks the dated rule (and PERSONLANG's real sheet name has no _T), so
+    # the file shipped the raw en_US. Owned here instead — mapped straight on the
+    # converted column that already carries en_US — so it holds regardless of the
+    # learned-store contest. Scoped so it never touches PARTYSITES Site Language,
+    # which REC-25 force-blanks.
+    if "acctsite" in n and "use" not in n:      # HZ_IMP_ACCTSITES_T only
+        _map_en_us(sub, "Site Language")
+    if "personlang" in n:                        # HZ_IMP_PERSONLANG
+        _map_en_us(sub, "Language Name")
     return sub
+
+
+def _map_en_us(sub: "pd.DataFrame", field: str) -> None:
+    """Owned en_US -> US transform on an existing converted column (REC-35/79).
+
+    Reads the column the base mapping already filled (en_US), maps en_US -> US
+    case-insensitively, leaves every other value untouched, and re-asserts it as an
+    owned column so a later mapping/default cannot overwrite it back to en_US."""
+    col = _find_col_ci(sub.columns, field)
+    if col is None:
+        return
+    s = sub[col].astype(str)
+    mapped = s.mask(s.str.strip().str.lower().eq("en_us"), "US")
+    _set_owned_col(sub, field, mapped)
 
 
 def merge_owned_fields(sheet_name: Optional[str]) -> set:
@@ -577,9 +617,13 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Account Description")
     if "roleresp" in n:                    # REC-76 computed reference
         owned.add("Account Contact Role Responsibility Original System Reference")
-    if "relationship" in n:                # REC-68/70 computed subject/object refs
+    if "relship" in n:                     # REC-68/70 computed subject/object refs
         owned.add("Subject Relationship Party Original System Reference")
         owned.add("Object Relationship Party Original System Reference")
+    if "acctsite" in n and "use" not in n:  # REC-35 owned en_US->US Site Language
+        owned.add("Site Language")
+    if "personlang" in n:                   # REC-79 owned en_US->US Language Name
+        owned.add("Language Name")
     owned.update(_sheet_rule_fields(n))    # constants / blanks / ref-copies
     return owned
 
@@ -679,7 +723,7 @@ def _mark_first_per_entityid(sub: "pd.DataFrame", sheet_name: Optional[str]) -> 
     spec = next((v for k, v in _FIRST_FLAG_SHEETS.items() if k in n), None)
     if spec is None or sub is None or len(sub) == 0:
         return sub
-    flag_name, use_candidates = spec
+    flag_name, use_candidates, prefer_else_any = spec[0], spec[1], (spec[2] if len(spec) > 2 else False)
     flag_col = _find_col_ci(sub.columns, flag_name)
     if (flag_col is None or ENTITYID_COL not in sub.columns
             or INTERNALID_COL not in sub.columns):
@@ -687,34 +731,49 @@ def _mark_first_per_entityid(sub: "pd.DataFrame", sheet_name: Optional[str]) -> 
 
     ent = sub[ENTITYID_COL].astype(str).str.strip()
     iid = sub[INTERNALID_COL].astype(str).str.strip()
-    # Eligible rows: BILL_TO where the sheet distinguishes uses, else every site.
-    eligible = pd.Series(True, index=sub.index)
+    # The billing flag, from the first use-type column present. None when the sheet
+    # carries no such column at all.
+    is_bill = None
     for cand in use_candidates:
         uc = _find_col_ci(sub.columns, cand)
         if uc is not None:
-            _bill = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
-            # Only narrow to BILL_TO when the column ACTUALLY carries billing rows.
-            # A use-type column that exists but is unpopulated (a project that never
-            # mapped it) would otherwise flag NOTHING — worse than the prior "every
-            # site" behaviour and, for the identifying address, an invalid load. So
-            # fall back to every site row when there are no BILL_TO rows at all.
-            if bool(_bill.any()):
-                eligible = _bill
+            is_bill = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
             break
 
-    work = pd.DataFrame(
-        {"ent": ent, "iid_num": pd.to_numeric(iid, errors="coerce"), "iid_str": iid},
-        index=sub.index,
-    )
-    work = work[eligible.values & work["ent"].ne("")]
     result = pd.Series("N", index=sub.index)
-    if len(work):
-        # Ascending MIN(internalid) per entityid; NaN internalids sort last so a
-        # real number always wins, ties broken by the string form then by
-        # first-seen (mergesort is stable).
-        winners = (work.sort_values(["ent", "iid_num", "iid_str"], kind="mergesort")
-                   .groupby("ent", sort=False).head(1).index)
-        result.loc[winners] = "Y"
+    if prefer_else_any:
+        # REC-23 (identifying address): one flag per customer, a BILL_TO row PREFERRED
+        # but the first site used when the customer has none. Sort billing-first
+        # (nb=0 before nb=1), then MIN(internalid); head(1) per entityid is the winner.
+        nb = ((~is_bill).astype(int) if is_bill is not None
+              else pd.Series(0, index=sub.index))
+        work = pd.DataFrame(
+            {"ent": ent, "nb": nb.values,
+             "iid_num": pd.to_numeric(iid, errors="coerce"), "iid_str": iid},
+            index=sub.index,
+        )
+        work = work[work["ent"].ne("")]
+        if len(work):
+            winners = (work.sort_values(["ent", "nb", "iid_num", "iid_str"],
+                                        kind="mergesort")
+                       .groupby("ent", sort=False).head(1).index)
+            result.loc[winners] = "Y"
+    else:
+        # Site-USE sheets: strictly the first BILL_TO row per customer. If the sheet
+        # has no BILL_TO row at all (a project that never mapped the use type) fall
+        # back to every site row rather than flagging nothing.
+        eligible = pd.Series(True, index=sub.index)
+        if is_bill is not None and bool(is_bill.any()):
+            eligible = is_bill
+        work = pd.DataFrame(
+            {"ent": ent, "iid_num": pd.to_numeric(iid, errors="coerce"), "iid_str": iid},
+            index=sub.index,
+        )
+        work = work[eligible.values & work["ent"].ne("")]
+        if len(work):
+            winners = (work.sort_values(["ent", "iid_num", "iid_str"], kind="mergesort")
+                       .groupby("ent", sort=False).head(1).index)
+            result.loc[winners] = "Y"
     sub = sub.copy()
     sub[flag_col] = result.values
     return sub
@@ -789,6 +848,15 @@ def set_party_identity(sub: "pd.DataFrame") -> "pd.DataFrame":
     pt = pd.Series(["ORGANIZATION"] * len(sub), index=sub.index)
     pt[is_contact] = "PERSON"
     _set_owned_col(sub, "Party Type", pt)
+
+    # Party Usage Code: a contact/person party is an ORG_CONTACT, the customer master
+    # is a CUSTOMER (analyst: ORG_CONTACT when first/middle/last name is present, else
+    # CUSTOMER — the person parties are exactly the contact-grain rows, which carry the
+    # names). Owned so it does not depend on a per-conversion CASE_WHEN rule that loses
+    # to an auto-captured mapping (the file shipped CUSTOMER on every row).
+    puc = pd.Series(["CUSTOMER"] * len(sub), index=sub.index)
+    puc[is_contact] = "ORG_CONTACT"
+    _set_owned_col(sub, "Party Usage Code", puc)
 
     cn = _carried(sub, "companyname")
     if cn is not None:
