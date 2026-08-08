@@ -171,16 +171,22 @@ def sheet_grain(sheet_name: Optional[str]) -> Optional[str]:
     if not n:
         return None
     # Contact grain: contacts, contact points/roles, role-responsibility, person
-    # language — all one row per contact person.
+    # language — all one row per contact person. RELATIONSHIPS belongs here too: an
+    # HZ relationship row is one CONTACT-to-org link (subject = the person, object =
+    # the customer org), so the sheet is one row per contact, not one per customer
+    # (REC-68/70). NOTE the substring is "relationship", not "relship" — the real
+    # sheet is HZ_IMP_RELATIONSHIPS_T, whose normalised name is "hzimprelationshipst"
+    # and does NOT contain "relship" (it contains "relationship"); the old key matched
+    # nothing, so relationships fell through to grain=None and got the WHOLE frame.
     if ("contact" in n or "personlang" in n or "roleresp" in n
-            or "personprofile" in n):
+            or "personprofile" in n or "relationship" in n):
         return CONTACT
     # Site / address grain: party sites, account sites, their uses, and locations.
     if "site" in n or "location" in n:
         return SITE
-    # Party / account grain: parties, accounts, customer profiles, relationships,
-    # classifications — one row per customer.
-    if ("parties" in n or "account" in n or "profile" in n or "relship" in n
+    # Party / account grain: parties, accounts, customer profiles, classifications —
+    # one row per customer.
+    if ("parties" in n or "account" in n or "profile" in n
             or "classific" in n):
         return PARTY
     return None
@@ -396,7 +402,14 @@ def _dedupe_party_grain(sub: "pd.DataFrame") -> "pd.DataFrame":
 _FIRST_FLAG_SHEETS = {
     "partysiteuses": ("Primary Indicator", ("Part Site Use Type", "Site Use Type")),
     "acctsiteuses": ("Primary Indicator", ("Purpose",)),
-    "partysites": ("Identifying Address", ()),
+    # REC-23: the Identifying Address must be the FIRST BILLING site per customer, not
+    # the first of ANY site. The billing/shipping split survives the reshape as the
+    # converted "Party Site Use Type" column (BILL_TO/SHIP_TO, derived from the source
+    # sheet), the same signal partysiteuses keys on — so scope eligibility to BILL_TO.
+    # If that column is absent (a project that never mapped it), _mark_first_per_entityid
+    # keeps every site row eligible, i.e. the prior behaviour — a safe degrade.
+    "partysites": ("Identifying Address",
+                   ("Party Site Use Type", "Part Site Use Type", "Site Use Type")),
 }
 
 
@@ -443,9 +456,11 @@ _PARTIES_OWNED = (
 # so they hold for every project instead of riding on a per-conversion mapping that a
 # fresh project won't reproduce. Keyed by normalised-sheet substring.
 _SHEET_CONST = {
-    # RELSHIPS Subject/Object Original System = NETSUITE (REC-67/69)
-    "relship": {"Subject Relationship Party Original System": "NETSUITE",
-                "Object Relationship Party Original System": "NETSUITE"},
+    # RELATIONSHIPS Subject/Object Original System = NETSUITE (REC-67/69).
+    # Key is "relationship" (the normalised HZ_IMP_RELATIONSHIPS_T), NOT "relship" —
+    # the old key never matched, so these constants were silently never stamped.
+    "relationship": {"Subject Relationship Party Original System": "NETSUITE",
+                     "Object Relationship Party Original System": "NETSUITE"},
     # ROLERESP Role Responsibility Original System = NETSUITE (REC-75)
     "roleresp": {"Account Contact Role Responsibility Original System": "NETSUITE"},
 }
@@ -498,10 +513,11 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
                 if col is not None:
                     sub[col] = ""
     # REC-76: Account Contact Role Responsibility Original System Reference =
-    # entityid_contactinternalid — the SAME value REC-74's Account Contact Source
-    # System Reference carries (e.g. NT-1885_606508). Computed from the carried
-    # customer + contact keys so it does not depend on a mapping a fresh project may
-    # lack, and so it is available now (the sibling ref is only filled later).
+    # entityid_contactinternalid_RR — the analyst's re-test expects the "_RR"
+    # (Role-Responsibility) suffix on this key so it is distinct from REC-74's
+    # Account Contact Source System Reference (entityid_contactinternalid, no suffix).
+    # Computed from the carried customer + contact keys so it does not depend on a
+    # mapping a fresh project may lack, and so it is available now.
     if "roleresp" in n and ENTITYID_COL in sub.columns and INTERNALID_COL in sub.columns:
         _e = sub[ENTITYID_COL].astype(str).str.strip()
         _i = sub[INTERNALID_COL].astype(str).str.strip()
@@ -509,10 +525,31 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
         def _mk(a, b):
             a = "" if a.lower() in ("nan", "none", "null") else a
             b = "" if b.lower() in ("nan", "none", "null") else b
-            return f"{a}_{b}" if (a and b) else ""
+            return f"{a}_{b}_RR" if (a and b) else ""
         _ref = [_mk(a, b) for a, b in zip(_e.tolist(), _i.tolist())]
         _set_owned_col(sub, "Account Contact Role Responsibility Original System Reference",
                        pd.Series(_ref, index=sub.index))
+    # REC-68/70: on HZ_IMP_RELATIONSHIPS_T (one row per CONTACT), the Subject party is
+    # the contact/person and the Object party is the customer org. Their OSRs must be
+    # the SAME references the PARTIES sheet assigns each party:
+    #   Subject Relationship Party Original System Reference  = the contact's OWN
+    #       internalid (the PERSON party's ref, matching PARTIES own_internalid=True);
+    #   Object  Relationship Party Original System Reference  = the customer org's
+    #       internalid (PARTYREF, resolved from the master by entityid — the ORG ref).
+    # _set_party_link already set BOTH to PARTYREF (org); we override the Subject with
+    # the contact's own id. Blank contact id falls back to the org ref so the link is
+    # never dangling.
+    if "relationship" in n:
+        _org = (sub[PARTYREF_COL].astype(str).str.strip()
+                if PARTYREF_COL in sub.columns else None)
+        if INTERNALID_COL in sub.columns:
+            _subj = sub[INTERNALID_COL].astype(str).str.strip()
+            _bad = _subj.eq("") | _subj.str.lower().isin(["nan", "none", "null"])
+            if _org is not None:
+                _subj = _subj.where(~_bad, _org)
+            _set_owned_col(sub, "Subject Relationship Party Original System Reference", _subj)
+        if _org is not None:
+            _set_owned_col(sub, "Object Relationship Party Original System Reference", _org)
     return sub
 
 
@@ -540,6 +577,9 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Account Description")
     if "roleresp" in n:                    # REC-76 computed reference
         owned.add("Account Contact Role Responsibility Original System Reference")
+    if "relationship" in n:                # REC-68/70 computed subject/object refs
+        owned.add("Subject Relationship Party Original System Reference")
+        owned.add("Object Relationship Party Original System Reference")
     owned.update(_sheet_rule_fields(n))    # constants / blanks / ref-copies
     return owned
 
@@ -652,7 +692,14 @@ def _mark_first_per_entityid(sub: "pd.DataFrame", sheet_name: Optional[str]) -> 
     for cand in use_candidates:
         uc = _find_col_ci(sub.columns, cand)
         if uc is not None:
-            eligible = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
+            _bill = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
+            # Only narrow to BILL_TO when the column ACTUALLY carries billing rows.
+            # A use-type column that exists but is unpopulated (a project that never
+            # mapped it) would otherwise flag NOTHING — worse than the prior "every
+            # site" behaviour and, for the identifying address, an invalid load. So
+            # fall back to every site row when there are no BILL_TO rows at all.
+            if bool(_bill.any()):
+                eligible = _bill
             break
 
     work = pd.DataFrame(

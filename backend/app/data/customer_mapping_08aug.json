@@ -242,6 +242,7 @@
   {
    "target_field": "Site Language",
    "action": "rule",
+   "source_column": "language",
    "rule_type": "VALUE_MAP",
    "rule_config": {
     "en_US": "US",
@@ -251,12 +252,13 @@
    "sheets": [
     "HZ_IMP_ACCTSITES_T"
    ],
-   "note": "HZ_IMP_ACCTSITES_T Site Language: transform en_US -> US.",
+   "note": "HZ_IMP_ACCTSITES_T Site Language <- source `language`, transform en_US -> US (REC-35: value was missing).",
    "target_object": "Customer"
   },
   {
    "target_field": "Language Name",
    "action": "rule",
+   "source_column": "language",
    "rule_type": "VALUE_MAP",
    "rule_config": {
     "en_US": "US",
@@ -266,7 +268,7 @@
    "sheets": [
     "HZ_IMP_PERSONLANG_T"
    ],
-   "note": "HZ_IMP_PERSONLANG_T Language Name: transform en_US -> US.",
+   "note": "HZ_IMP_PERSONLANG_T Language Name <- source `language`, transform en_US -> US (REC-79).",
    "target_object": "Customer"
   },
   {

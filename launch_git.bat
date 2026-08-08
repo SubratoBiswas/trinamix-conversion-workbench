@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Adds the admin endpoint that RUNS the one-row migration - POST /api/settings/collapse-decisions, dry_run defaults to TRUE so running it by accident reports and changes nothing. It is an endpoint rather than a script because the deploy box has no Python environment and the only machine that can reach Mongo is the running service. Administrators only - the settings router is mounted under ADMIN and a test asserts that. Also fixes the archive sweep to read the AST rather than the file text: a docstring that MENTIONS ArchivedMappingDecision is documentation, not a reader, and counting the mention is the same mistake three tests made when a comment quoted the expression being counted. Suite 1301 passing, 13 skipped, 0 failing."
+set "DEPLOY_NOTE=Customer yellow re-test fixes REC-23/35/68/70/76/79. Language VALUE_MAPs read source column, ROLERESP OSR gets _RR suffix, RELATIONSHIPS routed to contact grain with distinct Subject/Object party OSRs and the NETSUITE constants now actually stamped, Identifying Address scoped to the first billing site. Verified with a synthetic-frame unit test. REGENERATE customer outputs after this."
 
 echo Checking the deploy set...
 set "MISSING="
@@ -377,19 +377,10 @@ echo   Deployed when the "commit" field there starts with %SHA%
 echo   (Render takes a few minutes. The free tier cold-starts, so the first
 echo    request after idle takes about 45 seconds - that is not your bug.)
 echo.
-echo   Two Render dashboard settings. Neither is fixed by any deploy:
-echo.
-echo     1. SECURITY - Backend -^> Environment -^> JWT_SECRET.
-echo        The manifest used to set SECRET_KEY, which nothing reads, so the
-echo        live backend signs every token with the default that is committed
-echo        to this repo. generateValue only fires when a variable is CREATED,
-echo        so the rename in render.yaml does not repair a service that exists.
-echo        Setting it signs everyone out - that is the correct outcome.
-echo.
-echo     2. Static site -^> Redirects/Rewrites -^> source /*  destination /index.html
-echo        action Rewrite.  Without it, refreshing or pasting a deep link
-echo        returns 404 with a blank body, which looks just like a broken page.
-echo        Measured 05-Aug - tx-conversion-workbench.onrender.com/clients 404s.
+echo   Reminder - not fixed by any deploy, it is a Render dashboard setting:
+echo     Static site -^> Redirects/Rewrites -^> source /*  destination /index.html
+echo     action Rewrite.  Without it, refreshing or pasting a deep link returns
+echo     404 with a blank body, which looks just like a broken page.
 echo.
 pause
 endlocal
