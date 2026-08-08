@@ -301,6 +301,18 @@ async def _run_seeds_background() -> None:
         log.exception("customer 07-Aug mapping seed failed")
 
     try:
+        # 08-Aug customer corrections: sheet-scoped blanks (UDCP, DFF segments on
+        # PARTIES/RELATIONSHIPS, Site Language, Primary Indicator), ACCOUNTS DFF source
+        # mappings, Account Number<-entityid, en_US->US language transforms, ROLERESP
+        # source system, and the PARTIES Party Usage Code conditional. Dated 08-Aug so
+        # it wins over the 03/06/07-Aug documents.
+        from app.services.catalog_seed_service import seed_customer_mapping_08aug
+        r = await seed_customer_mapping_08aug()
+        log.info("startup seed — customer mapping 08-Aug: %s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("customer 08-Aug mapping seed failed")
+
+    try:
         # Supplier transform rules of 06-Aug: #1 Parent Supplier Name (self-lookup)
         # and #3 Supplier Site = BU(country code)-City. Client + object scoped, so they
         # reach every NextPower supplier conversion at generate time.

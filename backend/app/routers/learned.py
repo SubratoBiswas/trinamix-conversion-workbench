@@ -650,6 +650,15 @@ async def reseed_customer_mapping_07aug(_: User = Depends(get_current_user)):
     return await seed_customer_mapping_07aug()
 
 
+@router.post("/reseed-customer-mapping-08aug")
+async def reseed_customer_mapping_08aug(_: User = Depends(get_current_user)):
+    """Re-run the 08-Aug Customer corrections seed (sheet-scoped blanks, ACCOUNTS DFF
+    mappings, Account Number<-entityid, en_US->US transforms, ROLERESP source system,
+    Party Usage Code conditional) on demand + return counts."""
+    from app.services.catalog_seed_service import seed_customer_mapping_08aug
+    return await seed_customer_mapping_08aug()
+
+
 @router.post("/reseed-supplier-transforms")
 async def reseed_supplier_transforms(_: User = Depends(get_current_user)):
     """Re-run the 06-Aug Supplier transforms seed (#1 Parent Supplier Name, #3 Supplier

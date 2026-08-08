@@ -1,0 +1,313 @@
+{
+ "_label": "NXT Customer mapping \u2014 08-Aug corrections",
+ "_source": "Customer issue list (Subrato, 08-Aug-2026): sheet-scoped blanks (UDCP, DFF segments), ACCOUNTS DFF source mappings, Account Number<-entityid, en_US->US language transforms, ROLERESP source system, PARTIES Party Usage Code conditional.",
+ "_effective_date": "2026-08-08T23:59:00",
+ "_scope": "Client NextPower, source NetSuite, target object Customer. Each rule scoped to the sheet it applies to.",
+ "_precedence": "Dated 08-Aug 23:59 \u2014 beats the 03/06/07-Aug documents and same-day auto-captures; loses to any later human edit.",
+ "_open_items": [
+  "COUNT mismatches (PARTIES 15372 vs 5533, ACCOUNTS 10 missing, ACCTSITES/USES From Date 16108/16170) are merge/dedup issues, not field mappings \u2014 handled separately.",
+  "OSR remaps (RELATIONSHIPS Subject/Object OSR + Source System Ref, ROLERESP OSR entityid_internalid_RR, CONTACTPTS Party OSR<-contacts internalid) are computed cross-source references \u2014 handled separately.",
+  "ACCOUNTS DFF Segment5 <- externalid: source column reported NOT FOUND \u2014 omitted pending the real column name.",
+  "LOCATIONS address fields empty (mapped/approved) and RA_PROFILES DFF showing ACCOUNT values need investigation on generated output."
+ ],
+ "rules": [
+  {
+   "target_field": "User Defined Context Prompt",
+   "action": "blank",
+   "note": "Blank on all customer interface sheets (analyst 08-Aug). A DFF context prompt never carries a value in this load.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment2",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment2 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment3",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment3 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment6",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment6 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment7",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment7 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment8",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment8 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment9",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment9 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment11",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T DFF Segment11 must be blank (currently populated).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment1",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment1 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment2",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment2 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment3",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment3 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment6",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment6 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment7",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment7 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment8",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment8 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment9",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment9 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment11",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_RELATIONSHIPS_T"
+   ],
+   "note": "HZ_IMP_RELATIONSHIPS_T DFF Segment11 must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Site Language",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTYSITES_T"
+   ],
+   "note": "HZ_IMP_PARTYSITES_T Site Language must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Primary Indicator",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_PARTYSITEUSES_T"
+   ],
+   "note": "HZ_IMP_PARTYSITEUSES_T Primary Indicator must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Primary Indicator",
+   "action": "blank",
+   "sheets": [
+    "HZ_IMP_ACCTSITEUSES_T"
+   ],
+   "note": "HZ_IMP_ACCTSITEUSES_T Primary Indicator must be blank.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment4",
+   "action": "derive",
+   "source_column": "cseg1",
+   "sheets": [
+    "HZ_IMP_ACCOUNTS_T"
+   ],
+   "note": "HZ_IMP_ACCOUNTS_T DFF Segment4 <- cseg1 (analyst 08-Aug).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment10",
+   "action": "derive",
+   "source_column": "territory",
+   "sheets": [
+    "HZ_IMP_ACCOUNTS_T"
+   ],
+   "note": "HZ_IMP_ACCOUNTS_T DFF Segment10 <- territory (analyst 08-Aug).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment12",
+   "action": "derive",
+   "source_column": "custentity_enl_legalname",
+   "sheets": [
+    "HZ_IMP_ACCOUNTS_T"
+   ],
+   "note": "HZ_IMP_ACCOUNTS_T DFF Segment12 <- custentity_enl_legalname (analyst 08-Aug).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Descriptive Flexfield Segment13",
+   "action": "derive",
+   "source_column": "dateprospect",
+   "sheets": [
+    "HZ_IMP_ACCOUNTS_T"
+   ],
+   "note": "HZ_IMP_ACCOUNTS_T DFF Segment13 <- dateprospect (analyst 08-Aug).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Account Number",
+   "action": "derive",
+   "source_column": "entityid",
+   "sheets": [
+    "HZ_IMP_ACCTSITES_T"
+   ],
+   "note": "HZ_IMP_ACCTSITES_T Account Number <- entityid (mapped & approved).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Account Number",
+   "action": "derive",
+   "source_column": "entityid",
+   "sheets": [
+    "HZ_IMP_ACCTSITEUSES_T"
+   ],
+   "note": "HZ_IMP_ACCTSITEUSES_T Account Number <- entityid (mapped & approved).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Site Language",
+   "action": "rule",
+   "rule_type": "VALUE_MAP",
+   "rule_config": {
+    "en_US": "US",
+    "EN_US": "US",
+    "case_insensitive": true
+   },
+   "sheets": [
+    "HZ_IMP_ACCTSITES_T"
+   ],
+   "note": "HZ_IMP_ACCTSITES_T Site Language: transform en_US -> US.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Language Name",
+   "action": "rule",
+   "rule_type": "VALUE_MAP",
+   "rule_config": {
+    "en_US": "US",
+    "EN_US": "US",
+    "case_insensitive": true
+   },
+   "sheets": [
+    "HZ_IMP_PERSONLANG_T"
+   ],
+   "note": "HZ_IMP_PERSONLANG_T Language Name: transform en_US -> US.",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Account Contact Source System",
+   "action": "constant",
+   "value": "NETSUITE",
+   "sheets": [
+    "HZ_IMP_ROLERESP_T"
+   ],
+   "note": "HZ_IMP_ROLERESP_T Account Contact Source System default NETSUITE (was blank).",
+   "target_object": "Customer"
+  },
+  {
+   "target_field": "Party Usage Code",
+   "action": "rule",
+   "rule_type": "CASE_WHEN",
+   "rule_config": {
+    "branches": [
+     {
+      "if_column": "firstname",
+      "op": "notblank",
+      "then": "ORG_CONTACT"
+     },
+     {
+      "if_column": "middlename",
+      "op": "notblank",
+      "then": "ORG_CONTACT"
+     },
+     {
+      "if_column": "lastname",
+      "op": "notblank",
+      "then": "ORG_CONTACT"
+     }
+    ],
+    "default": "CUSTOMER"
+   },
+   "sheets": [
+    "HZ_IMP_PARTIES_T"
+   ],
+   "note": "HZ_IMP_PARTIES_T Party Usage Code = ORG_CONTACT when first/middle/last name present, else CUSTOMER.",
+   "target_object": "Customer"
+  }
+ ]
+}
