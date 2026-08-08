@@ -2409,8 +2409,18 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         decided: set = set()
         _owned = (_cm.merge_owned_fields(_sheet_name_of(sfields))
                   if _grain_merge else set())
+        # Normalised membership — the field's stored name may differ from the merge's
+        # literal by punctuation / case / a required-'*' (which is why an EXACT `in`
+        # protected Party Original System Reference but not Party Original System, so
+        # the glue re-stamped NETSUITE — REC-80). _finalize already matches owned keys
+        # normalised; do the same here.
+        _owned_n = {re.sub(r"[^a-z0-9]", "", str(x).lower()) for x in _owned}
+
+        def _is_owned(fn) -> bool:
+            return re.sub(r"[^a-z0-9]", "", str(fn).lower()) in _owned_n
+
         for f in sfields:
-            if f.field_name in _owned:
+            if _is_owned(f.field_name):
                 # The merge authoritatively populates this field (Primary/Identifying
                 # flag — REC-09/23; contact-point fields — REC-48/53/54/56/57; party
                 # identity and the PROFILES forced-blanks). Neither a not_applicable
