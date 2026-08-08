@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Supplier PROC-02 and PROC-04. PROC-02 Taxpayer ID conditional by country on Supplier Import: Country Code IN or Country India gives Permanent Account Number PAN, US gives Tax ID, CA gives Tax Id Canada, every other country blank; country and the three tax columns are carried through the fan-out and the derivation is guarded so any non NetSuite supplier source is untouched. PROC-04 D-U-N-S Number is forced blank on Supplier Import, overriding the External ID mapping. Compiled and unit tested. REGENERATE the supplier project and confirm Taxpayer ID per country and D-U-N-S blank."
+set "DEPLOY_NOTE=BOM validation: stamp mandatory Batch ID and Batch Number on every BOM tab. Both shipped blank because a customer keep Batch ID blank learning sprays onto BOM and Batch Number has no default. bom_structure_service reshape_for_sheet now forces Batch ID and Batch Number to 900001 engine-owned on Structures Components Substitutes and Reference Designators. Everything else in the BOM validation doc was already live and verified: Item Sequence 10 20 30 per parent, Org Code IMO, Structure Item Name populated, Effective Date SYSDATE yyyy mm dd, per tab dedup, substitute and designator filters. Compiled and unit tested. REGENERATE the BOM project and confirm Batch ID and Batch Number are 900001 on all four tabs."
 
 echo Checking the deploy set...
 set "MISSING="

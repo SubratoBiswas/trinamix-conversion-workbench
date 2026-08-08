@@ -228,7 +228,31 @@ def reshape_for_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     if kind == "components":
         out = _renumber_item_sequence(out)
 
+    # Batch ID & Number are MANDATORY on every BOM tab (validation doc). They were
+    # shipping blank: the control default never lands here (a customer "keep Batch ID
+    # blank" learning sprays onto BOM), and Batch Number has no default at all. Stamp
+    # both, engine-owned, so the load-batch grouping is always present. Constant value
+    # so all four interfaces share one batch — confirm the number if a convention exists.
+    out = _stamp_batch(out)
+
     return out
+
+
+_BOM_BATCH_VALUE = "900001"
+
+
+def _stamp_batch(df: pd.DataFrame) -> pd.DataFrame:
+    """Force Batch ID / Batch Number to the load-batch constant on a BOM tab.
+
+    Mandatory per the NEXTPOWER BOM validation doc; engine-owned so a stray
+    keep-blank learning or a missing control default cannot leave them empty."""
+    if df is None or df.empty:
+        return df
+    for _name in ("Batch ID", "Batch Number"):
+        col = _find_col(df, _name)
+        if col is not None:
+            df[col] = _BOM_BATCH_VALUE
+    return df
 
 
 def missing_mandatory(df: pd.DataFrame, sheet_name: str) -> list[str]:
