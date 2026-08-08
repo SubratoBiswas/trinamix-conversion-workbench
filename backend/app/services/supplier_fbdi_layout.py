@@ -392,6 +392,15 @@ def apply_supplier_layout(sdf: "pd.DataFrame", sheet_name: str, is_supplier: boo
         return sdf
     order = supplier_col_order().get(norm_hdr(safe_sheet_name(sheet_name)))
     sdf = _reorder_to(sdf, order) if order else sdf.copy()
+    # PROC-07: Oracle keeps "…-Obsoleted" columns in the supplier templates for
+    # backward compatibility; populating them is at best ignored, at worst rejected.
+    # The strategy default ("blank every column containing Obsolete") wasn't firing on
+    # the NetSuite mapping (it shipped Tax Registration Number-Obsoleted on 966 rows),
+    # so enforce it deterministically here where columns carry their Oracle header
+    # names. Fans out to every supplier project / source on regenerate.
+    for _c in list(sdf.columns):
+        if "obsolete" in norm_hdr(_c):
+            sdf[_c] = ""
     if batch_id_first:
         # Header spelling varies across the templates (Batch_id / Batch ID /
         # BatchId), so match on the normalised header rather than an exact string.

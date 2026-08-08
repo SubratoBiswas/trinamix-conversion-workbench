@@ -497,6 +497,22 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
                 col = _find_col_ci(sub.columns, fld)
                 if col is not None:
                     sub[col] = ""
+    # REC-76: Account Contact Role Responsibility Original System Reference =
+    # entityid_contactinternalid — the SAME value REC-74's Account Contact Source
+    # System Reference carries (e.g. NT-1885_606508). Computed from the carried
+    # customer + contact keys so it does not depend on a mapping a fresh project may
+    # lack, and so it is available now (the sibling ref is only filled later).
+    if "roleresp" in n and ENTITYID_COL in sub.columns and INTERNALID_COL in sub.columns:
+        _e = sub[ENTITYID_COL].astype(str).str.strip()
+        _i = sub[INTERNALID_COL].astype(str).str.strip()
+
+        def _mk(a, b):
+            a = "" if a.lower() in ("nan", "none", "null") else a
+            b = "" if b.lower() in ("nan", "none", "null") else b
+            return f"{a}_{b}" if (a and b) else ""
+        _ref = [_mk(a, b) for a, b in zip(_e.tolist(), _i.tolist())]
+        _set_owned_col(sub, "Account Contact Role Responsibility Original System Reference",
+                       pd.Series(_ref, index=sub.index))
     return sub
 
 
@@ -522,6 +538,8 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
     # ACCTCONTACTS normalise to "acct…", so this does not leak to the child sheets.
     if "account" in n and "site" not in n and "contact" not in n:
         owned.add("Account Description")
+    if "roleresp" in n:                    # REC-76 computed reference
+        owned.add("Account Contact Role Responsibility Original System Reference")
     owned.update(_sheet_rule_fields(n))    # constants / blanks / ref-copies
     return owned
 
