@@ -34,6 +34,13 @@ class LearnedMappingUpdate(BaseModel):
     target_field: Optional[str] = None
     rule_type: Optional[str] = None
     rule_config: Optional[Any] = None
+    # Source-system scope. LearnedMappingOut has always RETURNED this, but it was
+    # missing here, so a learning's scope was read-only — the engine scopes by it
+    # (mapping_store.applies) yet nothing could change "any" (None) to a specific
+    # ERP like "netsuite" without a reseed. Making it settable lets a rule be
+    # narrowed to one source (e.g. Alternate Name blank-if-equals on NetSuite only,
+    # not eBOS) from the API/UI. None/"" clears it back to source-agnostic.
+    source_erp: Optional[str] = None
     # Restrict a learning to specific interface sheets, or remove it from some.
     # Both empty = every sheet (the previous behaviour). Needed because Oracle
     # repeats a field name across sheets, so one approval used to reach all of

@@ -153,7 +153,8 @@
         "rule_config": {
           "other_column": "Supplier Name"
         },
-        "note": "Do not populate Alternate Name when it duplicates Supplier Name. The workbook shows many rows where NS Name and Alternate Name are identical (e.g. 'Advantage Electric Supply'). Comparison is case/whitespace-insensitive.",
+        "source_system": "netsuite",
+        "note": "Do not populate Alternate Name when it duplicates Supplier Name. The workbook shows many rows where NS Name and Alternate Name are identical (e.g. 'Advantage Electric Supply'). Comparison is case/whitespace-insensitive. NETSUITE ONLY (08-Aug-2026): eBOS supplies a distinct Alternate Name that must not be blanked, so this rule is scoped to the NetSuite source only.",
         "status": "IMPLEMENTED - engine rule BLANK_IF_EQUALS added"
       },
       {

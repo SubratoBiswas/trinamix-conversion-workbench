@@ -914,10 +914,16 @@ async def seed_supplier_strategy_defaults() -> dict:
         else:
             a_skip += 1        # constants already covered above, or not implementable yet
             continue
+        # Per-rule source scope. Default None keeps a rule source-agnostic (applies to
+        # every extract vocabulary); a rule may opt into ONE source system via its
+        # "source_system" field so it fires only for that ERP. Used to keep the
+        # Alternate-Name BLANK_IF_EQUALS on NetSuite only — eBOS supplies a distinct
+        # Alternate Name and must not have it blanked (analyst, 08-Aug-2026).
         row = await mapping_store.record_learning(
             kind=kind, category=cat, original_value=orig, resolved_value=res,
             target_object=tgt_obj, target_field=tgt_field,
             rule_type=rtype, rule_config=rcfg, client_id=nid,
+            source_erp=(r.get("source_system") or None),
             captured_from=(doc.get("analyst_rules", {}) or {}).get("_source", src),
             captured_by=None, effective_date=_eff_strategy(doc),
         )
