@@ -2410,16 +2410,20 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         _owned = (_cm.merge_owned_fields(_sheet_name_of(sfields))
                   if _grain_merge else set())
         for f in sfields:
-            m = _mbyfield.get(f.id)
-            if m is None:
-                continue
             if f.field_name in _owned:
                 # The merge authoritatively populates this field (Primary/Identifying
-                # flag — REC-09/23; contact-point fields — REC-48/53/54/56/57). Neither
-                # a not_applicable keep-blank nor a stray analyst constant (Contact
-                # Point Type=EMAIL on every row) may override it. Mark it decided so the
-                # linkage glue leaves it alone too.
+                # flag — REC-09/23; contact-point fields — REC-48/53/54/56/57; party
+                # identity and the PROFILES forced-blanks). Neither a not_applicable
+                # keep-blank nor a stray analyst constant (Contact Point Type=EMAIL on
+                # every row) nor the source-system linkage glue (NETSUITE on a PROFILES
+                # field the merge blanked) may override it. Marked decided REGARDLESS of
+                # whether a mapping row exists — a forced-blank field the fresh project
+                # never mapped has no MappingSuggestion, so this must run before the
+                # `m is None` skip or the glue re-stamps it (REC-80).
                 decided.add(f.field_name)
+                continue
+            m = _mbyfield.get(f.id)
+            if m is None:
                 continue
             if _analyst_keeps_blank(m):
                 consts[f.field_name] = ("", False)
