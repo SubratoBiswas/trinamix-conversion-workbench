@@ -326,12 +326,18 @@ async def seed_bom_field_mappings() -> dict:
         tgt_field = (r.get("target_field") or "").strip()
         if const is None or not (tgt_obj and tgt_field):
             continue
+        # A constant may be scoped to ONE interface sheet via "fbdi_sheet" — Oracle
+        # repeats a field name across BOM sheets (Effective Date is on both the
+        # Structures and Components interfaces), so the Structures-only default must
+        # not also stamp component effectivity. No fbdi_sheet = every sheet, as before.
+        _sheet = (r.get("fbdi_sheet") or "").strip()
         row = await mapping_store.record_learning(
             kind="example_default", category="Default Value",
             original_value="(constant)", resolved_value=str(const),
             target_object=tgt_obj, target_field=tgt_field,
             client_id=nid, captured_from=_OWN, captured_by=None,
             effective_date=_BOM_EFF,
+            sheets=[_sheet] if _sheet else None,
         )
         if row is not None:
             const_seeded += 1

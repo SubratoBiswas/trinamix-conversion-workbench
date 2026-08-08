@@ -17,5 +17,6 @@
   { "_note": "PROC/BOM: the input carries the real Org Code (e.g. IMO). Pass it through instead of overwriting with a constant — BOM-02.", "target_object": "BOM", "target_field": "Organization Code", "source_field": "Organization Code", "confidence": "High" },
 
   { "_constants": "Analyst-fixed constant defaults on EGP_STRUCTURES_INTERFACE, applied regardless of source system", "target_object": "BOM", "target_field": "Transaction Type", "constant": "SYNC" },
-  { "target_object": "BOM", "target_field": "Structure Name", "constant": "Primary" }
+  { "target_object": "BOM", "target_field": "Structure Name", "constant": "Primary" },
+  { "_note": "Structures Effective Date is mandatory (analyst spec) but the source carries none. Default to SYSDATE -> resolves to today's load date in YYYY/MM/DD. Sheet-scoped to Structures so component effectivity is not touched.", "target_object": "BOM", "fbdi_sheet": "EGP_STRUCTURES_INTERFACE", "target_field": "Effective Date", "constant": "SYSDATE" }
 ]
