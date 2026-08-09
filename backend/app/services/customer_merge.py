@@ -575,8 +575,21 @@ def apply_dff_udcp(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFr
             src = seg_map.get(i)
             if src:
                 sc = _carried(sub, src)
-                val = sc if sc is not None else pd.Series([""] * len(sub), index=sub.index)
-                _set_owned_col(sub, fld, val)
+                if sc is None:
+                    # The source column may have ridden along UN-prefixed (not threaded
+                    # as __src) on a freshly-created project's merge frame; use it
+                    # directly when it is present under its own name.
+                    _raw = _find_col_ci(sub.columns, src)
+                    if _raw is not None:
+                        sc = sub[_raw].astype(str).str.strip()
+                if sc is not None:
+                    _set_owned_col(sub, fld, sc)
+                # else: the source reached this frame under NEITHER name — leave what the
+                # base mapping produced (e.g. the approved SalesforceID -> Segment5
+                # mapping) instead of overwriting it with blank. This is what made
+                # Segment5 ship empty on a brand-new project even though the mapping had
+                # fanned out. The non-value-sheet blanking below still stops any leak, so
+                # "value on ACCOUNTS/PROFILES, blank on every other sheet" still holds.
             elif _find_col_ci(sub.columns, fld) is not None:
                 # a segment this sheet does not map -> blank
                 _set_owned_col(sub, fld, pd.Series([""] * len(sub), index=sub.index))
