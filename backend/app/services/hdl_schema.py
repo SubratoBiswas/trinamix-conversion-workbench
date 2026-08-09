@@ -76,6 +76,15 @@ _HIRE = "Hire Date"
 # carries. It was _blank() here — a required Oracle attribute shipped empty.
 _BU_SHORT_CODE = "NXT LLC BU"
 
+# The single legal employer every worker rolls up to in NextPower's Fusion instance
+# (Subrato, 09-Aug: "LegalEmployerName -> Nextpower LLC" for ALL employees). The
+# extract's Company column carries the real per-entity names (Nextracker LLC USA,
+# Nextpower India Private Limited, ...) — 11 distinct — but the target instance has
+# ONE legal employer, so this is a CONSTANT, not a copy of the source. Confirmed the
+# opposite of LegislationCode, which stays per-country ISO (each person's own
+# legislation), NOT a constant.
+_LEGAL_EMPLOYER = "Nextpower LLC"
+
 
 def _src(name, source, required=True):
     """``source`` may be ONE column name or a LIST of candidate spellings.
@@ -249,7 +258,7 @@ WORK_RELATIONSHIP = ("WorkRelationship", [
     _const("PrimaryFlag", "Y"),
     _key("PersonId(SourceSystemId)", "Workday"),
     _src("WorkerNumber", _EMP_ID),
-    _src("LegalEmployerName", "Company"),
+    _const("LegalEmployerName", _LEGAL_EMPLOYER),
     _vmap("WorkerType", "Worker Type", WORKER_TYPE_MAP),
     _const("SourceSystemOwner", "Workday"),
     _key("SourceSystemId", "WorkRelationship"),
@@ -274,7 +283,7 @@ def _work_terms(numbered: bool):
         _date("EffectiveStartDate", _HIRE),
         _key("PeriodOfServiceId(SourceSystemId)", "WorkRelationship"),
         _key("PersonId(SourceSystemId)", "Workday"),
-        _src("LegalEmployerName", "Company"),
+        _const("LegalEmployerName", _LEGAL_EMPLOYER),
         _const("SourceSystemOwner", "Workday"),
         _key("SourceSystemId", "Worker_Terms"),
         _const("ActionCode", "HIRE"),
@@ -295,7 +304,7 @@ def _assignment(numbered: bool):
         _key("PeriodOfServiceId(SourceSystemId)", "WorkRelationship"),
         _key("PersonId(SourceSystemId)", "Workday"),
         _vmap("WorkerType", "Worker Type", WORKER_TYPE_MAP),
-        _src("LegalEmployerName", "Company"),
+        _const("LegalEmployerName", _LEGAL_EMPLOYER),
         _key("WorkTermsAssignmentId(SourceSystemId)", "Worker_Terms"),
         _const("SourceSystemOwner", "Workday"),
         _key("SourceSystemId", "Assignment"),

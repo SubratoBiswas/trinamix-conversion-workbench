@@ -114,7 +114,7 @@ REM on the DONE screen, so the thing you deployed is stated twice.
 REM
 REM No brackets or ampersands in the text: it is echoed inside an IF, where cmd
 REM would parse them as syntax.
-set "DEPLOY_NOTE=Employee HDL OnMilitaryServiceFlag now maps the source to the Oracle Y N flag. The extract carries 0 and 1 which shipped raw before, so the required flag reached Oracle as 0 and 1 instead of N and Y. hdl_schema now value-maps it engine-owned: 1 yes y true on go to Y, 0 no n false off go to N, blank or unknown go to N. Measured live before the fix: 2185 rows of 0 and 21 rows of 1. The other three Employee value transforms were re-verified on a brand new clean project and are already correct and fanning out: ActiveStatus Active to A, Country and LegislationCode country name to ISO2 code, WorkerType Employee to E and Contingent to C. Compiled and unit tested. REGENERATE a new Employee HDL project and confirm OnMilitaryServiceFlag is N or Y on WorkRelationship in both Worker passes."
+set "DEPLOY_NOTE=Employee HDL LegalEmployerName is now the constant Nextpower LLC for all employees, per Subrato 09-Aug, instead of the per-entity names from the source Company column. hdl_schema sets it engine-owned on WorkRelationship WorkTerms and Assignment. LegislationCode deliberately stays per-country ISO US IN BR and so on, which Subrato confirmed is correct. This build also keeps the OnMilitaryServiceFlag value-map already live in 4ccddaba, 0 1 to N Y. Compiled. REGENERATE a new Employee HDL project and confirm LegalEmployerName is Nextpower LLC on all Worker rows and OnMilitaryServiceFlag is N or Y."
 
 echo Checking the deploy set...
 set "MISSING="
