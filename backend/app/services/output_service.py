@@ -896,9 +896,29 @@ def _transform_frame(
         # and the person-vs-overlay date test downstream still decides. A CONSTANT
         # overlay is left alone (it only fills blanks and is not gated by
         # `_conversion_rule_wins`), so the suggestion still runs under it.
+        #
+        # SUPPRESS ONLY WHEN THE MAPPING IS DISCARDED. (09-Aug, refined)
+        #
+        # The first cut of this suppressed the suggestion for EVERY field that
+        # carried an overlay rule, and that was too wide: it also silenced a
+        # correct APPROVED mapping whose own transform the overlay merely
+        # duplicates less well. Measured live on Supplier / Taxpayer ID — the
+        # mapping is `pan` + a CASE_WHEN keyed on the raw `country`/`pan`/`tax_id`
+        # columns and populated 1,199/1,391 US + 294/544 India; the overlay's copy
+        # keys on DISPLAY names ("{Tax ID}", "{Permanent Account Number ( PAN)}",
+        # if_column "Country") that do not resolve on a raw-name extract, so
+        # letting it win blanked Taxpayer ID on every row.
+        #
+        # The real signal is that Phone Country Code's mapping is DISCARDED
+        # (not_applicable, no source) — nobody bound a real column, so the AI's
+        # transform on it is a pure guess and the overlay must win. Taxpayer ID's
+        # mapping is APPROVED with a real source column — a deliberate binding,
+        # which the overlay guarantee was never meant to overwrite. So suppress the
+        # suggestion for an overlay-rule field ONLY when the mapping was discarded.
         _ov_rules_field = bool(_ov_early and "rule" in _ov_early)
+        _suppress_suggestion = _ov_rules_field and _discarded
         if (m.suggested_transformation and not rules and m.status != "rejected"
-                and not _ov_rules_field):
+                and not _suppress_suggestion):
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
         dv = m.default_value
