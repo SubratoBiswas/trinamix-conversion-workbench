@@ -1441,19 +1441,9 @@ async def build_converted_dataframe(
             # row-local so odf is 1:1 with src in order. Guarded on equal length so a
             # shape surprise never mis-aligns the key onto the wrong rows.
             if _carry and len(src) == len(odf):
-                # Resolve each carry name to the real source column by NORMALISED
-                # match (alnum, lower) — not exact string. A NetSuite supplier extract
-                # names columns "Email"/"Fax" while the carry list is lower-case, so an
-                # exact test threaded nothing and Communication Method could never see
-                # the e-mail. Customer sources are already lower-case, so this is a
-                # no-op there.
-                _src_by_norm = {re.sub(r"[^a-z0-9]", "", str(_c).lower()): _c
-                                for _c in src.columns}
                 for _cc in _carry:
-                    _real = (_cc if _cc in src.columns
-                             else _src_by_norm.get(re.sub(r"[^a-z0-9]", "", str(_cc).lower())))
-                    if _real is not None:
-                        odf["__" + _cc] = src[_real].astype(str).str.strip().values
+                    if _cc in src.columns:
+                        odf["__" + _cc] = src[_cc].astype(str).str.strip().values
             frames.append(odf)
             if collect_frames is not None:
                 # Keep the source's own column list (PRE-enrichment): sheet routing and
@@ -2124,195 +2114,6 @@ def _apply_control_defaults(df: pd.DataFrame, seq_start: int = 100000,
     return df
 
 
-# ── NetSuite Supplier rule batch (08-Aug) ────────────────────────────────────
-# Analyst-confirmed, per-interface forced values / blanks / value-maps for the
-# Supplier fan-out. Runs in _finalize (columns still keyed by field_name), AFTER
-# control defaults so it is authoritative, and ONLY on the sheet it names. Column
-# match is by normalised header (alnum, lower) so "Fax", "Fax*" and "  Fax "
-# all hit. A rule that names a column the sheet does not have is a silent no-op,
-# so the same table can be applied without per-sheet column lists.
-_SUP_NULL_VALUES = {"", "nan", "none", "null", "na", "<na>"}
-
-
-def _sup_sheet_kind(sheet_name: str | None) -> str:
-    n = _norm_hdr(sheet_name or "")
-    if "assignment" in n:
-        return "ASSIGN"
-    if "contact" in n:
-        return "CONTACT"
-    if "bank" in n:
-        return "BANK"
-    if "site" in n:                       # after ASSIGN, since "siteassignment" contains "site"
-        return "SITE"
-    if "address" in n:
-        return "ADDRESS"
-    if "supplier" in n or n.startswith("poz"):
-        return "SUPPLIER"
-    return ""
-
-
-def _apply_supplier_rules(df: pd.DataFrame, sheet_name: str | None,
-                          src: "pd.DataFrame | None" = None) -> pd.DataFrame:
-    """Force the analyst-confirmed constants / blanks / value-maps for one supplier
-    interface sheet. Additive and column-guarded: only touches columns that exist.
-
-    ``src`` is the pre-reindex frame (row-aligned with ``df``) that still carries the
-    threaded source columns — e-mail / fax — which the Communication Method
-    derivation needs but the interface reindex has already dropped from ``df``."""
-    n = len(df)
-    if n == 0:
-        return df
-    kind = _sup_sheet_kind(sheet_name)
-    if not kind:
-        return df
-
-    def _cols(*names):
-        want = {_norm_hdr(x) for x in names}
-        return [c for c in df.columns if _norm_hdr(c) in want]
-
-    def force(names, value):
-        for c in _cols(*([names] if isinstance(names, str) else names)):
-            df[c] = value
-
-    def blank(names):
-        for c in _cols(*([names] if isinstance(names, str) else names)):
-            df[c] = ""
-
-    def vmap(names, fn):
-        for c in _cols(*([names] if isinstance(names, str) else names)):
-            df[c] = [fn(str(v)) for v in df[c].tolist()]
-
-    def _yn(v: str) -> str:                # Federal Reportable: Yes->Y, No->N
-        s = v.strip().lower()
-        if s in _SUP_NULL_VALUES:
-            return ""
-        if s in ("yes", "y", "true", "1", "t"):
-            return "Y"
-        if s in ("no", "n", "false", "0", "f"):
-            return "N"
-        return v.strip()
-
-    def _b2b(v: str) -> str:                # Enable B2B: No->None, Yes->CMK, else blank
-        s = v.strip().lower()
-        if s in ("no", "n", "false", "0"):
-            return "None"
-        if s in ("yes", "y", "true", "1"):
-            return "CMK"
-        return ""
-
-    def _faxnum(v: str) -> str:             # keep only the local fax number
-        s = v.strip()
-        if s.lower() in _SUP_NULL_VALUES:
-            return ""
-        digits = re.sub(r"\D", "", s)
-        # Drop leading country (+area) code groups; keep the trailing 7-digit local
-        # number when the value carries more than that (e.g. "+1 602 555-1234").
-        return digits[-7:] if len(digits) > 7 else digits
-
-    def _derive_comm():                     # Communication Method from Email/Fax presence
-        ccols = _cols("Communication Method")
-        if not ccols:
-            return
-        # Read the source e-mail / fax from the carried columns on the pre-reindex
-        # frame (issue #14): the Site interface has no e-mail column of its own, so
-        # without this every row could only be FAX or NONE. Fall back to any e-mail /
-        # fax column that did survive onto df.
-        def _srccol(frame, *names):
-            if frame is None:
-                return None
-            want = {_norm_hdr(x) for x in names}
-            for c in frame.columns:
-                if _norm_hdr(c) in want:
-                    return frame[c].astype(str).tolist()
-            return None
-        ev = (_srccol(src, "email", "altemail", "external_email_addr")
-              or (df[_cols("Email", "E-Mail", "Email Address")[0]].astype(str).tolist()
-                  if _cols("Email", "E-Mail", "Email Address") else [""] * n))
-        fv = (_srccol(src, "fax")
-              or (df[_cols("Fax", "Fax Number")[0]].astype(str).tolist()
-                  if _cols("Fax", "Fax Number") else [""] * n))
-        if len(ev) != n:
-            ev = (ev + [""] * n)[:n]
-        if len(fv) != n:
-            fv = (fv + [""] * n)[:n]
-
-        def _has(x):
-            return str(x).strip().lower() not in _SUP_NULL_VALUES
-        out = ["EMAIL" if _has(ev[i]) else ("FAX" if _has(fv[i]) else "NONE")
-               for i in range(n)]
-        for c in ccols:
-            df[c] = out
-
-    def _derive_taxpayer():                 # PROC-02: Taxpayer ID conditional by country
-        tcols = _cols("Taxpayer ID")
-        if not tcols or src is None:
-            return
-
-        def _find(*names):
-            want = [_norm_hdr(x) for x in names]
-            for w in want:
-                for c in src.columns:
-                    if _norm_hdr(c) == w:
-                        return src[c].astype(str).tolist()
-            return None
-        cc = _find("__Country Code", "__Country")
-        pan = _find("__Permanent Account Number ( PAN)")
-        caid = _find("__Tax Id Canada")
-        # Only act on the NetSuite tax layout (country signal + the country-specific
-        # tax columns present). Any other supplier source keeps its own mapping.
-        if cc is None or (pan is None and caid is None):
-            return
-        usid = _find("__Tax ID") or [""] * n
-        pan = pan or [""] * n
-        caid = caid or [""] * n
-
-        def _g(lst, i):
-            return str(lst[i]).strip() if i < len(lst) else ""
-        out = []
-        for i in range(n):
-            c = _g(cc, i).lower()
-            if c in ("in", "ind", "india"):
-                out.append(_g(pan, i))
-            elif c in ("us", "usa", "unitedstates", "unitedstatesofamerica"):
-                out.append(_g(usid, i))
-            elif c in ("ca", "can", "canada"):
-                out.append(_g(caid, i))
-            else:
-                out.append("")                # other countries: blank (per analyst)
-        for c in tcols:
-            df[c] = out
-
-    if kind == "SUPPLIER":
-        force("Supplier Type", "Supplier")
-        force("Business Relationship", "SPEND_AUTHORIZED")
-        vmap("Federal Reportable", _yn)
-        blank("Pay Each Document Alone")
-        blank("D-U-N-S Number")             # PROC-04: blank on Supplier Import (overrides External ID mapping)
-        _derive_taxpayer()
-    elif kind == "ADDRESS":
-        blank("Address Name New")           # NOT "Address Name" (that stays = City)
-        blank("RFQ Or Bidding")
-        force("Ordering", "Y")
-        force("Pay", "Y")
-    elif kind == "SITE":
-        force("Pay", "Y")
-        force("Ordering", "Y")              # purpose flags may live on the site sheet
-        blank("RFQ Or Bidding")
-        vmap("Enable B2B Messaging", _b2b)
-        _derive_comm()
-        vmap("Fax", _faxnum)
-        force("Receipt Routing", "3")
-        blank("Invoice Amount Limit")
-        force("Invoice Match Option", "R")
-        force("Match Approval Level", "3")
-        force("Payment Method", "G Treas ACH")
-    elif kind == "ASSIGN":
-        force("Bill-to BU", "NX US BU")
-    elif kind == "CONTACT":
-        vmap("Fax", _faxnum)                # e-mail xx-prefix handled by _mask_supplier_emails
-    return df
-
-
 def _strategy_sheets_to_drop() -> set:
     """Interface sheets that must not appear in a generated workbook at all.
 
@@ -2754,12 +2555,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # LAST step renames columns to Oracle's exact header labels (with the
         # '*' required markers) so the file matches the shipped template.
         cols = _dedup([f.field_name for f in sfields])
-        # Keep the pre-reindex frame: it still carries the threaded source columns
-        # (e.g. supplier e-mail/fax) that the reindex to interface columns drops but
-        # _apply_supplier_rules needs to derive Communication Method. Row-aligned
-        # with sdf, since reindex only changes columns.
-        _pre_reindex = _frame_for(sfields)
-        sdf = _pre_reindex.reindex(columns=cols, fill_value="")
+        sdf = _frame_for(sfields).reindex(columns=cols, fill_value="")
         # Fields the customer merge OWNS on this sheet (Primary/Identifying flag set
         # per-sheet from the customer key — REC-09/23; the CONTACTPTS fan-out fields —
         # REC-48/53/54/56/57). Their value is the merge's to decide, so it must survive
@@ -2800,12 +2596,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # duplicates Supplier Name. Runs AFTER control defaults so a default that
         # re-creates the duplicate is caught too.
         sdf = _strategy_frame_rules(sdf, obj_name)
-        # NetSuite Supplier rule batch (08-Aug): analyst-confirmed constants,
-        # blanks and value-maps per interface sheet. BEFORE the e-mail mask so the
-        # Communication-Method derivation reads the un-masked e-mail column, and
-        # after control defaults so these values are authoritative.
-        if _sup_rules_on:
-            sdf = _apply_supplier_rules(sdf, _sheet_name_of(sfields), _pre_reindex)
         # Supplier safety: neutralise e-mail columns so a migration/test load can't
         # trigger real supplier notifications. Runs while columns are still keyed by
         # field_name (before the header rename below).
@@ -2862,15 +2652,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         or "supplier" in _safe_sheet_name(s.sheet_name).lower()
         for s in sheets_with_fields
     )
-    # The 08-Aug forced constants / value-maps are Fusion TARGET-side supplier
-    # requirements (Business Relationship = SPEND_AUTHORIZED, Supplier Type =
-    # Supplier, Receipt Routing = 3, Payment Method = G Treas ACH, Bill-to BU =
-    # NX US BU, …) — the target config is one config, so they apply to every
-    # supplier source, not just NetSuite. The source ERP is not tracked on the
-    # conversion here, so a source gate could never fire reliably anyway. The
-    # fields these touch do not overlap the signed-off eBOS fixes (Parent Supplier,
-    # Tax Registration Number-Obsoleted, Alternate Name, D-U-N-S).
-    _sup_rules_on = _is_supplier
     # BOM Import — the four EGP_*_INTERFACE structure tables. The sheet test comes
     # first and is the one that matters: the same object arrives as BOM, Bill of
     # Materials or Item Structure depending on who created it, and a bare substring
@@ -3341,31 +3122,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         fdf.to_csv(path, index=False, header=_hdr)
         return name, str(path), len(fdf), len(fdf.columns)
 
-    # REC-06 duplicate suspects (customer grain-merge). Load the analyst's saved
-    # delete/merge decisions so the sheet writer applies ONLY those (nothing is removed
-    # without a decision), reset the suspect + deletion logs, then after writing attach
-    # the detected suspects and the audit of what the decisions actually removed to the
-    # output's dq_report — the Duplicate Suspects screen and the Duplicates Report read
-    # from there.
-    if _grain_merge:
-        _cm.reset_dedup_log()
-        _cm.reset_duplicate_suspects()
-        try:
-            from app.models.project import Project as _Project
-            _proj = await _Project.get(conversion.project_id) if conversion.project_id else None
-            _cm.set_duplicate_decisions(getattr(_proj, "duplicate_decisions", None) or {})
-        except Exception:  # noqa: BLE001 — a missing project must not fail generation
-            _cm.set_duplicate_decisions({})
     _write_t0 = _time.monotonic()
     out_name, out_path_str, total_rows, total_cols = await asyncio.to_thread(_write_all)
     log.info("generate phase — %s: write %s took %.1fs",
              obj_name, fmt, _time.monotonic() - _write_t0)
-    if _grain_merge:
-        _sus = _cm.get_duplicate_suspects()
-        _dups = _cm.get_dedup_log()
-        if _sus or _dups:
-            dq_report = {**(dq_report if isinstance(dq_report, dict) else {}),
-                         "duplicate_suspects": _sus, "duplicates": _dups}
     out_path = Path(out_path_str)
     artefact = ConvertedOutput(
         conversion_id=conversion.id, output_file_path=str(out_path),
@@ -3440,7 +3200,6 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     # keep the plain converge + de-dup.
     from app.services import customer_merge as _cm
     _is_customer = "customer" in (target_object or "").lower()
-    _is_supplier_obj = "supplier" in (target_object or "").lower()
     # Cross-grain enrichment lookup (Customer only). A Customer load's columns live on
     # DIFFERENT source files — person names in the contact file, companyname/startdate/
     # datecreated in the master — but the rules that read them run on a different grain.
@@ -3471,33 +3230,23 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     for c in convs:
         _cf: dict = {}
         try:
-            _carry_cols = None
-            if _is_customer:
-                _carry_cols = (["entityid", "internalid", "email", "altemail",
-                                "phone", "mobilephone", "fax",  # fax → REC-02 FAX point
-                                # Identity stamped deterministically by the merge,
-                                # by grain (customer_merge.set_party_identity):
-                                "companyname", "firstname", "middlename", "lastname"]
-                               # DFF source columns the ACCOUNTS / RA_PROFILES DFF
-                               # stamp reads (customer_merge.apply_dff_udcp).
-                               + list(_cm.DFF_SOURCE_COLS)
-                               # LOCATIONS address block source columns
-                               # (customer_merge.apply address stamp, NEW-03/04).
-                               + list(_cm.ADDR_SOURCE_COLS))
-            elif _is_supplier_obj:
-                # Communication Method on the Supplier Site sheet is derived from the
-                # source e-mail / fax presence (issue #14), and Taxpayer ID on the
-                # Supplier Import sheet is derived per-country (PROC-02). Neither set of
-                # source columns otherwise reaches those interfaces, so carry them
-                # through the fan-out — _apply_supplier_rules reads them.
-                _carry_cols = ["email", "altemail", "external_email_addr", "fax",
-                               # PROC-02 conditional Taxpayer ID by country:
-                               "Country Code", "Country",
-                               "Permanent Account Number ( PAN)", "Tax ID",
-                               "Tax Id Canada"]
             f, _ = await build_converted_dataframe(
                 c, max_rows=max_rows,
-                carry_source_cols=_carry_cols,
+                carry_source_cols=(["entityid", "internalid", "email", "altemail",
+                                    "phone", "mobilephone",
+                                    # Identity stamped deterministically by the merge,
+                                    # by grain (customer_merge.set_party_identity):
+                                    "companyname", "firstname", "middlename", "lastname"]
+                                   # DFF source columns the ACCOUNTS / RA_PROFILES DFF
+                                   # stamp reads (customer_merge.apply_dff_udcp).
+                                   + list(_cm.DFF_SOURCE_COLS)
+                                   # LOCATIONS address block source columns
+                                   # (customer_merge.apply address stamp, NEW-03/04).
+                                   + list(_cm.ADDR_SOURCE_COLS)
+                                   # startdate/datecreated for the From Date / Account
+                                   # Established Date COALESCE stamp (customer_merge).
+                                   + list(_cm.FROM_DATE_SOURCE_COLS)
+                                   if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
         except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
