@@ -40,6 +40,29 @@
     },
     {
       "target_object": "Supplier",
+      "target_field": "Pay Each Document Alone",
+      "constant": "N",
+      "condition": "Consultant (via new_issues_2, 09-Aug): Pay Each Document Alone should be a fixed value N on every supplier row.",
+      "status": "SEEDED as constant"
+    },
+    {
+      "target_object": "Supplier",
+      "target_field": "Taxpayer ID",
+      "rule_type": "CASE_WHEN",
+      "rule_config": {
+        "branches": [
+          {"if_column": "Country", "op": "eq", "value": "India", "then": "{Permanent Account Number ( PAN)}"},
+          {"if_column": "Country", "op": "eq", "value": "United States", "then": "{Tax ID}"},
+          {"if_column": "Country", "op": "eq", "value": "Canada", "then": "{Tax Id Canada}"}
+        ],
+        "default": ""
+      },
+      "condition": "Consultant (via new_issues_2, 09-Aug): 'Map the taxpayer ID based on the country column by assigning pan for India, tax_id for the United States, and tax_id_canada for Canada.'",
+      "note": "then interpolates the source column VALUE via {Column}: India -> 'Permanent Account Number ( PAN)', United States -> 'Tax ID', Canada -> 'Tax Id Canada'. Only these three countries are specified; every other country ships Taxpayer ID blank (default).",
+      "status": "SEEDED as CASE_WHEN with {Column} interpolation (engine op 'eq' + interpolation both supported)."
+    },
+    {
+      "target_object": "Supplier",
       "target_field": "Business Relationship",
       "constant": "SPEND_AUTHORIZED",
       "condition": "Approved suppliers. Pending-approval suppliers take PROSPECTIVE - conditional, needs the approval-status source column to be confirmed."
