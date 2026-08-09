@@ -265,17 +265,38 @@ def _prompt(description: str, cols: list[str], target_field: Optional[str],
         '  VALUE_MAP: {"<from>":"<to>","case_insensitive":true,"default":"<optional>"}\n'
         '  CONSTANT: {"value":"<v>"}   DEFAULT_VALUE: {"value":"<v>"}\n'
         '  CONCAT: {"columns":["a","b"],"separator":" "}   COALESCE: {"columns":["a","b"],"default":""}\n'
-        '  SPLIT: {"separator":" ","index":0}   DATE_FORMAT: {"input_format":"%m/%d/%Y","output_format":"%Y/%m/%d"}\n\n'
+        '  SPLIT: {"separator":" ","index":0}   DATE_FORMAT: {"input_format":"%m/%d/%Y","output_format":"%Y/%m/%d"}\n'
+        '  REGEX_REPLACE: {"pattern":"<regex>","replace":"<replacement, may be empty>","flags":"i (optional)"}\n'
+        '  REGEX_EXTRACT: {"pattern":"<regex>","group":1,"default":""}\n'
+        '  SUBSTRING: {"start":0,"length":4}   PAD: {"side":"left","length":10,"char":"0"}\n'
+        '  TRIM/UPPERCASE/LOWERCASE/TITLE_CASE: {}   PREFIX/SUFFIX: {"value":"<text>"}\n\n'
+        "MULTI-STEP INSTRUCTIONS — CHAINING (important):\n"
+        "- One sentence usually describes SEVERAL operations. Capture EVERY step. Never drop "
+        "part of the instruction just to make it fit a single rule_type — that is the most "
+        "common failure, and it ships a rule that does half of what was asked.\n"
+        '- Any config may carry a "then" list of further rules, applied in order to the '
+        'previous rule\'s output: "then":[{"rule_type":"...","config":{...}}, ...]. Build a '
+        "chain whenever the instruction has more than one step.\n"
+        "- Worked example — instruction: \"if several phone numbers are separated by '/', keep only "
+        "the first; and if it starts with a country code like '+86 ' separated by a space, drop the "
+        "country code\":\n"
+        r'  {"rule_type":"SPLIT","config":{"separator":"/","index":0,"then":[{"rule_type":"REGEX_REPLACE","config":{"pattern":"^\\+\\d+\\s+","replace":""}},{"rule_type":"TRIM","config":{}}]}}'
+        "\n"
+        "  (SPLIT keeps the first number, REGEX_REPLACE drops a space-separated leading country "
+        "code, TRIM cleans up — all three steps, not just one.)\n\n"
         "RULES:\n"
         "- If the instruction tests OTHER column(s) to decide the value (e.g. 'if X is Yes set to A, "
         "if Y is Yes set to B, else blank'), use CASE_WHEN with one branch per condition and a default. "
         "For Yes/No flags prefer op 'regex' with value '(?i)^(y|yes|true|1|x)$'.\n"
+        r"- Regex backslashes MUST be JSON-escaped: write \\d for a digit, \\+ for a literal plus, \\s for whitespace."
+        "\n"
         "- Only reference columns from the list above, by their exact name.\n"
         '- If the instruction names which SOURCE COLUMN the field should read '
         '("mapped from Legal Name"), include "source_column" with that EXACT column '
         "name from the list.\n"
         f"INSTRUCTION: {description}\n\n"
-        'Respond with ONLY: {"rule_type":"...","config":{...},"explanation":"one sentence",'
+        'Respond with ONLY: {"rule_type":"...","config":{...},'
+        '"explanation":"one sentence that names EVERY step you applied",'
         '"ambiguities":[{"phrase":"...","interpreted_as":"...","alternatives":["..."]}]}'
     )
 

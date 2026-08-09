@@ -361,7 +361,14 @@ def _apply_one_rule(
 
     if rt == "REGEX_REPLACE":
         pattern = cfg.get("pattern", "")
-        repl = cfg.get("replace", "")
+        # Accept both "replace" and "replacement". The rule-authoring UI and the
+        # AI translator have historically emitted "replacement", but only "replace"
+        # was read — so a non-empty replacement string was silently dropped and the
+        # rule ran as a pure deletion. Reading either key makes the two spellings
+        # behave the same instead of one of them quietly doing nothing.
+        repl = cfg.get("replace")
+        if repl is None:
+            repl = cfg.get("replacement", "")
         flags_s = cfg.get("flags", "") or ""
         flags = 0
         if "i" in flags_s.lower():
