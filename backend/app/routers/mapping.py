@@ -798,7 +798,8 @@ async def _sync_mapping_to_rule(r: TransformationRule, actor: str) -> dict:
 
 @router.post("/conversions/{conversion_id}/rules", response_model=TransformationRuleOut)
 async def add_rule(
-    conversion_id: str, payload: TransformationRuleCreate, user: User = Depends(get_current_user)
+    conversion_id: str, payload: TransformationRuleCreate,
+    background_tasks: BackgroundTasks, user: User = Depends(get_current_user)
 ):
     conv = await Conversion.get(PydanticObjectId(conversion_id))
     if not conv:
@@ -828,6 +829,20 @@ async def add_rule(
     try:
         _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
         _learned = _lm is not None
+        # WRITE-THROUGH TO EXISTING CONVERSIONS. (09-Aug)
+        #
+        # The library entry above already makes NEW projects inherit this rule at
+        # auto-map. Existing conversions were the gap: nothing pushed the saved rule
+        # sideways onto the projects already created, so "I fixed it in the UI" fanned
+        # out forward in time but not across the fleet — the analyst then saw the same
+        # stale value on every project they had open. The mapping-approve / keep-blank
+        # paths already schedule this exact fan-out; the rule-authoring path was the
+        # one door that captured to the library and then stopped. Same background,
+        # date-ranked propagation (a person's later decision still wins; affected
+        # outputs are marked stale, never silently regenerated), run off the request
+        # so the Save returns immediately.
+        if _lm is not None:
+            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
     except Exception as exc:
         log.warning(f"add_rule: learning capture failed for rule {r.id}: {exc}")
     # Serialize explicitly so ObjectId fields become strings (model_dump leaves
@@ -1134,7 +1149,8 @@ async def list_rules(conversion_id: str, _: User = Depends(get_current_user)):
 
 @router.put("/rules/{rule_id}", response_model=TransformationRuleOut)
 async def update_rule(
-    rule_id: str, payload: TransformationRuleCreate, user: User = Depends(get_current_user)
+    rule_id: str, payload: TransformationRuleCreate,
+    background_tasks: BackgroundTasks, user: User = Depends(get_current_user)
 ):
     """Edit a saved rule in place.
 
@@ -1166,6 +1182,12 @@ async def update_rule(
     try:
         _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
         _learned = _lm is not None
+        # WRITE-THROUGH TO EXISTING CONVERSIONS on an EDIT — the edited definition is
+        # the analyst's latest word, so it supersedes the older one everywhere it
+        # already ran, not only on new projects. Same background, date-ranked fan-out
+        # as add_rule / mapping approve; see the note there.
+        if _lm is not None:
+            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
     except Exception as exc:
         log.warning(f"update_rule: learning capture failed for rule {r.id}: {exc}")
     return {
