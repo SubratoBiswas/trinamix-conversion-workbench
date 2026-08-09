@@ -28,8 +28,10 @@ Field ``kind``:
                    ``map['default']``; ``iso_country`` maps a country name → ISO2.
   * ``date``     — reformat the source date (Excel serial or common string) → the
                    HDL ``YYYY/MM/DD`` form.
-  * ``manager``  — parse a trailing numeric id out of a "Name (12345)" string and
-                   prefix it (Workday manager reference → Oracle assignment number).
+  * ``manager``  — the manager's own assignment number: the Manager_ID value VERBATIM
+                   (or the id inside a legacy "Name (12345)" string) prefixed with the
+                   MANAGER's worker-type letter, so the supervisor link equals the
+                   manager's own AssignmentNumber.
   * ``blank``    — required by Oracle but supplied by business later; left empty.
 """
 from __future__ import annotations
@@ -123,12 +125,14 @@ def _key(name, prefix, sep="_", key_source=_EMP_ID, required=True):
 
 
 def _wnum(name, key_source=_EMP_ID, type_source="Worker Type", required=True):
-    """AssignmentNumber: prefix by WORKER TYPE (C contingent / E employee) + the id's
-    DIGITS. A fixed "E" prefix produced "EC-100003" for a contingent worker whose id is
-    "C-100003" (Subrato, 09-Aug); this uses the type letter and strips the id to digits,
-    so contingent → C<digits>, employee → E<digits>. The generator gives a MANAGER's
-    number the matching prefix via its worker-id → type lookup, so supervisor links
-    still resolve when the manager is a contingent worker."""
+    """AssignmentNumber: prefix by WORKER TYPE (C contingent / E employee) + the FULL
+    Employee Number, VERBATIM. NextPower rule (Subrato, 09-Aug): the assignment number
+    is the employee number with the worker-type letter in front — C-100208 (contingent)
+    → CC-100208, C85849 (contingent) → CC85849, C-100129 → EC-100129 when that worker's
+    TYPE is Employee. The id is kept whole (dash and leading letter included); a pure
+    numeric id like 1200077 gives E1200077 / C1200077. The letter is the worker's own
+    type, and the generator gives a MANAGER's number the matching prefix via its
+    worker-id → type lookup, so supervisor links resolve when the manager is contingent."""
     return {"name": name, "kind": "worker_number",
             "key_source": key_source, "type_source": type_source, "required": required}
 

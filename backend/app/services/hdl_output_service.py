@@ -175,24 +175,45 @@ def render_cell(spec: dict, resolve, analyst=None, type_lookup=None) -> str:
         base = _clean(resolve(spec["name"], spec.get("key_source")))
         return f"{spec.get('prefix', '')}{spec.get('sep', '_')}{base}" if base else ""
     if kind == "worker_number":
-        # AssignmentNumber = <E|C by THIS worker's type> + the id's DIGITS. Stripping to
-        # digits is what stops a contingent id "C-100003" becoming "EC-100003": the old
-        # spec prepended a fixed "E" to the raw id. Employees stay E<id>.
+        # AssignmentNumber = <E|C by THIS worker's type> + the FULL Employee Number,
+        # VERBATIM. NextPower rule (Subrato, 09-Aug): the assignment number is the
+        # employee number prefixed with the worker-type letter — C-100208 (contingent)
+        # -> CC-100208, C85849 (contingent) -> CC85849, and the one worker whose id is
+        # C-100129 -> EC-100129 (E because THAT worker's type is Employee, not the id's
+        # leading C). The letter comes from the worker's TYPE, never from the id; the id
+        # itself is kept whole — dashes and any leading letter included — so the number
+        # matches the client's own template exactly. Earlier this stripped the id to its
+        # DIGITS (C-100208 -> C100208), which dropped the "C-" the template keeps. A
+        # pure-numeric id like 1200077 is unchanged: employee -> E1200077, contingent ->
+        # C1200077 (verbatim == digits when the id is already all digits).
         wt = _clean(resolve("Worker Type", spec.get("type_source", "Worker Type")))
-        num = re.sub(r"\D", "", _clean(resolve(spec["name"], spec.get("key_source"))))
-        return f"{_worker_letter(wt)}{num}" if num else ""
+        emp = _clean(resolve(spec["name"], spec.get("key_source")))
+        return f"{_worker_letter(wt)}{emp}" if emp else ""
     if kind == "manager":
+        # ManagerAssignmentNumber must EQUAL the manager's OWN AssignmentNumber so the
+        # supervisor link resolves: <E|C by the MANAGER's worker type> + the manager's
+        # id VERBATIM — the same rule as worker_number, applied to the Manager_ID value.
+        # The prefix is the MANAGER's type (looked up by manager id), not the
+        # subordinate's: a contingent manager with a numeric id must still resolve to C,
+        # which the id format alone cannot tell. Earlier this kept only the trailing
+        # DIGITS, so a manager C-100129 became E100129 while their own record now reads
+        # EC-100129 — the two no longer matched and the link broke.
         raw = _clean(resolve(spec["name"], spec.get("source")))
-        mnum = re.findall(r"(\d+)", raw)
-        if not mnum:
+        if not raw:
             return ""
-        num = mnum[-1]
+        # Legacy "Name (12345)" feed carried the id in parentheses; the real files carry
+        # a bare Manager_ID used whole. Take the parenthesised token when present so the
+        # older shape still yields the manager's NUMBER rather than their name.
+        m_paren = re.search(r"\(([^)]+)\)\s*$", raw)
+        mid = m_paren.group(1).strip() if m_paren else raw
+        if not mid:
+            return ""
         letter = spec.get("prefix", "E")
         if type_lookup:
-            letter = (type_lookup.get(re.sub(r"[^a-z0-9]", "", raw.lower()))
-                      or type_lookup.get(re.sub(r"\D", "", raw))
-                      or type_lookup.get(num) or letter)
-        return f"{letter}{num}"
+            letter = (type_lookup.get(re.sub(r"[^a-z0-9]", "", mid.lower()))
+                      or type_lookup.get(re.sub(r"\D", "", mid))
+                      or letter)
+        return f"{letter}{mid}"
     val = resolve(spec["name"], spec.get("source"))
     if kind == "date":
         return _hdl_date(val)
