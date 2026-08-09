@@ -151,20 +151,23 @@
     {
       "target_object": "Supplier Site",
       "target_field": "Invoice Match Option",
-      "constant": "Receipt",
-      "condition": "Receipt for all supplier sites"
+      "constant": "R",
+      "condition": "Analyst (09-Aug) confirmed the Oracle lookup CODE 'R' (Receipt) on every supplier site, approved on screen. Was the display label 'Receipt' (13-Jul), which the screen showed as R but the file shipped as 'Receipt' — screen and file disagreed. The code is what POZ_SUPPLIER_SITES_INT expects.",
+      "status": "UPDATED 09-Aug: display label 'Receipt' -> lookup code 'R' as the global engine constant."
     },
     {
       "target_object": "Supplier Site",
       "target_field": "Receipt Routing",
-      "constant": "DIRECT",
-      "condition": "DIRECT for all sites (analyst confirmed upper-case lookup code 28-Jul; was \"Direct\")."
+      "constant": "3",
+      "condition": "Analyst (09-Aug) confirmed the Oracle routing-header id '3' (Direct Delivery) on every supplier site, approved on screen. Was the display label 'DIRECT' (28-Jul), which the screen showed as 3 but the file shipped as 'DIRECT' — screen and file disagreed. The id is what POZ_SUPPLIER_SITES_INT expects (1=Standard, 2=Inspection Required, 3=Direct Delivery).",
+      "status": "UPDATED 09-Aug: display label 'DIRECT' -> routing-header id '3' as the global engine constant."
     },
     {
       "target_object": "Supplier Site",
       "target_field": "Match Approval Level",
-      "constant": "3-Way",
-      "condition": "3-way for all sites"
+      "constant": "3",
+      "condition": "Analyst (09-Aug) confirmed the Oracle match-approval-level code '3' (3-Way) on every supplier site, approved on screen. Was the display label '3-Way' (13-Jul), which the screen showed as 3 but the file shipped as '3-Way' — screen and file disagreed.",
+      "status": "UPDATED 09-Aug: display label '3-Way' -> code '3' as the global engine constant."
     }
   ],
   "open_items": [
