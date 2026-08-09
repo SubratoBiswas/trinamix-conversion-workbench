@@ -168,6 +168,13 @@
       "constant": "3",
       "condition": "Analyst (09-Aug) confirmed the Oracle match-approval-level code '3' (3-Way) on every supplier site, approved on screen. Was the display label '3-Way' (13-Jul), which the screen showed as 3 but the file shipped as '3-Way' — screen and file disagreed.",
       "status": "UPDATED 09-Aug: display label '3-Way' -> code '3' as the global engine constant."
+    },
+    {
+      "target_object": "Supplier Site Assignment",
+      "target_field": "Bill-to BU",
+      "constant": "NX US BU",
+      "condition": "Analyst (09-Aug): Bill-to BU = NX US BU on every site assignment (same BU as Client BU / Procurement BU). It was shipping blank because the field auto-maps to not_applicable (no source column carries it) and the finalize keep-blank pass then cleared the value; seeded here as a global constant so the file matches the mapping screen.",
+      "status": "SEEDED 09-Aug as global constant."
     }
   ],
   "open_items": [

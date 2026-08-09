@@ -2530,6 +2530,23 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             if m is None:
                 continue
             if _analyst_keeps_blank(m):
+                # ...UNLESS the signed strategy is ACTIVELY POPULATING this field.
+                # A DERIVED field never matches a source column at auto-map, so it
+                # sits not_applicable — Phone Country Code (derived from Country via
+                # a CASE_WHEN overlay rule) and Bill-to BU (a seeded constant) are
+                # the live cases. `_transform_frame` had already written the derived
+                # value into the frame, and blanking it here overwrote it: the
+                # preview (which skips finalize) showed +NN / NX US BU while the
+                # generated file shipped empty — this codebase's signature screen/file
+                # split, one layer down. A POPULATING overlay directive (rule/constant,
+                # NOT a `blank` one) is the analyst's live instruction and outranks a
+                # stale not_applicable auto-map, so the value stands. A genuine
+                # keep-blank (RFQ Or Bidding, Address Name New) carries a `blank`
+                # directive, not a populating one, so it is unaffected.
+                _pop = _strategy_directive(obj_name, f.field_name)
+                if _pop and ("rule" in _pop or "constant" in _pop):
+                    decided.add(f.field_name)   # overlay owns it — protect, don't blank
+                    continue
                 consts[f.field_name] = ("", False)
                 decided.add(f.field_name)
                 continue
