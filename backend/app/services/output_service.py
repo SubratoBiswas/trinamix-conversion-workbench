@@ -872,7 +872,33 @@ def _transform_frame(
         if (_discarded and not _ov_writes and not rules
                 and not (m.default_value and str(m.default_value).strip())):
             continue
-        if m.suggested_transformation and not rules and m.status != "rejected":
+        # A SUGGESTION MUST NOT SILENCE THE ANALYST'S OWN OVERLAY RULE. (09-Aug)
+        #
+        # `_conversion_rule_wins` treats every UNDATED rule on the field as a
+        # winner, and the engine's own suggested_transformation — an AI/learned
+        # GUESS, appended here — is undated by nature. So a strategy-overlay
+        # "rule" the analyst wrote for the field (Phone Country Code = derive the
+        # +NN dialling code from the Country column) stopped running the moment
+        # auto-map guessed ANY transform for that same cell, even a no-op one.
+        #
+        # Measured live on Supplier Address/Contacts: after the stale learned
+        # PHONE_PART rule was retired, auto-map re-proposed EXTRACT_COUNTRY_CODE /
+        # REGEX_EXTRACT (src null, not_applicable). Neither is a real engine
+        # rule_type, so each evaluated to "" — and because it was still an undated
+        # rule, it beat the overlay and shipped a BLANK Phone Country Code on every
+        # row while the Country column was fully populated.
+        #
+        # The overlay is the analyst's explicit instruction; a suggestion is a
+        # guess. When the overlay carries a transformation RULE for this exact
+        # field, the guess must not be appended at all — the overlay computes the
+        # value below. A PERSON who authored a rule is unaffected: `rules` is then
+        # non-empty from `_authored_rules`, so the suggestion was never appended,
+        # and the person-vs-overlay date test downstream still decides. A CONSTANT
+        # overlay is left alone (it only fills blanks and is not gated by
+        # `_conversion_rule_wins`), so the suggestion still runs under it.
+        _ov_rules_field = bool(_ov_early and "rule" in _ov_early)
+        if (m.suggested_transformation and not rules and m.status != "rejected"
+                and not _ov_rules_field):
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
         dv = m.default_value
