@@ -596,14 +596,17 @@ export const MappingApi = {
     api.get<TransformationRule[]>(`/conversions/${conversionId}/rules`).then(r => r.data),
   addRule: (conversionId: string, body: {
     target_field_id?: string; source_column?: string; rule_type: string;
-    rule_config: any; description?: string;
+    rule_config: any; description?: string; prompt?: string;
+    /** "global" (default) fans out to client+source+object; "project" = here only. */
+    scope?: "global" | "project";
   }) =>
     api.post<TransformationRule>(`/conversions/${conversionId}/rules`, body).then(r => r.data),
   /** Edit a saved rule in place (so re-saving from the author modal does not
    *  stack a duplicate rule on the same target field). */
   updateRule: (ruleId: string, body: {
     target_field_id?: string; source_column?: string; rule_type: string;
-    rule_config: any; description?: string;
+    rule_config: any; description?: string; prompt?: string;
+    scope?: "global" | "project";
   }) =>
     api.put<TransformationRule>(`/rules/${ruleId}`, body).then(r => r.data),
   deleteRule: (ruleId: string) => api.delete(`/rules/${ruleId}`).then(r => r.data),

@@ -1302,6 +1302,10 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
   const [advancedError, setAdvancedError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Where the rule applies. "global" (default) captures to the shared
+  // client+source+object library so it fans out to existing and future projects;
+  // "project" keeps it on THIS conversion only. Wired to the toggle by the Save row.
+  const [scope, setScope] = useState<"global" | "project">("global");
 
   // Live preview
   const [preview, setPreview] = useState<
@@ -1673,6 +1677,8 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
         rule_config: activeCfg,
         description: description || undefined,
         prompt: _prompt,
+        // Global (fan out to client+source+object) vs this project only.
+        scope,
       };
       // Editing a rule that already exists updates it in place; only a genuinely
       // new rule is inserted. Previously every save inserted, so reopening and
@@ -1696,9 +1702,11 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
       // exactly the "my rule does not show in the Rule Library / does not carry over"
       // symptom, which used to happen silently. Say so, and keep the modal open so the
       // message is seen (the rule itself is already saved on this conversion).
-      if ((_saved as any)?.learned === false) {
+      if (scope === "global" && (_saved as any)?.learned === false) {
         // Keep the modal OPEN (do not call onSaved) so this is actually read. The
         // rule is already saved on this conversion; only propagation failed.
+        // (Only a warning when the analyst ASKED for global — "this project only"
+        // is expected to return learned:false.)
         setSaveError(
           "Saved on this conversion, but it could NOT be added to the shared Rule "
           + "Library — so it will not propagate to other or future projects. This "
@@ -1743,13 +1751,46 @@ export const RuleAuthorModal: React.FC<RuleAuthorModalProps> = ({
             <Code2 className="h-3.5 w-3.5" />
             {advanced ? "Form view" : "Advanced (JSON)"}
           </button>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {/* APPLY SCOPE — global (client+source+object, fans out to existing and
+                future projects) vs this project only. */}
+            <div className="flex items-center gap-1" title="Global applies to every project for this client + source system + object; This project keeps the rule here only.">
+              <span className="text-[11px] font-medium text-ink-muted">Apply&nbsp;to:</span>
+              <div className="inline-flex overflow-hidden rounded-md border border-line">
+                <button
+                  type="button"
+                  onClick={() => setScope("global")}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] font-medium",
+                    scope === "global"
+                      ? "bg-brand text-white"
+                      : "bg-white text-ink-muted hover:text-ink"
+                  )}
+                >
+                  All projects (global)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScope("project")}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] font-medium border-l border-line",
+                    scope === "project"
+                      ? "bg-brand text-white"
+                      : "bg-white text-ink-muted hover:text-ink"
+                  )}
+                >
+                  This project only
+                </button>
+              </div>
+            </div>
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button onClick={save} loading={saving}>
               <Check className="h-3.5 w-3.5" />
-              {editingRuleId ? "Update & learn" : "Save & learn"}
+              {scope === "project"
+                ? (editingRuleId ? "Update (this project)" : "Save (this project)")
+                : (editingRuleId ? "Update & learn" : "Save & learn")}
             </Button>
           </div>
         </div>

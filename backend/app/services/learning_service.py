@@ -436,6 +436,16 @@ async def record_learning_from_rule(
         project_id=conversion.project_id, client_id=_cid, source_erp=_src,
         captured_from=captured_from, captured_by=captured_by,
         sheets=[_sheet_name] if _sheet_name else None,
+        # AN ANALYST TYPING A RULE IS AN EXPLICIT ACTION — IT MAY REVIVE A RETIRED
+        # DECISION. (09-Aug) Without this, a field whose learning had ever been
+        # retired (a tombstone) silently swallowed the new rule: record_decision
+        # returned None on SKIP_RETIRED and the rule stayed on that one conversion,
+        # never reaching the library — the "my constant does not fan out" report.
+        # Measured on Business Relationship / Invoice Match Option / Match Approval
+        # Level, all carrying retired rows. The plain-English author path already
+        # passes revive=True (rule_authoring_service); this direct POST/PUT path is
+        # the same deliberate action and must behave the same.
+        revive=True,
     )
     if _is_master_key_field(business_object, target_field):
         await _upsert(

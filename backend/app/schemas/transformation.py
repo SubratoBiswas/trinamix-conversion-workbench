@@ -15,6 +15,11 @@ class TransformationRuleCreate(BaseModel):
     # The plain-English/SQL instruction the analyst typed to author this rule,
     # persisted so it can be reviewed and re-used later (screenshot request).
     prompt: str | None = None
+    # Where this rule should apply. "global" (default) captures it to the shared
+    # client+source+object library so it fans out to existing and future projects;
+    # "project" keeps it on THIS conversion only (no library capture, no fan-out).
+    # Drives the "apply global vs per-project" control in the rule/constant modal.
+    scope: str = "global"
 
 
 class TransformationRuleOut(ApiOut):
@@ -36,6 +41,9 @@ class TransformationRuleOut(ApiOut):
     # Whether the save also reached the shared client+source-scoped library (so it
     # will propagate to other/future projects). False = this conversion only.
     learned: bool | None = None
+    # Echo of the requested scope ("global" | "project"), so the UI can confirm what
+    # the save did and show the right badge.
+    scope: str | None = None
 
     class Config:
         from_attributes = True

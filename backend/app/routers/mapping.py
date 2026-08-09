@@ -808,6 +808,12 @@ async def add_rule(
         TransformationRule.conversion_id == PydanticObjectId(conversion_id)
     ).count()
     data = payload.model_dump()
+    # SCOPE is a request directive, not a stored column — pull it off before the
+    # model is built. "global" (default) captures to the shared library and fans
+    # out; "project" keeps the rule on THIS conversion only.
+    _scope = (data.pop("scope", None) or "global").strip().lower()
+    if _scope not in ("global", "project"):
+        _scope = "global"
     # target_field_id arrives as a string ObjectId (or, from a buggy older UI,
     # possibly junk). Coerce safely — never let a bad id 500 the whole save.
     if data.get("target_field_id"):
@@ -826,25 +832,30 @@ async def add_rule(
     # show in the Rule Library / does not propagate" complaint — and it used to fail
     # in silence, indistinguishable from success.
     _learned = False
-    try:
-        _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
-        _learned = _lm is not None
-        # WRITE-THROUGH TO EXISTING CONVERSIONS. (09-Aug)
-        #
-        # The library entry above already makes NEW projects inherit this rule at
-        # auto-map. Existing conversions were the gap: nothing pushed the saved rule
-        # sideways onto the projects already created, so "I fixed it in the UI" fanned
-        # out forward in time but not across the fleet — the analyst then saw the same
-        # stale value on every project they had open. The mapping-approve / keep-blank
-        # paths already schedule this exact fan-out; the rule-authoring path was the
-        # one door that captured to the library and then stopped. Same background,
-        # date-ranked propagation (a person's later decision still wins; affected
-        # outputs are marked stale, never silently regenerated), run off the request
-        # so the Save returns immediately.
-        if _lm is not None:
-            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
-    except Exception as exc:
-        log.warning(f"add_rule: learning capture failed for rule {r.id}: {exc}")
+    if _scope == "project":
+        # Per-project by request: the rule runs here and nowhere else. No library
+        # capture, no fan-out — the analyst chose "this project only" in the modal.
+        pass
+    else:
+        try:
+            _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
+            _learned = _lm is not None
+            # WRITE-THROUGH TO EXISTING CONVERSIONS. (09-Aug)
+            #
+            # The library entry above already makes NEW projects inherit this rule at
+            # auto-map. Existing conversions were the gap: nothing pushed the saved rule
+            # sideways onto the projects already created, so "I fixed it in the UI" fanned
+            # out forward in time but not across the fleet — the analyst then saw the same
+            # stale value on every project they had open. The mapping-approve / keep-blank
+            # paths already schedule this exact fan-out; the rule-authoring path was the
+            # one door that captured to the library and then stopped. Same background,
+            # date-ranked propagation (a person's later decision still wins; affected
+            # outputs are marked stale, never silently regenerated), run off the request
+            # so the Save returns immediately.
+            if _lm is not None:
+                background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
+        except Exception as exc:
+            log.warning(f"add_rule: learning capture failed for rule {r.id}: {exc}")
     # Serialize explicitly so ObjectId fields become strings (model_dump leaves
     # target_field_id as an ObjectId, which fails TransformationRuleOut).
     return {
@@ -864,6 +875,8 @@ async def add_rule(
         # Did this rule reach the shared, client+source-scoped library? If false, it
         # runs on THIS conversion only and will not propagate — the UI says so.
         "learned": _learned,
+        # Echo the scope the save honoured, so the modal shows the right badge.
+        "scope": _scope,
     }
 
 
@@ -1166,6 +1179,10 @@ async def update_rule(
     if not conv:
         raise HTTPException(404, "Conversion not found")
     data = payload.model_dump(exclude_unset=True)
+    # SCOPE is a directive, not a stored column — pull it off before the setattr loop.
+    _scope = (data.pop("scope", None) or "global").strip().lower()
+    if _scope not in ("global", "project"):
+        _scope = "global"
     if data.get("target_field_id"):
         try:
             data["target_field_id"] = PydanticObjectId(str(data["target_field_id"]))
@@ -1179,17 +1196,20 @@ async def update_rule(
     # Re-learn so the edited definition (not the superseded one) is what future
     # conversions inherit. Best-effort, exactly as in add_rule.
     _learned = False
-    try:
-        _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
-        _learned = _lm is not None
-        # WRITE-THROUGH TO EXISTING CONVERSIONS on an EDIT — the edited definition is
-        # the analyst's latest word, so it supersedes the older one everywhere it
-        # already ran, not only on new projects. Same background, date-ranked fan-out
-        # as add_rule / mapping approve; see the note there.
-        if _lm is not None:
-            background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
-    except Exception as exc:
-        log.warning(f"update_rule: learning capture failed for rule {r.id}: {exc}")
+    if _scope == "project":
+        pass  # "this project only" — no library capture, no fan-out.
+    else:
+        try:
+            _lm = await record_learning_from_rule(r, conv, captured_by=user.email)
+            _learned = _lm is not None
+            # WRITE-THROUGH TO EXISTING CONVERSIONS on an EDIT — the edited definition is
+            # the analyst's latest word, so it supersedes the older one everywhere it
+            # already ran, not only on new projects. Same background, date-ranked fan-out
+            # as add_rule / mapping approve; see the note there.
+            if _lm is not None:
+                background_tasks.add_task(_propagate_in_background, _lm, conv, user.email)
+        except Exception as exc:
+            log.warning(f"update_rule: learning capture failed for rule {r.id}: {exc}")
     return {
         "id": str(r.id),
         "conversion_id": str(r.conversion_id),
@@ -1205,6 +1225,7 @@ async def update_rule(
         # than something the analyst has to spot.
         "mapping_sync": _sync,
         "learned": _learned,
+        "scope": _scope,
     }
 
 
