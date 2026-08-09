@@ -122,6 +122,17 @@ def _key(name, prefix, sep="_", key_source=_EMP_ID, required=True):
             "key_source": key_source, "required": required}
 
 
+def _wnum(name, key_source=_EMP_ID, type_source="Worker Type", required=True):
+    """AssignmentNumber: prefix by WORKER TYPE (C contingent / E employee) + the id's
+    DIGITS. A fixed "E" prefix produced "EC-100003" for a contingent worker whose id is
+    "C-100003" (Subrato, 09-Aug); this uses the type letter and strips the id to digits,
+    so contingent → C<digits>, employee → E<digits>. The generator gives a MANAGER's
+    number the matching prefix via its worker-id → type lookup, so supervisor links
+    still resolve when the manager is a contingent worker."""
+    return {"name": name, "kind": "worker_number",
+            "key_source": key_source, "type_source": type_source, "required": required}
+
+
 def _date(name, source, required=True):
     return {"name": name, "kind": "date", "source": source, "required": required}
 
@@ -273,7 +284,7 @@ WORK_RELATIONSHIP = ("WorkRelationship", [
 # at. Built from one definition so the two passes cannot drift apart.
 def _work_terms(numbered: bool):
     return ("WorkTerms", [
-        (_key("AssignmentNumber", "E", sep="") if numbered
+        (_wnum("AssignmentNumber") if numbered
          else _blank("AssignmentNumber")),
         (_const("AssignmentStatusTypeCode", "ACTIVE_PROCESS") if numbered
          else _blank("AssignmentStatusTypeCode")),
@@ -293,7 +304,7 @@ def _work_terms(numbered: bool):
 def _assignment(numbered: bool):
     return ("Assignment", [
         _const("ActionCode", "HIRE"),
-        (_key("AssignmentNumber", "E", sep="") if numbered
+        (_wnum("AssignmentNumber") if numbered
          else _blank("AssignmentNumber")),
         _date("EffectiveStartDate", _HIRE),
         _const("EffectiveSequence", "1"),
@@ -325,7 +336,7 @@ WORK_TERMS_NUMBERED = _work_terms(True)
 ASSIGNMENT_NUMBERED = _assignment(True)
 
 ASSIGNMENT_SUPERVISOR = ("AssignmentSupervisor", [
-    _key("AssignmentNumber", "E", sep=""),
+    _wnum("AssignmentNumber"),
     # Template: E111 against employee E1007802 — the manager's own assignment
     # number. The real input has a plain Manager_ID column (1001899); the older
     # "Manager - Level 01" spelling holds a "Name (12345)" string. The manager rule

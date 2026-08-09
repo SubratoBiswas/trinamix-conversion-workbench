@@ -30,6 +30,7 @@ un-reshaped is recoverable and dropping real rows is not.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Optional
 
@@ -778,6 +779,13 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
     ae_col = "__altemail" if "__altemail" in sub.columns else None
     p_col = "__phone" if "__phone" in sub.columns else None
     m_col = "__mobilephone" if "__mobilephone" in sub.columns else None
+    # REC-02: a fax number is its own contact POINT — Contact Point Type PHONE with
+    # Phone Line Type FAX (a phone-family point in Oracle), as opposed to a voice
+    # phone which is MOBILE. The current NextPower contact extract carries no fax
+    # column, so this stays dormant (no __fax → no FAX rows) and adds nothing today;
+    # it makes the rule spec-complete so a fax source column, if supplied later,
+    # produces FAX points automatically without another code change.
+    f_col = "__fax" if "__fax" in sub.columns else None
     have_ent = ENTITYID_COL in sub.columns
     have_iid = INTERNALID_COL in sub.columns
 
@@ -791,6 +799,7 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
     for _, r in sub.iterrows():
         email = _v(r, e_col) or _v(r, ae_col)
         phone = _v(r, p_col) or _v(r, m_col)
+        fax = _v(r, f_col)
         base = ""
         if have_ent or have_iid:
             base = f"{_v(r, ENTITYID_COL)}_{_v(r, INTERNALID_COL)}"
@@ -821,6 +830,21 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
                 row[plt_f] = "MOBILE"
             if osr_f is not None:
                 row[osr_f] = f"{base}_PHONE" if base.strip("_") else ""
+            rows.append(row)
+            made = True
+        if fax:
+            # REC-02: fax → its own PHONE contact point, Phone Line Type = FAX.
+            row = r.copy()
+            if cpt is not None:
+                row[cpt] = "PHONE"
+            if phone_f is not None:
+                row[phone_f] = fax
+            if email_f is not None:
+                row[email_f] = ""
+            if plt_f is not None:
+                row[plt_f] = "FAX"
+            if osr_f is not None:
+                row[osr_f] = f"{base}_FAX" if base.strip("_") else ""
             rows.append(row)
             made = True
         if not made:
@@ -1012,6 +1036,177 @@ def _stamp_account_description(sub: "pd.DataFrame", sheet_name: Optional[str]) -
     return sub
 
 
+# REC-06: the address columns that decide whether two sites are the SAME address.
+# Read from the carried source columns (__addr1 …), matched case/punctuation-insensitively.
+_SITE_ADDR_KEY_COLS = ("addr1", "addr2", "addr3", "city", "state", "zip", "country")
+
+
+# ── Duplicate-deletion audit log ─────────────────────────────────────────────
+# Every row the merge removes as a duplicate is recorded here, so the tool can hand
+# the analyst a report of WHAT it deleted, WHY, from WHICH tab, and the row's data.
+# Module-level and reset once per generation (output_service.generate_output_artifact),
+# read back after the sheets are written. One customer object generates at a time, so
+# this needs no per-run key.
+_DEDUP_LOG: list = []
+
+
+def reset_dedup_log() -> None:
+    _DEDUP_LOG.clear()
+
+
+def get_dedup_log() -> list:
+    return list(_DEDUP_LOG)
+
+
+def _log_deletion(reason: str, tab, entityid: str, data: dict) -> None:
+    _DEDUP_LOG.append({
+        "reason": reason,
+        "tab": str(tab or ""),
+        "entityid": str(entityid or ""),
+        "data": {k: ("" if v is None else str(v)) for k, v in (data or {}).items()},
+    })
+
+
+# ── REC-06 duplicate suspects: detection + user-decision apply ────────────────
+# Nothing here removes a row on its own. The generator DETECTS shipping sites that
+# duplicate a billing address for the same customer and records them as suspects for
+# the Duplicate Suspects review screen; a row is only removed or merged when the
+# analyst has explicitly decided so. Decisions are keyed by a stable suspect key so
+# the screen and the generator agree on identity across regenerations.
+_DUP_DECISIONS: dict = {}    # suspect_key -> "delete" | "merge" (set per generation)
+_DUP_SUSPECTS: dict = {}     # suspect_key -> {suspect_key, entityid, address, refs}
+
+
+def set_duplicate_decisions(decisions: dict) -> None:
+    """Load the project's saved delete/merge decisions for this generation."""
+    _DUP_DECISIONS.clear()
+    for k, v in (decisions or {}).items():
+        a = str(v or "").strip().lower()
+        if a in ("delete", "merge"):
+            _DUP_DECISIONS[str(k)] = a
+
+
+def reset_duplicate_suspects() -> None:
+    _DUP_SUSPECTS.clear()
+
+
+def get_duplicate_suspects() -> list:
+    return list(_DUP_SUSPECTS.values())
+
+
+def duplicate_suspect_key(entityid: str, addr_key: str) -> str:
+    """Stable id for one duplicate suspect (a customer's shipping address that equals
+    one of its billing addresses). Same inputs → same key on every regeneration."""
+    return hashlib.sha1(
+        f"{str(entityid).strip()}\x1f{addr_key}".encode("utf-8")).hexdigest()[:16]
+
+
+def _apply_duplicate_decisions(sub: "pd.DataFrame",
+                               sheet_name: "Optional[str]" = None) -> "pd.DataFrame":
+    """REC-06 — DETECT shipping sites that duplicate a billing address for the same
+    customer, record them as review suspects, and APPLY only the analyst's explicit
+    delete/merge decisions. A suspect with NO decision is kept untouched.
+
+    A customer legitimately has a billing address AND a distinct shipping address
+    (Wellington billing / Cedar City shipping) — those are NOT duplicates and are
+    never touched. Only a shipping site whose address EXACTLY matches one of the
+    customer's billing addresses is a suspect.
+
+      * delete → drop the shipping duplicate site row (on every site sheet, so no
+                 Site Use / Location is orphaned).
+      * merge  → fold it onto the billing site: the shipping row is dropped on the
+                 site-entity sheets (party sites / locations / account sites), and on
+                 the *use* sheets the SHIP_TO use is KEPT but re-pointed to the billing
+                 site's key, so one site carries both BILL_TO and SHIP_TO.
+      * no decision → kept.
+
+    Origin is the converted BILL_TO / SHIP_TO use-type column (REC-04); the address is
+    the carried __addr1…__country block. If the origin column or the whole address
+    block is absent, nothing is detected or changed."""
+    if sub is None or len(sub) == 0 or ENTITYID_COL not in sub.columns:
+        return sub
+    uc = None
+    for cand in ("Party Site Use Type", "Part Site Use Type",
+                 "Site Use Type", "Site Use Code", "Purpose"):
+        uc = _find_col_ci(sub.columns, cand)
+        if uc is not None:
+            break
+    if uc is None:
+        return sub
+    addr_series = [_carried(sub, c) for c in _SITE_ADDR_KEY_COLS]
+    if all(s is None for s in addr_series):
+        return sub
+    key = None
+    for s in addr_series:
+        part = (s.map(_norm) if s is not None
+                else pd.Series([""] * len(sub), index=sub.index))
+        key = part if key is None else key.str.cat(part, sep="|")
+    ent = sub[ENTITYID_COL].astype(str).str.strip()
+    use = sub[uc].astype(str).str.strip().str.upper()
+    has_addr = key.str.replace("|", "", regex=False).str.len().gt(0)
+
+    # The site key columns, used to re-point a merged SHIP_TO use onto the billing site.
+    osr_col = (_find_col_ci(sub.columns, "Party Site Original System Reference")
+               or _find_col_ci(sub.columns, "Party Site Source System Reference")
+               or _find_col_ci(sub.columns, "Original System Reference"))
+    iid_col = INTERNALID_COL if INTERNALID_COL in sub.columns else None
+
+    # Billing survivor per (entityid, address): the site every matching shipping use
+    # merges onto — its OSR and internalid.
+    billing_ref: dict = {}
+    for e, k, u, a, i in zip(ent, key, use, has_addr, sub.index):
+        if u == "BILL_TO" and e and a and (e, k) not in billing_ref:
+            billing_ref[(e, k)] = (
+                str(sub.at[i, osr_col]) if osr_col else "",
+                str(sub.at[i, iid_col]) if iid_col else "",
+            )
+    if not billing_ref:
+        return sub
+
+    _a = {c: _carried(sub, c) for c in _SITE_ADDR_KEY_COLS}
+    _get = lambda s, i: (str(s.loc[i]) if s is not None else "")
+    is_use_sheet = "use" in _norm(sheet_name)
+    sub = sub.copy()
+    drop_idx: list = []
+    for i in sub.index:
+        if use.loc[i] != "SHIP_TO":
+            continue
+        e, k, a = ent.loc[i], key.loc[i], bool(has_addr.loc[i])
+        if not (e and a and (e, k) in billing_ref):
+            continue
+        skey = duplicate_suspect_key(e, k)
+        addr = {
+            "Address Line 1": _get(_a["addr1"], i), "Address Line 2": _get(_a["addr2"], i),
+            "City": _get(_a["city"], i), "State": _get(_a["state"], i),
+            "Postal Code": _get(_a["zip"], i), "Country": _get(_a["country"], i),
+        }
+        _DUP_SUSPECTS.setdefault(skey, {
+            "suspect_key": skey, "entityid": e, "address": addr,
+            "shipping_ref": (str(sub.at[i, osr_col]) if osr_col else ""),
+            "billing_ref": billing_ref[(e, k)][0],
+        })
+        action = _DUP_DECISIONS.get(skey)
+        if action == "delete":
+            drop_idx.append(i)
+            _log_deletion("Duplicate shipping site deleted by analyst decision (REC-06)",
+                          sheet_name, e, {**addr, "Use Type": "SHIP_TO"})
+        elif action == "merge":
+            if is_use_sheet:
+                b_osr, b_iid = billing_ref[(e, k)]
+                if osr_col and b_osr:
+                    sub.at[i, osr_col] = b_osr
+                if iid_col and b_iid:
+                    sub.at[i, iid_col] = b_iid
+            else:
+                drop_idx.append(i)
+                _log_deletion("Duplicate shipping site merged into billing site (REC-06)",
+                              sheet_name, e, {**addr, "Use Type": "SHIP_TO"})
+        # no decision → keep untouched
+    if drop_idx:
+        sub = sub.drop(index=drop_idx)
+    return sub
+
+
 def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     """The subset of the merged frame that belongs on ``sheet_name``.
 
@@ -1059,6 +1254,14 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     if len(sub) == 0:
         # No source of this grain in the load — don't empty the sheet.
         return df
+    if grain == SITE:
+        # REC-06: DETECT shipping sites that duplicate a billing address for the same
+        # customer, and APPLY only the decisions the analyst has explicitly made on the
+        # Duplicate Suspects screen (delete / merge). With no decision a suspect is kept
+        # untouched — nothing is ever removed automatically.
+        sub = _apply_duplicate_decisions(sub, sheet_name)
+        if len(sub) == 0:
+            return df
     if grain == PARTY and ENTITYID_COL in sub.columns:
         sub = _dedupe_party_grain(sub)
     sub = sub.reset_index(drop=True)

@@ -122,10 +122,23 @@ def _iso_country(v: Any) -> str:
 NO_ANSWER = object()
 
 
-def render_cell(spec: dict, resolve, analyst=None) -> str:
+def _worker_letter(worker_type: str) -> str:
+    """Assignment-number prefix by worker type: C for a contingent worker, E for an
+    employee (and anything else). NextPower rule (Subrato, 09-Aug): "for contingent
+    users it should be C+number, for employee E+number"."""
+    return "C" if str(worker_type or "").strip().lower() in (
+        "contingent worker", "contingent", "c") else "E"
+
+
+def render_cell(spec: dict, resolve, analyst=None, type_lookup=None) -> str:
     """Compute one HDL cell from its field spec. ``resolve(field_name, source_name)``
     returns the raw source value (or None). Pure + module-level so it's unit-tested
     directly rather than through a DB-backed generation run.
+
+    ``type_lookup`` (optional) maps a worker id (normalised, and digits-only) to that
+    worker's assignment-number letter (E/C). It is used to give a MANAGER's assignment
+    number the SAME prefix as that manager's own record — a contingent manager with a
+    numeric id must still resolve to C, which the id format alone cannot tell.
 
     ``analyst(field_name)`` returns what the ANALYST set for this field in Mapping
     Review — a fixed value, "" for keep-blank, or ``NO_ANSWER``.
@@ -161,10 +174,25 @@ def render_cell(spec: dict, resolve, analyst=None) -> str:
     if kind == "key":
         base = _clean(resolve(spec["name"], spec.get("key_source")))
         return f"{spec.get('prefix', '')}{spec.get('sep', '_')}{base}" if base else ""
+    if kind == "worker_number":
+        # AssignmentNumber = <E|C by THIS worker's type> + the id's DIGITS. Stripping to
+        # digits is what stops a contingent id "C-100003" becoming "EC-100003": the old
+        # spec prepended a fixed "E" to the raw id. Employees stay E<id>.
+        wt = _clean(resolve("Worker Type", spec.get("type_source", "Worker Type")))
+        num = re.sub(r"\D", "", _clean(resolve(spec["name"], spec.get("key_source"))))
+        return f"{_worker_letter(wt)}{num}" if num else ""
     if kind == "manager":
         raw = _clean(resolve(spec["name"], spec.get("source")))
         mnum = re.findall(r"(\d+)", raw)
-        return f"{spec.get('prefix', 'E')}{mnum[-1]}" if mnum else ""
+        if not mnum:
+            return ""
+        num = mnum[-1]
+        letter = spec.get("prefix", "E")
+        if type_lookup:
+            letter = (type_lookup.get(re.sub(r"[^a-z0-9]", "", raw.lower()))
+                      or type_lookup.get(re.sub(r"\D", "", raw))
+                      or type_lookup.get(num) or letter)
+        return f"{letter}{num}"
     val = resolve(spec["name"], spec.get("source"))
     if kind == "date":
         return _hdl_date(val)
@@ -370,11 +398,26 @@ async def generate_hdl_artifact(conversion: Conversion, fmt: str = "dat") -> Con
             return const_override_any[field_name]
         return NO_ANSWER
 
+    # Worker-type letter (E/C) by worker id — so a MANAGER's assignment number gets the
+    # SAME prefix as that manager's own record. 172 contingent workers have numeric ids,
+    # so the id format alone cannot tell E from C; only this lookup can. Keyed by both
+    # the normalised id and its digits-only form, matching how render_cell looks it up.
+    _emp_id_col = col_by_norm.get(_norm("Employee ID"))
+    _wt_col = col_by_norm.get(_norm("Worker Type"))
+    wt_letter_by_id: dict[str, str] = {}
+    if _emp_id_col is not None and _wt_col is not None:
+        for _eid, _wt in zip(src[_emp_id_col].astype(str), src[_wt_col].astype(str)):
+            _letter = _worker_letter(_wt)
+            for _k in {_norm(_eid), re.sub(r"\D", "", _clean(_eid))}:
+                if _k:
+                    wt_letter_by_id[_k] = _letter
+
     def _cell(row: pd.Series, spec: dict, comp: str) -> str:
         def _resolve(field_name: str, source_name: str | None):
             col = _resolve_col(comp, field_name, source_name)
             return row[col] if col else None
-        value = render_cell(spec, _resolve, lambda _fn: _analyst(comp, _fn))
+        value = render_cell(spec, _resolve, lambda _fn: _analyst(comp, _fn),
+                            type_lookup=wt_letter_by_id)
         # Rules run on whatever the field ended up holding — source value, schema
         # constant or the analyst's fixed value — which is the order the FBDI
         # generator uses. A rule is a transformation OF the value, so it has to

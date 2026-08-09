@@ -429,28 +429,6 @@ export const ConversionsApi = {
     api.get<{ source_type: string; table: string | null; columns: import("@/types").DatasetColumnProfile[]; debug?: Record<string, any> | null }>(
       `/conversions/${id}/source-columns`
     ).then(r => r.data),
-  /** Every conversion in the project with its source columns and target fields
-   *  (each target's resolved source column + rule) — the data the rule-author
-   *  cross-conversion picker needs to reference one conversion's column from
-   *  another (CROSS_CONVERSION_LOOKUP). Read-only. */
-  crossReference: (projectId: string) =>
-    api.get<{
-      project_id: string;
-      conversions: {
-        conversion_id: string;
-        name: string;
-        target_object: string | null;
-        source_columns: string[];
-        targets: {
-          target_field: string | null;
-          target_sheet: string | null;
-          source_column: string | null;
-          rule_type: string | null;
-          status: string | null;
-          default_value: string | null;
-        }[];
-      }[];
-    }>(`/conversions/project/${projectId}/cross-reference`).then(r => r.data),
   /** Values Generate Output writes for unmapped target fields (control
    *  constants, sequence keys, learned + AI-inferred defaults). Used by the
    *  mapping-review UI to show "defaulted -> value" instead of a required gap.
@@ -556,29 +534,8 @@ export const MappingApi = {
     ).then(r => r.data),
   propagationCandidates: (conversionId: string) =>
     api.get<PropagationCandidates>(`/conversions/${conversionId}/propagation-candidates`).then(r => r.data),
-  /** AI Auto Map. Heavy fan-out templates (Item ~1365 fields, Customer ~1250) run
-   *  the deterministic + learning pass plus a bounded AI residual; the backend is
-   *  capped near the ~100s gateway, so the client must wait well past the 60s
-   *  default or it reports "timeout of 60000ms exceeded" on a run that actually
-   *  finished server-side. A cold free-tier backend is woken and retried once
-   *  (POSTs are not auto-retried) — but never after a genuine client timeout, which
-   *  would just wait another 180s on a request the server is still processing. */
-  suggest: async (conversionId: string) => {
-    const call = () => api.post<MappingSuggestion[]>(
-      `/conversions/${conversionId}/suggest-mapping`, undefined, { timeout: 180_000 },
-    ).then(r => r.data);
-    try {
-      return await call();
-    } catch (e: any) {
-      const isTimeout = e?.code === "ECONNABORTED";
-      const s = e?.response?.status;
-      if (!isTimeout && (!e?.response || s === 502 || s === 503 || s === 504)) {
-        await new Promise((r) => setTimeout(r, 3500));
-        return await call();
-      }
-      throw e;
-    }
-  },
+  suggest: (conversionId: string) =>
+    api.post<MappingSuggestion[]>(`/conversions/${conversionId}/suggest-mapping`).then(r => r.data),
   /** Ranked alternative source-column candidates per target field. */
   candidates: (conversionId: string, opts?: { topN?: number; targetFieldId?: string }) =>
     api.get<MappingCandidateGroup[]>(`/conversions/${conversionId}/mapping-candidates`, {
@@ -639,14 +596,14 @@ export const MappingApi = {
     api.get<TransformationRule[]>(`/conversions/${conversionId}/rules`).then(r => r.data),
   addRule: (conversionId: string, body: {
     target_field_id?: string; source_column?: string; rule_type: string;
-    rule_config: any; description?: string; prompt?: string;
+    rule_config: any; description?: string;
   }) =>
     api.post<TransformationRule>(`/conversions/${conversionId}/rules`, body).then(r => r.data),
   /** Edit a saved rule in place (so re-saving from the author modal does not
    *  stack a duplicate rule on the same target field). */
   updateRule: (ruleId: string, body: {
     target_field_id?: string; source_column?: string; rule_type: string;
-    rule_config: any; description?: string; prompt?: string;
+    rule_config: any; description?: string;
   }) =>
     api.put<TransformationRule>(`/rules/${ruleId}`, body).then(r => r.data),
   deleteRule: (ruleId: string) => api.delete(`/rules/${ruleId}`).then(r => r.data),
@@ -1198,6 +1155,43 @@ export const OutputApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+  /** Download the Excel report of every row the tool removed as a DUPLICATE in the
+   * last generation — reason, tab(s) it was removed from, and the row data, grouped.
+   * Built from the deletion audit captured during Generate All. */
+  downloadDuplicatesReport: async (projectId: string, filename = "Duplicates_Report.xlsx") => {
+    const response = await api.get(`/conversions/project/${projectId}/duplicates-report`, {
+      responseType: "blob",
+      timeout: 120000,
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+  /** REC-06 duplicate SUSPECTS for review — each is a customer's shipping address
+   *  that exactly matches one of its billing addresses, detected in the last
+   *  generation, merged with the analyst's saved delete/merge decisions. */
+  duplicateSuspects: (projectId: string) =>
+    api.get<{
+      suspects: Array<{
+        suspect_key: string; entityid: string; object?: string;
+        address: Record<string, string>; shipping_ref?: string; billing_ref?: string;
+      }>;
+      decisions: Record<string, string>;
+      count: number; decided: number; undecided: number; generated: boolean;
+    }>(`/conversions/project/${projectId}/duplicate-suspects`).then(r => r.data),
+  /** Save REC-06 delete/merge decisions (applied at the next Generate all & download).
+   *  action = "delete" | "merge" | "keep" ("keep"/empty clears the decision). */
+  saveDuplicateDecisions: (projectId: string, decisions: Record<string, string>) =>
+    api.post<{ saved: number; decisions: Record<string, string> }>(
+      `/conversions/project/${projectId}/duplicate-decisions`, { decisions },
+    ).then(r => r.data),
 };
 
 export const LoadApi = {

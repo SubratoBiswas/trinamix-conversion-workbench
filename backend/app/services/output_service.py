@@ -3341,10 +3341,31 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         fdf.to_csv(path, index=False, header=_hdr)
         return name, str(path), len(fdf), len(fdf.columns)
 
+    # REC-06 duplicate suspects (customer grain-merge). Load the analyst's saved
+    # delete/merge decisions so the sheet writer applies ONLY those (nothing is removed
+    # without a decision), reset the suspect + deletion logs, then after writing attach
+    # the detected suspects and the audit of what the decisions actually removed to the
+    # output's dq_report — the Duplicate Suspects screen and the Duplicates Report read
+    # from there.
+    if _grain_merge:
+        _cm.reset_dedup_log()
+        _cm.reset_duplicate_suspects()
+        try:
+            from app.models.project import Project as _Project
+            _proj = await _Project.get(conversion.project_id) if conversion.project_id else None
+            _cm.set_duplicate_decisions(getattr(_proj, "duplicate_decisions", None) or {})
+        except Exception:  # noqa: BLE001 — a missing project must not fail generation
+            _cm.set_duplicate_decisions({})
     _write_t0 = _time.monotonic()
     out_name, out_path_str, total_rows, total_cols = await asyncio.to_thread(_write_all)
     log.info("generate phase — %s: write %s took %.1fs",
              obj_name, fmt, _time.monotonic() - _write_t0)
+    if _grain_merge:
+        _sus = _cm.get_duplicate_suspects()
+        _dups = _cm.get_dedup_log()
+        if _sus or _dups:
+            dq_report = {**(dq_report if isinstance(dq_report, dict) else {}),
+                         "duplicate_suspects": _sus, "duplicates": _dups}
     out_path = Path(out_path_str)
     artefact = ConvertedOutput(
         conversion_id=conversion.id, output_file_path=str(out_path),
@@ -3453,7 +3474,7 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
             _carry_cols = None
             if _is_customer:
                 _carry_cols = (["entityid", "internalid", "email", "altemail",
-                                "phone", "mobilephone",
+                                "phone", "mobilephone", "fax",  # fax → REC-02 FAX point
                                 # Identity stamped deterministically by the merge,
                                 # by grain (customer_merge.set_party_identity):
                                 "companyname", "firstname", "middlename", "lastname"]

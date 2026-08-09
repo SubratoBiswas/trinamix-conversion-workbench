@@ -179,6 +179,42 @@ export const ProjectOverviewPage: React.FC = () => {
       flash(e?.message || "Couldn't build the report. Generate at least one object first.");
     } finally { setDlReport(false); }
   };
+  // REC-06 Duplicate Suspects review: a customer's shipping address that exactly
+  // matches one of its billing addresses. Nothing is removed until the analyst picks
+  // Delete or Merge here and regenerates — undecided suspects are kept as-is.
+  type DupSuspect = {
+    suspect_key: string; entityid: string; object?: string;
+    address: Record<string, string>; shipping_ref?: string; billing_ref?: string;
+  };
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [dupSaving, setDupSaving] = useState(false);
+  const [dupSuspects, setDupSuspects] = useState<DupSuspect[]>([]);
+  const [dupDecisions, setDupDecisions] = useState<Record<string, string>>({});
+  const openDupSuspects = async () => {
+    setDupOpen(true);
+    setDupLoading(true);
+    try {
+      const d = await OutputApi.duplicateSuspects(pid);
+      setDupSuspects(d.suspects || []);
+      setDupDecisions(d.decisions || {});
+    } catch (e: any) {
+      flash(e?.message || "Couldn't load duplicate suspects. Run Generate all & download first.");
+    } finally { setDupLoading(false); }
+  };
+  const setDupChoice = (key: string, action: string) =>
+    setDupDecisions((cur) => ({ ...cur, [key]: action }));
+  const saveDupDecisions = async () => {
+    setDupSaving(true);
+    try {
+      await OutputApi.saveDuplicateDecisions(pid, dupDecisions);
+      flash("Saved. Run “Generate all & download” to apply your delete/merge choices to the output.");
+      setDupOpen(false);
+    } catch (e: any) {
+      flash(e?.message || "Couldn't save decisions.");
+    } finally { setDupSaving(false); }
+  };
+  const dupUndecided = dupSuspects.filter((s) => !["delete", "merge"].includes(dupDecisions[s.suspect_key])).length;
   // Generate + download every bound conversion's FBDI file for this engagement
   // as one zip (named/ordered by the supplier load sequence).
   const [dlAll, setDlAll] = useState(false);
@@ -551,6 +587,18 @@ export const ProjectOverviewPage: React.FC = () => {
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
                   {dlAll ? (dlStatus ?? "Working…") : "Generate all & download (.zip)"}
                 </button>
+                {/* REC-06 Duplicate Suspects review — opens the suspects the tool
+                    DETECTED (a customer's shipping address that matches a billing one);
+                    the analyst deletes or merges each, applied on the next Generate all.
+                    Nothing is removed without a decision. */}
+                <button
+                  onClick={openDupSuspects}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                  title="Review duplicate suspects: customers whose shipping address exactly matches one of their billing addresses. Delete or merge each; nothing is removed until you decide and re-run Generate all & download. Detected during the last generation — run Generate all first if you haven't."
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Duplicate suspects
+                </button>
                 {/* What the tool DID to the input file. Sits with the bundle
                     buttons because it answers the question that follows one:
                     the analyst has the FBDI files, and now has to be able to say
@@ -573,7 +621,10 @@ export const ProjectOverviewPage: React.FC = () => {
                   <FolderDown className={cn("h-3 w-3", dlAll && "animate-pulse")} />
                   {dlAll ? (dlStatus ?? "Working…") : allHdl ? "HDL templates (.zip)" : "FBDI Excel templates (.zip)"}
                 </button>
-                {!fileBased && (
+                {/* "Use EBS Source" button hidden per request (09-Aug-2026). The
+                    switch-to-EBS logic below is left fully intact — to bring the
+                    button back, change the guard to `{!fileBased && (`. */}
+                {false && !fileBased && (
                   <button
                     onClick={async () => {
                       setEbsBusy(true);
@@ -898,6 +949,95 @@ export const ProjectOverviewPage: React.FC = () => {
           onClose={() => setShowModuleModal(false)}
           onDone={(r) => { flash(`Created ${r.created_count} conversion(s)`); refresh(); setShowModuleModal(false); }}
         />
+      )}
+
+      {dupOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+             onClick={() => setDupOpen(false)}>
+          <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+               onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
+              <div>
+                <h2 className="text-sm font-semibold text-ink">Duplicate suspects</h2>
+                <p className="mt-0.5 text-[11px] text-ink-muted">
+                  A customer's shipping address that exactly matches one of its billing
+                  addresses. Nothing is removed until you choose Delete or Merge and re-run
+                  “Generate all &amp; download”. Undecided suspects are kept as-is.
+                </p>
+              </div>
+              <button className="text-ink-muted hover:text-ink" onClick={() => setDupOpen(false)}>✕</button>
+            </div>
+            <div className="flex-1 overflow-auto px-4 py-3">
+              {dupLoading ? (
+                <div className="py-10 text-center text-sm text-ink-muted">Loading…</div>
+              ) : dupSuspects.length === 0 ? (
+                <div className="py-10 text-center text-sm text-ink-muted">
+                  No duplicate suspects were detected in the last generation.<br />
+                  Run “Generate all &amp; download” first, then reopen this.
+                </div>
+              ) : (
+                <>
+                  <div className="mb-2 text-[11px] text-ink-muted">
+                    {dupSuspects.length} suspect(s) · {dupUndecided} undecided.&nbsp;
+                    <span className="font-medium">Delete</span> removes the shipping duplicate;&nbsp;
+                    <span className="font-medium">Merge</span> keeps one site carrying both BILL_TO and SHIP_TO.
+                  </div>
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="text-left text-ink-muted">
+                        <th className="py-1 pr-2">Customer</th>
+                        <th className="py-1 pr-2">Duplicate address (shipping = billing)</th>
+                        <th className="py-1">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dupSuspects.map((s) => {
+                        const a = s.address || {};
+                        const addr = [a["Address Line 1"], a["Address Line 2"], a["City"],
+                                      a["State"], a["Postal Code"], a["Country"]]
+                          .filter(Boolean).join(", ");
+                        const val = ["delete", "merge"].includes(dupDecisions[s.suspect_key])
+                          ? dupDecisions[s.suspect_key] : "keep";
+                        return (
+                          <tr key={s.suspect_key} className="border-t border-line align-top">
+                            <td className="py-1 pr-2 font-medium text-ink">{s.entityid}</td>
+                            <td className="py-1 pr-2 text-ink">{addr || "—"}</td>
+                            <td className="py-1">
+                              <select
+                                value={val}
+                                onChange={(e) => setDupChoice(s.suspect_key, e.target.value)}
+                                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                              >
+                                <option value="keep">Keep both</option>
+                                <option value="delete">Delete shipping</option>
+                                <option value="merge">Merge</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+              <button
+                className="rounded-md border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => setDupOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={dupSaving || dupLoading || dupSuspects.length === 0}
+                className="rounded-md border border-brand/40 bg-brand-subtle px-3 py-1 text-[11px] font-semibold text-brand-dark hover:bg-brand-subtle/70 disabled:opacity-50"
+                onClick={saveDupDecisions}
+              >
+                {dupSaving ? "Saving…" : "Save decisions"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

@@ -293,11 +293,6 @@ async def merged_preview(conversion_id: str, limit: int = 50, _: User = Depends(
         p["sources"] = names
         return p
     head = merged.head(limit)
-    # Internal merge bookkeeping columns (grain tag + customer key) never belong in
-    # the preview — they are dropped from the file by the per-sheet reindex too.
-    _internal = [col for col in head.columns if str(col).startswith("__")]
-    if _internal:
-        head = head.drop(columns=_internal)
     if "supplier" in (c.target_object or "").lower():
         try:
             head = _mask_supplier_emails(head.copy())
@@ -1475,6 +1470,195 @@ async def download_output(
             "This output was generated before the current rules and no longer matches "
             "them — regenerate it before downloading.")
     return FileResponse(out.output_file_path, filename=out.output_file_name)
+
+
+@output_router.get("/project/{project_id}/duplicate-suspects")
+async def project_duplicate_suspects(
+    project_id: str,
+    _: User = Depends(get_current_user),
+):
+    """REC-06 duplicate SUSPECTS for the review screen. Each suspect is a customer's
+    shipping address that EXACTLY matches one of its billing addresses — detected
+    during the last generation and read from the merged output's dq_report, merged
+    with the analyst's saved decisions. Nothing is removed until a decision is saved
+    AND the output is regenerated; a suspect with no decision is kept as-is."""
+    from app.models.project import Project
+    project = await Project.get(PydanticObjectId(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+    conversions = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)).to_list()
+    suspects: list = []
+    seen_obj: set = set()
+    seen_key: set = set()
+    for c in sorted(conversions, key=lambda x: (x.planned_load_order or 100)):
+        obj = c.target_object or c.name
+        if obj in seen_obj:
+            continue
+        seen_obj.add(obj)
+        carrier = await _carrier_for_object(PydanticObjectId(project_id), obj) or c
+        out = await ConvertedOutput.find(
+            ConvertedOutput.conversion_id == carrier.id).sort("-generated_at").first_or_none()
+        dq = getattr(out, "dq_report", None) if out else None
+        for s in ((dq.get("duplicate_suspects") if isinstance(dq, dict) else None) or []):
+            k = s.get("suspect_key")
+            if not k or k in seen_key:
+                continue
+            seen_key.add(k)
+            suspects.append({**s, "object": obj})
+    decisions = getattr(project, "duplicate_decisions", None) or {}
+    return {
+        "suspects": suspects,
+        "decisions": decisions,
+        "count": len(suspects),
+        "decided": sum(1 for s in suspects if s.get("suspect_key") in decisions),
+        "undecided": sum(1 for s in suspects if s.get("suspect_key") not in decisions),
+        "generated": bool(suspects),
+    }
+
+
+@output_router.post("/project/{project_id}/duplicate-decisions")
+async def save_duplicate_decisions(
+    project_id: str,
+    payload: dict,
+    _: User = Depends(get_current_user),
+):
+    """Save REC-06 delete/merge decisions on the project (applied at the next
+    Generate all & download). Body: ``{"decisions": {suspect_key: "delete"|"merge"|
+    "keep"}}``. ``keep`` or any empty/other value CLEARS the decision, so the suspect
+    goes back to being kept untouched."""
+    from app.models.project import Project
+    project = await Project.get(PydanticObjectId(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+    incoming = (payload or {}).get("decisions") or {}
+    if not isinstance(incoming, dict):
+        raise HTTPException(422, "decisions must be an object of suspect_key -> action")
+    cur = dict(getattr(project, "duplicate_decisions", None) or {})
+    for k, v in incoming.items():
+        a = str(v or "").strip().lower()
+        if a in ("delete", "merge"):
+            cur[str(k)] = a
+        else:
+            cur.pop(str(k), None)   # keep / clear
+    await project.set({"duplicate_decisions": cur, "updated_at": datetime.utcnow()})
+    return {"saved": len(cur), "decisions": cur}
+
+
+@output_router.get("/project/{project_id}/duplicates-report")
+async def duplicates_report(
+    project_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Excel report of every row the tool removed as a DUPLICATE during generation:
+    the reason, the interface/tab it was removed from, and the removed row's data,
+    grouped together. Built from the duplicate-deletion audit captured on each merged
+    output's dq_report — so it reflects the LAST generation. Regenerate the
+    interface(s) (Generate All) first if the rules have changed."""
+    from app.models.project import Project
+    project = await Project.get(PydanticObjectId(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    conversions = await Conversion.find(
+        Conversion.project_id == PydanticObjectId(project_id)
+    ).to_list()
+
+    # Newest merged output per interface object → its captured duplicate deletions.
+    entries: list = []
+    seen_obj: set = set()
+    for c in sorted(conversions, key=lambda x: (x.planned_load_order or 100)):
+        obj = c.target_object or c.name
+        if obj in seen_obj:
+            continue
+        seen_obj.add(obj)
+        carrier = await _carrier_for_object(PydanticObjectId(project_id), obj) or c
+        out = await ConvertedOutput.find(
+            ConvertedOutput.conversion_id == carrier.id
+        ).sort("-generated_at").first_or_none()
+        dq = getattr(out, "dq_report", None) if out else None
+        dups = dq.get("duplicates") if isinstance(dq, dict) else None
+        for d in (dups or []):
+            e = dict(d)
+            e["object"] = obj
+            entries.append(e)
+
+    # ── Group so "all the data grouped together": one line per removed duplicate,
+    # with every tab it was removed from listed in a single cell. ──────────────
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    grouped: dict = {}
+    for e in entries:
+        data = e.get("data") or {}
+        gk = (e.get("object", ""), e.get("reason", ""), e.get("entityid", ""),
+              data.get("Address Line 1", ""), data.get("Address Line 2", ""),
+              data.get("City", ""), data.get("State", ""),
+              data.get("Postal Code", ""), data.get("Country", ""))
+        g = grouped.setdefault(gk, {"tabs": set(), "data": data,
+                                    "use": data.get("Use Type", "")})
+        if e.get("tab"):
+            g["tabs"].add(e["tab"])
+
+    wb = Workbook()
+    hdr_font = Font(bold=True, color="FFFFFF")
+    hdr_fill = PatternFill("solid", fgColor="4472C4")
+    wrap = Alignment(vertical="top", wrap_text=True)
+
+    def _style_header(ws, ncols):
+        for j in range(1, ncols + 1):
+            cell = ws.cell(row=1, column=j)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+
+    # Summary tab — count per interface + reason.
+    ws0 = wb.active
+    ws0.title = "Summary"
+    ws0.append(["Interface object", "Reason", "Duplicate rows removed", "Tabs affected"])
+    _style_header(ws0, 4)
+    summ: dict = {}
+    for (obj, reason, *_rest), g in grouped.items():
+        s = summ.setdefault((obj, reason), {"n": 0, "tabs": set()})
+        s["n"] += 1
+        s["tabs"] |= g["tabs"]
+    if summ:
+        for (obj, reason), s in sorted(summ.items()):
+            ws0.append([obj, reason, s["n"], ", ".join(sorted(s["tabs"]))])
+        ws0.append([])
+        ws0.append(["TOTAL", "", sum(s["n"] for s in summ.values()), ""])
+    else:
+        ws0.append(["— No duplicates were removed in the last generation —", "", 0, ""])
+        ws0.append(["Run Generate All, then download this report again "
+                    "(it is built from the most recent generation).", "", "", ""])
+    for w, col in zip((26, 60, 22, 40), "ABCD"):
+        ws0.column_dimensions[col].width = w
+
+    # Detail tab — one row per removed duplicate, tabs grouped into one cell.
+    ws1 = wb.create_sheet("Deleted Duplicates")
+    cols = ["Interface object", "Reason", "Customer (entityid)", "Use Type",
+            "Address Line 1", "Address Line 2", "City", "State", "Postal Code",
+            "Country", "Site Reference", "Removed from tabs"]
+    ws1.append(cols)
+    _style_header(ws1, len(cols))
+    for (obj, reason, entityid, a1, a2, city, state, zipc, country), g in sorted(grouped.items()):
+        data = g["data"]
+        ws1.append([obj, reason, entityid, g.get("use", ""),
+                    a1, a2, city, state, zipc, country,
+                    data.get("Site Reference", ""),
+                    ", ".join(sorted(g["tabs"]))])
+    for j in range(1, len(cols) + 1):
+        for r in range(2, ws1.max_row + 1):
+            ws1.cell(row=r, column=j).alignment = wrap
+    for w, col in zip((22, 46, 20, 12, 26, 18, 18, 12, 12, 14, 26, 46),
+                      "ABCDEFGHIJKL"):
+        ws1.column_dimensions[col].width = w
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    tmp.close()
+    wb.save(tmp.name)
+    fname = f"{project.name or 'project'}_Duplicates_Report.xlsx".replace("/", "-")
+    return FileResponse(tmp.name, filename=fname,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 def _safe_name(s: str) -> str:

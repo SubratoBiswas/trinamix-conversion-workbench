@@ -34,6 +34,10 @@ class Project(Document):
     dress_rehearsal_count: int = 0
     source_connection_id: Optional[str] = None
     current_environment: str = "DEV"
+    # REC-06 Duplicate Suspects decisions: {suspect_key -> "delete" | "merge"}. A
+    # suspect with no entry here is kept untouched at generation, so nothing is ever
+    # removed without an explicit analyst decision.
+    duplicate_decisions: dict = Field(default_factory=dict)
 
     class Settings:
         name = "projects"
