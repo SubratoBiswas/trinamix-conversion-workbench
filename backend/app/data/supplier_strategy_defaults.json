@@ -51,9 +51,24 @@
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
-          {"if_column": "Country", "op": "eq", "value": "India", "then": "{Permanent Account Number ( PAN)}"},
-          {"if_column": "Country", "op": "eq", "value": "United States", "then": "{Tax ID}"},
-          {"if_column": "Country", "op": "eq", "value": "Canada", "then": "{Tax Id Canada}"}
+          {
+            "if_column": "Country",
+            "op": "eq",
+            "value": "India",
+            "then": "{Permanent Account Number ( PAN)}"
+          },
+          {
+            "if_column": "Country",
+            "op": "eq",
+            "value": "United States",
+            "then": "{Tax ID}"
+          },
+          {
+            "if_column": "Country",
+            "op": "eq",
+            "value": "Canada",
+            "then": "{Tax Id Canada}"
+          }
         ],
         "default": ""
       },
@@ -348,9 +363,26 @@
       {
         "target_object": "Supplier Site",
         "target_field": "Enable B2B Messaging",
-        "suppress": true,
-        "note": "Leave blank on every row.",
-        "status": "SEEDED as suppress_field"
+        "rule_type": "CASE_WHEN",
+        "rule_config": {
+          "branches": [
+            {
+              "if_column": "enable_for_edi",
+              "op": "eq",
+              "value": "Yes",
+              "then": "CMK"
+            },
+            {
+              "if_column": "enable_for_edi",
+              "op": "eq",
+              "value": "No",
+              "then": "None"
+            }
+          ],
+          "default": ""
+        },
+        "note": "Consultant (09-Aug): enable_for_edi No -> None, Yes -> CMK, otherwise blank.",
+        "status": "value-map (was suppress)"
       },
       {
         "target_object": "Supplier Site",
@@ -418,15 +450,376 @@
         "status": "CAPTURED - confirm whether the Site value comes from the same source column as the header."
       },
       {
-        "target_object": "Supplier",
+        "target_object": "Supplier Address",
         "target_field": "Phone Country Code",
-        "rule_type": "PHONE_PART",
+        "rule_type": "CASE_WHEN",
         "rule_config": {
-          "part": "country"
+          "branches": [
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United States",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "USA",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "US",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United States of America",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Canada",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "India",
+              "then": "+91"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Brazil",
+              "then": "+55"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "China",
+              "then": "+86"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Spain",
+              "then": "+34"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Israel",
+              "then": "+972"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United Arab Emirates",
+              "then": "+971"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "UAE",
+              "then": "+971"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United Kingdom",
+              "then": "+44"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "UK",
+              "then": "+44"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Germany",
+              "then": "+49"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "France",
+              "then": "+33"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Mexico",
+              "then": "+52"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Italy",
+              "then": "+39"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Netherlands",
+              "then": "+31"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Australia",
+              "then": "+61"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Japan",
+              "then": "+81"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Singapore",
+              "then": "+65"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Ireland",
+              "then": "+353"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Switzerland",
+              "then": "+41"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Sweden",
+              "then": "+46"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Poland",
+              "then": "+48"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Portugal",
+              "then": "+351"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "South Korea",
+              "then": "+82"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Korea",
+              "then": "+82"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Taiwan",
+              "then": "+886"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Hong Kong",
+              "then": "+852"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Malaysia",
+              "then": "+60"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Thailand",
+              "then": "+66"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Vietnam",
+              "then": "+84"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Indonesia",
+              "then": "+62"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Philippines",
+              "then": "+63"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Turkey",
+              "then": "+90"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Saudi Arabia",
+              "then": "+966"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "South Africa",
+              "then": "+27"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Belgium",
+              "then": "+32"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Austria",
+              "then": "+43"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Denmark",
+              "then": "+45"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Norway",
+              "then": "+47"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Finland",
+              "then": "+358"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Czech Republic",
+              "then": "+420"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Hungary",
+              "then": "+36"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Romania",
+              "then": "+40"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Greece",
+              "then": "+30"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "New Zealand",
+              "then": "+64"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Argentina",
+              "then": "+54"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Chile",
+              "then": "+56"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Colombia",
+              "then": "+57"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Peru",
+              "then": "+51"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Russia",
+              "then": "+7"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Egypt",
+              "then": "+20"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Nigeria",
+              "then": "+234"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Pakistan",
+              "then": "+92"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Bangladesh",
+              "then": "+880"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Sri Lanka",
+              "then": "+94"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Vietnam ",
+              "then": "+84"
+            }
+          ],
+          "default": ""
         },
-        "source_hint": "Phone",
-        "note": "Split the single legacy phone string into its Oracle parts. Country code and area code go in their OWN columns; the Phone column keeps ONLY the bare number (no country/area prefix, no duplication).",
-        "status": "READY - engine PHONE_PART already supports part=country|area|number|extension. Confirm the source column name (\"Phone\") then seed all three together."
+        "note": "Consultant (09-Aug): derive the phone country code from the COUNTRY column (+1 US/Canada, +91 India, ...), NOT by splitting the phone string. Unlisted countries ship blank.",
+        "status": "country-derived CASE_WHEN"
       },
       {
         "target_object": "Supplier",
@@ -555,6 +948,433 @@
         "suppress": true,
         "note": "Alias of the above - the payees interface is registered under both object names across the template records.",
         "status": "IMPLEMENTED - write-time suppression"
+      },
+      {
+        "target_object": "Supplier Contacts",
+        "target_field": "Phone Country Code",
+        "rule_type": "CASE_WHEN",
+        "rule_config": {
+          "branches": [
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United States",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "USA",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "US",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United States of America",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Canada",
+              "then": "+1"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "India",
+              "then": "+91"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Brazil",
+              "then": "+55"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "China",
+              "then": "+86"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Spain",
+              "then": "+34"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Israel",
+              "then": "+972"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United Arab Emirates",
+              "then": "+971"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "UAE",
+              "then": "+971"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "United Kingdom",
+              "then": "+44"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "UK",
+              "then": "+44"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Germany",
+              "then": "+49"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "France",
+              "then": "+33"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Mexico",
+              "then": "+52"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Italy",
+              "then": "+39"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Netherlands",
+              "then": "+31"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Australia",
+              "then": "+61"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Japan",
+              "then": "+81"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Singapore",
+              "then": "+65"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Ireland",
+              "then": "+353"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Switzerland",
+              "then": "+41"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Sweden",
+              "then": "+46"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Poland",
+              "then": "+48"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Portugal",
+              "then": "+351"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "South Korea",
+              "then": "+82"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Korea",
+              "then": "+82"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Taiwan",
+              "then": "+886"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Hong Kong",
+              "then": "+852"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Malaysia",
+              "then": "+60"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Thailand",
+              "then": "+66"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Vietnam",
+              "then": "+84"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Indonesia",
+              "then": "+62"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Philippines",
+              "then": "+63"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Turkey",
+              "then": "+90"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Saudi Arabia",
+              "then": "+966"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "South Africa",
+              "then": "+27"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Belgium",
+              "then": "+32"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Austria",
+              "then": "+43"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Denmark",
+              "then": "+45"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Norway",
+              "then": "+47"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Finland",
+              "then": "+358"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Czech Republic",
+              "then": "+420"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Hungary",
+              "then": "+36"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Romania",
+              "then": "+40"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Greece",
+              "then": "+30"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "New Zealand",
+              "then": "+64"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Argentina",
+              "then": "+54"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Chile",
+              "then": "+56"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Colombia",
+              "then": "+57"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Peru",
+              "then": "+51"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Russia",
+              "then": "+7"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Egypt",
+              "then": "+20"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Nigeria",
+              "then": "+234"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Pakistan",
+              "then": "+92"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Bangladesh",
+              "then": "+880"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Sri Lanka",
+              "then": "+94"
+            },
+            {
+              "if_column": "country",
+              "op": "eq",
+              "value": "Vietnam ",
+              "then": "+84"
+            }
+          ],
+          "default": ""
+        },
+        "note": "Consultant (09-Aug): derive the phone country code from the COUNTRY column (+1 US/Canada, +91 India, ...), NOT by splitting the phone string. Unlisted countries ship blank.",
+        "status": "country-derived CASE_WHEN"
+      },
+      {
+        "target_object": "Supplier Address",
+        "target_field": "Phone",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "phone",
+        "note": "Consultant (09-Aug): Phone keeps ONLY the local number - strip country code and area code (they go in their own columns).",
+        "status": "PHONE_PART number"
+      },
+      {
+        "target_object": "Supplier Contacts",
+        "target_field": "Phone",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "phone",
+        "note": "Consultant (09-Aug): Phone keeps ONLY the local number - strip country code and area code (they go in their own columns).",
+        "status": "PHONE_PART number"
+      },
+      {
+        "target_object": "Supplier Address",
+        "target_field": "Fax",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "fax",
+        "note": "Consultant (09-Aug): Fax keeps ONLY the local number - strip country code and area code (they go in their own columns).",
+        "status": "PHONE_PART number"
+      },
+      {
+        "target_object": "Supplier Contacts",
+        "target_field": "Fax",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "fax",
+        "note": "Consultant (09-Aug): Fax keeps ONLY the local number - strip country code and area code (they go in their own columns).",
+        "status": "PHONE_PART number"
+      },
+      {
+        "target_object": "Supplier Site",
+        "target_field": "Fax",
+        "rule_type": "PHONE_PART",
+        "rule_config": {
+          "part": "number"
+        },
+        "source_hint": "fax",
+        "note": "Consultant (09-Aug): Fax keeps ONLY the local number - strip country code and area code (they go in their own columns).",
+        "status": "PHONE_PART number"
       }
     ],
     "pattern_rules": [
