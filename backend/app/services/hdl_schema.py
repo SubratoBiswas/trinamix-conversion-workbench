@@ -233,7 +233,14 @@ WORKER = ("Worker", [
 PERSON_NAME = ("PersonName", [
     _date("EffectiveStartDate", _HIRE),
     _key("PersonId(SourceSystemId)", "Workday"),
-    _vmap("LegislationCode", "Country", {"kind": "iso_country"}),
+    # LegislationCode is a CONSTANT "US" for every worker (Subrato, 09-Aug, per MOCK 1:
+    # "legislationcode should reflect US as a default value ... but currently it is
+    # showing more values as well"). This REVERSES the earlier per-country ISO reading:
+    # the client's target instance runs one US legislation, so a Saudi/Spain/India
+    # worker still loads under US, not their country's ISO. Was _vmap(Country->iso_country),
+    # which shipped SA/ES/IN/BR for non-US rows. An analyst who sets a different value in
+    # Mapping Review still wins (render_cell checks the analyst before this constant).
+    _const("LegislationCode", "US"),
     _const("NameType", "GLOBAL"),
     _src("FirstName", ["Legal First Name", "Legal_First_Name"]),
     _src("LastName", ["Legal Last Name", "Legal_Last_Name"]),

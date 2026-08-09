@@ -495,8 +495,16 @@ _SHEET_BLANK = {
 _UDCP_FIELD = "User Defined Context Prompt"
 _DFF_MAX = 30
 _ACCOUNTS_DFF = {
+    # Segment5 was "externalid" — a column the NetSuite customer extract does NOT carry,
+    # so the owned stamp shipped Segment5 BLANK on ACCOUNTS ("not reflecting"), and the
+    # analyst's approved SalesforceID->Segment5 learned mapping filled it instead — but
+    # that mapping reaches the shared party-grain frame and leaked the value onto every
+    # projected sheet. The functional consultant (via Tejaswini, 09-Aug) confirmed the
+    # real column is "SalesforceID". Sourcing Segment5 from it here puts the value on
+    # ACCOUNTS through the OWNED policy (which blanks Segment5 on every other sheet), so
+    # it reflects on ACCOUNTS and ONLY on ACCOUNTS.
     1: "comments", 2: "custentity_upaya_sf_account_id", 3: "custentity_parent_guarantee",
-    4: "cseg1", 5: "externalid", 6: "custentity_esc_industry",
+    4: "cseg1", 5: "SalesforceID", 6: "custentity_esc_industry",
     7: "custentitynx_account_manger", 8: "salesrep", 9: "custentity_sales_region",
     10: "territory", 11: "custentity_nxt_customer_tier", 12: "custentity_enl_legalname",
     13: "dateprospect",
