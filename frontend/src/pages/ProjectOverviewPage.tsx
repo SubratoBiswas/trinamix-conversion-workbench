@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import ReactFlow, {
   Background, Controls, MarkerType, useEdgesState, useNodesState,
 } from "reactflow";
@@ -97,6 +97,7 @@ const STATUS_TONE = (s: string) => {
 export const ProjectOverviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const pid = id!;
+  const navigate = useNavigate();
 
   const [project, setProject] = useState<Project | null>(null);
   const [conversions, setConversions] = useState<Conversion[] | null>(null);
@@ -201,6 +202,18 @@ export const ProjectOverviewPage: React.FC = () => {
     } catch (e: any) {
       flash(e?.message || "Couldn't load duplicate suspects. Run Generate all & download first.");
     } finally { setDupLoading(false); }
+  };
+  // Redirect the "Duplicate suspects" button to the duplicate-suspect section of the
+  // output preview (09-Aug, Subrato) rather than the in-page modal. Suspects belong to
+  // the merged output, so open the CARRIER conversion — the lowest planned_load_order
+  // one, which is what "Generate all & download" merges into — on its ?tab=dupes view.
+  const openDupSuspectsPreview = () => {
+    const convs = conversions ?? [];
+    if (convs.length === 0) { flash("No conversions yet — add one to this project first."); return; }
+    const carrier = [...convs].sort(
+      (a, b) => (((a as any).planned_load_order ?? 999) - ((b as any).planned_load_order ?? 999)),
+    )[0];
+    navigate(`/conversions/${carrier.id}/output?tab=dupes`);
   };
   const setDupChoice = (key: string, action: string) =>
     setDupDecisions((cur) => ({ ...cur, [key]: action }));
@@ -592,9 +605,9 @@ export const ProjectOverviewPage: React.FC = () => {
                     the analyst deletes or merges each, applied on the next Generate all.
                     Nothing is removed without a decision. */}
                 <button
-                  onClick={openDupSuspects}
+                  onClick={openDupSuspectsPreview}
                   className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                  title="Review duplicate suspects: customers whose shipping address exactly matches one of their billing addresses. Delete or merge each; nothing is removed until you decide and re-run Generate all & download. Detected during the last generation — run Generate all first if you haven't."
+                  title="Open the Duplicate suspects review in the output preview: customers whose shipping address exactly matches one of their billing addresses. Delete or merge each there; nothing is removed until you decide and re-run Generate all & download."
                 >
                   <Trash2 className="h-3 w-3" />
                   Duplicate suspects

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, Copy, Download, FileOutput, FolderDown, RotateCcw, Sparkles, Wand2,
 } from "lucide-react";
@@ -86,9 +86,14 @@ interface ConfirmState {
 export const OutputPreviewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const pid = id;
+  const [searchParams] = useSearchParams();
   const [project, setProject] = useState<Conversion | null>(null);
   const [data, setData] = useState<OutputPreview | null>(null);
-  const [tab, setTab] = useState("data");
+  // Deep-linkable initial tab: the Project overview "Duplicate suspects" button
+  // links here with ?tab=dupes so it opens straight on the duplicate-suspect review
+  // rather than a modal (09-Aug). Unknown values fall back to the default "data".
+  const [tab, setTab] = useState(() =>
+    searchParams.get("tab") === "dupes" ? "dupes" : "data");
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
@@ -197,6 +202,15 @@ export const OutputPreviewPage: React.FC = () => {
       );
     } finally { setDupLoading(false); }
   };
+
+  // Deep-link auto-load: when opened straight on the duplicate-suspect tab
+  // (?tab=dupes from the Project overview button), fetch the clusters on mount —
+  // the Tabs onChange loader only fires on an in-page tab switch, so without this
+  // a redirected user would land on an empty panel until clicking Load.
+  useEffect(() => {
+    if (tab === "dupes" && dupes === null && !dupError && !dupLoading) void loadDupes(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadReview = async (silent = false) => {
     if (!pid) return;
