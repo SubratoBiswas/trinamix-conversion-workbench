@@ -40,6 +40,20 @@ WORKER_TYPE_MAP = {
     "employee": "E", "contingent worker": "C", "contingent": "C",
     "pending worker": "P", "nonworker": "N", "default": "E",
 }
+# OnMilitaryServiceFlag is a CASE condition source->target (analyst, 06-Aug), NOT a
+# passthrough. The NextPower extract spells Military_Service as 0/1 (0 = not on
+# service, 1 = on service); other feeds spell it Yes/No or Y/N/true/false. Every
+# spelling resolves to Oracle's Y/N flag, and a blank or unrecognised value ships N
+# — the template's default for the rows the extract leaves silent. It was
+# const_if_blank before, which shipped the raw 0/1 and only defaulted the blanks, so
+# the flag reached Oracle as 0/1 instead of N/Y (confirmed live 09-Aug: 2,185 "0" /
+# 21 "1"). A value-map is engine-owned, so it holds on any new project without a
+# learned rule having to fan out.
+MILITARY_SERVICE_MAP = {
+    "1": "Y", "y": "Y", "yes": "Y", "true": "Y", "on": "Y",
+    "0": "N", "n": "N", "no": "N", "false": "N", "off": "N",
+    "default": "N",
+}
 # A small ISO-3166 alpha-2 crosswalk covering the countries in the NextPower
 # Workday extract; unknown names fall through untouched (and a value already given
 # as a 2-letter code is kept as-is by the generator).
@@ -225,11 +239,13 @@ PERSON_EMAIL = ("PersonEmail", [
 
 WORK_RELATIONSHIP = ("WorkRelationship", [
     _date("DateStart", _HIRE),
-    # Field-mapping workbook row 54: Military_Service -> OnMilitaryServiceFlag, and
-    # the template shows N where the extract is silent. The real input has the column
-    # and populates it on 23 of 2,773 rows, so both halves matter: read it, and
-    # default the rest to N rather than shipping an empty required flag.
-    _const_if_blank("OnMilitaryServiceFlag", "N", ["Military_Service", "Military Service"]),
+    # Field-mapping workbook row 54: Military_Service -> OnMilitaryServiceFlag. The
+    # extract carries 0/1 (and other feeds Yes/No), which must become Oracle's Y/N
+    # flag — a CASE map, not a copy (see MILITARY_SERVICE_MAP). A blank or unknown
+    # value ships N via the map default, so the "populate it, default the silent
+    # rows to N" behaviour is preserved while the populated rows now map correctly.
+    _vmap("OnMilitaryServiceFlag", ["Military_Service", "Military Service"],
+          MILITARY_SERVICE_MAP),
     _const("PrimaryFlag", "Y"),
     _key("PersonId(SourceSystemId)", "Workday"),
     _src("WorkerNumber", _EMP_ID),
