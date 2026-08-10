@@ -174,8 +174,17 @@ def render_cell(spec: dict, resolve, analyst=None, type_lookup=None) -> str:
             # PersonEmail survived only because it happened to carry no such row). So an
             # EMPTY answer on a derived key is IGNORED and the schema derivation stands;
             # a NON-EMPTY analyst value still overrides (a real fixed value they typed).
-            if not (kind in ("key", "worker_number", "manager")
-                    and _clean(answer) == ""):
+            # AssignmentNumber (kind="worker_number") is now HONOURED when the analyst
+            # sets it to keep-blank: a deliberate "Left blank" on the assignment number
+            # ships EMPTY so Oracle auto-generates it on load, and the Mapping Review UI
+            # promises not_applicable "ships empty in every output" — the HDL writer was
+            # the one place that quietly ignored that. Only the SourceSystemId cross-
+            # references (kind="key") and the supervisor link (kind="manager") still keep
+            # their schema derivation on an EMPTY answer: those have no source column to
+            # map, an auto-map marks them not_applicable mechanically, and blanking them
+            # dangles every child-record link (PersonId / PeriodOfServiceId). A NON-empty
+            # analyst value still overrides any kind (a real fixed value they typed).
+            if not (kind in ("key", "manager") and _clean(answer) == ""):
                 return _clean(answer)
     if kind == "const":
         return _clean(spec.get("value"))

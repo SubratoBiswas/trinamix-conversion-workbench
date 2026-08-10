@@ -1027,11 +1027,15 @@ def _apply_one_rule(
         if _fixed_cc:
             cc = _to_str(_fixed_cc).strip()
         city = _first(cfg.get("city_column") or "")
-        # With a fixed prefix, a row with no city would collapse to a bare "US" and
-        # every city-less site would collide — keep the incoming value instead so those
-        # rows stay distinct rather than merging into one "US" site.
+        # With a fixed prefix and NO city, ship the bare prefix ("US"). Analyst, 10-Aug:
+        # a city-less supplier site is just "US". (Earlier this kept the incoming value to
+        # avoid several city-less sites collapsing to one "US" key, but the country name
+        # it fell back to — "Brazil", "India" — did not match the US-<City> convention and
+        # the analyst chose the bare prefix instead; sites that need to stay distinct
+        # carry a city.) Only for the fixed-prefix case — a column-derived country with no
+        # city still returns the incoming value below, unchanged.
         if _fixed_cc and not city:
-            return value
+            return cc
         # Collapse capitalisation variants onto the spelling this extract uses most,
         # because the site key is REQUIRED and UNIQUE: "IN-Hyderabad" appeared 461
         # times and "IN-HYDERABAD" 103, and Fusion would have created two sites for

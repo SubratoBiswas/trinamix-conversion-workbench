@@ -157,7 +157,7 @@
       "note": "EMAIL is tested first, which is what 'preference to EMAIL' means - a row carrying both takes EMAIL. The remittance-specific spellings are tried first and kept, but the NetSuite extract has NO 'Remittance *' column: its 258 headers carry Email, Alt. Email and Fax, so those are the fallbacks that actually fire. Confirm this is the intended source - if remittance advice goes somewhere else, name the column and it replaces these. Default blank rather than a guess: it is a coded column."
     },
     {
-      "target_object": "Supplier Site",
+      "target_object": "Supplier",
       "target_field": "Supplier Site",
       "action": "rule",
       "rule_type": "CITY_COUNTRY_KEY",
