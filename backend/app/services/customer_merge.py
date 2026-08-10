@@ -541,6 +541,15 @@ FROM_DATE_SOURCE_COLS = ("startdate", "datecreated")
 # dropped from HZ_IMP_PERSONLANG (analyst, 10-Aug).
 LANG_SOURCE_COLS = ("language",)
 
+# Threaded through the merge so the owned Job Title stamp (stamp_sheet_rules) can read
+# the per-contact title on the contact grain. The contact extract carries NO title
+# column; "title" is the customer master's (primary contact's) job title, borrowed onto
+# the customer's contact rows by entityid in enrich_source_frame BEFORE the carry runs,
+# so __title reaches the contact rows with the customer's title (REC-62). Owned rather
+# than left to a per-project Job Title <- title mapping, which shipped blank because no
+# such mapping survived the learning re-apply on RegTest4 (analyst, 10-Aug).
+TITLE_SOURCE_COLS = ("title",)
+
 
 def _fbdi_date(v) -> str:
     """A source date (YYYY-MM-DD / YYYY/MM/DD / MM/DD/YYYY) rendered as the FBDI
@@ -749,6 +758,18 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             # field the template lacks is dropped at the per-sheet reindex.
             if sc is not None:
                 _set_owned_col(sub, fld, sc)
+    # Job Title <- title on the contact sheets (REC-62, analyst 10-Aug: "job title
+    # should be mapped to the title field, which has values"). The contact extract has
+    # no per-contact title; "title" is the customer master's primary-contact job title,
+    # borrowed onto the customer's contact rows by entityid (enrich_source_frame) and
+    # threaded here as __title. Owned so it populates regardless of whether a per-project
+    # Job Title mapping survived — the same reason Person Name / Party Type are owned.
+    # Only where the sheet actually carries a Job Title column (HZ_IMP_CONTACTS_T /
+    # HZ_IMP_ACCTCONTACTS_T); the guard leaves CONTACTPTS and other sheets untouched.
+    if "contact" in n:
+        _jt = _carried(sub, "title")
+        if _jt is not None and _find_col_ci(sub.columns, "Job Title") is not None:
+            _set_owned_col(sub, "Job Title", _jt)
     # From Date / Account Established Date = COALESCE(startdate, datecreated): when a
     # row's startdate is blank, fall back to datecreated (analyst, 09-Aug). startdate is
     # blank on ~1.4% of rows and used to ship an empty From Date; datecreated is always
@@ -820,6 +841,8 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Site Language")
     if "location" in n:                     # NEW-03/04 owned LOCATIONS address block
         owned.update(_ADDR_MAP.keys())
+    if "contact" in n:                      # REC-62 owned Job Title <- borrowed title
+        owned.add("Job Title")
     # PERSONLANG's blank fields (Party Original System / Reference / Language Name) are
     # owned via _sheet_rule_fields(n) below, since they live in _SHEET_BLANK now.
     # From Date coalesce (owned) on the site/contact/relationship sheets, Account

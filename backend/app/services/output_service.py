@@ -3320,6 +3320,9 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                    # language for the PERSONLANG language-not-empty
                                    # row filter (customer_merge.sheet_rows, 10-Aug).
                                    + list(_cm.LANG_SOURCE_COLS)
+                                   # title for the owned Job Title stamp on the contact
+                                   # sheets (customer_merge.stamp_sheet_rules, REC-62).
+                                   + list(_cm.TITLE_SOURCE_COLS)
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
