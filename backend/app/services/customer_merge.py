@@ -483,6 +483,13 @@ _SHEET_BLANK = {
     "partysites": ("Relationship Source System Reference",),
     "partysiteuses": ("Primary Indicator",),
     "acctsiteuses": ("Primary Indicator",),
+    # HZ_IMP_PERSONLANG — functional consultant, 10-Aug: NO field on this sheet is
+    # populated. The only three that were carrying a value (the NETSUITE source-system
+    # tag, the party ref, and the en_US->US Language Name) all ship blank now. Owned +
+    # re-asserted at finalize like every other _SHEET_BLANK entry, so a learned default
+    # or the source-system linkage glue cannot re-fill them.
+    "personlang": ("Party Original System", "Party Original System Reference",
+                   "Language Name"),
 }
 
 # ── Descriptive Flexfield + User Defined Context Prompt policy ────────────────────
@@ -706,13 +713,7 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
     # (own_internalid=True). _set_party_link stamped the customer PARTYREF instead, so
     # every contact point pointed at the customer org party (analyst: "shows wrong
     # values"). Owned here on the contact's own internalid.
-    # PERSONLANG (10-Aug) shares this exact defect: _set_party_link stamped the
-    # CUSTOMER org ref on every person-language row (one value repeated thousands of
-    # times), so the language did not attach to the person. HZ_IMP_PARTIES gives each
-    # PERSON party its OWN internalid as the ref, and the language row must point at
-    # that same ref — so PERSONLANG's Party Original System Reference is the person's
-    # own internalid too, owned here so _set_party_link's customer ref cannot win.
-    if ("contactpt" in n or "personlang" in n) and INTERNALID_COL in sub.columns:
+    if "contactpt" in n and INTERNALID_COL in sub.columns:
         _cid = sub[INTERNALID_COL].astype(str).str.strip()
         if _find_col_ci(sub.columns, "Party Original System Reference") is not None:
             _set_owned_col(sub, "Party Original System Reference", _cid)
@@ -725,8 +726,10 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
     # which REC-25 force-blanks.
     if "acctsite" in n and "use" not in n:      # HZ_IMP_ACCTSITES_T only
         _map_en_us(sub, "Site Language")
-    if "personlang" in n:                        # HZ_IMP_PERSONLANG
-        _map_en_us(sub, "Language Name")
+    # HZ_IMP_PERSONLANG (functional consultant, 10-Aug): NO field on this sheet is
+    # populated — Party Original System, Party Original System Reference and Language
+    # Name all ship BLANK. So the en_US->US Language Name transform is gone and the 3
+    # fields are force-blanked via _SHEET_BLANK["personlang"] instead.
     # HZ_IMP_LOCATIONS_T address block (NEW-03/04). The address is site-grain data
     # (addr1/2/3, city, state, zip, country from the billing/shipping extracts). The
     # per-sheet mapping loses it in the multi-source merge — LOCATIONS' own address
@@ -817,9 +820,8 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Site Language")
     if "location" in n:                     # NEW-03/04 owned LOCATIONS address block
         owned.update(_ADDR_MAP.keys())
-    if "personlang" in n:                   # REC-79 owned en_US->US Language Name
-        owned.add("Language Name")
-        owned.add("Party Original System Reference")  # person's own internalid (10-Aug)
+    # PERSONLANG's blank fields (Party Original System / Reference / Language Name) are
+    # owned via _sheet_rule_fields(n) below, since they live in _SHEET_BLANK now.
     # From Date coalesce (owned) on the site/contact/relationship sheets, Account
     # Established Date on ACCOUNTS — so the per-sheet keep-blank/control default cannot
     # blank the datecreated fallback back out.
@@ -1144,21 +1146,6 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     if grain == PARTY and ENTITYID_COL in sub.columns:
         sub = _dedupe_party_grain(sub)
     sub = sub.reset_index(drop=True)
-    # HZ_IMP_PERSONLANG carries ONLY the persons the source gives a language for
-    # (analyst, 10-Aug: "only include rows where language source field is not empty").
-    # A person with no language must not appear at all rather than shipping a blank /
-    # defaulted Language Name. The borrowed `language` reaches the contact grain via
-    # BORROWABLE_SRC_COLS; a row whose language is blank/na is dropped here.
-    if "personlang" in _norm(sheet_name):
-        _lang = _carried(sub, "language")
-        if _lang is None:
-            _lc = _find_col_ci(sub.columns, "language")
-            if _lc is not None:
-                _lang = sub[_lc].astype(str).str.strip()
-        if _lang is not None and len(_lang) == len(sub):
-            sub = sub[(~_is_blank_series(_lang)).values].reset_index(drop=True)
-        if len(sub) == 0:                       # never empty the sheet on a bad guess
-            return df
     _set_party_link(sub)
     sub = _stamp_account_description(sub, sheet_name)   # Account Description <- companyname (REC-30)
     sub = stamp_sheet_rules(sub, sheet_name)            # NETSUITE constants / PROFILES blanks / ref-copies

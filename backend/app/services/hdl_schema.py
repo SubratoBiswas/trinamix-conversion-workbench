@@ -295,8 +295,15 @@ WORK_RELATIONSHIP = ("WorkRelationship", [
 # at. Built from one definition so the two passes cannot drift apart.
 def _work_terms(numbered: bool):
     return ("WorkTerms", [
-        (_wnum("AssignmentNumber") if numbered
-         else _blank("AssignmentNumber")),
+        # AssignmentNumber = E/C<employee id> on BOTH Worker passes (Subrato, 10-Aug:
+        # Worker(Employee) WorkTerms/Assignment showed blank, expected E1200588). The
+        # earlier template read left it empty on pass one and set it on pass two — but
+        # then the supervisor row in pass two points at an AssignmentNumber pass one
+        # never created (pass one's assignment was auto-numbered), so the link cannot
+        # resolve. Numbering it the same in both passes makes the two agree. Only
+        # AssignmentStatusTypeCode still differs by pass (blank on Employee,
+        # ACTIVE_PROCESS on AssignmentSupervisor).
+        _wnum("AssignmentNumber"),
         (_const("AssignmentStatusTypeCode", "ACTIVE_PROCESS") if numbered
          else _blank("AssignmentStatusTypeCode")),
         _const("BusinessUnitShortCode", _BU_SHORT_CODE),
@@ -315,8 +322,8 @@ def _work_terms(numbered: bool):
 def _assignment(numbered: bool):
     return ("Assignment", [
         _const("ActionCode", "HIRE"),
-        (_wnum("AssignmentNumber") if numbered
-         else _blank("AssignmentNumber")),
+        # E/C<employee id> on BOTH passes — see _work_terms note.
+        _wnum("AssignmentNumber"),
         _date("EffectiveStartDate", _HIRE),
         _const("EffectiveSequence", "1"),
         _const("EffectiveLatestChange", "Y"),
