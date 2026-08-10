@@ -373,21 +373,7 @@ def _phone_split(raw: Any, region: str | None) -> dict | None:
             cc = None
         if cc and digits.startswith(str(cc)) and len(digits) > len(str(cc)) + 4:
             intl_cand = _try("+" + digits, None)
-    # A supplier's registered country is only a HINT for where its fax lives: a
-    # supplier in one country can carry a fax in another — a Chinese-registered
-    # supplier with a Canadian "519…" fax. So ALSO read the number against a small
-    # set of FALLBACK regions ("US" covers the whole NANP, US + Canada, for a
-    # 10-digit number) and, below, prefer whichever reading is a VALID number that
-    # actually carries a geographical AREA CODE. Without this the 519 number parsed
-    # as CN gave country 86, NO area code, and the whole number in the subscriber
-    # field — the "fax area code reverted" the analyst reported on 10-Aug.
-    fallback_cands = []
-    for _fb in ("US",):
-        if _fb != region:
-            o = _try(s, _fb)
-            if o is not None:
-                fallback_cands.append(o)
-    if region_cand is None and intl_cand is None and not fallback_cands:
+    if region_cand is None and intl_cand is None:
         return None
 
     def _valid(o):
@@ -408,22 +394,14 @@ def _phone_split(raw: Any, region: str | None) -> dict | None:
         except Exception:  # noqa: BLE001
             return False
 
-    # 1) VALID and carrying an AREA CODE. Region reading FIRST so a genuine local
-    #    area code equal to the calling code (Brazil DDD 55) is never mistaken for a
-    #    country code, then the international reading, then the fallback regions —
-    #    which is where the 519 Canadian fax on a CN supplier finally resolves.
-    best = next((o for o in (region_cand, intl_cand, *fallback_cands)
-                 if _valid(o) and _has_area(o)), None)
-    # 2) VALID but no geographical area code (a mobile, a toll-free) — still the
-    #    supplier's own reading; a fallback must not steal an area-less valid number.
+    # Prefer a reading that carries a geographical AREA CODE, region reading FIRST so a
+    # genuine local area code equal to the calling code (Brazil DDD 55) is never
+    # mistaken for a country code; then plain VALID; then POSSIBLE (international first).
+    best = next((o for o in (region_cand, intl_cand) if _valid(o) and _has_area(o)), None)
     if best is None:
         best = next((o for o in (region_cand, intl_cand) if _valid(o)), None)
-    # 3) POSSIBLE-only — international reading preferred, because reaching here means
-    #    the local reading was not even valid and an embedded country code (Israel
-    #    "97254323291") is better shown code-stripped.
     if best is None:
-        best = next((o for o in (intl_cand, region_cand, *fallback_cands)
-                     if _possible(o)), None)
+        best = next((o for o in (intl_cand, region_cand) if _possible(o)), None)
     if best is None:
         return None
     try:
@@ -436,6 +414,23 @@ def _phone_split(raw: Any, region: str | None) -> dict | None:
         aclen = 0
     area = nsn[:aclen] if aclen and aclen > 0 else ""
     number = nsn[aclen:] if aclen and aclen > 0 else nsn
+    # DELIMITER FALLBACK for the area code. libphonenumber only yields a geographical
+    # area code for a number it considers VALID for its country; a fax whose subscriber
+    # part is the wrong length (a Changzhou number typed "0086-519-8776134", where
+    # 8776134 is 7 digits not the 8 the CN plan expects) comes back area-less with the
+    # whole national number in the subscriber field. But the analyst SPELLED the split
+    # out with dashes/spaces — 0086 | 519 | 8776134 — so when the area is still empty,
+    # recover it from those groups: the group AFTER the country-code group is the area,
+    # the remainder is the subscriber number. Guarded to ≥3 delimiter-separated digit
+    # groups led by the country code, so an unbroken string is never mis-split and a
+    # reading libphonenumber already resolved (area non-empty) is left untouched.
+    if not area:
+        groups = [g for g in re.split(r"\D+", s) if g]
+        cc_str = str(best.country_code)
+        if len(groups) >= 3 and groups[0] in ("00" + cc_str, "0" + cc_str, cc_str):
+            cand_area, cand_number = groups[1], "".join(groups[2:])
+            if cand_area and cand_number:
+                area, number = cand_area, cand_number
     ext = getattr(best, "extension", "") or ""
     return {"country": str(best.country_code), "area": area,
             "number": number, "extension": ext}
