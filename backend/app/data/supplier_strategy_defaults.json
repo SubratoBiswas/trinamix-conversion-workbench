@@ -117,17 +117,20 @@
     {
       "target_object": "Supplier Site",
       "target_field": "Supplier Site",
-      "derive": "country_code_dash_city",
-      "condition": "COUNTRY CODE + \"-\" + City, e.g. US-Chicago. Analyst clarified 28-Jul: the \"US\" in the strategy 7.3 example US-Austin is the COUNTRY code, not the Procurement BU. This removes the site NAME dependency on the missing Subsidiary-to-Procurement-BU crosswalk (the Procurement BU FIELD still needs it). NOT the constant PRIMARY.",
-      "rule_type": "CONCAT",
+      "condition": "FIXED \"US-\" + City, e.g. US-Chicago. Analyst re-clarified 10-Aug: 'US' is a FIXED literal on every supplier (all suppliers load into the NX US BU), NOT the supplier's own country code. Supersedes the 28-Jul reading. Uses CITY_COUNTRY_KEY with country_value=US so the city case-collapse (which prevents US-Houston vs US-HOUSTON duplicate sites) is preserved.",
+      "rule_type": "CITY_COUNTRY_KEY",
       "rule_config": {
-        "columns": [
-          "Country Code",
-          "City"
+        "country_value": "US",
+        "city_column": [
+          "City",
+          "Billing City",
+          "Shipping City"
         ],
-        "separator": "-"
+        "separator": "-",
+        "country_to_iso": false,
+        "resolve_country_from_city": false
       },
-      "status": "CLARIFIED - CONCAT(Country Code, \"-\", City). Source column names need confirming; use the 2-char ISO code (COUNTRY_ISO2) so it is US-Chicago not UnitedStates-Chicago."
+      "status": "SEEDED - CITY_COUNTRY_KEY fixed country_value=US -> US-<City>. Blank-city rows fall back to the incoming value (guard) rather than a bare 'US'."
     },
     {
       "target_object": "Supplier Site",
