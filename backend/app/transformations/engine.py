@@ -1019,7 +1019,19 @@ def _apply_one_rule(
             return ""
 
         cc = _first(cfg.get("country_column") or "")
+        # A FIXED prefix wins over any resolved country. Analyst, 10-Aug: Supplier Site
+        # = "US-<City>", US a literal on EVERY row — all suppliers load into the NX US
+        # BU regardless of their own country. Set via ``country_value`` so the rest of
+        # the rule (city case-collapse, blank-city fallback) is unchanged.
+        _fixed_cc = cfg.get("country_value") or cfg.get("fixed_country")
+        if _fixed_cc:
+            cc = _to_str(_fixed_cc).strip()
         city = _first(cfg.get("city_column") or "")
+        # With a fixed prefix, a row with no city would collapse to a bare "US" and
+        # every city-less site would collide — keep the incoming value instead so those
+        # rows stay distinct rather than merging into one "US" site.
+        if _fixed_cc and not city:
+            return value
         # Collapse capitalisation variants onto the spelling this extract uses most,
         # because the site key is REQUIRED and UNIQUE: "IN-Hyderabad" appeared 461
         # times and "IN-HYDERABAD" 103, and Fusion would have created two sites for
