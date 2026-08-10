@@ -2727,6 +2727,21 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                     and not (getattr(_fm, "default_value", None)
                              and str(_fm.default_value).strip())):
                 sdf[_f.field_name] = ""
+        # OBSOLETED COLUMNS — hard blank, every sheet, every client. Oracle keeps
+        # columns it has retired IN the template (their header carries "Obsolete"/
+        # "-Obsoleted") for backward compatibility; populating them is at best ignored
+        # and at worst rejects the row. The strategy overlay could only name ONE such
+        # column at a time — "Tax Registration Number-Obsoleted" was seeded by hand,
+        # and "Vat Code-Obsoleted" shipped empty only because nothing happened to map
+        # to it. This is the global rule the overlay's field_pattern:"obsolete" entry
+        # always intended (it was carried as NOT IMPLEMENTED because suppression is
+        # name-keyed with no wildcard): blank EVERY obsoleted column wherever it
+        # appears, no matter what a future extract auto-maps into it. Keyed on the
+        # field_name, which still carries the "-Obsoleted" suffix at this point,
+        # before the header rename below.
+        for _c in list(sdf.columns):
+            if "obsolet" in str(_c).lower():
+                sdf[_c] = ""
         hdr: dict[str, str] = {}
         for f in sfields:
             hdr.setdefault(f.field_name, _header_label(f))
@@ -2744,10 +2759,12 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for _c in list(sdf.columns):
                     if _norm_hdr(_c) in _need:
                         sdf[_c] = ""
-        # PROC-07: blank every supplier "…-Obsoleted" column here too. apply_supplier_layout
-        # already does this for the CSV package, but the filled .xlsm template path does NOT
-        # call it, so Tax Registration Number-Obsoleted still shipped populated on the
-        # NetSuite template. Enforcing it in _finalize (used by every path) closes that gap.
+        # PROC-07 (blank every supplier "…-Obsoleted" column, on the filled .xlsm path
+        # as well as the CSV package) is now subsumed by the GLOBAL obsoleted-column
+        # blank above: it runs for every object before the header rename, so the
+        # supplier sheets are covered along with everything else. Header-keyed belt-and-
+        # suspenders kept below in case a header ever carries the "Obsolete" marker that
+        # its field_name does not.
         if _is_supplier:
             for _c in list(sdf.columns):
                 if "obsolete" in _norm_hdr(_c):

@@ -1421,7 +1421,7 @@
           "any other column Oracle has marked Obsolete on any supplier sheet"
         ],
         "note": "Every column whose name contains \"Obsolete\" must be blank, on EVERY supplier sheet - not just the Tax Registration Number one already captured. Oracle keeps obsoleted columns in the template for backward compatibility; populating them is at best ignored and at worst rejected.",
-        "status": "NOT IMPLEMENTED - same pattern-suppression mechanism as the Site attribute rule. Cross-object (target_object \"*\")."
+        "status": "IMPLEMENTED 10-Aug in output_service._finalize - every finished-frame column whose name contains \"obsolet\" (case-insensitive) is hard-blanked before the header rename, on EVERY sheet and EVERY client, regardless of what a source auto-mapped in. Global rule, not name-keyed, so it needs no per-column seeding."
       }
     ]
   },
