@@ -874,7 +874,15 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
     rows: list = []
     for _, r in sub.iterrows():
         email = _v(r, e_col) or _v(r, ae_col)
-        phone = _v(r, p_col) or _v(r, m_col)
+        # A landline (`phone`) and a mobile (`mobilephone`) are SEPARATE Oracle
+        # contact points with distinct line types, not one merged point. The old
+        # code took `phone or mobilephone` into a single row typed MOBILE, which
+        # (a) mistyped every landline as MOBILE and (b) dropped the mobile number of
+        # a contact that also had a landline. Analyst, 10-Aug: the Phone count must
+        # match the source — `phone` (3,955) as a GEN point, `mobilephone` as its own
+        # MOBILE point. Emit each independently; a contact with both gets two points.
+        landline = _v(r, p_col)
+        mobile = _v(r, m_col)
         base = ""
         if have_ent or have_iid:
             base = f"{_v(r, ENTITYID_COL)}_{_v(r, INTERNALID_COL)}"
@@ -893,19 +901,29 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
                 row[osr_f] = f"{base}_EMAIL" if base.strip("_") else ""
             rows.append(row)
             made = True
-        if phone:
+
+        def _phone_point(number: str, line_type: str, tag: str):
             row = r.copy()
             if cpt is not None:
                 row[cpt] = "PHONE"
             if phone_f is not None:
-                row[phone_f] = phone
+                row[phone_f] = number
             if email_f is not None:
                 row[email_f] = ""
             if plt_f is not None:
-                row[plt_f] = "MOBILE"
+                row[plt_f] = line_type
             if osr_f is not None:
-                row[osr_f] = f"{base}_PHONE" if base.strip("_") else ""
+                row[osr_f] = f"{base}_{tag}" if base.strip("_") else ""
             rows.append(row)
+
+        if landline:
+            _phone_point(landline, "GEN", "PHONE")
+            made = True
+        # Mobile as its own MOBILE point — but skip it when it is the SAME number as
+        # the landline (131 contacts carry the identical value in both columns), so a
+        # party never gets the same number twice under one contact.
+        if mobile and re.sub(r"\D", "", mobile) != re.sub(r"\D", "", landline):
+            _phone_point(mobile, "MOBILE", "MOBILE")
             made = True
         if not made:
             # A contact with neither e-mail nor phone has NO contact point. Emitting a
