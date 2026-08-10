@@ -924,7 +924,27 @@ def _transform_frame(
         # which the overlay guarantee was never meant to overwrite. So suppress the
         # suggestion for an overlay-rule field ONLY when the mapping was discarded.
         _ov_rules_field = bool(_ov_early and "rule" in _ov_early)
-        _suppress_suggestion = _ov_rules_field and _discarded
+        # A STALE LEARNED CITY_COUNTRY_KEY MUST NOT OVERRULE A FIXED-PREFIX OVERLAY. (10-Aug)
+        #
+        # Supplier Site, analyst 10-Aug: "US-<City>", US a LITERAL on every row — all
+        # suppliers load into the NX US BU regardless of their own country. The overlay
+        # carries exactly that (CITY_COUNTRY_KEY with a fixed `country_value`). But
+        # apply_learned re-applied an OLDER learned CITY_COUNTRY_KEY onto the mapping as a
+        # suggested_transformation — one that resolves the country FROM the Country column
+        # — and because the mapping is APPROVED (not discarded) the 09-Aug rule below let
+        # that suggestion win, so the field shipped "BR-SP"/"US-New York" (the row's own
+        # country) instead of "US-SP". Unlike the Taxpayer-ID CASE_WHEN — whose overlay
+        # copy keys on DISPLAY names that miss on a raw extract, which is why an approved
+        # mapping's suggestion is normally preferred — a fixed country_value has NO column
+        # to miss, so the overlay is strictly the correct and safer value. Narrowly
+        # scoped to that shape so Taxpayer ID and every column-driven key are untouched.
+        _ov_rule_cfg = ((_ov_early or {}).get("rule") or {})
+        _ov_fixed_city_country = (
+            str(_ov_rule_cfg.get("rule_type") or "").upper() == "CITY_COUNTRY_KEY"
+            and bool((_ov_rule_cfg.get("config") or {}).get("country_value")
+                     or (_ov_rule_cfg.get("config") or {}).get("fixed_country"))
+        )
+        _suppress_suggestion = _ov_rules_field and (_discarded or _ov_fixed_city_country)
         if (m.suggested_transformation and not rules and m.status != "rejected"
                 and not _suppress_suggestion):
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
@@ -2672,6 +2692,29 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # field_name (before the header rename below).
         if _is_supplier:
             sdf = _mask_supplier_emails(sdf)
+        # PER-SHEET KEEP-BLANK ACROSS A SHARED FIELD NAME. A field whose OWN mapping on
+        # THIS sheet is not_applicable ("Left blank") must ship EMPTY here, even when the
+        # SAME field NAME is approved on ANOTHER sheet. out_cols is keyed by the bare
+        # field NAME, so the other sheet's value bleeds into every sheet that carries the
+        # name, and the name-level suppressed_keys cannot say "blank here, keep there".
+        # Employee HDL AssignmentNumber is the analyst's case: marked Left blank on
+        # WorkTerms and Assignment, approved (Employee_ID) on AssignmentSupervisor — and
+        # the Supervisor value filled all three. Keyed by THIS sheet's target_field_id
+        # (f.id) so the two blank while Supervisor keeps its value. Scoped to a genuine
+        # cross-sheet collision — the name IS approved on another sheet — so it never
+        # touches structural glue (generated, not approved-mapped) or a field that is
+        # not_applicable everywhere (already handled by suppressed_keys). A merge-owned
+        # field and a field with an explicit default_value are deliberately left alone.
+        for _f in sfields:
+            _fm = _best_m.get(_f.id)
+            if _fm is None or _fm.status != "not_applicable":
+                continue
+            _fk = (_f.field_name or "").strip().lower().rstrip("*").strip()
+            if (_fk and _fk not in _owned_keys and _fk in explicitly_mapped_keys
+                    and _f.field_name in sdf.columns
+                    and not (getattr(_fm, "default_value", None)
+                             and str(_fm.default_value).strip())):
+                sdf[_f.field_name] = ""
         hdr: dict[str, str] = {}
         for f in sfields:
             hdr.setdefault(f.field_name, _header_label(f))
