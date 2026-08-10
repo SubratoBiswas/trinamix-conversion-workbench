@@ -1806,17 +1806,29 @@ def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
 # etc.) write for "no value". Loaded verbatim into Oracle they'd become the
 # literal text "NULL"/"N/A" instead of an empty cell, so blank them at generate.
 _NULL_SENTINELS = {"null", "(null)", "#n/a", "n/a", "nan", "none", "\\n"}
+# Fields whose literal source value must round-trip verbatim: a "None" typed into the
+# source is the analyst's real value, not a null sentinel to strip (Customer contact
+# Person First Name — analyst, 10-Aug: "it should be 'None' in destination too"). The
+# parser reads with keep_default_na=False and fillna(""), so an EMPTY source cell is ""
+# — never "None" — which means sparing "None" here can only ever keep a genuine source
+# string, never re-introduce a blank-cell artifact. Only "none" is spared for these
+# fields; the unambiguous artifacts (nan / null / #n/a / \n) still blank everywhere.
+_PRESERVE_NONE_FIELDS = {"personfirstname", "personmiddlename", "personlastname"}
 
 
 def _blank_null_sentinels(df: pd.DataFrame) -> pd.DataFrame:
     """Replace whole-cell null sentinels (case-insensitive) with empty strings.
     Whole-cell match only, so a real value like a description containing the word
-    is never touched."""
+    is never touched. A Person name field keeps a literal "None" (see
+    _PRESERVE_NONE_FIELDS)."""
     for col in df.columns:
         s = df[col]
         if s.dtype != object:
             continue
-        mask = s.astype(str).str.strip().str.lower().isin(_NULL_SENTINELS)
+        _sent = (_NULL_SENTINELS - {"none"}
+                 if re.sub(r"[^a-z0-9]", "", str(col).lower()) in _PRESERVE_NONE_FIELDS
+                 else _NULL_SENTINELS)
+        mask = s.astype(str).str.strip().str.lower().isin(_sent)
         if mask.any():
             df.loc[mask, col] = ""
     return df
