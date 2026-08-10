@@ -158,11 +158,25 @@ def render_cell(spec: dict, resolve, analyst=None, type_lookup=None) -> str:
     conversion where nobody has said otherwise. What it is not is an override of
     a person.
     """
+    kind = spec.get("kind")
     if analyst is not None:
         answer = analyst(spec.get("name"))
         if answer is not NO_ANSWER:
-            return _clean(answer)
-    kind = spec.get("kind")
+            # A STRUCTURAL LINK is owned by the schema and required for the load to
+            # resolve — the SourceSystemId cross-references (PersonId(SourceSystemId),
+            # PeriodOfServiceId(SourceSystemId), WorkTermsAssignmentId(SourceSystemId)),
+            # the AssignmentNumber, and the supervisor link. An EMPTY analyst answer on
+            # one of these is never a real keep-blank: there is no source column called
+            # "PersonId(SourceSystemId)" to map, so auto-map marks the field
+            # not_applicable, and that not_applicable was being read as "ship it empty"
+            # — which blanked every child-record link (PersonName / WorkRelationship /
+            # WorkTerms / Assignment all lost their PersonId + PeriodOfServiceId, while
+            # PersonEmail survived only because it happened to carry no such row). So an
+            # EMPTY answer on a derived key is IGNORED and the schema derivation stands;
+            # a NON-EMPTY analyst value still overrides (a real fixed value they typed).
+            if not (kind in ("key", "worker_number", "manager")
+                    and _clean(answer) == ""):
+                return _clean(answer)
     if kind == "const":
         return _clean(spec.get("value"))
     if kind == "const_if_blank":
