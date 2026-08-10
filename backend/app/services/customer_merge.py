@@ -1114,6 +1114,58 @@ def _stamp_account_description(sub: "pd.DataFrame", sheet_name: Optional[str]) -
     return sub
 
 
+# ── Site-sheet de-duplication: billing wins, shipping only when new ──────────────
+# HZ_IMP_PARTYSITES_T / LOCATIONS / ACCTSITES are one row per ADDRESS RECORD, but 553
+# address internalids appear in BOTH the billing and shipping extracts (a NetSuite
+# address flagged for both uses), so the same record was emitted twice — once
+# "… - Billing" and once "… - Shipping" — colliding on the entityid_internalid site
+# key (552 duplicate Party Site OSRs, 414 billing/shipping pairs). Analyst, 10-Aug:
+# "Billing sheet — all records. Shipping sheet — if the record is already in billing,
+# skip it, else add it." So keep every billing row and drop a shipping row only when
+# its (entityid, internalid) already came from billing. The ship-to USE still
+# references that one site key on the use sheets, so no use is lost — this runs on the
+# SITE sheets only, never the *SITEUSES sheets.
+_SITE_DEDUP_USE_COLS = ("Party Site Use Type", "Part Site Use Type", "Site Use Type")
+
+
+def _dedupe_billing_over_shipping(sub: "pd.DataFrame") -> "pd.DataFrame":
+    """One row per (entityid, internalid) address record, billing preferred.
+
+    A row whose key is present in a BILL_TO row is kept only from the billing side;
+    a key seen only on shipping keeps its first shipping row; a row without a full
+    (entityid, internalid) key is never collapsed. Row order is otherwise preserved.
+    """
+    if sub is None or len(sub) == 0:
+        return sub
+    if ENTITYID_COL not in sub.columns or INTERNALID_COL not in sub.columns:
+        return sub
+    ent = sub[ENTITYID_COL].astype(str).str.strip()
+    iid = sub[INTERNALID_COL].astype(str).str.strip()
+    has_key = ent.ne("") & iid.ne("")
+    if not bool(has_key.any()):
+        return sub
+    key = ent + "\x01" + iid
+    is_bill = None
+    for cand in _SITE_DEDUP_USE_COLS:
+        uc = _find_col_ci(sub.columns, cand)
+        if uc is not None:
+            is_bill = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
+            break
+    # nb=0 for billing so the stable sort puts billing first; drop_duplicates then
+    # keeps the billing row for a key seen on both sides.
+    nb = ((~is_bill).astype(int) if is_bill is not None
+          else pd.Series(0, index=sub.index))
+    work = pd.DataFrame({"nb": nb.values, "ord": range(len(sub)),
+                         "key": key.values, "hk": has_key.values}, index=sub.index)
+    keyed = work[work["hk"]]
+    winners = (keyed.sort_values(["nb", "ord"], kind="mergesort")
+               .loc[lambda w: ~w["key"].duplicated(keep="first")].index)
+    keep = pd.Series(False, index=sub.index)
+    keep.loc[~has_key] = True            # rows without a full key are always kept
+    keep.loc[winners] = True             # the winning row per key
+    return sub[keep.values]
+
+
 def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     """The subset of the merged frame that belongs on ``sheet_name``.
 
@@ -1163,6 +1215,17 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
         return df
     if grain == PARTY and ENTITYID_COL in sub.columns:
         sub = _dedupe_party_grain(sub)
+    # SITE sheets are one row per address record: collapse the billing/shipping
+    # duplicate (an address that appears in both extracts) — billing kept, a shipping
+    # row dropped only when its (entityid, internalid) already came from billing. Runs
+    # on PARTYSITES / LOCATIONS / ACCTSITES only; the *SITEUSES sheets keep every use.
+    _sn = _norm(sheet_name)
+    if grain == SITE and (
+        ("location" in _sn)
+        or ("partysite" in _sn and "use" not in _sn)
+        or ("acctsite" in _sn and "use" not in _sn)
+    ):
+        sub = _dedupe_billing_over_shipping(sub)
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
     sub = _stamp_account_description(sub, sheet_name)   # Account Description <- companyname (REC-30)
