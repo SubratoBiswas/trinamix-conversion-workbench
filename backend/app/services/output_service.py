@@ -3309,6 +3309,9 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                    # startdate/datecreated for the From Date / Account
                                    # Established Date COALESCE stamp (customer_merge).
                                    + list(_cm.FROM_DATE_SOURCE_COLS)
+                                   # language for the PERSONLANG language-not-empty
+                                   # row filter (customer_merge.sheet_rows, 10-Aug).
+                                   + list(_cm.LANG_SOURCE_COLS)
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
