@@ -262,9 +262,16 @@ def clean_value(value: Any, *, column: str = "", families: Iterable[str] = SAFE_
 
 
 def default_profile(columns: Iterable[str]) -> dict:
-    """The profile applied when the conversion has none saved: safe families on
-    everywhere, name-rewriting families off."""
-    return {"families": list(SAFE_FAMILIES), "ascii_fold": False,
+    """The profile applied when the conversion has none saved.
+
+    CHANGED 10-Aug (Subrato): data cleansing is now OFF by default and OPT-IN per
+    rule from the Output Preview. Cleansing was silently rewriting real data — a
+    trailing full stop on a company name, a leading zero on an account/site number,
+    a source literal "None" — and the analyst asked for raw source values to ship
+    unchanged unless a cleansing rule is deliberately switched on. So the default
+    profile now enables NO families; a saved profile (set from the Output Preview
+    cleansing selector) turns specific ones back on."""
+    return {"families": [], "ascii_fold": False,
             "per_field": {}, "exclude_fields": [], "value_overrides": {}}
 
 
@@ -274,7 +281,14 @@ def resolve_families(column: str, profile: dict) -> set[str]:
         return set()
     per = (profile.get("per_field") or {}).get(column)
     if per is None:
-        return set(profile.get("families") or SAFE_FAMILIES)
+        # An EXPLICIT empty families list means "no cleansing" and must be honoured —
+        # `families or SAFE_FAMILIES` treated [] as falsy and silently re-enabled the
+        # safe families, which is exactly the default-off behaviour this change is
+        # meant to deliver. Only a MISSING key (None) falls back to the safe set.
+        fams = profile.get("families")
+        if fams is None:
+            fams = SAFE_FAMILIES
+        return set(fams)
     return set(per)
 
 
