@@ -271,6 +271,157 @@ def _row_value_ci(row: Any, name: Any) -> Any:
     return ""
 
 
+# ── Phone parsing (PHONE_PART) ────────────────────────────────────────────────
+# A phone with no international prefix ("5515981205351") cannot be split on its
+# own: libphonenumber (and the old tokeniser) cannot tell a country code from an
+# area code on a bare national string, so the legacy code shipped the WHOLE
+# number — country + area + subscriber — in the "number" part. Reported 10-Aug
+# (NextPower Supplier): "The Phone field should contain only the phone number,
+# not the country code and area code." The row's Country column is the missing
+# hint: it fixes the region so the number can be parsed and split properly.
+#
+# Country name -> ISO-3166 alpha-2 region. Covers every country present in the
+# NextPower supplier extract plus the common English aliases an extract uses.
+_PHONE_REGION_BY_COUNTRY = {
+    "albania": "AL", "australia": "AU", "austria": "AT", "belgium": "BE",
+    "brazil": "BR", "brunei darussalam": "BN", "brunei": "BN", "bulgaria": "BG",
+    "cambodia": "KH", "canada": "CA", "chile": "CL", "china": "CN",
+    "colombia": "CO", "costa rica": "CR", "cyprus": "CY", "denmark": "DK",
+    "egypt": "EG", "estonia": "EE", "finland": "FI", "france": "FR",
+    "germany": "DE", "hong kong": "HK", "hungary": "HU", "india": "IN",
+    "indonesia": "ID", "israel": "IL", "italy": "IT", "kenya": "KE",
+    "malaysia": "MY", "malta": "MT", "mauritius": "MU", "mexico": "MX",
+    "netherlands": "NL", "new zealand": "NZ", "norway": "NO", "panama": "PA",
+    "peru": "PE", "philippines": "PH", "poland": "PL", "portugal": "PT",
+    "romania": "RO", "rwanda": "RW", "saudi arabia": "SA", "singapore": "SG",
+    "south africa": "ZA", "spain": "ES", "sweden": "SE", "switzerland": "CH",
+    "taiwan (province of china)": "TW", "taiwan": "TW", "thailand": "TH",
+    "tunisia": "TN", "turkiye": "TR", "turkey": "TR", "united arab emirates": "AE",
+    "united kingdom": "GB", "united states": "US", "uruguay": "UY",
+    "viet nam": "VN", "vietnam": "VN",
+    # common aliases the extract may carry
+    "usa": "US", "u.s.a.": "US", "united states of america": "US",
+    "u.s.": "US", "uk": "GB", "u.k.": "GB", "great britain": "GB",
+    "england": "GB", "uae": "AE", "u.a.e.": "AE", "korea": "KR",
+    "south korea": "KR", "japan": "JP", "ireland": "IE", "russia": "RU",
+    "russian federation": "RU", "argentina": "AR", "greece": "GR",
+    "czech republic": "CZ", "czechia": "CZ", "slovakia": "SK", "slovenia": "SI",
+    "croatia": "HR", "luxembourg": "LU", "iceland": "IS", "nigeria": "NG",
+    "ghana": "GH", "morocco": "MA", "qatar": "QA", "kuwait": "KW",
+    "bahrain": "BH", "oman": "OM", "jordan": "JO", "lebanon": "LB",
+    "pakistan": "PK", "bangladesh": "BD", "sri lanka": "LK", "nepal": "NP",
+}
+_PHONE_REGION_NORM = {
+    re.sub(r"[^a-z0-9]", "", k): v for k, v in _PHONE_REGION_BY_COUNTRY.items()
+}
+
+
+def _phone_region_for(row: Any) -> str | None:
+    """The ISO-2 region hint for this row, read from its Country column."""
+    if row is None:
+        return None
+    for name in ("Country", "country", "Country Name", "country_name",
+                 "Country Code", "country_code"):
+        v = _row_value_ci(row, name)
+        key = re.sub(r"[^a-z0-9]", "", str(v or "").strip().lower())
+        if key and key in _PHONE_REGION_NORM:
+            return _PHONE_REGION_NORM[key]
+    return None
+
+
+def _phone_split(raw: Any, region: str | None) -> dict | None:
+    """Split a phone/fax string into {country, area, number, extension} with
+    libphonenumber. Returns None when the number cannot be parsed, so the caller
+    falls back to the legacy tokeniser (no regression on unparseable input).
+
+    An explicit ``+``/``00`` country code is trusted OVER the region hint — a
+    US-registered supplier can legitimately carry a ``+972`` number — because
+    libphonenumber ignores the region when the string is already international.
+    """
+    try:
+        import phonenumbers  # lazy: engine stays importable without the package
+    except Exception:  # noqa: BLE001
+        return None
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    digits = re.sub(r"\D", "", s)
+    if not digits:
+        return None
+
+    def _try(text, reg):
+        try:
+            return phonenumbers.parse(text, reg)
+        except Exception:  # noqa: BLE001
+            return None
+
+    # Two readings of the string:
+    #  * region_cand — parsed as dialled in the row's country. Keeps a leading
+    #    group as the AREA code (Brazil's DDD 55, a US area code), which is right
+    #    when the number does NOT carry a country code.
+    #  * intl_cand — only when the bare digits (no + / 00) START with the region's
+    #    own calling code: re-read as international so that embedded code is
+    #    stripped off the subscriber number instead of kept in it. This is what
+    #    "5515981205351" (55 + 15 + 981205351) needs.
+    region_cand = _try(s, region)
+    intl_cand = None
+    lead = s.lstrip()
+    if region and not lead.startswith("+") and not lead.startswith("00"):
+        try:
+            cc = phonenumbers.country_code_for_region(region)
+        except Exception:  # noqa: BLE001
+            cc = None
+        if cc and digits.startswith(str(cc)) and len(digits) > len(str(cc)) + 4:
+            intl_cand = _try("+" + digits, None)
+    if region_cand is None and intl_cand is None:
+        return None
+
+    def _valid(o):
+        try:
+            return o is not None and phonenumbers.is_valid_number(o)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _possible(o):
+        try:
+            return o is not None and phonenumbers.is_possible_number(o)
+        except Exception:  # noqa: BLE001
+            return False
+
+    best = None
+    # VALID tier prefers the LOCAL reading (region first) so a genuine area code
+    # that happens to equal the calling code — Brazil DDD 55 — is not mistaken
+    # for a country code. The 13-digit "5515981205351" makes region_cand invalid,
+    # so intl_cand (valid) wins there and the code is correctly stripped.
+    for o in (region_cand, intl_cand):
+        if _valid(o):
+            best = o
+            break
+    # POSSIBLE-only tier prefers the INTERNATIONAL reading, because reaching here
+    # means the local reading was not even valid — a malformed number that embeds
+    # its country code (Israel "97254323291") is better shown code-stripped.
+    if best is None:
+        for o in (intl_cand, region_cand):
+            if _possible(o):
+                best = o
+                break
+    if best is None:
+        return None
+    try:
+        nsn = phonenumbers.national_significant_number(best)
+    except Exception:  # noqa: BLE001
+        nsn = str(getattr(best, "national_number", "") or "")
+    try:
+        aclen = phonenumbers.length_of_geographical_area_code(best)
+    except Exception:  # noqa: BLE001
+        aclen = 0
+    area = nsn[:aclen] if aclen and aclen > 0 else ""
+    number = nsn[aclen:] if aclen and aclen > 0 else nsn
+    ext = getattr(best, "extension", "") or ""
+    return {"country": str(best.country_code), "area": area,
+            "number": number, "extension": ext}
+
+
 def _branch_holds(br: dict, value: Any, row: Any) -> bool:
     """Does one CASE_WHEN / SUFFIX_WHEN branch fire?
 
@@ -1071,7 +1222,17 @@ def _apply_one_rule(
         raw = _to_str(value).strip()
         if not raw:
             return ""
-        # 1) pull an extension off the end, if any.
+        # PRIMARY: libphonenumber, with the row's Country column as the region hint.
+        # This is what lets a bare "5515981205351" (no + / no separators) be split
+        # into +55 / 15 / 981205351 instead of dumping the whole string into the
+        # "number" part — the reported 10-Aug defect. Only used when it yields a
+        # parseable number; otherwise the legacy tokeniser below runs unchanged, so
+        # an unparseable value never regresses.
+        _split = _phone_split(raw, _phone_region_for(row))
+        if _split is not None:
+            return _split.get(part, "")
+        # FALLBACK (legacy tokeniser): no region and no international prefix, or an
+        # unparseable value. 1) pull an extension off the end, if any.
         ext = ""
         mext = re.search(r"(?i)(?:ext|extn|extension|x)\.?\s*(\d{1,6})\s*$", raw)
         if mext:

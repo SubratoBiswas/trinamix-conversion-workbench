@@ -215,6 +215,14 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
             # "unique sequence on the basis of entityid" — the key column is a
             # SOURCE column the field does not own, so it is pruned unless declared.
             cols.update(_flat_cols(cfg.get("key_column")))
+        elif rt == "PHONE_PART":
+            # The phone split reads the row's Country column as a region hint
+            # (engine `_phone_region_for`) so a bare national string with no + can
+            # be split — otherwise the whole number ships in the "number" part.
+            # Country is not named in the PHONE_PART config, so declare it here or
+            # the source prune drops it and the hint is always blank.
+            cols.update({"country", "Country", "Country Name", "Country Code",
+                         "country_code"})
     return cols
 
 

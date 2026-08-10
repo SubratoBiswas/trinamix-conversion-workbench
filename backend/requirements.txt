@@ -25,6 +25,11 @@ pytest-asyncio==0.24.0
 # 1,182 green tests on 04-Aug. Pure Python, no server, no binary download.
 mongomock-motor==0.0.36
 anthropic>=0.40.0
+# Google libphonenumber port. PHONE_PART uses it to split a supplier phone into
+# country / area / subscriber parts with the row's Country column as a region
+# hint, so a bare "5515981205351" ships the subscriber number alone rather than
+# the whole string. Pure Python, no binary. (NextPower Supplier phone fix.)
+phonenumbers>=8.13.0
 oracledb>=2.0.0
 jaydebeapi==1.2.3
 JPype1>=1.5.0

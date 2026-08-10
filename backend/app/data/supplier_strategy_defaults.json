@@ -52,29 +52,36 @@
       "rule_config": {
         "branches": [
           {
-            "if_column": "Country",
+            "if_column": "country",
             "op": "eq",
             "value": "India",
-            "then": "{Permanent Account Number ( PAN)}"
+            "then": "{pan}"
           },
           {
-            "if_column": "Country",
+            "if_column": "country",
             "op": "eq",
             "value": "United States",
-            "then": "{Tax ID}"
+            "then": "{tax_id}"
           },
           {
-            "if_column": "Country",
+            "all": [
+              { "if_column": "country", "op": "eq", "value": "Canada" },
+              { "if_column": "tax_id_canada", "op": "notblank" }
+            ],
+            "then": "{tax_id_canada}"
+          },
+          {
+            "if_column": "country",
             "op": "eq",
             "value": "Canada",
-            "then": "{Tax Id Canada}"
+            "then": "{tax_id}"
           }
         ],
         "default": ""
       },
-      "condition": "Consultant (via new_issues_2, 09-Aug): 'Map the taxpayer ID based on the country column by assigning pan for India, tax_id for the United States, and tax_id_canada for Canada.'",
-      "note": "then interpolates the source column VALUE via {Column}: India -> 'Permanent Account Number ( PAN)', United States -> 'Tax ID', Canada -> 'Tax Id Canada'. Only these three countries are specified; every other country ships Taxpayer ID blank (default).",
-      "status": "SEEDED as CASE_WHEN with {Column} interpolation (engine op 'eq' + interpolation both supported)."
+      "condition": "Consultant (via new_issues_2, 09-Aug): 'Map the taxpayer ID based on the country column by assigning pan for India, tax_id for the United States, and tax_id_canada for Canada.' Canada follow-up (10-Aug): values were not populating because most Canadian tax numbers live in tax_id, not tax_id_canada (only 8 of 49 Canada rows had tax_id_canada). Canada now coalesces tax_id_canada -> tax_id.",
+      "note": "RAW source column names ({pan}/{tax_id}/{tax_id_canada}, if_column 'country') so the tokens resolve on the extract's own headers — the display-name form ({Tax ID}, if_column 'Country') did NOT resolve and shipped blank. Canada is two ordered branches: tax_id_canada when present, else tax_id. Every other country ships Taxpayer ID blank (default). Mirrors the learned rule that wins at generate time.",
+      "status": "SEEDED as CASE_WHEN with raw {Column} interpolation + Canada coalesce (engine 'all'/'notblank'/'eq' + interpolation all supported)."
     },
     {
       "target_object": "Supplier",
