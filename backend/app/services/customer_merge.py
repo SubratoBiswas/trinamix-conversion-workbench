@@ -490,6 +490,16 @@ _SHEET_BLANK = {
     # or the source-system linkage glue cannot re-fill them.
     "personlang": ("Party Original System", "Party Original System Reference",
                    "Language Name"),
+    # Analyst, 10-Aug: the contact and contact-point sheets carry the party-SITE
+    # linkage columns from the structural glue, but a contact/contact-point is not a
+    # site — those references are meaningless here and must ship BLANK. Keys are the
+    # unambiguous normalised-sheet substrings: "contactpt" = HZ_IMP_CONTACTPTS_T only;
+    # "impcontactst" = HZ_IMP_CONTACTS_T only (does NOT match acctcontacts' "…acct…" or
+    # contactpts' "…pt…"); "acctcontact" = HZ_IMP_ACCTCONTACTS_T only. Re-asserted at
+    # finalize like every _SHEET_BLANK entry, so the source-system glue cannot re-fill.
+    "contactpt": ("Party Site Original System", "Party Site Original System Reference"),
+    "impcontactst": ("Party Site Original System", "Party Site Original System Reference"),
+    "acctcontact": ("Account Site Source System",),
 }
 
 # ── Descriptive Flexfield + User Defined Context Prompt policy ────────────────────
@@ -903,12 +913,14 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
     for _, r in sub.iterrows():
         email = _v(r, e_col) or _v(r, ae_col)
         # A landline (`phone`) and a mobile (`mobilephone`) are SEPARATE Oracle
-        # contact points with distinct line types, not one merged point. The old
-        # code took `phone or mobilephone` into a single row typed MOBILE, which
-        # (a) mistyped every landline as MOBILE and (b) dropped the mobile number of
-        # a contact that also had a landline. Analyst, 10-Aug: the Phone count must
-        # match the source — `phone` (3,955) as a GEN point, `mobilephone` as its own
-        # MOBILE point. Emit each independently; a contact with both gets two points.
+        # contact points, not one merged point. The old code took `phone or
+        # mobilephone` into a single row and dropped the mobile number of a contact
+        # that also had a landline; each is emitted independently now, so a contact
+        # with both gets two points and the phone count matches the source.
+        # Phone Line Type: analyst, 10-Aug (revised) — a phone point carries the
+        # mapping value MOBILE whenever a phone record exists in the extract; it is
+        # blank only on the EMAIL points. This supersedes the earlier GEN-for-landline
+        # split: the client's load marks every telephone contact point MOBILE.
         landline = _v(r, p_col)
         mobile = _v(r, m_col)
         base = ""
@@ -945,7 +957,7 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
             rows.append(row)
 
         if landline:
-            _phone_point(landline, "GEN", "PHONE")
+            _phone_point(landline, "MOBILE", "PHONE")
             made = True
         # Mobile as its own MOBILE point — but skip it when it is the SAME number as
         # the landline (131 contacts carry the identical value in both columns), so a
