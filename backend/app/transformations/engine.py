@@ -373,7 +373,21 @@ def _phone_split(raw: Any, region: str | None) -> dict | None:
             cc = None
         if cc and digits.startswith(str(cc)) and len(digits) > len(str(cc)) + 4:
             intl_cand = _try("+" + digits, None)
-    if region_cand is None and intl_cand is None:
+    # A supplier's registered country is only a HINT for where its fax lives: a
+    # supplier in one country can carry a fax in another — a Chinese-registered
+    # supplier with a Canadian "519…" fax. So ALSO read the number against a small
+    # set of FALLBACK regions ("US" covers the whole NANP, US + Canada, for a
+    # 10-digit number) and, below, prefer whichever reading is a VALID number that
+    # actually carries a geographical AREA CODE. Without this the 519 number parsed
+    # as CN gave country 86, NO area code, and the whole number in the subscriber
+    # field — the "fax area code reverted" the analyst reported on 10-Aug.
+    fallback_cands = []
+    for _fb in ("US",):
+        if _fb != region:
+            o = _try(s, _fb)
+            if o is not None:
+                fallback_cands.append(o)
+    if region_cand is None and intl_cand is None and not fallback_cands:
         return None
 
     def _valid(o):
@@ -388,23 +402,28 @@ def _phone_split(raw: Any, region: str | None) -> dict | None:
         except Exception:  # noqa: BLE001
             return False
 
-    best = None
-    # VALID tier prefers the LOCAL reading (region first) so a genuine area code
-    # that happens to equal the calling code — Brazil DDD 55 — is not mistaken
-    # for a country code. The 13-digit "5515981205351" makes region_cand invalid,
-    # so intl_cand (valid) wins there and the code is correctly stripped.
-    for o in (region_cand, intl_cand):
-        if _valid(o):
-            best = o
-            break
-    # POSSIBLE-only tier prefers the INTERNATIONAL reading, because reaching here
-    # means the local reading was not even valid — a malformed number that embeds
-    # its country code (Israel "97254323291") is better shown code-stripped.
+    def _has_area(o):
+        try:
+            return o is not None and phonenumbers.length_of_geographical_area_code(o) > 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    # 1) VALID and carrying an AREA CODE. Region reading FIRST so a genuine local
+    #    area code equal to the calling code (Brazil DDD 55) is never mistaken for a
+    #    country code, then the international reading, then the fallback regions —
+    #    which is where the 519 Canadian fax on a CN supplier finally resolves.
+    best = next((o for o in (region_cand, intl_cand, *fallback_cands)
+                 if _valid(o) and _has_area(o)), None)
+    # 2) VALID but no geographical area code (a mobile, a toll-free) — still the
+    #    supplier's own reading; a fallback must not steal an area-less valid number.
     if best is None:
-        for o in (intl_cand, region_cand):
-            if _possible(o):
-                best = o
-                break
+        best = next((o for o in (region_cand, intl_cand) if _valid(o)), None)
+    # 3) POSSIBLE-only — international reading preferred, because reaching here means
+    #    the local reading was not even valid and an embedded country code (Israel
+    #    "97254323291") is better shown code-stripped.
+    if best is None:
+        best = next((o for o in (intl_cand, region_cand, *fallback_cands)
+                     if _possible(o)), None)
     if best is None:
         return None
     try:
