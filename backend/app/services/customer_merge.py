@@ -758,17 +758,22 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             # field the template lacks is dropped at the per-sheet reindex.
             if sc is not None:
                 _set_owned_col(sub, fld, sc)
-    # Job Title <- title on the contact sheets (REC-62, analyst 10-Aug: "job title
-    # should be mapped to the title field, which has values"). The contact extract has
-    # no per-contact title; "title" is the customer master's primary-contact job title,
-    # borrowed onto the customer's contact rows by entityid (enrich_source_frame) and
-    # threaded here as __title. Owned so it populates regardless of whether a per-project
-    # Job Title mapping survived — the same reason Person Name / Party Type are owned.
-    # Only where the sheet actually carries a Job Title column (HZ_IMP_CONTACTS_T /
-    # HZ_IMP_ACCTCONTACTS_T); the guard leaves CONTACTPTS and other sheets untouched.
-    if "contact" in n:
+    # Job Title <- title on the contact-attribute sheets (REC-62, analyst 10-Aug: "job
+    # title should be mapped to the title field, which has values"). The contact extract
+    # has no per-contact title; "title" is the customer master's primary-contact job
+    # title, borrowed onto the customer's contact rows by entityid (enrich_source_frame)
+    # and threaded here as __title. Owned so it populates regardless of whether a
+    # per-project Job Title mapping survived — the same reason Person Name / Party Type
+    # are owned. ALWAYS CREATE the column (like the LOCATIONS address block above):
+    # measured on RegTest4, HZ_IMP_CONTACTS_T maps NO Job Title column at all (only the
+    # glue refs), so the earlier "field must already exist" guard found nothing to write
+    # to and the stamp was skipped — Job Title shipped 0/9,837. _set_owned_col creates
+    # the column; a sheet whose template lacks Job Title drops it at the per-sheet
+    # reindex. Scoped off the contact-point / contact-role sheets, which carry no Job
+    # Title, so no spurious column is fanned out there.
+    if "contact" in n and "contactpt" not in n and "contactrole" not in n:
         _jt = _carried(sub, "title")
-        if _jt is not None and _find_col_ci(sub.columns, "Job Title") is not None:
+        if _jt is not None:
             _set_owned_col(sub, "Job Title", _jt)
     # From Date / Account Established Date = COALESCE(startdate, datecreated): when a
     # row's startdate is blank, fall back to datecreated (analyst, 09-Aug). startdate is
