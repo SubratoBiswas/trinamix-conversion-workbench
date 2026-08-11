@@ -463,7 +463,9 @@ _SHEET_CONST = {
     # RELSHIPS Subject/Object Original System = NETSUITE (REC-67/69). Key "relship"
     # matches the real sheet HZ_IMP_RELSHIPS_T ("hzimprelshipst").
     "relship": {"Subject Relationship Party Original System": "NETSUITE",
-                "Object Relationship Party Original System": "NETSUITE"},
+                "Object Relationship Party Original System": "NETSUITE",
+                # Relationship Source System = NETSUITE (functional consultant, 11-Aug).
+                "Relationship Source System": "NETSUITE"},
     # ROLERESP: Role Responsibility Original System = NETSUITE (REC-75) AND Account
     # Contact Source System = NETSUITE (REC-73). REC-73 was seeded as a learned
     # default scoped to "HZ_IMP_ROLERESP_T", but the real sheet is HZ_IMP_ROLERESP
@@ -471,6 +473,19 @@ _SHEET_CONST = {
     # "roleresp" which matches the real sheet.
     "roleresp": {"Account Contact Role Responsibility Original System": "NETSUITE",
                  "Account Contact Source System": "NETSUITE"},
+    # Relationship Source System = NETSUITE on the contact/relationship sheets and
+    # Insert Update Indicator = I on RA_CUSTOMER_PROFILES only (functional consultant,
+    # 11-Aug). These shipped in yesterday's approved output as conversion-level
+    # defaults, but that was DATA and it drifted to blank; pinned in code so they are
+    # deterministic and fan out to every Customer project. Keys are unambiguous
+    # normalised-sheet substrings: "contactrole"=HZ_IMP_CONTACTROLES, "acctcontact"=
+    # HZ_IMP_ACCTCONTACTS_T, "impcontactst"=HZ_IMP_CONTACTS_T only (does NOT match
+    # "…acct…" or "…pt…"), "contactpt"=HZ_IMP_CONTACTPTS_T, "profile"=RA_CUSTOMER_PROFILES.
+    "contactrole": {"Relationship Source System": "NETSUITE"},
+    "acctcontact": {"Relationship Source System": "NETSUITE"},
+    "impcontactst": {"Relationship Source System": "NETSUITE"},
+    "contactpt": {"Relationship Source System": "NETSUITE"},
+    "profile": {"Insert Update Indicator": "I"},
 }
 # Forced-blank fields (REC-80/81/82/83/84/88 on RA_CUSTOMER_PROFILES; REC-25 on PARTYSITES).
 # Primary Indicator is BLANK on both site-use sheets (analyst re-test), replacing the old
