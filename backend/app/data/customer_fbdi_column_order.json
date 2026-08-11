@@ -37,9 +37,7 @@
   "HZ_IMP_CONTACTS_T",
   "HZ_IMP_LOCATIONS_T",
   "HZ_IMP_RELSHIPS_T",
-  "HZ_IMP_ROLERESP",
-  "HZ_IMP_PERSONLANG",
-  "RA_CUSTOMER_PROFILES_INT_ALL"
+  "HZ_IMP_ROLERESP",  "RA_CUSTOMER_PROFILES_INT_ALL"
  ],
  "load_scope": [
   "HZ_IMP_PARTIES_T",
@@ -54,9 +52,7 @@
   "HZ_IMP_CONTACTS_T",
   "HZ_IMP_LOCATIONS_T",
   "HZ_IMP_RELSHIPS_T",
-  "HZ_IMP_ROLERESP",
-  "HZ_IMP_PERSONLANG",
-  "RA_CUSTOMER_PROFILES_INT_ALL"
+  "HZ_IMP_ROLERESP",  "RA_CUSTOMER_PROFILES_INT_ALL"
  ],
  "excluded_interfaces": [
   {
@@ -74,6 +70,10 @@
   {
    "sheet": "RA_CUSTOMER_BANKS_INT_ALL",
    "reason": "Not among the 15 loaded interfaces."
+  },
+  {
+   "sheet": "HZ_IMP_PERSONLANG",
+   "reason": "Not loaded by NextPower - dropped 11-Aug-2026. HZ_IMP_PERSONLANG carries no valid person-language data (Language Name was defaulting to the country code 'US'), so the client loads 14 files, not 15."
   }
  ],
  "sheets": {

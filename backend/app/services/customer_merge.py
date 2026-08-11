@@ -483,6 +483,23 @@ _SHEET_BLANK = {
     "partysites": ("Relationship Source System Reference",),
     "partysiteuses": ("Primary Indicator",),
     "acctsiteuses": ("Primary Indicator",),
+    # HZ_IMP_PERSONLANG — functional consultant, 10-Aug: NO field on this sheet is
+    # populated. The only three that were carrying a value (the NETSUITE source-system
+    # tag, the party ref, and the en_US->US Language Name) all ship blank now. Owned +
+    # re-asserted at finalize like every other _SHEET_BLANK entry, so a learned default
+    # or the source-system linkage glue cannot re-fill them.
+    "personlang": ("Party Original System", "Party Original System Reference",
+                   "Language Name"),
+    # Analyst, 10-Aug: the contact and contact-point sheets carry the party-SITE
+    # linkage columns from the structural glue, but a contact/contact-point is not a
+    # site — those references are meaningless here and must ship BLANK. Keys are the
+    # unambiguous normalised-sheet substrings: "contactpt" = HZ_IMP_CONTACTPTS_T only;
+    # "impcontactst" = HZ_IMP_CONTACTS_T only (does NOT match acctcontacts' "…acct…" or
+    # contactpts' "…pt…"); "acctcontact" = HZ_IMP_ACCTCONTACTS_T only. Re-asserted at
+    # finalize like every _SHEET_BLANK entry, so the source-system glue cannot re-fill.
+    "contactpt": ("Party Site Original System", "Party Site Original System Reference"),
+    "impcontactst": ("Party Site Original System", "Party Site Original System Reference"),
+    "acctcontact": ("Account Site Source System",),
 }
 
 # ── Descriptive Flexfield + User Defined Context Prompt policy ────────────────────
@@ -527,6 +544,21 @@ ADDR_SOURCE_COLS = tuple(_ADDR_MAP.values())
 # (output_service carry_source_cols) so they reach the site/contact/relationship grain
 # (enriched from the master by entityid) and the account grain (native).
 FROM_DATE_SOURCE_COLS = ("startdate", "datecreated")
+
+# Threaded through the merge so the PERSONLANG language filter (sheet_rows) can see the
+# per-party language on the contact grain — it is borrowed by entityid like startdate/
+# datecreated, and carried under __language so a person with no source language is
+# dropped from HZ_IMP_PERSONLANG (analyst, 10-Aug).
+LANG_SOURCE_COLS = ("language",)
+
+# Threaded through the merge so the owned Job Title stamp (stamp_sheet_rules) can read
+# the per-contact title on the contact grain. The contact extract carries NO title
+# column; "title" is the customer master's (primary contact's) job title, borrowed onto
+# the customer's contact rows by entityid in enrich_source_frame BEFORE the carry runs,
+# so __title reaches the contact rows with the customer's title (REC-62). Owned rather
+# than left to a per-project Job Title <- title mapping, which shipped blank because no
+# such mapping survived the learning re-apply on RegTest4 (analyst, 10-Aug).
+TITLE_SOURCE_COLS = ("title",)
 
 
 def _fbdi_date(v) -> str:
@@ -713,14 +745,13 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
     # which REC-25 force-blanks.
     # Account Number on the account-SITE sheets is the LINK back to the customer
     # account, so it must equal the account's own Account Number — the raw entityid,
-    # hyphens and all (NT-2437). The billing / shipping / contact source mappings carry a
-    # REMOVE_HYPHEN on this field, and HZ_IMP_ACCTSITES_T / HZ_IMP_ACCTSITEUSES_T take
-    # their site rows from those sources, so it shipped NT2437 there while
-    # HZ_IMP_ACCOUNTS_T (master source, no strip) kept NT-2437 — the site no longer
-    # matched its account and the load could not link the two (functional consultant,
-    # 11-Aug). Own it from the raw entityid so the link holds regardless of which source
-    # mapping wins the merge. Matches both acctsite sheets; ACCOUNTS ("account", no
-    # "acctsite") and ACCTCONTACTS ("acctcontact") are deliberately untouched.
+    # hyphens and all (NT-2437). The billing/shipping site sources stripped the hyphen
+    # on their site rows, so it shipped NT2437 there while HZ_IMP_ACCOUNTS_T (master,
+    # no strip) kept NT-2437 — the site no longer matched its account and the load
+    # could not link the two (functional consultant, 11-Aug). Own it from the raw
+    # entityid so the link holds regardless of which source mapping wins the merge.
+    # Matches both acctsite sheets; ACCOUNTS ("account", no "acctsite") and
+    # ACCTCONTACTS ("acctcontact") are deliberately untouched.
     if "acctsite" in n and ENTITYID_COL in sub.columns:
         try:
             _set_owned_col(sub, "Account Number",
@@ -729,8 +760,10 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             pass
     if "acctsite" in n and "use" not in n:      # HZ_IMP_ACCTSITES_T only
         _map_en_us(sub, "Site Language")
-    if "personlang" in n:                        # HZ_IMP_PERSONLANG
-        _map_en_us(sub, "Language Name")
+    # HZ_IMP_PERSONLANG (functional consultant, 10-Aug): NO field on this sheet is
+    # populated — Party Original System, Party Original System Reference and Language
+    # Name all ship BLANK. So the en_US->US Language Name transform is gone and the 3
+    # fields are force-blanked via _SHEET_BLANK["personlang"] instead.
     # HZ_IMP_LOCATIONS_T address block (NEW-03/04). The address is site-grain data
     # (addr1/2/3, city, state, zip, country from the billing/shipping extracts). The
     # per-sheet mapping loses it in the multi-source merge — LOCATIONS' own address
@@ -750,6 +783,23 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             # field the template lacks is dropped at the per-sheet reindex.
             if sc is not None:
                 _set_owned_col(sub, fld, sc)
+    # Job Title <- title on the contact-attribute sheets (REC-62, analyst 10-Aug: "job
+    # title should be mapped to the title field, which has values"). The contact extract
+    # has no per-contact title; "title" is the customer master's primary-contact job
+    # title, borrowed onto the customer's contact rows by entityid (enrich_source_frame)
+    # and threaded here as __title. Owned so it populates regardless of whether a
+    # per-project Job Title mapping survived — the same reason Person Name / Party Type
+    # are owned. ALWAYS CREATE the column (like the LOCATIONS address block above):
+    # measured on RegTest4, HZ_IMP_CONTACTS_T maps NO Job Title column at all (only the
+    # glue refs), so the earlier "field must already exist" guard found nothing to write
+    # to and the stamp was skipped — Job Title shipped 0/9,837. _set_owned_col creates
+    # the column; a sheet whose template lacks Job Title drops it at the per-sheet
+    # reindex. Scoped off the contact-point / contact-role sheets, which carry no Job
+    # Title, so no spurious column is fanned out there.
+    if "contact" in n and "contactpt" not in n and "contactrole" not in n:
+        _jt = _carried(sub, "title")
+        if _jt is not None:
+            _set_owned_col(sub, "Job Title", _jt)
     # From Date / Account Established Date = COALESCE(startdate, datecreated): when a
     # row's startdate is blank, fall back to datecreated (analyst, 09-Aug). startdate is
     # blank on ~1.4% of rows and used to ship an empty From Date; datecreated is always
@@ -823,8 +873,10 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Site Language")
     if "location" in n:                     # NEW-03/04 owned LOCATIONS address block
         owned.update(_ADDR_MAP.keys())
-    if "personlang" in n:                   # REC-79 owned en_US->US Language Name
-        owned.add("Language Name")
+    if "contact" in n:                      # REC-62 owned Job Title <- borrowed title
+        owned.add("Job Title")
+    # PERSONLANG's blank fields (Party Original System / Reference / Language Name) are
+    # owned via _sheet_rule_fields(n) below, since they live in _SHEET_BLANK now.
     # From Date coalesce (owned) on the site/contact/relationship sheets, Account
     # Established Date on ACCOUNTS — so the per-sheet keep-blank/control default cannot
     # blank the datecreated fallback back out.
@@ -877,7 +929,17 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
     rows: list = []
     for _, r in sub.iterrows():
         email = _v(r, e_col) or _v(r, ae_col)
-        phone = _v(r, p_col) or _v(r, m_col)
+        # A landline (`phone`) and a mobile (`mobilephone`) are SEPARATE Oracle
+        # contact points, not one merged point. The old code took `phone or
+        # mobilephone` into a single row and dropped the mobile number of a contact
+        # that also had a landline; each is emitted independently now, so a contact
+        # with both gets two points and the phone count matches the source.
+        # Phone Line Type: analyst, 10-Aug (revised) — a phone point carries the
+        # mapping value MOBILE whenever a phone record exists in the extract; it is
+        # blank only on the EMAIL points. This supersedes the earlier GEN-for-landline
+        # split: the client's load marks every telephone contact point MOBILE.
+        landline = _v(r, p_col)
+        mobile = _v(r, m_col)
         base = ""
         if have_ent or have_iid:
             base = f"{_v(r, ENTITYID_COL)}_{_v(r, INTERNALID_COL)}"
@@ -896,19 +958,29 @@ def _fanout_contact_points(sub: "pd.DataFrame") -> "pd.DataFrame":
                 row[osr_f] = f"{base}_EMAIL" if base.strip("_") else ""
             rows.append(row)
             made = True
-        if phone:
+
+        def _phone_point(number: str, line_type: str, tag: str):
             row = r.copy()
             if cpt is not None:
                 row[cpt] = "PHONE"
             if phone_f is not None:
-                row[phone_f] = phone
+                row[phone_f] = number
             if email_f is not None:
                 row[email_f] = ""
             if plt_f is not None:
-                row[plt_f] = "MOBILE"
+                row[plt_f] = line_type
             if osr_f is not None:
-                row[osr_f] = f"{base}_PHONE" if base.strip("_") else ""
+                row[osr_f] = f"{base}_{tag}" if base.strip("_") else ""
             rows.append(row)
+
+        if landline:
+            _phone_point(landline, "MOBILE", "PHONE")
+            made = True
+        # Mobile as its own MOBILE point — but skip it when it is the SAME number as
+        # the landline (131 contacts carry the identical value in both columns), so a
+        # party never gets the same number twice under one contact.
+        if mobile and re.sub(r"\D", "", mobile) != re.sub(r"\D", "", landline):
+            _phone_point(mobile, "MOBILE", "MOBILE")
             made = True
         if not made:
             # A contact with neither e-mail nor phone has NO contact point. Emitting a
@@ -1099,6 +1171,58 @@ def _stamp_account_description(sub: "pd.DataFrame", sheet_name: Optional[str]) -
     return sub
 
 
+# ── Site-sheet de-duplication: billing wins, shipping only when new ──────────────
+# HZ_IMP_PARTYSITES_T / LOCATIONS / ACCTSITES are one row per ADDRESS RECORD, but 553
+# address internalids appear in BOTH the billing and shipping extracts (a NetSuite
+# address flagged for both uses), so the same record was emitted twice — once
+# "… - Billing" and once "… - Shipping" — colliding on the entityid_internalid site
+# key (552 duplicate Party Site OSRs, 414 billing/shipping pairs). Analyst, 10-Aug:
+# "Billing sheet — all records. Shipping sheet — if the record is already in billing,
+# skip it, else add it." So keep every billing row and drop a shipping row only when
+# its (entityid, internalid) already came from billing. The ship-to USE still
+# references that one site key on the use sheets, so no use is lost — this runs on the
+# SITE sheets only, never the *SITEUSES sheets.
+_SITE_DEDUP_USE_COLS = ("Party Site Use Type", "Part Site Use Type", "Site Use Type")
+
+
+def _dedupe_billing_over_shipping(sub: "pd.DataFrame") -> "pd.DataFrame":
+    """One row per (entityid, internalid) address record, billing preferred.
+
+    A row whose key is present in a BILL_TO row is kept only from the billing side;
+    a key seen only on shipping keeps its first shipping row; a row without a full
+    (entityid, internalid) key is never collapsed. Row order is otherwise preserved.
+    """
+    if sub is None or len(sub) == 0:
+        return sub
+    if ENTITYID_COL not in sub.columns or INTERNALID_COL not in sub.columns:
+        return sub
+    ent = sub[ENTITYID_COL].astype(str).str.strip()
+    iid = sub[INTERNALID_COL].astype(str).str.strip()
+    has_key = ent.ne("") & iid.ne("")
+    if not bool(has_key.any()):
+        return sub
+    key = ent + "\x01" + iid
+    is_bill = None
+    for cand in _SITE_DEDUP_USE_COLS:
+        uc = _find_col_ci(sub.columns, cand)
+        if uc is not None:
+            is_bill = sub[uc].astype(str).str.strip().str.upper().eq("BILL_TO")
+            break
+    # nb=0 for billing so the stable sort puts billing first; drop_duplicates then
+    # keeps the billing row for a key seen on both sides.
+    nb = ((~is_bill).astype(int) if is_bill is not None
+          else pd.Series(0, index=sub.index))
+    work = pd.DataFrame({"nb": nb.values, "ord": range(len(sub)),
+                         "key": key.values, "hk": has_key.values}, index=sub.index)
+    keyed = work[work["hk"]]
+    winners = (keyed.sort_values(["nb", "ord"], kind="mergesort")
+               .loc[lambda w: ~w["key"].duplicated(keep="first")].index)
+    keep = pd.Series(False, index=sub.index)
+    keep.loc[~has_key] = True            # rows without a full key are always kept
+    keep.loc[winners] = True             # the winning row per key
+    return sub[keep.values]
+
+
 def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     """The subset of the merged frame that belongs on ``sheet_name``.
 
@@ -1148,6 +1272,17 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
         return df
     if grain == PARTY and ENTITYID_COL in sub.columns:
         sub = _dedupe_party_grain(sub)
+    # SITE sheets are one row per address record: collapse the billing/shipping
+    # duplicate (an address that appears in both extracts) — billing kept, a shipping
+    # row dropped only when its (entityid, internalid) already came from billing. Runs
+    # on PARTYSITES / LOCATIONS / ACCTSITES only; the *SITEUSES sheets keep every use.
+    _sn = _norm(sheet_name)
+    if grain == SITE and (
+        ("location" in _sn)
+        or ("partysite" in _sn and "use" not in _sn)
+        or ("acctsite" in _sn and "use" not in _sn)
+    ):
+        sub = _dedupe_billing_over_shipping(sub)
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
     sub = _stamp_account_description(sub, sheet_name)   # Account Description <- companyname (REC-30)
