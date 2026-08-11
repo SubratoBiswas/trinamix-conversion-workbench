@@ -215,14 +215,6 @@ def _rule_referenced_columns(rules: list[dict]) -> set[str]:
             # "unique sequence on the basis of entityid" — the key column is a
             # SOURCE column the field does not own, so it is pruned unless declared.
             cols.update(_flat_cols(cfg.get("key_column")))
-        elif rt == "PHONE_PART":
-            # The phone split reads the row's Country column as a region hint
-            # (engine `_phone_region_for`) so a bare national string with no + can
-            # be split — otherwise the whole number ships in the "number" part.
-            # Country is not named in the PHONE_PART config, so declare it here or
-            # the source prune drops it and the hint is always blank.
-            cols.update({"country", "Country", "Country Name", "Country Code",
-                         "country_code"})
     return cols
 
 
@@ -904,49 +896,9 @@ def _transform_frame(
         # and the person-vs-overlay date test downstream still decides. A CONSTANT
         # overlay is left alone (it only fills blanks and is not gated by
         # `_conversion_rule_wins`), so the suggestion still runs under it.
-        #
-        # SUPPRESS ONLY WHEN THE MAPPING IS DISCARDED. (09-Aug, refined)
-        #
-        # The first cut of this suppressed the suggestion for EVERY field that
-        # carried an overlay rule, and that was too wide: it also silenced a
-        # correct APPROVED mapping whose own transform the overlay merely
-        # duplicates less well. Measured live on Supplier / Taxpayer ID — the
-        # mapping is `pan` + a CASE_WHEN keyed on the raw `country`/`pan`/`tax_id`
-        # columns and populated 1,199/1,391 US + 294/544 India; the overlay's copy
-        # keys on DISPLAY names ("{Tax ID}", "{Permanent Account Number ( PAN)}",
-        # if_column "Country") that do not resolve on a raw-name extract, so
-        # letting it win blanked Taxpayer ID on every row.
-        #
-        # The real signal is that Phone Country Code's mapping is DISCARDED
-        # (not_applicable, no source) — nobody bound a real column, so the AI's
-        # transform on it is a pure guess and the overlay must win. Taxpayer ID's
-        # mapping is APPROVED with a real source column — a deliberate binding,
-        # which the overlay guarantee was never meant to overwrite. So suppress the
-        # suggestion for an overlay-rule field ONLY when the mapping was discarded.
         _ov_rules_field = bool(_ov_early and "rule" in _ov_early)
-        # A STALE LEARNED CITY_COUNTRY_KEY MUST NOT OVERRULE A FIXED-PREFIX OVERLAY. (10-Aug)
-        #
-        # Supplier Site, analyst 10-Aug: "US-<City>", US a LITERAL on every row — all
-        # suppliers load into the NX US BU regardless of their own country. The overlay
-        # carries exactly that (CITY_COUNTRY_KEY with a fixed `country_value`). But
-        # apply_learned re-applied an OLDER learned CITY_COUNTRY_KEY onto the mapping as a
-        # suggested_transformation — one that resolves the country FROM the Country column
-        # — and because the mapping is APPROVED (not discarded) the 09-Aug rule below let
-        # that suggestion win, so the field shipped "BR-SP"/"US-New York" (the row's own
-        # country) instead of "US-SP". Unlike the Taxpayer-ID CASE_WHEN — whose overlay
-        # copy keys on DISPLAY names that miss on a raw extract, which is why an approved
-        # mapping's suggestion is normally preferred — a fixed country_value has NO column
-        # to miss, so the overlay is strictly the correct and safer value. Narrowly
-        # scoped to that shape so Taxpayer ID and every column-driven key are untouched.
-        _ov_rule_cfg = ((_ov_early or {}).get("rule") or {})
-        _ov_fixed_city_country = (
-            str(_ov_rule_cfg.get("rule_type") or "").upper() == "CITY_COUNTRY_KEY"
-            and bool((_ov_rule_cfg.get("config") or {}).get("country_value")
-                     or (_ov_rule_cfg.get("config") or {}).get("fixed_country"))
-        )
-        _suppress_suggestion = _ov_rules_field and (_discarded or _ov_fixed_city_country)
         if (m.suggested_transformation and not rules and m.status != "rejected"
-                and not _suppress_suggestion):
+                and not _ov_rules_field):
             rules.append({"rule_type": m.suggested_transformation.get("rule_type"),
                           "config": m.suggested_transformation.get("config", {})})
         dv = m.default_value
@@ -1806,29 +1758,17 @@ def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
 # etc.) write for "no value". Loaded verbatim into Oracle they'd become the
 # literal text "NULL"/"N/A" instead of an empty cell, so blank them at generate.
 _NULL_SENTINELS = {"null", "(null)", "#n/a", "n/a", "nan", "none", "\\n"}
-# Fields whose literal source value must round-trip verbatim: a "None" typed into the
-# source is the analyst's real value, not a null sentinel to strip (Customer contact
-# Person First Name — analyst, 10-Aug: "it should be 'None' in destination too"). The
-# parser reads with keep_default_na=False and fillna(""), so an EMPTY source cell is ""
-# — never "None" — which means sparing "None" here can only ever keep a genuine source
-# string, never re-introduce a blank-cell artifact. Only "none" is spared for these
-# fields; the unambiguous artifacts (nan / null / #n/a / \n) still blank everywhere.
-_PRESERVE_NONE_FIELDS = {"personfirstname", "personmiddlename", "personlastname"}
 
 
 def _blank_null_sentinels(df: pd.DataFrame) -> pd.DataFrame:
     """Replace whole-cell null sentinels (case-insensitive) with empty strings.
     Whole-cell match only, so a real value like a description containing the word
-    is never touched. A Person name field keeps a literal "None" (see
-    _PRESERVE_NONE_FIELDS)."""
+    is never touched."""
     for col in df.columns:
         s = df[col]
         if s.dtype != object:
             continue
-        _sent = (_NULL_SENTINELS - {"none"}
-                 if re.sub(r"[^a-z0-9]", "", str(col).lower()) in _PRESERVE_NONE_FIELDS
-                 else _NULL_SENTINELS)
-        mask = s.astype(str).str.strip().str.lower().isin(_sent)
+        mask = s.astype(str).str.strip().str.lower().isin(_NULL_SENTINELS)
         if mask.any():
             df.loc[mask, col] = ""
     return df
@@ -2570,23 +2510,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
             if m is None:
                 continue
             if _analyst_keeps_blank(m):
-                # ...UNLESS the signed strategy is ACTIVELY POPULATING this field.
-                # A DERIVED field never matches a source column at auto-map, so it
-                # sits not_applicable — Phone Country Code (derived from Country via
-                # a CASE_WHEN overlay rule) and Bill-to BU (a seeded constant) are
-                # the live cases. `_transform_frame` had already written the derived
-                # value into the frame, and blanking it here overwrote it: the
-                # preview (which skips finalize) showed +NN / NX US BU while the
-                # generated file shipped empty — this codebase's signature screen/file
-                # split, one layer down. A POPULATING overlay directive (rule/constant,
-                # NOT a `blank` one) is the analyst's live instruction and outranks a
-                # stale not_applicable auto-map, so the value stands. A genuine
-                # keep-blank (RFQ Or Bidding, Address Name New) carries a `blank`
-                # directive, not a populating one, so it is unaffected.
-                _pop = _strategy_directive(obj_name, f.field_name)
-                if _pop and ("rule" in _pop or "constant" in _pop):
-                    decided.add(f.field_name)   # overlay owns it — protect, don't blank
-                    continue
                 consts[f.field_name] = ("", False)
                 decided.add(f.field_name)
                 continue
@@ -2704,44 +2627,6 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # field_name (before the header rename below).
         if _is_supplier:
             sdf = _mask_supplier_emails(sdf)
-        # PER-SHEET KEEP-BLANK ACROSS A SHARED FIELD NAME. A field whose OWN mapping on
-        # THIS sheet is not_applicable ("Left blank") must ship EMPTY here, even when the
-        # SAME field NAME is approved on ANOTHER sheet. out_cols is keyed by the bare
-        # field NAME, so the other sheet's value bleeds into every sheet that carries the
-        # name, and the name-level suppressed_keys cannot say "blank here, keep there".
-        # Employee HDL AssignmentNumber is the analyst's case: marked Left blank on
-        # WorkTerms and Assignment, approved (Employee_ID) on AssignmentSupervisor — and
-        # the Supervisor value filled all three. Keyed by THIS sheet's target_field_id
-        # (f.id) so the two blank while Supervisor keeps its value. Scoped to a genuine
-        # cross-sheet collision — the name IS approved on another sheet — so it never
-        # touches structural glue (generated, not approved-mapped) or a field that is
-        # not_applicable everywhere (already handled by suppressed_keys). A merge-owned
-        # field and a field with an explicit default_value are deliberately left alone.
-        for _f in sfields:
-            _fm = _best_m.get(_f.id)
-            if _fm is None or _fm.status != "not_applicable":
-                continue
-            _fk = (_f.field_name or "").strip().lower().rstrip("*").strip()
-            if (_fk and _fk not in _owned_keys and _fk in explicitly_mapped_keys
-                    and _f.field_name in sdf.columns
-                    and not (getattr(_fm, "default_value", None)
-                             and str(_fm.default_value).strip())):
-                sdf[_f.field_name] = ""
-        # OBSOLETED COLUMNS — hard blank, every sheet, every client. Oracle keeps
-        # columns it has retired IN the template (their header carries "Obsolete"/
-        # "-Obsoleted") for backward compatibility; populating them is at best ignored
-        # and at worst rejects the row. The strategy overlay could only name ONE such
-        # column at a time — "Tax Registration Number-Obsoleted" was seeded by hand,
-        # and "Vat Code-Obsoleted" shipped empty only because nothing happened to map
-        # to it. This is the global rule the overlay's field_pattern:"obsolete" entry
-        # always intended (it was carried as NOT IMPLEMENTED because suppression is
-        # name-keyed with no wildcard): blank EVERY obsoleted column wherever it
-        # appears, no matter what a future extract auto-maps into it. Keyed on the
-        # field_name, which still carries the "-Obsoleted" suffix at this point,
-        # before the header rename below.
-        for _c in list(sdf.columns):
-            if "obsolet" in str(_c).lower():
-                sdf[_c] = ""
         hdr: dict[str, str] = {}
         for f in sfields:
             hdr.setdefault(f.field_name, _header_label(f))
@@ -2759,12 +2644,10 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                 for _c in list(sdf.columns):
                     if _norm_hdr(_c) in _need:
                         sdf[_c] = ""
-        # PROC-07 (blank every supplier "…-Obsoleted" column, on the filled .xlsm path
-        # as well as the CSV package) is now subsumed by the GLOBAL obsoleted-column
-        # blank above: it runs for every object before the header rename, so the
-        # supplier sheets are covered along with everything else. Header-keyed belt-and-
-        # suspenders kept below in case a header ever carries the "Obsolete" marker that
-        # its field_name does not.
+        # PROC-07: blank every supplier "…-Obsoleted" column here too. apply_supplier_layout
+        # already does this for the CSV package, but the filled .xlsm template path does NOT
+        # call it, so Tax Registration Number-Obsoleted still shipped populated on the
+        # NetSuite template. Enforcing it in _finalize (used by every path) closes that gap.
         if _is_supplier:
             for _c in list(sdf.columns):
                 if "obsolete" in _norm_hdr(_c):
@@ -3369,7 +3252,7 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                     _raw_small.append(_rf[_cols].copy())
                 del _rf
         _enrich = _cm.build_entity_enrichment(_raw_small) or None
-    frames, names = [], []
+    frames, names, _skips = [], [], []
     for c in convs:
         _cf: dict = {}
         try:
@@ -3389,16 +3272,12 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                    # startdate/datecreated for the From Date / Account
                                    # Established Date COALESCE stamp (customer_merge).
                                    + list(_cm.FROM_DATE_SOURCE_COLS)
-                                   # language for the PERSONLANG language-not-empty
-                                   # row filter (customer_merge.sheet_rows, 10-Aug).
-                                   + list(_cm.LANG_SOURCE_COLS)
-                                   # title for the owned Job Title stamp on the contact
-                                   # sheets (customer_merge.stamp_sheet_rules, REC-62).
-                                   + list(_cm.TITLE_SOURCE_COLS)
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
-        except Exception:  # noqa: BLE001 — skip an unreadable source, keep the rest
+        except Exception as _mexc:  # noqa: BLE001 — skip an unreadable source, keep the rest
+            _skips.append(str(getattr(c, "name", "?")) + ": EXC "
+                          + type(_mexc).__name__ + ": " + str(_mexc)[:200])
             continue
         if f is not None and len(f.columns):
             if _is_customer:
@@ -3428,6 +3307,15 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                 ds = await _DS.get(did)
                 if ds:
                     names.append(ds.name)
+        else:
+            _skips.append(str(getattr(c, "name", "?")) + ": empty (None or 0 columns)")
+    # MERGE_DIAG (temporary): a customer merge that silently drops sources degrades
+    # to single-source (one row per customer). Surface WHY — the swallowed reason for
+    # each dropped source — rather than shipping the degraded file. Removed once the
+    # root cause is fixed.
+    if _is_customer and len(convs) > 1 and _skips:
+        raise RuntimeError("MERGE_DIAG dropped " + str(len(_skips)) + "/"
+                           + str(len(convs)) + " sources -> " + " || ".join(_skips))
     if not frames:
         return None, convs[0], names
     if _is_customer and len(frames) > 1:

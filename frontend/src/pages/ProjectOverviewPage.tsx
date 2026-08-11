@@ -139,6 +139,28 @@ export const ProjectOverviewPage: React.FC = () => {
     try { await ConversionsApi.update(String(c.id), { output_mode: mode } as any); refresh(); }
     catch { flash("Couldn't update output type"); }
   };
+
+  // Swap a conversion's source file for a fresh raw extract WITHOUT losing any of
+  // its mappings, defaults, keep-blanks or custom rules. This is how a proven
+  // project is reused on the next data drop: upload the new file, then re-point the
+  // conversion at it with a "replace" set-sources. Mappings live on the conversion
+  // and are only wiped on delete — set-sources re-runs auto-map, which is a no-op
+  // when mappings already exist, so every prior decision carries straight over.
+  // Column names in the new file must match the old (same extract shape); only the
+  // data changes.
+  const handleReplaceSource = async (c: Conversion, file: File | null | undefined) => {
+    if (!file) return;
+    setBusy(`replace:${c.id}`);
+    try {
+      const ds = await DatasetsApi.upload(file);
+      await ConversionsApi.setSources(String(c.id), [String(ds.id)], "replace");
+      flash(`Source replaced with "${ds.name}" — mappings & rules preserved`);
+      refresh();
+      window.dispatchEvent(new Event("workbench:refresh"));
+    } catch (e: any) {
+      flash(`Replace failed: ${e?.response?.data?.detail || e?.message}`);
+    } finally { setBusy(null); }
+  };
   const [dl, setDl] = useState<string | null>(null);
   const downloadFbdi = async (c: Conversion) => {
     setDl(String(c.id));
@@ -774,14 +796,42 @@ export const ProjectOverviewPage: React.FC = () => {
                         : <span className="text-ink-subtle italic">not selected</span>}
                     </td>
                     <td>
-                      {!c.dataset_id
-                        ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                            <Zap className="h-3 w-3" />
-                            {c.ebs_table_hint ? c.ebs_table_hint : "EBS Live"}
-                          </span>
-                        : c.dataset_name
-                          ? <span className="inline-flex items-center gap-1 text-[12px] text-ink"><Database className="h-3 w-3 text-emerald-500" />{c.dataset_name}</span>
-                          : <span className="text-ink-subtle italic">awaiting file</span>}
+                      {!c.dataset_id ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                          <Zap className="h-3 w-3" />
+                          {c.ebs_table_hint ? c.ebs_table_hint : "EBS Live"}
+                        </span>
+                      ) : (
+                        <div className="flex flex-col items-start gap-0.5">
+                          {c.dataset_name
+                            ? <span className="inline-flex items-center gap-1 text-[12px] text-ink"><Database className="h-3 w-3 text-emerald-500" />{c.dataset_name}</span>
+                            : <span className="text-ink-subtle italic">awaiting file</span>}
+                          {/* Reuse this proven conversion on the next data drop:
+                              drop in a fresh raw file and keep every mapping/rule. */}
+                          <label
+                            className={cn(
+                              "inline-flex w-fit cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[10px] font-medium",
+                              busy === `replace:${c.id}`
+                                ? "text-ink-subtle"
+                                : "text-ink-muted hover:bg-canvas hover:text-brand-dark"
+                            )}
+                            title="Upload a fresh raw file to replace this source. All mappings, defaults, keep-blanks and custom rules are preserved — only the data changes. The new file must have the same columns as the old one."
+                          >
+                            <input
+                              type="file"
+                              className="hidden"
+                              accept=".csv,.xlsx,.xls"
+                              disabled={busy === `replace:${c.id}`}
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                e.currentTarget.value = "";
+                                void handleReplaceSource(c, f);
+                              }}
+                            />
+                            {busy === `replace:${c.id}` ? "Replacing…" : "↩ Replace source"}
+                          </label>
+                        </div>
+                      )}
                     </td>
                     <td><Pill tone={STATUS_TONE(c.status)}>{c.status.replace("_", " ")}</Pill></td>
                     <td>
