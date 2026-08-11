@@ -184,7 +184,17 @@ def render_cell(spec: dict, resolve, analyst=None, type_lookup=None) -> str:
             # map, an auto-map marks them not_applicable mechanically, and blanking them
             # dangles every child-record link (PersonId / PeriodOfServiceId). A NON-empty
             # analyst value still overrides any kind (a real fixed value they typed).
-            if not (kind in ("key", "manager") and _clean(answer) == ""):
+            #
+            # ``protect_blank`` extends that same EMPTY-answer protection to a field the
+            # SCHEMA flags per pass. AssignmentNumber is Keep-blank on the Worker(Employee)
+            # file but must stay populated on the Worker(AssignmentSupervisor) file so the
+            # supervisor row has a number to point at; the two passes share the
+            # "WorkTerms"/"Assignment" component NAMES, so the analyst's component-keyed
+            # keep-blank reaches both. The numbered (pass-two) specs carry protect_blank so
+            # the blank is ignored there while the Worker(Employee) pass still honours it
+            # (Subrato, 11-Aug). A NON-empty analyst value still overrides.
+            if not ((kind in ("key", "manager") or spec.get("protect_blank"))
+                    and _clean(answer) == ""):
                 return _clean(answer)
     if kind == "const":
         return _clean(spec.get("value"))

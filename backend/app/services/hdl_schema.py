@@ -124,7 +124,8 @@ def _key(name, prefix, sep="_", key_source=_EMP_ID, required=True):
             "key_source": key_source, "required": required}
 
 
-def _wnum(name, key_source=_EMP_ID, type_source="Worker Type", required=True):
+def _wnum(name, key_source=_EMP_ID, type_source="Worker Type", required=True,
+          protect_blank=False):
     """AssignmentNumber: prefix by WORKER TYPE (C contingent / E employee) + the FULL
     Employee Number, VERBATIM. NextPower rule (Subrato, 09-Aug): the assignment number
     is the employee number with the worker-type letter in front — C-100208 (contingent)
@@ -132,9 +133,20 @@ def _wnum(name, key_source=_EMP_ID, type_source="Worker Type", required=True):
     TYPE is Employee. The id is kept whole (dash and leading letter included); a pure
     numeric id like 1200077 gives E1200077 / C1200077. The letter is the worker's own
     type, and the generator gives a MANAGER's number the matching prefix via its
-    worker-id → type lookup, so supervisor links resolve when the manager is contingent."""
+    worker-id → type lookup, so supervisor links resolve when the manager is contingent.
+
+    ``protect_blank`` — keep this derived number even when the analyst set the field to
+    Keep blank. Set ONLY on the Worker(AssignmentSupervisor) pass. The analyst's "Left
+    blank" for AssignmentNumber is meant for the Worker(Employee) file, but WorkTerms and
+    Assignment share their component NAME across both passes, so a keep-blank keyed by
+    (component, field) cannot tell pass one from pass two. Without this flag the blank
+    meant for Worker(Employee) also emptied Worker(AssignmentSupervisor), leaving the
+    supervisor row with no assignment number to point at (Subrato, 11-Aug). Pass one
+    leaves it False so the analyst's keep-blank still ships those two components empty
+    on the Worker(Employee) file, exactly as asked."""
     return {"name": name, "kind": "worker_number",
-            "key_source": key_source, "type_source": type_source, "required": required}
+            "key_source": key_source, "type_source": type_source,
+            "required": required, "protect_blank": protect_blank}
 
 
 def _date(name, source, required=True):
@@ -295,15 +307,17 @@ WORK_RELATIONSHIP = ("WorkRelationship", [
 # at. Built from one definition so the two passes cannot drift apart.
 def _work_terms(numbered: bool):
     return ("WorkTerms", [
-        # AssignmentNumber = E/C<employee id> on BOTH Worker passes (Subrato, 10-Aug:
-        # Worker(Employee) WorkTerms/Assignment showed blank, expected E1200588). The
-        # earlier template read left it empty on pass one and set it on pass two — but
-        # then the supervisor row in pass two points at an AssignmentNumber pass one
-        # never created (pass one's assignment was auto-numbered), so the link cannot
-        # resolve. Numbering it the same in both passes makes the two agree. Only
-        # AssignmentStatusTypeCode still differs by pass (blank on Employee,
-        # ACTIVE_PROCESS on AssignmentSupervisor).
-        _wnum("AssignmentNumber"),
+        # AssignmentNumber is DERIVED as E/C<employee id> on both passes, but the two
+        # passes are no longer forced to agree: Subrato, 11-Aug — the analyst's Keep
+        # blank must empty AssignmentNumber on the Worker(Employee) file (WorkTerms and
+        # Assignment) while the Worker(AssignmentSupervisor) file keeps it so the
+        # supervisor row has a number to point at. The keep-blank is keyed by
+        # (component, field) and both files reuse the "WorkTerms"/"Assignment" names, so
+        # the writer cannot tell them apart on its own; ``protect_blank=numbered`` is how
+        # pass two (numbered) refuses the blank while pass one accepts it. Assignment
+        # StatusTypeCode likewise differs by pass (blank on Employee, ACTIVE_PROCESS on
+        # AssignmentSupervisor).
+        _wnum("AssignmentNumber", protect_blank=numbered),
         (_const("AssignmentStatusTypeCode", "ACTIVE_PROCESS") if numbered
          else _blank("AssignmentStatusTypeCode")),
         _const("BusinessUnitShortCode", _BU_SHORT_CODE),
@@ -322,8 +336,9 @@ def _work_terms(numbered: bool):
 def _assignment(numbered: bool):
     return ("Assignment", [
         _const("ActionCode", "HIRE"),
-        # E/C<employee id> on BOTH passes — see _work_terms note.
-        _wnum("AssignmentNumber"),
+        # Derived on both passes; pass two (numbered) protects it from the analyst
+        # keep-blank so only Worker(Employee) ships empty — see _work_terms note.
+        _wnum("AssignmentNumber", protect_blank=numbered),
         _date("EffectiveStartDate", _HIRE),
         _const("EffectiveSequence", "1"),
         _const("EffectiveLatestChange", "Y"),
@@ -354,7 +369,11 @@ WORK_TERMS_NUMBERED = _work_terms(True)
 ASSIGNMENT_NUMBERED = _assignment(True)
 
 ASSIGNMENT_SUPERVISOR = ("AssignmentSupervisor", [
-    _wnum("AssignmentNumber"),
+    # This component only exists on the Worker(AssignmentSupervisor) pass, and its
+    # AssignmentNumber is the assignment the supervisor row attaches to — it must stay
+    # populated even if the analyst set AssignmentNumber to Keep blank for the
+    # Worker(Employee) file. protect_blank keeps it derived here.
+    _wnum("AssignmentNumber", protect_blank=True),
     # Template: E111 against employee E1007802 — the manager's own assignment
     # number. The real input has a plain Manager_ID column (1001899); the older
     # "Manager - Level 01" spelling holds a "Name (12345)" string. The manager rule
