@@ -352,12 +352,13 @@ def _assignment(numbered: bool):
         _key("WorkTermsAssignmentId(SourceSystemId)", "Worker_Terms"),
         _const("SourceSystemOwner", "Workday"),
         _key("SourceSystemId", "Assignment"),
-        # The template's Assignment carries DefaultExpenseAccount where this
-        # component carried DepartmentName. That also settles the mapping workbook's
-        # Cost_Center row, which was recorded as having no Oracle field on the
-        # strength of its own TRX comment ("No suitable field is available in Oracle
-        # for this information") — the client's template proves otherwise.
-        _src("DefaultExpenseAccount", ["Cost Center", "Cost_Center"], required=False),
+        # DefaultExpenseAccount is a FIXED accounting flexfield for the whole employee
+        # population (Subrato, 11-Aug): the single GL combination below, on both Worker
+        # passes, not a per-worker value. It replaces the earlier _src that pulled a
+        # cost-centre column — the template's DepartmentName slot became
+        # DefaultExpenseAccount, and its value is this constant, not a mapped source.
+        _const("DefaultExpenseAccount",
+               "1200.41305.680010.0000.0000.0000.0000", required=False),
         _src("JobCode", ["Job Code", "Job_Code"], required=False),
         _src("LocationCode", ["Location Code", "Location_Code"], required=False),
     ])

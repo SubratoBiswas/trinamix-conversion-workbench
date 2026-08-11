@@ -84,6 +84,80 @@ async def _add_components(tpl, comps, *, start_order: int = 0) -> list[str]:
     return added
 
 
+async def _reconcile_fields(tpl) -> list[str]:
+    """Repair per-field drift on component sheets that already exist.
+
+    The sheet-level reconcile only notices a MISSING component. A field the schema
+    RENAMED or ADDED inside a component that already exists slips past it, because the
+    seeder never re-examined an existing sheet's field list. Live 11-Aug: the schema
+    renamed Assignment.DepartmentName -> DefaultExpenseAccount, but the DB kept
+    DepartmentName — so the .dat shipped DefaultExpenseAccount (from the schema) while
+    Mapping Review showed DepartmentName (from the DB), and the analyst could neither
+    see the field nor set its value. HDL fields are declared entirely by
+    all_components(), so the schema is authoritative here.
+
+    Conservative: a sheet with exactly one schema field the DB lacks AND exactly one DB
+    field the schema no longer names is treated as a RENAME — the DB row is updated IN
+    PLACE so its id, and any mapping an analyst attached to it, carry across rather than
+    being orphaned. Every other shape only ADDS the missing fields; nothing is deleted,
+    so a hand-added field is left untouched. Idempotent: once the rename lands there is
+    no drift, so later runs change nothing.
+    """
+    def _note(f: dict) -> str:
+        return {
+            "source": f"HDL attribute — mapped from source '{f.get('source')}'.",
+            "const": f"HDL structural constant — always '{f.get('value')}'.",
+            "key": f"HDL SourceSystemId composite key ('{f.get('prefix')}"
+                   f"{f.get('sep', '_')}<key>').",
+            "valuemap": f"Value-mapped from source '{f.get('source')}'.",
+            "date": f"Date reformatted from source '{f.get('source')}' to YYYY/MM/DD.",
+            "manager": f"Manager reference parsed from '{f.get('source')}'.",
+            "blank": "Required by Oracle; supplied by business (left blank).",
+        }.get(f.get("kind"), "")
+
+    schema_by_comp: dict[str, list[dict]] = {}
+    for _obj, comp_name, fields in all_components():
+        schema_by_comp.setdefault((comp_name or "").strip().lower(), fields)
+    changes: list[str] = []
+    for sh in await FBDISheet.find(FBDISheet.template_id == tpl.id).to_list():
+        specs = schema_by_comp.get((sh.sheet_name or "").strip().lower())
+        if not specs:
+            continue
+        db_fields = await FBDIField.find(FBDIField.sheet_id == sh.id).to_list()
+        db_names = {(f.field_name or "").strip().lower() for f in db_fields}
+        schema_names = {(s["name"] or "").strip().lower() for s in specs}
+        missing = [s for s in specs
+                   if (s["name"] or "").strip().lower() not in db_names]
+        if not missing:
+            continue
+        orphans = [f for f in db_fields
+                   if (f.field_name or "").strip().lower() not in schema_names]
+        if len(missing) == 1 and len(orphans) == 1:
+            spec, old = missing[0], orphans[0]
+            old_name = old.field_name
+            await old.set({
+                "field_name": spec["name"],
+                "display_name": (spec["name"] + " *") if spec.get("required")
+                                else spec["name"],
+                "required": bool(spec.get("required")),
+                "data_type": "date" if spec.get("kind") == "date" else "text",
+                "sample_value": (str(spec.get("value"))
+                                 if spec.get("kind") == "const" else None),
+                "validation_notes": _note(spec),
+            })
+            changes.append(f"{sh.sheet_name}: {old_name} -> {spec['name']}")
+        else:
+            seq = await FBDIField.find(FBDIField.template_id == tpl.id).count()
+            docs = _field_docs_for(tpl.id, sh.id, missing, seq)
+            if docs:
+                await FBDIField.insert_many(docs)
+                changes.append(f"{sh.sheet_name}: +"
+                               + ", ".join(s["name"] for s in missing))
+    if changes:
+        logger.info("hdl seed: field reconcile — %s", "; ".join(changes))
+    return changes
+
+
 async def ensure_employee_hdl() -> dict:
     """Guarantee the Employee HDL template exists with its component sheets +
     attribute fields. Returns a small status dict. Idempotent."""
@@ -106,17 +180,22 @@ async def ensure_employee_hdl() -> dict:
                          FBDISheet.template_id == tpl.id).to_list()}
             _want = [c for c in all_components()
                      if (c[1] or "").strip().lower() not in _have]
-            if not _want:
+            # FIELD-level drift (a renamed/added attribute inside a sheet that already
+            # exists) is invisible to the sheet check above — reconcile it too.
+            field_changes = await _reconcile_fields(tpl)
+            if not _want and not field_changes:
                 return {"seeded": False, "template_id": str(tpl.id), "sheets": sheet_n,
                         "note": "Employee HDL template already complete"}
-            added = await _add_components(tpl, _want, start_order=sheet_n)
+            added = (await _add_components(tpl, _want, start_order=sheet_n)
+                     if _want else [])
             # The template changed, so it is now the most recent answer for this
             # object — which is the whole point of latest-wins.
             await tpl.set({"updated_at": datetime.utcnow()})
             return {"seeded": False, "reconciled": True, "template_id": str(tpl.id),
                     "sheets": sheet_n + len(_want), "added_sheets": added,
-                    "note": (f"Added {len(added)} component sheet(s) the schema declares "
-                             f"and the template did not have: {', '.join(added)}")}
+                    "field_changes": field_changes,
+                    "note": (f"Reconciled — added sheet(s): [{', '.join(added)}]; "
+                             f"field changes: [{'; '.join(field_changes)}]")}
         target = tpl
     else:
         target = None
