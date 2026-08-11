@@ -722,8 +722,11 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
     # mapping wins the merge. Matches both acctsite sheets; ACCOUNTS ("account", no
     # "acctsite") and ACCTCONTACTS ("acctcontact") are deliberately untouched.
     if "acctsite" in n and ENTITYID_COL in sub.columns:
-        _set_owned_col(sub, "Account Number",
-                       sub[ENTITYID_COL].astype(str).str.strip())
+        try:
+            _set_owned_col(sub, "Account Number",
+                           sub[ENTITYID_COL].astype(str).str.strip())
+        except Exception:  # noqa: BLE001 — never let the link stamp break generation
+            pass
     if "acctsite" in n and "use" not in n:      # HZ_IMP_ACCTSITES_T only
         _map_en_us(sub, "Site Language")
     if "personlang" in n:                        # HZ_IMP_PERSONLANG
