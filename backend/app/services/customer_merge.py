@@ -1186,6 +1186,27 @@ def _stamp_account_description(sub: "pd.DataFrame", sheet_name: Optional[str]) -
     return sub
 
 
+def _stamp_job_title(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
+    """Job Title <- the ``title`` borrowed from the customer master by entityid, on
+    HZ_IMP_CONTACTS_T (REC-62). Owned via ``merge_owned_fields`` so it survives the
+    per-conversion mapping state / keep-blank / suppression — the reason a fresh
+    engagement kept shipping Job Title blank was that nothing populated it here, so it
+    depended on a per-project mapping that the auto-mapper never binds (``title`` is
+    not a physical column in the contact extract; it is joined from the master at
+    generate-time).
+
+    A NO-OP unless ``title`` was carried onto the rows (``__title``). output_service
+    threads it ONLY for a netsuite Customer load, so this is netsuite-gated and leaves
+    every other source untouched. Scoped to the contacts interface — not the
+    contact-points sheet (fanned to e-mail/phone points) and not account-contacts."""
+    n = _norm(sheet_name)
+    if "contacts" in n and "contactpt" not in n and "acctcontact" not in n:
+        t = _carried(sub, "title")
+        if t is not None:
+            _set_owned_col(sub, "Job Title", t)
+    return sub
+
+
 # ── Site-sheet de-duplication: billing wins, shipping only when new ──────────────
 # HZ_IMP_PARTYSITES_T / LOCATIONS / ACCTSITES are one row per ADDRESS RECORD, but 553
 # address internalids appear in BOTH the billing and shipping extracts (a NetSuite
@@ -1301,6 +1322,7 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     sub = sub.reset_index(drop=True)
     _set_party_link(sub)
     sub = _stamp_account_description(sub, sheet_name)   # Account Description <- companyname (REC-30)
+    sub = _stamp_job_title(sub, sheet_name)             # Job Title <- borrowed title (REC-62, netsuite)
     sub = stamp_sheet_rules(sub, sheet_name)            # NETSUITE constants / PROFILES blanks / ref-copies
     # Contact points: fan each contact into its e-mail and phone points (REC-48/53/54/
     # 56/57). Only the contact-points sheet; every other contact sheet stays one row

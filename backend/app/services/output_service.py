@@ -3267,6 +3267,16 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
     # keep the plain converge + de-dup.
     from app.services import customer_merge as _cm
     _is_customer = "customer" in (target_object or "").lower()
+    # Job Title <- borrowed `title` (customer_merge._stamp_job_title, REC-62) is a
+    # NetSuite-specific Customer field. Resolve the merge's source once so the carry
+    # below threads `title` for a netsuite load ONLY — every other source (eBOS,
+    # SyteLine, …) is left untouched, and the stamp is a no-op without it.
+    _merge_src_erp = None
+    if _is_customer and convs:
+        try:
+            _merge_src_erp = await source_erp_for_conversion(convs[0])
+        except Exception:  # noqa: BLE001 — no resolvable source tag ⇒ do not carry title
+            _merge_src_erp = None
     # Cross-grain enrichment lookup (Customer only). A Customer load's columns live on
     # DIFFERENT source files — person names in the contact file, companyname/startdate/
     # datecreated in the master — but the rules that read them run on a different grain.
@@ -3313,6 +3323,10 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                    # startdate/datecreated for the From Date / Account
                                    # Established Date COALESCE stamp (customer_merge).
                                    + list(_cm.FROM_DATE_SOURCE_COLS)
+                                   # Job Title <- borrowed `title` (REC-62), stamped and
+                                   # owned by the merge. NETSUITE-GATED: carried only for a
+                                   # netsuite source, so no other source is affected.
+                                   + (["title"] if _merge_src_erp == "netsuite" else [])
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
