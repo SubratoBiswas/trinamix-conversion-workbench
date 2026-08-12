@@ -49,32 +49,33 @@
       "target_object": "Supplier",
       "target_field": "Taxpayer ID",
       "source_erp": "netsuite",
+      "as_of": "2026-08-12",
       "rule_type": "CASE_WHEN",
       "rule_config": {
         "branches": [
           {
-            "if_column": "Country",
+            "if_column": "country",
             "op": "eq",
             "value": "India",
-            "then": "{Permanent Account Number ( PAN)}"
+            "then": "{pan}"
           },
           {
-            "if_column": "Country",
+            "if_column": "country",
             "op": "eq",
             "value": "United States",
-            "then": "{Tax ID}"
+            "then": "{tax_id}"
           },
           {
-            "if_column": "Country",
+            "if_column": "country",
             "op": "eq",
             "value": "Canada",
-            "then": "{Tax Id Canada}"
+            "then": "{tax_id_canada}"
           }
         ],
         "default": ""
       },
       "condition": "Consultant (via new_issues_2, 09-Aug): 'Map the taxpayer ID based on the country column by assigning pan for India, tax_id for the United States, and tax_id_canada for Canada.'",
-      "note": "then interpolates the source column VALUE via {Column}: India -> 'Permanent Account Number ( PAN)', United States -> 'Tax ID', Canada -> 'Tax Id Canada'. Only these three countries are specified; every other country ships Taxpayer ID blank (default).",
+      "note": "if_column is 'country' (lowercase, matches the netsuite extract). then interpolates the source column VALUE via {Column}: India -> {pan}, United States -> {tax_id}, Canada -> {tax_id_canada}. Only these three countries are specified; every other country ships Taxpayer ID blank (default). Fixed 2026-08-12: previously used 'Country' + non-existent columns and resolved to blank for every row.",
       "status": "SEEDED as CASE_WHEN with {Column} interpolation (engine op 'eq' + interpolation both supported)."
     },
     {
