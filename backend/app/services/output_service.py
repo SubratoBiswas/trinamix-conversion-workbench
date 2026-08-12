@@ -1778,16 +1778,32 @@ def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
 # literal text "NULL"/"N/A" instead of an empty cell, so blank them at generate.
 _NULL_SENTINELS = {"null", "(null)", "#n/a", "n/a", "nan", "none", "\\n"}
 
+# Person-name columns legitimately carry a value that collides with a null
+# sentinel: a NetSuite contact whose first name is literally "None" (internalid
+# 4025141 in the NextPower Customer extract, lastname "."). Analysts keep that
+# verbatim rather than emptying it, so the "none" token is NOT treated as null on
+# these columns. Every harder sentinel (NULL, N/A, NaN, \N) still blanks, and this
+# is an exact-name set so "Party Site Name" and other …Name fields are untouched.
+_PERSON_NAME_COLS = {
+    "person first name", "person middle name", "person last name",
+    "person second last name", "person last name prefix", "person name suffix",
+}
+_NAME_SENTINEL_KEEP = {"none"}
+
 
 def _blank_null_sentinels(df: pd.DataFrame) -> pd.DataFrame:
     """Replace whole-cell null sentinels (case-insensitive) with empty strings.
     Whole-cell match only, so a real value like a description containing the word
-    is never touched."""
+    is never touched. Person-name columns keep a literal "None" (see
+    ``_PERSON_NAME_COLS``); all other sentinels still blank there."""
     for col in df.columns:
         s = df[col]
         if s.dtype != object:
             continue
-        mask = s.astype(str).str.strip().str.lower().isin(_NULL_SENTINELS)
+        col_key = str(col).strip().lower().rstrip("*").strip()
+        sentinels = (_NULL_SENTINELS - _NAME_SENTINEL_KEEP
+                     if col_key in _PERSON_NAME_COLS else _NULL_SENTINELS)
+        mask = s.astype(str).str.strip().str.lower().isin(sentinels)
         if mask.any():
             df.loc[mask, col] = ""
     return df
