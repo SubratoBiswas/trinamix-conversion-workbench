@@ -15,3 +15,5 @@ node_modules/
 *.patch
 *.patch_old
 COMMIT_MSG.txt
+
+_to_delete/

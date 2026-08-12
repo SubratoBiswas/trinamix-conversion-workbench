@@ -65,6 +65,25 @@ def _label(s: Any) -> str:
     return str(s or "").strip().lower().rstrip("*").strip()
 
 
+def _src_ok(d: dict, source_erp: str | None) -> bool:
+    """Does a directive apply for this source system?
+
+    A directive carrying no ``source_erp`` is a statement about EVERY source —
+    that is what the whole existing overlay is, so the historical behaviour is
+    unchanged. A directive tagged with a source (e.g. the NextPower Alternate-Name
+    dedup and the Taxpayer-ID country CASE_WHEN, both NetSuite-only) applies ONLY
+    when the conversion's source matches, so an arena_ebos supplier keeps its
+    direct ``name`` / ``tax_id`` mapping instead of the NetSuite rule. When the
+    caller does not know the source (source_erp is None) the directive still
+    applies — refusing to enforce a signed rule just because the source was not
+    threaded in would be the more dangerous default.
+    """
+    want = d.get("source_erp")
+    if not want or source_erp is None:
+        return True
+    return _n(want) == _n(source_erp)
+
+
 # ``applies_to_all_sheets`` was already being written into the corrections file by
 # the analyst — and NOTHING read it. It was dead data, so two rules that say "all
 # sheets" were silently applied to one sheet only:
@@ -162,6 +181,11 @@ def _load() -> dict:
         # generator has to be able to compare the two — a directive with no date
         # loses to any human approval, which is the old behaviour.
         d["as_of"] = r.get("_asof")
+        # Which legacy source this directive is scoped to, or None for every
+        # source. NextPower Supplier has two sources — netsuite and arena_ebos —
+        # and a rule the analyst wrote against the NetSuite extract (Alternate
+        # Name dedup, Taxpayer ID by country) must not reshape the arena_ebos one.
+        d["source_erp"] = r.get("source_erp")
         out.setdefault(obj, {})[fld] = d
         if d.get("blank"):
             blanks.setdefault(obj, set()).add(_label(r.get("target_field")))
@@ -193,16 +217,24 @@ def _parse_date(v) -> "datetime | None":
         return None
 
 
-def directive_for(target_object: str | None, field_name: str | None) -> dict | None:
-    """The write-time directive for one target field, or None."""
+def directive_for(target_object: str | None, field_name: str | None,
+                  source_erp: str | None = None) -> dict | None:
+    """The write-time directive for one target field, or None.
+
+    ``source_erp`` narrows to source-scoped directives: a NetSuite-only rule is
+    invisible to an arena_ebos conversion, which then keeps its own mapping.
+    """
     if not target_object or not field_name:
         return None
     fld = _n(field_name)
     exact = _load().get(_n(target_object), {}).get(fld)
+    if exact is not None and not _src_ok(exact, source_erp):
+        exact = None
     wide = None
     for k in _prefix_hits(target_object):
-        wide = (_wild_cache or {}).get(k, {}).get(fld)
-        if wide is not None:
+        cand = (_wild_cache or {}).get(k, {}).get(fld)
+        if cand is not None and _src_ok(cand, source_erp):
+            wide = cand
             break
     if exact is None:
         return wide
@@ -301,7 +333,7 @@ def self_lookup_configs(target_object: str | None) -> list[dict]:
     return out
 
 
-def apply_frame_rules(df, target_object: str | None):
+def apply_frame_rules(df, target_object: str | None, source_erp: str | None = None):
     """Rules that compare one OUTPUT column against another, applied to the
     finished frame.
 
@@ -311,6 +343,10 @@ def apply_frame_rules(df, target_object: str | None):
     all 3,407 duplicate alternate names survived the 28-Jul run. Here both sides
     are output columns, so the comparison is the one the analyst actually asked
     for. Comparison is case- and whitespace-insensitive.
+
+    ``source_erp`` skips a source-scoped rule on a non-matching source: the
+    Alternate Name dedup is NetSuite-only, so an arena_ebos supplier keeps its
+    Alternate Name = name.
     """
     rules = _load().get(_n(target_object), {})
     if df is None or not len(df.columns) or not rules:
@@ -321,6 +357,8 @@ def apply_frame_rules(df, target_object: str | None):
     for fld, d in rules.items():
         r = d.get("rule") or {}
         if r.get("rule_type") != "BLANK_IF_EQUALS":
+            continue
+        if not _src_ok(d, source_erp):
             continue
         tgt = by_norm.get(fld)
         other = by_norm.get(_n((r.get("config") or {}).get("other_column")))
