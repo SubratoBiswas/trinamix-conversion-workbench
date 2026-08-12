@@ -66,16 +66,23 @@
             "then": "{tax_id}"
           },
           {
+            "all": [
+              { "if_column": "country", "op": "eq", "value": "Canada" },
+              { "if_column": "tax_id_canada", "op": "notblank" }
+            ],
+            "then": "{tax_id_canada}"
+          },
+          {
             "if_column": "country",
             "op": "eq",
             "value": "Canada",
-            "then": "{tax_id_canada}"
+            "then": "{tax_id}"
           }
         ],
         "default": ""
       },
       "condition": "Consultant (via new_issues_2, 09-Aug): 'Map the taxpayer ID based on the country column by assigning pan for India, tax_id for the United States, and tax_id_canada for Canada.'",
-      "note": "if_column is 'country' (lowercase, matches the netsuite extract). then interpolates the source column VALUE via {Column}: India -> {pan}, United States -> {tax_id}, Canada -> {tax_id_canada}. Only these three countries are specified; every other country ships Taxpayer ID blank (default). Fixed 2026-08-12: previously used 'Country' + non-existent columns and resolved to blank for every row.",
+      "note": "if_column is 'country' (lowercase, matches the netsuite extract). then interpolates the source column VALUE via {Column}: India -> {pan}, United States -> {tax_id}, Canada -> {tax_id_canada} when present ELSE {tax_id}. Only these three countries are specified; every other country ships Taxpayer ID blank (default). Fixed 2026-08-12: (a) corrected if_column 'Country'->'country' + real columns; (b) added Canada tax_id fallback — only 8 of 49 Canada suppliers carry tax_id_canada, the other ~27 hold their number in tax_id, so restricting Canada to tax_id_canada dropped values a prior mapping produced.",
       "status": "SEEDED as CASE_WHEN with {Column} interpolation (engine op 'eq' + interpolation both supported)."
     },
     {
