@@ -172,13 +172,28 @@ def _stream_sheet(ws, limit: int | None) -> list[list]:
     return rows
 
 
+_INT_DOT_ZERO_RE = re.compile(r"^(-?\d+)\.0$")
+
+
+def _strip_int_dot_zero(df: "pd.DataFrame") -> "pd.DataFrame":
+    """calamine reads a numeric Excel cell as a float, so ``dtype=str`` renders an
+    integer value with a spurious trailing ``.0`` (postal code 75109 -> "75109.0",
+    a DFF/id value 2506251 -> "2506251.0", 0 -> "0.0"; functional consultant,
+    netsuite Customer). Restore the integer text for cells that are EXACTLY
+    ``<digits>.0``. Real decimals ("75.5"), multi-zero decimals ("1.00"), scientific
+    notation, blanks, literal "NULL"/"None" text and any non-numeric value are left
+    untouched. Applied only to the all-string calamine frame."""
+    return df.apply(lambda col: col.str.replace(_INT_DOT_ZERO_RE, r"\1", regex=True))
+
+
 def _read_sheet_calamine(raw: bytes, sheet_title: str) -> pd.DataFrame:
     """Read one sheet with the calamine engine (Rust-based, ~5x faster than
     openpyxl on large workbooks). keep_default_na=False preserves literal source
     tokens like 'NULL'/'NA' as text so FBDI output stays faithful to the source."""
     import io
-    return pd.read_excel(io.BytesIO(raw), sheet_name=sheet_title, engine="calamine",
-                         header=None, dtype=str, keep_default_na=False)
+    df = pd.read_excel(io.BytesIO(raw), sheet_name=sheet_title, engine="calamine",
+                       header=None, dtype=str, keep_default_na=False)
+    return _strip_int_dot_zero(df)
 
 
 def list_excel_sheets(file_path: Path | str) -> list[dict]:

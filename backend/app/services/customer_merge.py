@@ -767,7 +767,7 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
     # entityid so the link holds regardless of which source mapping wins the merge.
     # Matches both acctsite sheets; ACCOUNTS ("account", no "acctsite") and
     # ACCTCONTACTS ("acctcontact") are deliberately untouched.
-    if "acctsite" in n and ENTITYID_COL in sub.columns:
+    if (("acctsite" in n) or ("account" in n and "site" not in n and "contact" not in n)) and ENTITYID_COL in sub.columns:
         try:
             _set_owned_col(sub, "Account Number",
                            sub[ENTITYID_COL].astype(str).str.strip())
@@ -882,7 +882,7 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Subject Relationship Party Original System Reference")
         owned.add("Object Relationship Party Original System Reference")
         owned.add("Relationship Source System Reference")   # entityid_internalid_RS
-    if "acctsite" in n:                     # Account Number = raw account entityid (link)
+    if ("acctsite" in n) or ("account" in n and "site" not in n and "contact" not in n):                     # Account Number = raw account entityid (link)
         owned.add("Account Number")
     if "acctsite" in n and "use" not in n:  # REC-35 owned en_US->US Site Language
         owned.add("Site Language")
