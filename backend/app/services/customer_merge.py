@@ -649,27 +649,28 @@ def _dff_udcp_field_names() -> list:
     return [_UDCP_FIELD] + [f"Descriptive Flexfield Segment{i}" for i in range(1, _DFF_MAX + 1)]
 
 
-# A DFF TEXT segment fed a date value must ship the ISO yyyy-mm-dd the reference file
-# uses (dateprospect -> ACCOUNTS Segment13, custentity_nxt_cust_due_date -> PROFILES
-# Segment4), NOT the yyyy/mm/dd the date-typed columns carry. Only a value that is
-# unambiguously a full date is rewritten; every other segment value (text, id, number,
-# blank) passes through untouched. ``dayfirst`` reads the ambiguous DD-MM-YYYY the same
-# way as the rest of the NextPower/NetSuite date fixes. Analyst 13-Aug (comparison report).
+# A DFF TEXT segment fed a date value must ship the SAME yyyy/mm/dd the date-typed
+# columns use (dateprospect -> ACCOUNTS Segment13, custentity_nxt_cust_due_date ->
+# PROFILES Segment4), so EVERY date on EVERY sheet reads yyyy/mm/dd (analyst 13-Aug:
+# one consistent date spelling everywhere). Only a value that is unambiguously a full
+# date is rewritten; every other segment value (text, id, number, blank) passes through
+# untouched. ``dayfirst`` reads the ambiguous DD-MM-YYYY the same way as the rest of the
+# NextPower/NetSuite date fixes.
 _DFF_ISO_RE = re.compile(r"^\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s*$")
 _DFF_DMY_RE = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
 
 
-def _dff_iso_date(v, dayfirst: bool = False):
+def _dff_date(v, dayfirst: bool = False):
     s = str(v if v is not None else "").strip()
     if not s:
         return v
     m = _DFF_ISO_RE.match(s)
     if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
     m = _DFF_DMY_RE.match(s)
     if m:
         _d, _mo = (m.group(1), m.group(2)) if dayfirst else (m.group(2), m.group(1))
-        return f"{m.group(3)}-{int(_mo):02d}-{int(_d):02d}"
+        return f"{m.group(3)}/{int(_mo):02d}/{int(_d):02d}"
     return v
 
 
@@ -697,7 +698,7 @@ def apply_dff_udcp(sub: "pd.DataFrame", sheet_name: Optional[str], dayfirst: boo
                         sc = sub[_raw].astype(str).str.strip()
                 if sc is not None:
                     if dayfirst:
-                        sc = sc.map(lambda _v: _dff_iso_date(_v, True))
+                        sc = sc.map(lambda _v: _dff_date(_v, True))
                     _set_owned_col(sub, fld, sc)
                 # else: the source reached this frame under NEITHER name — leave what the
                 # base mapping produced (e.g. the approved SalesforceID -> Segment5
