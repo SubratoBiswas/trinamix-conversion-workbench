@@ -283,6 +283,22 @@ def classify_frame_grain(frame: pd.DataFrame) -> Optional[str]:
     return grain if score >= 0.10 else None
 
 
+# Canonical key for the party-ref lookup, tolerant of the spreadsheet time-coercion
+# that mangles a NetSuite HH:MM-looking entityid on export: the master keeps "05:15"
+# but the address file exported it as the clock time "5:15" (and "03:01" -> "3:1" or
+# "03:01:00"). Zero-pad the two numeric fields and drop any seconds so both sides map
+# to one key; every non-time-shaped entityid ("NT-2437", "NT-292:1") is returned as-is.
+_TIME_ENTITYID_RE = re.compile(r"^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$")
+
+
+def _norm_entity_key(e: str) -> str:
+    e = str(e).strip()
+    m = _TIME_ENTITYID_RE.match(e)
+    if not m:
+        return e
+    return f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
+
+
 # ── The customer's internalid, resolved by entityid ─────────────────────────
 def set_party_ref_from_master(df: "pd.DataFrame") -> "pd.DataFrame":
     """Stamp ``PARTYREF_COL`` = the CUSTOMER's internalid on every row, resolved from
@@ -306,13 +322,24 @@ def set_party_ref_from_master(df: "pd.DataFrame") -> "pd.DataFrame":
     iid = df[INTERNALID_COL].astype(str).str.strip()
     master = g.eq(PARTY)
     id_by_entity: dict[str, str] = {}
+    id_by_entity_norm: dict[str, str] = {}
     for e, i in zip(eid[master].tolist(), iid[master].tolist()):
         if not e or e in id_by_entity:
             continue
         if i and i.lower() not in ("nan", "none", "null"):
             id_by_entity[e] = i
+            # Also index by the time-coercion-normalised key so a child whose entityid
+            # was mangled on export ("5:15" for master "05:15", "3:1" for "03:01")
+            # still resolves to the customer's internalid instead of falling back to
+            # the corrupted key. Analyst 13-Aug (Wrong Reference report). setdefault so
+            # a real exact key always wins over a normalised collision.
+            id_by_entity_norm.setdefault(_norm_entity_key(e), i)
     df = df.copy()
-    df[PARTYREF_COL] = [id_by_entity.get(e, e) for e in eid.tolist()]
+    df[PARTYREF_COL] = [
+        id_by_entity.get(e)
+        or id_by_entity_norm.get(_norm_entity_key(e), e)
+        for e in eid.tolist()
+    ]
     return df
 
 
@@ -576,10 +603,16 @@ LANG_SOURCE_COLS = ("language",)
 TITLE_SOURCE_COLS = ("title",)
 
 
-def _fbdi_date(v) -> str:
-    """A source date (YYYY-MM-DD / YYYY/MM/DD / MM/DD/YYYY) rendered as the FBDI
-    yyyy/mm/dd, or "" for a blank/na value. Used by the owned From Date coalesce stamp
-    so its value matches the format the base date mapping already ships."""
+def _fbdi_date(v, dayfirst: bool = False) -> str:
+    """A source date (YYYY-MM-DD / YYYY/MM/DD / DD-MM-YYYY / MM/DD/YYYY) rendered as
+    the FBDI yyyy/mm/dd, or "" for a blank/na value. Used by the owned From Date
+    coalesce stamp so its value matches the format the base date mapping already ships.
+
+    ``dayfirst`` (NextPower/NetSuite Customer, analyst 13-Aug): the NetSuite export
+    writes dates DAY-first ("20-08-2018" = 20 Aug), so the two-field-then-year branch
+    must read the FIRST field as the DAY. Default False keeps the historic month-first
+    reading for every other source. A YYYY-first value is unambiguous and handled by
+    the first branch regardless of this flag."""
     s = str(v or "").strip()
     if not s or s.lower() in ("nan", "none", "null", "nat", "na", "<na>"):
         return ""
@@ -588,7 +621,8 @@ def _fbdi_date(v) -> str:
         return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
     m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})", s)
     if m:
-        return f"{m.group(3)}/{int(m.group(1)):02d}/{int(m.group(2)):02d}"
+        _d, _mo = (m.group(1), m.group(2)) if dayfirst else (m.group(2), m.group(1))
+        return f"{m.group(3)}/{int(_mo):02d}/{int(_d):02d}"
     return s
 
 
@@ -676,7 +710,7 @@ def sheet_blank_fields(sheet_name: Optional[str]) -> set:
     return out
 
 
-def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.DataFrame":
+def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str], dayfirst: bool = False) -> "pd.DataFrame":
     """Apply the sheet-scoped constants / forced blanks (owned)."""
     if sub is None or len(sub) == 0:
         return sub
@@ -828,7 +862,7 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
         _n = len(sub)
         _s = _sd if _sd is not None else pd.Series([""] * _n, index=sub.index)
         _c = _cd if _cd is not None else pd.Series([""] * _n, index=sub.index)
-        _coalesced = _s.where(~_is_blank_series(_s), _c).map(_fbdi_date)
+        _coalesced = _s.where(~_is_blank_series(_s), _c).map(lambda _v: _fbdi_date(_v, dayfirst))
         if "account" in n and "site" not in n and "contact" not in n:
             _set_owned_col(sub, "Account Established Date", _coalesced)
         if (("partysiteuse" in n) or ("contactpt" in n) or ("relship" in n)
@@ -1272,7 +1306,7 @@ def _dedupe_billing_over_shipping(sub: "pd.DataFrame") -> "pd.DataFrame":
     return sub[keep.values]
 
 
-def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
+def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str], dayfirst: bool = False) -> pd.DataFrame:
     """The subset of the merged frame that belongs on ``sheet_name``.
 
     Party/account sheets get the party-grain rows, de-duplicated to one per
@@ -1336,7 +1370,7 @@ def sheet_rows(df: pd.DataFrame, sheet_name: Optional[str]) -> pd.DataFrame:
     _set_party_link(sub)
     sub = _stamp_account_description(sub, sheet_name)   # Account Description <- companyname (REC-30)
     sub = _stamp_job_title(sub, sheet_name)             # Job Title <- borrowed title (REC-62, netsuite)
-    sub = stamp_sheet_rules(sub, sheet_name)            # NETSUITE constants / PROFILES blanks / ref-copies
+    sub = stamp_sheet_rules(sub, sheet_name, dayfirst)  # NETSUITE constants / PROFILES blanks / ref-copies
     # Contact points: fan each contact into its e-mail and phone points (REC-48/53/54/
     # 56/57). Only the contact-points sheet; every other contact sheet stays one row
     # per contact.

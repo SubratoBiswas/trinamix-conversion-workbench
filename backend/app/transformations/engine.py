@@ -77,12 +77,27 @@ def _oracle_date_to_py(fmt: Any) -> str | None:
     return s
 
 
-def _parse_any_date(s: str) -> "datetime | None":
-    """Parse a date value written in any of the common spellings, else None."""
+# Same spellings as _DATE_IN_FORMATS but DAY-first: the two ambiguous pairs
+# (%d/%m vs %m/%d, %d-%m vs %m-%d) are tried day-first. Used only when a caller passes
+# dayfirst=True (NextPower/NetSuite Customer, whose export writes DD-MM-YYYY). YYYY-first
+# spellings stay first, so ISO values are unaffected either way.
+_DATE_IN_FORMATS_DAYFIRST = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
+    "%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%d-%B-%Y",
+)
+
+
+def _parse_any_date(s: str, dayfirst: bool = False) -> "datetime | None":
+    """Parse a date value written in any of the common spellings, else None.
+
+    ``dayfirst`` prefers day-first readings for the two ambiguous ``xx-xx-YYYY`` /
+    ``xx/xx/YYYY`` spellings (a source whose dates are DD-MM-YYYY). Default False keeps
+    the historic month-first preference for every other source."""
     s = s.strip()
     if not s:
         return None
-    for fmt in _DATE_IN_FORMATS:
+    for fmt in (_DATE_IN_FORMATS_DAYFIRST if dayfirst else _DATE_IN_FORMATS):
         try:
             return datetime.strptime(s, fmt)
         except ValueError:
@@ -623,7 +638,7 @@ def _apply_one_rule(
         if not s:
             return s
         to_fmt = _oracle_date_to_py(cfg.get("to_format")) or _OUT_DATE_FORMAT
-        dt = _parse_any_date(s)
+        dt = _parse_any_date(s, dayfirst=bool((ctx or {}).get("dayfirst")))
         return dt.strftime(to_fmt) if dt else value
 
     if rt == "DATE_FORMAT":

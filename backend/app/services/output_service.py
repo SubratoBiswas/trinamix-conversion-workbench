@@ -753,9 +753,13 @@ def _transform_frame(
     """
     out_cols: dict[str, list[Any]] = {}
     lineage: dict[str, dict[str, Any]] = {}
+    # DD-MM-YYYY day-first date reading is a property of the NetSuite export locale;
+    # scope it to a netsuite CUSTOMER load so every other source/object is byte-identical.
+    _dayfirst = (source_erp == "netsuite") and ("customer" in (target_object or "").lower())
     _rule_ctx = {"self_index": self_index or {}, "city_country": city_country or {},
                  "city_case": city_case or {}, "sequence_index": sequence_index or {},
-                 "cross_index": cross_index or {}, "group_first_index": group_first_index or {}}
+                 "cross_index": cross_index or {}, "group_first_index": group_first_index or {},
+                 "dayfirst": _dayfirst}
     n_rows = len(src)
     needed_cols = {
         m.source_column for m in sorted_mappings
@@ -1710,6 +1714,19 @@ _DATE_INPUT_FORMATS = (
     "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
 )
 
+# DAY-first variant of the above: the two ambiguous xx-xx-YYYY / xx/xx/YYYY spellings
+# are tried day-first. Used only for a source whose dates are DD-MM-YYYY (NextPower/
+# NetSuite Customer). YYYY-first spellings stay first, so ISO values are unaffected.
+_DATE_INPUT_FORMATS_DAYFIRST = (
+    "%Y%m%d",
+    "%Y-%m-%d", "%Y/%m/%d",
+    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
+    "%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%d-%m-%Y",
+    "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m-%d-%Y",
+    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
+)
+
 
 # The date spelling every output carries. Analyst, 05-Aug: "all dates should be
 # yyyy/mm/dd format" — chosen for FBDI and the Excel templates alike (HDL already
@@ -1726,13 +1743,17 @@ _TODAY_TOKENS = {"sysdate", "today", "now", "current_date", "currentdate",
                  "system date", "systemdate", "getdate()", "current date"}
 
 
-def to_fbdi_date(v: Any) -> Any:
+def to_fbdi_date(v: Any, dayfirst: bool = False) -> Any:
     """One cell → ``yyyy/mm/dd``, or the value untouched if it is not a date.
 
     Untouched is deliberate: a column that turns out to hold free text must not be
     mangled, and an unparseable date is more useful in the reject report as the
     analyst's original string than as a blank. The exception is a SYSDATE-style
     token, which is an INSTRUCTION ("use today"), not free text, and is resolved.
+
+    ``dayfirst`` reads the ambiguous ``xx-xx-YYYY`` / ``xx/xx/YYYY`` spellings day-first
+    (a source whose dates are DD-MM-YYYY). Default False keeps the historic month-first
+    reading for every other source.
     """
     if v is None or str(v).strip() == "":
         return v
@@ -1742,7 +1763,7 @@ def to_fbdi_date(v: Any) -> Any:
     # Fractional seconds ("2020-01-15 00:00:00.000") — strptime has no optional
     # group for them, so drop the fraction before matching.
     core = re.sub(r"\.\d+$", "", s)
-    for fmt_in in _DATE_INPUT_FORMATS:
+    for fmt_in in (_DATE_INPUT_FORMATS_DAYFIRST if dayfirst else _DATE_INPUT_FORMATS):
         try:
             return datetime.strptime(core, fmt_in).strftime(FBDI_DATE_FORMAT)
         except ValueError:
@@ -1750,7 +1771,7 @@ def to_fbdi_date(v: Any) -> Any:
     return v
 
 
-def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
+def _format_date_columns(df: pd.DataFrame, fields: list, dayfirst: bool = False) -> pd.DataFrame:
     """Reformat any date/Date columns to ``yyyy/mm/dd`` (see FBDI_DATE_FORMAT).
 
     Matched on a NORMALISED name (case and punctuation folded), because the frame's
@@ -1769,7 +1790,7 @@ def _format_date_columns(df: pd.DataFrame, fields: list) -> pd.DataFrame:
     date_field_names.discard("")
     for col in df.columns:
         if re.sub(r"[^a-z0-9]", "", str(col).lower()) in date_field_names:
-            df[col] = df[col].apply(to_fbdi_date)
+            df[col] = df[col].apply(lambda _v: to_fbdi_date(_v, dayfirst))
     return df
 
 
@@ -2484,7 +2505,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # party. Falls back to the full frame for a sheet whose grain is unknown or
         # absent (customer_merge.sheet_rows), so no sheet is emptied on a guess.
         if _grain_merge:
-            sub = _cm.sheet_rows(df, _sheet_name_of(sfields))
+            sub = _cm.sheet_rows(df, _sheet_name_of(sfields), dayfirst=(_src_erp == "netsuite"))
             _sheet_ref_holder["ref"] = _cm.sheet_reference(sub)
             return sub
         wanted = {_src_by_field.get(f.id) for f in sfields}
@@ -2642,7 +2663,7 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # source filled entirely with "NULL" is treated as empty and gets its
         # standard default, not the literal text.
         sdf = _blank_null_sentinels(sdf)
-        sdf = _format_date_columns(sdf, sfields)
+        sdf = _format_date_columns(sdf, sfields, dayfirst=(_grain_merge and _src_erp == "netsuite"))
         sdf = _apply_control_defaults(sdf, suppressed=_supp,
                                       effective=_eff_for_sheet(sfields),
                                       explicitly_mapped=_expl)
