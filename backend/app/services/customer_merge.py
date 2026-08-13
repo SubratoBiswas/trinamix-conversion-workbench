@@ -39,25 +39,6 @@ import pandas as pd
 # per-sheet reindex before anything is written, so they never reach the file.
 GRAIN_COL = "__grain"
 ENTITYID_COL = "__entityid"
-
-
-_INT_DOT_ZERO_RE = re.compile(r"^(-?\d+)\.0$")
-
-
-def _strip_dot_zero_frame(sub: "pd.DataFrame") -> "pd.DataFrame":
-    """Drop the spurious trailing ``.0`` a numeric source cell gains when the extract
-    was exported with float formatting: postal code 75109 -> "75109.0", a DFF/id value
-    2506251 -> "2506251.0", 0 -> "0.0" (functional consultant, netsuite Customer). Only
-    cells that are EXACTLY ``<digits>.0`` change; real decimals ("75.5"), multi-zero
-    decimals ("1.00"), blanks, and any non-numeric text are untouched, and non-string
-    cells (None / already-numeric) pass through. CUSTOMER-scoped so BOM/Item revision
-    codes like "1.0" are never affected."""
-    for _c in sub.columns:
-        _s = sub[_c]
-        if _s.dtype == object:
-            sub[_c] = _s.map(lambda v: _INT_DOT_ZERO_RE.sub(r"\1", v)
-                             if isinstance(v, str) else v)
-    return sub
 # Each row's OWN internalid, carried verbatim from the source (like ENTITYID_COL).
 # On a master/party row this IS the customer's internalid; on a child row it is the
 # address/contact record's own internalid, which is NOT what a party link wants.
@@ -855,8 +836,18 @@ def stamp_sheet_rules(sub: "pd.DataFrame", sheet_name: Optional[str]) -> "pd.Dat
             _set_owned_col(sub, "From Date", _coalesced)
     # DFF segments + User Defined Context Prompt: values on ACCOUNTS / RA_PROFILES,
     # blank on every other sheet (analyst "Output Mappings Customer").
+    # Party Site Name = entityid + "_" + addresslabel (simple concat, NO check; analyst
+    # 13-Aug). Engine-owned so it fans out to every netsuite Customer project instead of a
+    # per-conversion CONCAT mapping (which shipped blank on a project that lacked it).
+    # addresslabel is carried NETSUITE-ONLY, so this is a no-op for other sources.
+    if "partysite" in n and "use" not in n and ENTITYID_COL in sub.columns:
+        _al = _carried(sub, "addresslabel")
+        if _al is not None:
+            _lbl = _al.astype(str).str.strip()
+            _lbl = _lbl.mask(_is_blank_series(_al), "")
+            _set_owned_col(sub, "Party Site Name",
+                           sub[ENTITYID_COL].astype(str).str.strip() + "_" + _lbl)
     sub = apply_dff_udcp(sub, sheet_name)
-    sub = _strip_dot_zero_frame(sub)
     return sub
 
 
@@ -908,6 +899,8 @@ def merge_owned_fields(sheet_name: Optional[str]) -> set:
         owned.add("Site Language")
     if "location" in n:                     # NEW-03/04 owned LOCATIONS address block
         owned.update(_ADDR_MAP.keys())
+    if "partysite" in n and "use" not in n:  # engine-owned Party Site Name (analyst 13-Aug)
+        owned.add("Party Site Name")
     if "contact" in n:                      # REC-62 owned Job Title <- borrowed title
         owned.add("Job Title")
     # PERSONLANG's blank fields (Party Original System / Reference / Language Name) are

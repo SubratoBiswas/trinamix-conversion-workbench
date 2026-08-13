@@ -3326,7 +3326,7 @@ async def build_merged_frame_for_object(project_id, target_object: str, max_rows
                                    # Job Title <- borrowed `title` (REC-62), stamped and
                                    # owned by the merge. NETSUITE-GATED: carried only for a
                                    # netsuite source, so no other source is affected.
-                                   + (["title"] if _merge_src_erp == "netsuite" else [])
+                                   + (["title", "addresslabel"] if _merge_src_erp == "netsuite" else [])
                                    if _is_customer else None),
                 collect_frames=(_cf if _is_customer else None),
                 enrich_by_entityid=_enrich)
