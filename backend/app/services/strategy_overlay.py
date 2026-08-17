@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.domain.precedence.policy import wide_directive_wins as _precedence_wide_wins
+
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _FILE = _DATA / "supplier_strategy_defaults.json"
 # Later analyst documents, in the ``action: blank|constant|rule`` shape. They are
@@ -247,8 +249,7 @@ def directive_for(target_object: str | None, field_name: str | None,
     # says apply the EMAIL/FAX rule to all sheets. Preferring precision alone let
     # the older, narrower rule shadow the newer instruction, and the column shipped
     # empty on all 8,561 site rows.
-    ea, wa = exact.get("as_of"), wide.get("as_of")
-    if wa is not None and (ea is None or wa > ea):
+    if _precedence_wide_wins(exact.get("as_of"), wide.get("as_of")):
         return wide
     return exact
 

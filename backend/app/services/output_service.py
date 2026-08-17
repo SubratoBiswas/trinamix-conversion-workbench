@@ -27,6 +27,10 @@ from app.domain.dates.fbdi_date import (
     INPUT_FORMATS as _DATE_INPUT_FORMATS_SRC,
     INPUT_FORMATS_DAYFIRST as _DATE_INPUT_FORMATS_DAYFIRST_SRC,
 )
+from app.domain.precedence.policy import (
+    conversion_rule_wins as _precedence_conversion_rule_wins,
+    person_is_newer as _precedence_person_is_newer,
+)
 from app.parsers import parse_tabular
 from app.services.learning_service import REFERENCE_KEY_FIELDS, source_erp_for_conversion
 from app.transformations import apply_pipeline
@@ -242,17 +246,10 @@ def _conversion_rule_wins(rules: list[dict] | None, directive_asof) -> bool:
     ``TransformationRule`` carries ``created_at``, so the undated case is a
     hand-built config, not a real one.
     """
-    if not rules:
-        return False
-    if directive_asof is None:
-        # The document does not say when it was written, so it cannot be shown to
-        # be newer than anything. Previous behaviour for undated files.
-        return True
-    for r in rules:
-        when = r.get("as_of")
-        if when is None or when >= directive_asof:
-            return True
-    return False
+    # The comparison lives in app.domain.precedence.policy now (one home for the
+    # "whichever is latest" rule); this reads the rules' as_of dates and delegates.
+    return _precedence_conversion_rule_wins(
+        [r.get("as_of") for r in (rules or [])], directive_asof)
 
 
 def _self_lookup_configs(pipelines: dict, target_object: str | None,
@@ -1083,11 +1080,7 @@ def _transform_frame(
         # behaviour and the safe default for older files.
         _asof = (_ov or {}).get("as_of") if _ov else None
         _appr_at = getattr(m, "approved_at", None)
-        _person_is_newer = True
-        if _asof is not None:
-            # No approval timestamp means we cannot show the person spoke later,
-            # and the dated file is the only thing that can be placed in time.
-            _person_is_newer = bool(_appr_at) and _appr_at >= _asof
+        _person_is_newer = _precedence_person_is_newer(_appr_at, _asof)
         # A PERSON'S FIXED VALUE COUNTS, not only a person's source column.
         #
         # This read `m.source_column` alone, so the only analyst it could see was
