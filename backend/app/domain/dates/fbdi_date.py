@@ -92,3 +92,63 @@ def fbdi_date(v: object, dayfirst: bool = False) -> str:
     order = DateOrder.DAY_FIRST if dayfirst else DateOrder.MONTH_FIRST
     d = FbdiDate.from_regex(s, order)
     return d.to_fbdi("/") if d else s
+
+
+# ── Phase 1b: the strptime-validating parsers ───────────────────────────────────
+# The three remaining historical parsers (output_service.to_fbdi_date,
+# engine._parse_any_date, engine._norm_date) share one strategy: try a list of strptime
+# formats in order, first that parses wins. The loop and the format lists are relocated
+# here verbatim so ALL date-format knowledge lives in one module; each caller keeps its
+# own list identity and its own blank/miss/token wrapper, so behaviour is byte-identical.
+
+# engine._parse_any_date  (returns a datetime; month-first default + day-first variant)
+PARSE_FORMATS = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y",
+    "%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%d-%B-%Y",
+)
+PARSE_FORMATS_DAYFIRST = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
+    "%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%d-%B-%Y",
+)
+
+# output_service.to_fbdi_date  (blanket date-column pass; wider set incl. compact + names)
+INPUT_FORMATS = (
+    "%Y%m%d",
+    "%Y-%m-%d", "%Y/%m/%d",
+    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
+    "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m-%d-%Y",
+    "%d/%m/%Y", "%d-%m-%Y",
+    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
+)
+INPUT_FORMATS_DAYFIRST = (
+    "%Y%m%d",
+    "%Y-%m-%d", "%Y/%m/%d",
+    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
+    "%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%d-%m-%Y",
+    "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m-%d-%Y",
+    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
+)
+
+# engine CONDITIONAL_DATE._norm_date  (token/other-column dates)
+CONDITIONAL_FORMATS = (
+    "%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y",
+    "%Y%m%d", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+)
+
+
+def parse_with_formats(s: str, formats) -> "datetime | None":
+    """Try each strptime format in order; the first that parses wins, else None. The
+    single shared core of the three validating parsers. The caller pre-processes the
+    string (blank guard, fractional-second strip, token handling) and post-processes the
+    result (its own output format / miss return), so its exact contract is preserved."""
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None

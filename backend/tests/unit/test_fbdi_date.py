@@ -42,3 +42,13 @@ def test_from_regex_order():
     assert FbdiDate.from_regex("01-02-2018", DateOrder.DAY_FIRST) == FbdiDate(2018, 2, 1)
     assert FbdiDate.from_regex("01-02-2018", DateOrder.MONTH_FIRST) == FbdiDate(2018, 1, 2)
     assert FbdiDate.from_regex("not a date", DateOrder.DAY_FIRST) is None
+
+
+def test_parse_with_formats_and_relocated_constants():
+    from datetime import datetime
+    from app.domain.dates.fbdi_date import (
+        parse_with_formats, PARSE_FORMATS, INPUT_FORMATS, CONDITIONAL_FORMATS)
+    assert parse_with_formats("2018-08-20", PARSE_FORMATS) == datetime(2018, 8, 20)
+    assert parse_with_formats("20-Aug-2018", INPUT_FORMATS) == datetime(2018, 8, 20)
+    assert parse_with_formats("Aug 20, 2018", INPUT_FORMATS) == datetime(2018, 8, 20)
+    assert parse_with_formats("not a date", CONDITIONAL_FORMATS) is None

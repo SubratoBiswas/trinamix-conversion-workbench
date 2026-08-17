@@ -22,6 +22,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from app.domain.dates.fbdi_date import (
+    parse_with_formats, PARSE_FORMATS, PARSE_FORMATS_DAYFIRST, CONDITIONAL_FORMATS,
+)
+
 
 def _to_str(v: Any) -> str:
     if v is None:
@@ -60,11 +64,9 @@ _ORACLE_DATE_TOKENS = [
 # reliably in it (Workday hands "2024-02-12" where the rule says
 # "YYYY-MM-DD HH:MM:SS"), so the value is parsed by probing rather than by trusting
 # the declared format — the same forgiving approach the date column pass uses.
-_DATE_IN_FORMATS = (
-    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
-    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y",
-    "%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%d-%B-%Y",
-)
+# Phase 1b: the strptime format lists now live in app.domain.dates.fbdi_date
+# (PARSE_FORMATS / PARSE_FORMATS_DAYFIRST), imported above and relocated verbatim, so all
+# date-format knowledge sits in one module. Behaviour unchanged.
 
 
 def _oracle_date_to_py(fmt: Any) -> str | None:
@@ -77,17 +79,6 @@ def _oracle_date_to_py(fmt: Any) -> str | None:
     return s
 
 
-# Same spellings as _DATE_IN_FORMATS but DAY-first: the two ambiguous pairs
-# (%d/%m vs %m/%d, %d-%m vs %m-%d) are tried day-first. Used only when a caller passes
-# dayfirst=True (NextPower/NetSuite Customer, whose export writes DD-MM-YYYY). YYYY-first
-# spellings stay first, so ISO values are unaffected either way.
-_DATE_IN_FORMATS_DAYFIRST = (
-    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
-    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
-    "%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%d-%B-%Y",
-)
-
-
 def _parse_any_date(s: str, dayfirst: bool = False) -> "datetime | None":
     """Parse a date value written in any of the common spellings, else None.
 
@@ -97,12 +88,7 @@ def _parse_any_date(s: str, dayfirst: bool = False) -> "datetime | None":
     s = s.strip()
     if not s:
         return None
-    for fmt in (_DATE_IN_FORMATS_DAYFIRST if dayfirst else _DATE_IN_FORMATS):
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-    return None
+    return parse_with_formats(s, PARSE_FORMATS_DAYFIRST if dayfirst else PARSE_FORMATS)
 
 
 # ``{Column_Name}`` inside a rule's result string, so a CASE/WHEN "then" can build
@@ -889,14 +875,8 @@ def _apply_one_rule(
         now = ctx.get("now") or datetime.utcnow()
 
         def _norm_date(s: str) -> str:
-            for fmt_in in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y",
-                           "%Y%m%d", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S",
-                           "%Y-%m-%d %H:%M:%S"):
-                try:
-                    return datetime.strptime(s, fmt_in).strftime(_OUT_DATE_FORMAT)
-                except ValueError:
-                    continue
-            return s
+            dt = parse_with_formats(s, CONDITIONAL_FORMATS)
+            return dt.strftime(_OUT_DATE_FORMAT) if dt else s
 
         def _resolve_date_token(tok: Any) -> str:
             if tok is None:

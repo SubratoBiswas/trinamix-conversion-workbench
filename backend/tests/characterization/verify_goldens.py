@@ -23,7 +23,9 @@ Deliberately dependency-light: openpyxl for workbooks, stdlib csv/zipfile otherw
 from __future__ import annotations
 
 import csv
+import gzip
 import io
+import json
 import sys
 import zipfile
 from dataclasses import dataclass, field
@@ -108,8 +110,7 @@ class Report:
         return "\n".join(lines)
 
 
-def compare_artifacts(golden: str | Path, candidate: str | Path) -> Report:
-    g, c = _load(golden), _load(candidate)
+def _compare_grids(g: dict, c: dict) -> Report:
     rep = Report()
     rep.only_in_golden = sorted(set(g) - set(c))
     rep.only_in_candidate = sorted(set(c) - set(g))
@@ -129,13 +130,54 @@ def compare_artifacts(golden: str | Path, candidate: str | Path) -> Report:
     return rep
 
 
+def compare_artifacts(golden: str | Path, candidate: str | Path) -> Report:
+    """Compare two live artifacts (xlsm/zip/csv)."""
+    return _compare_grids(_load(golden), _load(candidate))
+
+
+# ── In-repo golden storage ──────────────────────────────────────────────────────
+# A golden is stored as a gzipped JSON of the normalised cell grid — a few hundred KB,
+# diff-friendly and deterministic, instead of committing a multi-MB .xlsm binary. Capture
+# a known-good artifact once with --save; every later run checks a fresh artifact against
+# it with --check. Goldens live under tests/characterization/goldens/.
+
+def save_golden(artifact: str | Path, golden_path: str | Path) -> None:
+    grid = _load(artifact)
+    gp = Path(golden_path)
+    gp.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(gp, "wt", encoding="utf-8") as f:
+        json.dump(grid, f, ensure_ascii=False)
+
+
+def _load_golden(golden_path: str | Path) -> dict:
+    with gzip.open(golden_path, "rt", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def compare_to_golden(golden_path: str | Path, candidate: str | Path) -> Report:
+    """Compare a fresh artifact against a stored golden grid."""
+    return _compare_grids(_load_golden(golden_path), _load(candidate))
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: verify_goldens.py GOLDEN CANDIDATE", file=sys.stderr)
-        return 2
-    rep = compare_artifacts(argv[1], argv[2])
-    print(rep.summary())
-    return 0 if rep.identical else 1
+    usage = ("usage:\n"
+             "  verify_goldens.py GOLDEN CANDIDATE        compare two live artifacts\n"
+             "  verify_goldens.py --save ARTIFACT GOLDEN  capture a golden grid (.json.gz)\n"
+             "  verify_goldens.py --check GOLDEN CANDIDATE check an artifact vs a golden")
+    if len(argv) == 4 and argv[1] == "--save":
+        save_golden(argv[2], argv[3])
+        print(f"golden saved: {argv[3]}")
+        return 0
+    if len(argv) == 4 and argv[1] == "--check":
+        rep = compare_to_golden(argv[2], argv[3])
+        print(rep.summary())
+        return 0 if rep.identical else 1
+    if len(argv) == 3:
+        rep = compare_artifacts(argv[1], argv[2])
+        print(rep.summary())
+        return 0 if rep.identical else 1
+    print(usage, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

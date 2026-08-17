@@ -22,6 +22,11 @@ from app.models.mapping import MappingSuggestion
 from app.models.output import ConvertedOutput
 from app.models.conversion import Conversion
 from app.models.transformation import TransformationRule
+from app.domain.dates.fbdi_date import (
+    parse_with_formats as _parse_with_formats,
+    INPUT_FORMATS as _DATE_INPUT_FORMATS_SRC,
+    INPUT_FORMATS_DAYFIRST as _DATE_INPUT_FORMATS_DAYFIRST_SRC,
+)
 from app.parsers import parse_tabular
 from app.services.learning_service import REFERENCE_KEY_FIELDS, source_erp_for_conversion
 from app.transformations import apply_pipeline
@@ -1704,28 +1709,10 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 # common database spelling of all — "2020-01-15 00:00:00", what every SQL/ODBC
 # export writes — reached the loader unconverted. "15-JAN-2020" is Oracle's own
 # default DATE display, so EBS/SQL*Plus extracts carry it constantly.
-_DATE_INPUT_FORMATS = (
-    "%Y%m%d",
-    "%Y-%m-%d", "%Y/%m/%d",
-    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
-    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
-    "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m-%d-%Y",
-    "%d/%m/%Y", "%d-%m-%Y",
-    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
-)
-
-# DAY-first variant of the above: the two ambiguous xx-xx-YYYY / xx/xx/YYYY spellings
-# are tried day-first. Used only for a source whose dates are DD-MM-YYYY (NextPower/
-# NetSuite Customer). YYYY-first spellings stay first, so ISO values are unaffected.
-_DATE_INPUT_FORMATS_DAYFIRST = (
-    "%Y%m%d",
-    "%Y-%m-%d", "%Y/%m/%d",
-    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
-    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
-    "%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%d-%m-%Y",
-    "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m-%d-%Y",
-    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%b %d, %Y",
-)
+# Phase 1b: the strptime format lists now live in app.domain.dates.fbdi_date
+# (INPUT_FORMATS / INPUT_FORMATS_DAYFIRST), imported above as _DATE_INPUT_FORMATS_SRC /
+# _DATE_INPUT_FORMATS_DAYFIRST_SRC and relocated verbatim, so all date-format knowledge
+# sits in one module. Behaviour unchanged.
 
 
 # The date spelling every output carries. Analyst, 05-Aug: "all dates should be
@@ -1763,12 +1750,9 @@ def to_fbdi_date(v: Any, dayfirst: bool = False) -> Any:
     # Fractional seconds ("2020-01-15 00:00:00.000") — strptime has no optional
     # group for them, so drop the fraction before matching.
     core = re.sub(r"\.\d+$", "", s)
-    for fmt_in in (_DATE_INPUT_FORMATS_DAYFIRST if dayfirst else _DATE_INPUT_FORMATS):
-        try:
-            return datetime.strptime(core, fmt_in).strftime(FBDI_DATE_FORMAT)
-        except ValueError:
-            pass
-    return v
+    _dt = _parse_with_formats(
+        core, _DATE_INPUT_FORMATS_DAYFIRST_SRC if dayfirst else _DATE_INPUT_FORMATS_SRC)
+    return _dt.strftime(FBDI_DATE_FORMAT) if _dt else v
 
 
 def _format_date_columns(df: pd.DataFrame, fields: list, dayfirst: bool = False) -> pd.DataFrame:
