@@ -25,12 +25,12 @@ from typing import Any
 from app.domain.dates.fbdi_date import (
     parse_with_formats, PARSE_FORMATS, PARSE_FORMATS_DAYFIRST, CONDITIONAL_FORMATS,
 )
+from app.domain.text import to_str as _to_str, is_blank as _is_blank
+from app.domain.rules.registry import standard_rule_engine
 
-
-def _to_str(v: Any) -> str:
-    if v is None:
-        return ""
-    return str(v)
+# Phase 1c: rule types migrated to app.domain.rules dispatch through this registry;
+# the rest keep their if/elif branch below. Adding a type is one class + one register().
+_RULE_REGISTRY = standard_rule_engine()
 
 
 # The spellings these extracts actually carry. Shared with MAP_BOOLEAN so a rule
@@ -43,10 +43,6 @@ _FALSEISH = {"no", "n", "0", "false", "f"}
 # this is the default when none is given, kept in step with
 # output_service.FBDI_DATE_FORMAT.
 _OUT_DATE_FORMAT = "%Y/%m/%d"
-
-
-def _is_blank(v: Any) -> bool:
-    return v is None or _to_str(v).strip() == ""
 
 
 # Oracle/ISO date TOKENS (as written in FORMAT_DATE's from_format/to_format, e.g.
@@ -500,30 +496,10 @@ def _apply_one_rule(
     cfg = config or {}
     ctx = ctx or {}
 
-    if rt == "TRIM":
-        return _to_str(value).strip()
-
-    if rt == "UPPERCASE":
-        return _to_str(value).upper()
-
-    if rt == "LOWERCASE":
-        return _to_str(value).lower()
-
-    if rt == "TITLE_CASE":
-        return _to_str(value).title()
-
-    if rt == "REMOVE_HYPHEN":
-        return _to_str(value).replace("-", "")
-
-    if rt == "REMOVE_SPECIAL_CHARS":
-        keep = cfg.get("keep", "")
-        pattern = re.compile(rf"[^A-Za-z0-9{re.escape(keep)} ]")
-        return pattern.sub("", _to_str(value))
-
-    if rt == "REPLACE":
-        find = cfg.get("find", "")
-        repl = cfg.get("replace", "")
-        return _to_str(value).replace(find, repl)
+    # Migrated rule types (Phase 1c) dispatch to app.domain.rules strategies; every
+    # other type falls through to the if/elif below until it is migrated too.
+    if rt in _RULE_REGISTRY:
+        return _RULE_REGISTRY.apply(rt, cfg, value, row, ctx)
 
     if rt == "REGEX_REPLACE":
         pattern = cfg.get("pattern", "")
