@@ -49,5 +49,26 @@ def test_registry_size_grew_but_stateful_types_not_migrated():
     for rt in ["PAD", "SUBSTRING", "REGEX_REPLACE", "REGEX_EXTRACT",
                "DEFAULT_VALUE", "CONSTANT", "VALUE_MAP"]:
         assert rt in eng
-    for rt in ["FORMAT_DATE", "CONCAT", "CASE_WHEN", "SELF_LOOKUP", "MAP_BOOLEAN"]:
+    for rt in ["FORMAT_DATE", "CONCAT", "CASE_WHEN", "SELF_LOOKUP"]:
         assert rt not in eng           # still handled by engine's if/elif
+
+
+def test_third_batch_numeric_and_boolean():
+    assert eng.apply("NUMBER_FORMAT", {"decimals": 2}, "1234.5") == "1234.50"
+    assert eng.apply("NUMBER_FORMAT", {}, "1,234.567") == "1234.57"
+    assert eng.apply("NUMBER_FORMAT", {}, "abc") == "abc"
+    assert eng.apply("ARITHMETIC", {"op": "add", "amount": "1.5"}, "2") == 3.5
+    assert eng.apply("ARITHMETIC", {"op": "round"}, "2.6") == 3
+    assert eng.apply("ARITHMETIC", {"op": "divide", "amount": 0}, "10") == 10.0  # guarded, passes value through
+    assert eng.apply("SPLIT", {"separator": "-", "index": 1}, "a-b-c") == "b"
+    assert eng.apply("SPLIT", {"index": 9}, "one two") == "one two"    # out of range -> value
+    assert eng.apply("MAP_BOOLEAN", {}, "Yes") == "Y"
+    assert eng.apply("MAP_BOOLEAN", {"false_output": "N"}, "no") == "N"
+    assert eng.apply("MAP_BOOLEAN", {"default": "?"}, "maybe") == "?"
+
+
+def test_registry_now_has_eighteen_and_stateful_still_out():
+    for rt in ["NUMBER_FORMAT", "ARITHMETIC", "SPLIT", "MAP_BOOLEAN"]:
+        assert rt in eng
+    for rt in ["CONCAT", "CASE_WHEN", "SELF_LOOKUP", "COALESCE", "COUNTRY_ISO2"]:
+        assert rt not in eng      # still engine branches (need shared helpers / country table)

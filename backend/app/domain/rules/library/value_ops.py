@@ -38,3 +38,20 @@ class ValueMapRule:
             if s in mapping:
                 return mapping[s]
         return default if default is not None else value
+
+
+class MapBooleanRule:
+    rule_type = "MAP_BOOLEAN"
+    def apply(self, value: Any, config: dict, row=None, ctx=None) -> Any:
+        from app.domain.text import TRUEISH, FALSEISH
+        s = to_str(value).strip()
+        if s == "":
+            return config.get("default", "")
+        low = s.lower()
+        trues = [str(x).strip().lower() for x in (config.get("true_values") or sorted(TRUEISH))]
+        falses = [str(x).strip().lower() for x in (config.get("false_values") or sorted(FALSEISH))]
+        if low in trues:
+            return config.get("true_output", "Y")
+        if low in falses:
+            return config.get("false_output", "N")
+        return config.get("default", "")

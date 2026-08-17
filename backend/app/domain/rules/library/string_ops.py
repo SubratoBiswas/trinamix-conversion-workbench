@@ -77,3 +77,12 @@ class SubstringRule:
         except (TypeError, ValueError):
             return s
         return s[start : start + length]
+
+
+class SplitRule:
+    rule_type = "SPLIT"
+    def apply(self, value: Any, config: dict, row=None, ctx=None) -> Any:
+        sep = config.get("separator", " ")
+        idx = int(config.get("index", 0))
+        parts = to_str(value).split(sep)
+        return parts[idx] if 0 <= idx < len(parts) else value

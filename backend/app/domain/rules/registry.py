@@ -4,12 +4,13 @@ from __future__ import annotations
 from app.domain.rules.engine import RuleEngine
 from app.domain.rules.library.string_ops import (
     TrimRule, UppercaseRule, LowercaseRule, TitleCaseRule,
-    RemoveHyphenRule, RemoveSpecialCharsRule, ReplaceRule, PadRule, SubstringRule,
+    RemoveHyphenRule, RemoveSpecialCharsRule, ReplaceRule, PadRule, SubstringRule, SplitRule,
 )
 from app.domain.rules.library.regex_ops import RegexReplaceRule, RegexExtractRule
 from app.domain.rules.library.value_ops import (
-    DefaultValueRule, ConstantRule, ValueMapRule,
+    DefaultValueRule, ConstantRule, ValueMapRule, MapBooleanRule,
 )
+from app.domain.rules.library.numeric_ops import NumberFormatRule, ArithmeticRule
 
 
 def standard_rule_engine() -> RuleEngine:
@@ -17,9 +18,10 @@ def standard_rule_engine() -> RuleEngine:
     for strat in (
         TrimRule(), UppercaseRule(), LowercaseRule(), TitleCaseRule(),
         RemoveHyphenRule(), RemoveSpecialCharsRule(), ReplaceRule(),
-        PadRule(), SubstringRule(),
+        PadRule(), SubstringRule(), SplitRule(),
         RegexReplaceRule(), RegexExtractRule(),
-        DefaultValueRule(), ConstantRule(), ValueMapRule(),
+        DefaultValueRule(), ConstantRule(), ValueMapRule(), MapBooleanRule(),
+        NumberFormatRule(), ArithmeticRule(),
     ):
         eng.register(strat)
     return eng

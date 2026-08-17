@@ -25,7 +25,10 @@ from typing import Any
 from app.domain.dates.fbdi_date import (
     parse_with_formats, PARSE_FORMATS, PARSE_FORMATS_DAYFIRST, CONDITIONAL_FORMATS,
 )
-from app.domain.text import to_str as _to_str, is_blank as _is_blank
+from app.domain.text import (
+    to_str as _to_str, is_blank as _is_blank,
+    to_float as _to_float, TRUEISH as _TRUEISH, FALSEISH as _FALSEISH,
+)
 from app.domain.rules.registry import standard_rule_engine
 
 # Phase 1c: rule types migrated to app.domain.rules dispatch through this registry;
@@ -33,10 +36,8 @@ from app.domain.rules.registry import standard_rule_engine
 _RULE_REGISTRY = standard_rule_engine()
 
 
-# The spellings these extracts actually carry. Shared with MAP_BOOLEAN so a rule
-# written one way cannot disagree with a rule written the other.
-_TRUEISH = {"yes", "y", "1", "true", "t"}
-_FALSEISH = {"no", "n", "0", "false", "f"}
+# _TRUEISH / _FALSEISH moved to app.domain.text (imported above as aliases); kept so
+# _COMPARISON_OPS' istrue/isfalse still read them.
 
 # The output spelling every date rule defaults to. Analyst, 05-Aug: "all dates
 # should be yyyy/mm/dd format." A rule that names its own output_format still wins;
@@ -174,18 +175,6 @@ def _interpolate(template: Any, row: Any) -> Any:
         return s
 
     return _PLACEHOLDER.sub(_sub, template)
-
-
-def _to_float(v: Any) -> float | None:
-    if v is None:
-        return None
-    s = _to_str(v).strip().replace(",", "")
-    if s == "":
-        return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
 
 
 _COMPARISON_OPS = {
@@ -531,44 +520,6 @@ def _apply_one_rule(
         except ValueError:
             return value  # leave for validation to flag
 
-    if rt == "NUMBER_FORMAT":
-        decimals = int(cfg.get("decimals", 2))
-        s = _to_str(value).strip().replace(",", "")
-        if s == "":
-            return s
-        try:
-            return f"{float(s):.{decimals}f}"
-        except ValueError:
-            return value
-
-    if rt == "ARITHMETIC":
-        op = (cfg.get("op") or "round").lower()
-        amount = _to_float(cfg.get("amount"))
-        decimals = cfg.get("decimals")
-        n = _to_float(value)
-        if n is None:
-            return value
-        if op == "add" and amount is not None:
-            n = n + amount
-        elif op == "subtract" and amount is not None:
-            n = n - amount
-        elif op == "multiply" and amount is not None:
-            n = n * amount
-        elif op == "divide" and amount not in (None, 0):
-            n = n / amount
-        elif op == "abs":
-            n = abs(n)
-        elif op == "negate":
-            n = -n
-        if decimals not in (None, ""):
-            try:
-                return round(n, int(decimals))
-            except (TypeError, ValueError):
-                return n
-        if op == "round":
-            return round(n)
-        return n
-
     if rt == "CONCAT":
         sep = cfg.get("separator", " ")
         if not row:
@@ -632,12 +583,6 @@ def _apply_one_rule(
         _pfx = _to_str(cfg.get("prefix", ""))
         _sfx = _to_str(cfg.get("suffix", ""))
         return f"{_pfx}{joined}{_sfx}"
-
-    if rt == "SPLIT":
-        sep = cfg.get("separator", " ")
-        idx = int(cfg.get("index", 0))
-        parts = _to_str(value).split(sep)
-        return parts[idx] if 0 <= idx < len(parts) else value
 
     if rt == "COALESCE":
         cols = cfg.get("columns", [])
@@ -735,23 +680,6 @@ def _apply_one_rule(
                 # braces and pass through unchanged.
                 return _interpolate(br.get("then", default), row)
         return _interpolate(default, row)
-
-    if rt == "MAP_BOOLEAN":
-        # Normalise a boolean-ish source value to a fixed pair of output codes.
-        # config: {"true_values":[...], "false_values":[...],
-        #          "true_output":"Y", "false_output":"N", "default":""}.
-        # Comparison is case-insensitive & trimmed; blank source -> default.
-        s = _to_str(value).strip()
-        if s == "":
-            return cfg.get("default", "")
-        low = s.lower()
-        trues = [str(x).strip().lower() for x in (cfg.get("true_values") or sorted(_TRUEISH))]
-        falses = [str(x).strip().lower() for x in (cfg.get("false_values") or sorted(_FALSEISH))]
-        if low in trues:
-            return cfg.get("true_output", "Y")
-        if low in falses:
-            return cfg.get("false_output", "N")
-        return cfg.get("default", "")
 
     if rt == "CONDITIONAL_DATE":
         # Emit a date when a condition on another column holds, else a blank/other
