@@ -11,6 +11,10 @@ from app.domain.rules.library.value_ops import (
     DefaultValueRule, ConstantRule, ValueMapRule, MapBooleanRule,
 )
 from app.domain.rules.library.numeric_ops import NumberFormatRule, ArithmeticRule
+from app.domain.rules.library.stateful_ops import (
+    ConcatRule, CoalesceRule, BlankIfEqualsRule, ConditionalRule, CaseWhenRule,
+    PrefixRule, SuffixRule, SuffixWhenRule,
+)
 
 
 def standard_rule_engine() -> RuleEngine:
@@ -22,6 +26,8 @@ def standard_rule_engine() -> RuleEngine:
         RegexReplaceRule(), RegexExtractRule(),
         DefaultValueRule(), ConstantRule(), ValueMapRule(), MapBooleanRule(),
         NumberFormatRule(), ArithmeticRule(),
+        ConcatRule(), CoalesceRule(), BlankIfEqualsRule(), ConditionalRule(),
+        CaseWhenRule(), PrefixRule(), SuffixRule(), SuffixWhenRule(),
     ):
         eng.register(strat)
     return eng

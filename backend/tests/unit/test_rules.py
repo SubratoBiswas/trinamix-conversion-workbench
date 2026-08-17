@@ -49,7 +49,7 @@ def test_registry_size_grew_but_stateful_types_not_migrated():
     for rt in ["PAD", "SUBSTRING", "REGEX_REPLACE", "REGEX_EXTRACT",
                "DEFAULT_VALUE", "CONSTANT", "VALUE_MAP"]:
         assert rt in eng
-    for rt in ["FORMAT_DATE", "CONCAT", "CASE_WHEN", "SELF_LOOKUP"]:
+    for rt in ["FORMAT_DATE", "CONDITIONAL_DATE", "COMPUTED", "SELF_LOOKUP"]:
         assert rt not in eng           # still handled by engine's if/elif
 
 
@@ -70,5 +70,102 @@ def test_third_batch_numeric_and_boolean():
 def test_registry_now_has_eighteen_and_stateful_still_out():
     for rt in ["NUMBER_FORMAT", "ARITHMETIC", "SPLIT", "MAP_BOOLEAN"]:
         assert rt in eng
-    for rt in ["CONCAT", "CASE_WHEN", "SELF_LOOKUP", "COALESCE", "COUNTRY_ISO2"]:
-        assert rt not in eng      # still engine branches (need shared helpers / country table)
+    for rt in ["SELF_LOOKUP", "COUNTRY_ISO2", "CONDITIONAL_DATE", "CITY_COUNTRY_KEY"]:
+        assert rt not in eng      # still engine branches (need ctx / country table)
+
+
+# ---- Fourth batch (Phase 1c): row-aware "stateful" rules migrated onto the
+# domain-context helpers. Each assertion mirrors a case verified byte-identical
+# against the pre-migration engine branch in the differential harness.
+ROW = {
+    "A": "foo", "B": "bar", "City": "Austin", "Country Code": "US",
+    "Employee_ID": "12345", "Worker Type": "E", "Supplier Name": "Acme Inc",
+    "Alternate Name": "acme  inc ", "Default Billing": "Y", "Is Individual": "No",
+    "internalid": "999",
+}
+
+
+def test_registry_contains_stateful_batch():
+    for rt in ["CONCAT", "COALESCE", "CONDITIONAL", "CASE_WHEN",
+               "BLANK_IF_EQUALS", "PREFIX", "SUFFIX", "SUFFIX_WHEN"]:
+        assert rt in eng
+
+
+def test_concat():
+    assert eng.apply("CONCAT", {"columns": ["A", "B"]}, "orig", ROW) == "foo bar"
+    assert eng.apply("CONCAT", {"columns": ["A", "B"], "separator": "-"}, "o", ROW) == "foo-bar"
+    # literal segment carries its own separator; require_all gates only column parts
+    assert eng.apply("CONCAT", {"parts": [{"col": "A"}, {"literal": "_RS"}]}, "o", ROW) == "foo_RS"
+    assert eng.apply("CONCAT", {"columns": ["A", "B"], "prefix": "P", "suffix": "S"}, "o", ROW) == "Pfoo barS"
+    # all-blank inputs -> incoming value (misconfig stays visible), row None -> value
+    assert eng.apply("CONCAT", {"columns": ["X", "Y"]}, "orig", {"X": "", "Y": ""}) == "orig"
+    assert eng.apply("CONCAT", {"columns": ["A"]}, "orig", None) == "orig"
+    # a half key under require_all is blanked
+    assert eng.apply("CONCAT", {"columns": ["Country Code", "City"], "separator": "-",
+                                "require_all": True}, "o", {"Country Code": "US", "City": ""}) == ""
+
+
+def test_coalesce():
+    assert eng.apply("COALESCE", {"columns": ["MISSING", "B"]}, "o", ROW) == "bar"
+    assert eng.apply("COALESCE", {"columns": ["M1", "M2"]}, "fallback", ROW) == "fallback"
+    assert eng.apply("COALESCE", {"columns": ["M1"], "default": "DEF"}, "", ROW) == "DEF"
+    assert eng.apply("COALESCE", {"columns": ["A"]}, "orig", None) == "orig"
+
+
+def test_blank_if_equals():
+    # case- and whitespace-insensitive duplicate -> blank
+    assert eng.apply("BLANK_IF_EQUALS", {"other_column": "Alternate Name"}, "Acme Inc", ROW) == ""
+    assert eng.apply("BLANK_IF_EQUALS", {"other_column": "Supplier Name"}, "Different", ROW) == "Different"
+    assert eng.apply("BLANK_IF_EQUALS", {}, "x", ROW) == "x"
+    assert eng.apply("BLANK_IF_EQUALS", {"other_column": "A"}, "x", None) == "x"
+
+
+def test_conditional():
+    assert eng.apply("CONDITIONAL", {"if_column": "Worker Type", "equals": "E",
+                                     "then": "IS_E", "else": "NOT_E"}, "o", ROW) == "IS_E"
+    assert eng.apply("CONDITIONAL", {"if_column": "Worker Type", "equals": "C",
+                                     "then": "IS_C", "else": "NOT_C"}, "o", ROW) == "NOT_C"
+    # {Column} interpolation in the chosen result
+    assert eng.apply("CONDITIONAL", {"if_column": "Worker Type", "equals": "E",
+                                     "then": "E{Employee_ID}"}, "o", ROW) == "E12345"
+    assert eng.apply("CONDITIONAL", {"equals": "x"}, "orig", ROW) == "orig"  # no if_column
+
+
+def test_case_when():
+    assert eng.apply("CASE_WHEN", {"branches": [{"if_column": "Worker Type", "op": "eq",
+                                                 "value": "E", "then": "SA"}],
+                                   "default": "DEF"}, "o", ROW) == "SA"
+    assert eng.apply("CASE_WHEN", {"branches": [{"if_column": "internalid", "op": "gt",
+                                                 "value": "500", "then": "BIG"}],
+                                   "default": "SMALL"}, "o", ROW) == "BIG"
+    # conjunction branch + interpolation
+    assert eng.apply("CASE_WHEN", {"branches": [{"if_column": "Worker Type", "op": "eq",
+                                                 "value": "E", "then": "E{Employee_ID}"}]},
+                     "o", ROW) == "E12345"
+    assert eng.apply("CASE_WHEN", {"branches": [], "default": "{City}"}, "o", ROW) == "Austin"
+    assert eng.apply("CASE_WHEN", {"branches": [{"if_column": "Worker Type", "op": "eq",
+                                                 "value": "Z", "then": "X"}]}, "passthru", ROW) == "passthru"
+
+
+def test_prefix_suffix():
+    assert eng.apply("PREFIX", {"prefix": "xx"}, "addr", ROW) == "xxaddr"
+    assert eng.apply("PREFIX", {"prefix": "xx"}, "xxaddr", ROW) == "xxaddr"          # idempotent
+    assert eng.apply("PREFIX", {"prefix": "xx", "skip_if_present": False}, "xxaddr", ROW) == "xxxxaddr"
+    assert eng.apply("PREFIX", {"prefix": "xx"}, "  ", ROW) == "  "                  # skip_blank
+    assert eng.apply("SUFFIX", {"suffix": "_S"}, "key", ROW) == "key_S"
+    assert eng.apply("SUFFIX", {"suffix": "_S"}, "key_S", ROW) == "key_S"            # idempotent
+    assert eng.apply("SUFFIX", {"suffix": "_S"}, "", ROW) == ""                      # skip_blank
+
+
+def test_suffix_when():
+    assert eng.apply("SUFFIX_WHEN", {"branches": [{"if_column": "Default Billing",
+                                                   "op": "notblank", "suffix": "_b"}],
+                                     "default_suffix": ""}, "key", ROW) == "key_b"
+    assert eng.apply("SUFFIX_WHEN", {"branches": [{"if_column": "MISSING", "op": "notblank",
+                                                   "suffix": "_b"}],
+                                     "default_suffix": "_d"}, "key", ROW) == "key_d"
+    assert eng.apply("SUFFIX_WHEN", {"branches": [], "default_suffix": ""}, "key", ROW) == "key"
+    # idempotent: already carries the branch suffix
+    assert eng.apply("SUFFIX_WHEN", {"branches": [{"if_column": "Default Billing",
+                                                   "op": "notblank", "suffix": "_b"}]},
+                     "key_b", ROW) == "key_b"
