@@ -50,3 +50,30 @@ class ReplaceRule:
     rule_type = "REPLACE"
     def apply(self, value: Any, config: dict, row=None, ctx=None) -> Any:
         return to_str(value).replace(config.get("find", ""), config.get("replace", ""))
+
+
+class PadRule:
+    rule_type = "PAD"
+    def apply(self, value: Any, config: dict, row=None, ctx=None) -> Any:
+        side = (config.get("side") or "left").lower()
+        length = int(config.get("length", 0))
+        char = (config.get("char") or "0")[:1] or "0"
+        s = to_str(value)
+        if length <= 0 or len(s) >= length:
+            return s
+        return s.rjust(length, char) if side == "left" else s.ljust(length, char)
+
+
+class SubstringRule:
+    rule_type = "SUBSTRING"
+    def apply(self, value: Any, config: dict, row=None, ctx=None) -> Any:
+        s = to_str(value)
+        start = int(config.get("start", 0))
+        length = config.get("length")
+        if length is None or length == "":
+            return s[start:]
+        try:
+            length = int(length)
+        except (TypeError, ValueError):
+            return s
+        return s[start : start + length]
