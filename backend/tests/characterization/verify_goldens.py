@@ -23,7 +23,7 @@ Deliberately dependency-light: openpyxl for workbooks, stdlib csv/zipfile otherw
 from __future__ import annotations
 
 import csv
-import gzip
+import hashlib
 import io
 import json
 import sys
@@ -136,27 +136,46 @@ def compare_artifacts(golden: str | Path, candidate: str | Path) -> Report:
 
 
 # ── In-repo golden storage ──────────────────────────────────────────────────────
-# A golden is stored as a gzipped JSON of the normalised cell grid — a few hundred KB,
-# diff-friendly and deterministic, instead of committing a multi-MB .xlsm binary. Capture
-# a known-good artifact once with --save; every later run checks a fresh artifact against
-# it with --check. Goldens live under tests/characterization/goldens/.
+# A golden is a tiny per-sheet HASH MANIFEST (row/col counts + a SHA-256 of the
+# normalised grid), a few KB of plain JSON that commits cleanly — not a multi-MB cell
+# dump. --check recomputes the candidate's manifest and compares: matching hashes prove
+# the sheet is byte-identical; a differing hash localises drift to that sheet, and the
+# exact cell is then pinpointed with a full two-artifact compare (verify_goldens.py A B).
+
+def _manifest(grid: dict) -> dict:
+    out: dict = {}
+    for sheet, rows in grid.items():
+        h = hashlib.sha256()
+        for row in rows:
+            h.update(("\x1f".join(row) + "\x1e").encode("utf-8"))
+        out[sheet] = {"rows": len(rows),
+                      "cols": max((len(r) for r in rows), default=0),
+                      "sha256": h.hexdigest()}
+    return out
+
 
 def save_golden(artifact: str | Path, golden_path: str | Path) -> None:
-    grid = _load(artifact)
     gp = Path(golden_path)
     gp.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(gp, "wt", encoding="utf-8") as f:
-        json.dump(grid, f, ensure_ascii=False)
-
-
-def _load_golden(golden_path: str | Path) -> dict:
-    with gzip.open(golden_path, "rt", encoding="utf-8") as f:
-        return json.load(f)
+    gp.write_text(json.dumps(_manifest(_load(artifact)), indent=2, sort_keys=True),
+                  encoding="utf-8")
 
 
 def compare_to_golden(golden_path: str | Path, candidate: str | Path) -> Report:
-    """Compare a fresh artifact against a stored golden grid."""
-    return _compare_grids(_load_golden(golden_path), _load(candidate))
+    """Compare a fresh artifact against a stored hash-manifest golden."""
+    gold = json.loads(Path(golden_path).read_text(encoding="utf-8"))
+    cand = _manifest(_load(candidate))
+    rep = Report()
+    rep.only_in_golden = sorted(set(gold) - set(cand))
+    rep.only_in_candidate = sorted(set(cand) - set(gold))
+    for sh in sorted(set(gold) & set(cand)):
+        g, c = gold[sh], cand[sh]
+        if g["rows"] != c["rows"]:
+            rep.rowcount_diffs.append((sh, g["rows"], c["rows"]))
+        if g["sha256"] != c["sha256"]:
+            rep.cell_diff_total += 1   # sheet-level drift; pinpoint via full A/B compare
+            rep.cell_diffs.append((sh, -1, -1, g["sha256"][:12], c["sha256"][:12]))
+    return rep
 
 
 def main(argv: list[str]) -> int:

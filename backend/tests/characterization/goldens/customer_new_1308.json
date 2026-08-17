@@ -1,0 +1,77 @@
+{
+  "HZ_IMP_ACCOUNTS_T": {
+    "cols": 84,
+    "rows": 5547,
+    "sha256": "c6219d09e2556ae2c1ac3ac74b51ac03d1931d139bf7c5fa075b8483aadd2946"
+  },
+  "HZ_IMP_ACCTCONTACTS_T": {
+    "cols": 68,
+    "rows": 9843,
+    "sha256": "0454712d4325e7638fec88befa523e2fb36be2ffca51f28e2d572052afae6b48"
+  },
+  "HZ_IMP_ACCTSITES_T": {
+    "cols": 89,
+    "rows": 15770,
+    "sha256": "fe7fec46ec9056a3c4abe3250f7ea8699569dcc6d929607d0814f7a583774687"
+  },
+  "HZ_IMP_ACCTSITEUSES_T": {
+    "cols": 45,
+    "rows": 16339,
+    "sha256": "9939c08c2065de5c79fba0d6eaab2ffdea46d3668608d5ea540f921e26e92ce8"
+  },
+  "HZ_IMP_CONTACTPTS_T": {
+    "cols": 79,
+    "rows": 13448,
+    "sha256": "4950255821cf5dd814957051007682fe373fcc5d64ddc2e7e4e5296f64e325d6"
+  },
+  "HZ_IMP_CONTACTROLES": {
+    "cols": 67,
+    "rows": 9843,
+    "sha256": "d9e7d75d34c692587a488fe320da4bbd5f3e453e0439ec0c894632bf736ac8b8"
+  },
+  "HZ_IMP_CONTACTS_T": {
+    "cols": 66,
+    "rows": 9843,
+    "sha256": "a12102370bc04cbffc4d5183546323c167a29edfde98e77243343be53468c4e9"
+  },
+  "HZ_IMP_LOCATIONS_T": {
+    "cols": 87,
+    "rows": 15770,
+    "sha256": "acce718109b473cfce87b09bdf9c4799eb5ce57b722cfb2fecbfcd60070f4f1b"
+  },
+  "HZ_IMP_PARTIES_T": {
+    "cols": 49,
+    "rows": 15386,
+    "sha256": "0598d048e71ce9381ad818c15803bbd307974171fd76adc29d927f9bb987fece"
+  },
+  "HZ_IMP_PARTYSITES_T": {
+    "cols": 48,
+    "rows": 15770,
+    "sha256": "0121eb71815c1c90df1318baabd7fa055d6593fc3779bc92b1cdcf2a42a29084"
+  },
+  "HZ_IMP_PARTYSITEUSES_T": {
+    "cols": 43,
+    "rows": 16339,
+    "sha256": "17e5d540a56da7c147d13b0df1ddc0223b98c5c606e3bf2912d62d6aa8369a8b"
+  },
+  "HZ_IMP_RELSHIPS_T": {
+    "cols": 69,
+    "rows": 9843,
+    "sha256": "775cd5d789758352f5d2232bbae5ecb3110af8103870407d5c7a770368457986"
+  },
+  "HZ_IMP_ROLERESP": {
+    "cols": 65,
+    "rows": 9843,
+    "sha256": "a45a60fe933552e5998ad2d6e68e2353ee8a27fecbb031fea38a5f13ee78d88e"
+  },
+  "Instructions and CSV Generation": {
+    "cols": 4,
+    "rows": 17,
+    "sha256": "abec4b30ad752f511d42d6761761d8ecf9dedd30568d8945237fee6cdb2017a0"
+  },
+  "RA_CUSTOMER_PROFILES_INT_ALL": {
+    "cols": 132,
+    "rows": 5547,
+    "sha256": "a756b51b58fd2173b0973a5894c058961c4399b26e2ae5dd8daef28716fc5e25"
+  }
+}
