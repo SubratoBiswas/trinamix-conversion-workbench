@@ -553,6 +553,10 @@ async def value_map_accept(
     )
     if "error" in result:
         raise HTTPException(422, result["error"])
+    # A value-map creates/merges a VALUE_MAP rule that changes what generation produces,
+    # so the cached artifact is stale — without this the download reuses the old file and
+    # the accepted pairs never appear (the other write endpoints already do this).
+    await _mark_outputs_stale(m.conversion_id)
     return result
 
 

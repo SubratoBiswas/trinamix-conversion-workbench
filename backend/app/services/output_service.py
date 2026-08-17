@@ -2210,6 +2210,49 @@ def _strategy_sheets_to_drop() -> set:
         return set()
 
 
+async def compute_owned_overrides(convs, template_id) -> set:
+    """{(sheet_norm, field_norm)} for every OWNED customer field a person has
+    deliberately decided — an approved/overridden mapping carrying a real value, or an
+    authored TransformationRule — on ANY of the merged conversions. The customer merge
+    leaves those fields at their mapped value instead of restamping them (see
+    customer_merge._OWNED_OVERRIDE / _set_owned_col). Glue/reference fields
+    (customer_merge._GLUE_OWNED) are excluded so cross-sheet referential integrity is
+    preserved. Empty when nobody has spoken, which keeps a normal load byte-identical."""
+    from app.models.fbdi import FBDISheet
+    from app.services import customer_merge as _cm
+    if not template_id:
+        return set()
+    fields = await FBDIField.find(FBDIField.template_id == template_id).to_list()
+    sheets = await FBDISheet.find(FBDISheet.template_id == template_id).to_list()
+    _sheet = {s.id: s.sheet_name for s in sheets}
+    _fld = {f.id: (_sheet.get(f.sheet_id, ""), f.field_name) for f in fields}
+    out: set = set()
+
+    def _add(fid):
+        sf = _fld.get(fid)
+        if not sf:
+            return
+        sh, fn = _cm._norm(sf[0]), _cm._norm(sf[1])
+        if fn and fn not in _cm._GLUE_OWNED:
+            out.add((sh, fn))
+
+    for c in convs:
+        for m in await MappingSuggestion.find(
+                MappingSuggestion.conversion_id == c.id).to_list():
+            val = (str(getattr(m, "source_column", "") or "").strip()
+                   or str(getattr(m, "default_value", "") or "").strip())
+            appr = str(getattr(m, "approved_by", "") or "").strip()
+            if (val and str(getattr(m, "status", "")) in ("approved", "overridden")
+                    and appr and appr.lower() != "learning-engine"
+                    and getattr(m, "approved_at", None) is not None):
+                _add(m.target_field_id)
+        for r in await TransformationRule.find(
+                TransformationRule.conversion_id == c.id).to_list():
+            if getattr(r, "target_field_id", None):
+                _add(r.target_field_id)
+    return out
+
+
 async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
                                    include_header: bool | None = None,
                                    merged_df: "pd.DataFrame | None" = None) -> ConvertedOutput:
@@ -2299,6 +2342,22 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
     # keeps the merged-frame behaviour unchanged.
     from app.services import customer_merge as _cm
     _grain_merge = _cm.GRAIN_COL in getattr(df, "columns", [])
+    # Fields a person has deliberately taken over in the UI — the merge leaves those at
+    # their mapped value instead of restamping them. Empty unless someone has decided,
+    # so a normal load stays byte-identical. Best-effort: on any failure the engine keeps
+    # owning every field (the previous behaviour).
+    _owned_overrides: set = set()
+    if _grain_merge:
+        try:
+            _sibs = await Conversion.find(
+                Conversion.project_id == conversion.project_id,
+                Conversion.target_object == conversion.target_object,
+            ).to_list()
+            _owned_overrides = await compute_owned_overrides(
+                _sibs or [conversion], conversion.template_id)
+        except Exception:  # noqa: BLE001 — never fail generation on the override compute
+            log.exception("owned-override compute failed; engine owns every field")
+            _owned_overrides = set()
     _sheet_ref_holder: dict = {"ref": None}   # this sheet's entityid linkage refs
     template = await FBDITemplate.get(conversion.template_id) if conversion.template_id else None
 
@@ -2505,7 +2564,14 @@ async def generate_output_artifact(conversion: Conversion, fmt: str = "csv",
         # party. Falls back to the full frame for a sheet whose grain is unknown or
         # absent (customer_merge.sheet_rows), so no sheet is emptied on a guess.
         if _grain_merge:
-            sub = _cm.sheet_rows(df, _sheet_name_of(sfields), dayfirst=(_src_erp == "netsuite"))
+            _this = frozenset(f for (sh, f) in _owned_overrides
+                              if sh == _cm._norm(_sheet_name_of(sfields)))
+            _tok = _cm._OWNED_OVERRIDE.set(_this or None)
+            try:
+                sub = _cm.sheet_rows(df, _sheet_name_of(sfields),
+                                     dayfirst=(_src_erp == "netsuite"))
+            finally:
+                _cm._OWNED_OVERRIDE.reset(_tok)
             _sheet_ref_holder["ref"] = _cm.sheet_reference(sub)
             return sub
         wanted = {_src_by_field.get(f.id) for f in sfields}

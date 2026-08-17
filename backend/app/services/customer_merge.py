@@ -31,6 +31,7 @@ un-reshaped is recoverable and dropping real rows is not.
 from __future__ import annotations
 
 import re
+import contextvars
 from typing import Optional
 
 import pandas as pd
@@ -1203,10 +1204,44 @@ def _carried(sub: "pd.DataFrame", name: str) -> "Optional[pd.Series]":
     return None
 
 
+# A deliberate UI decision may take a customer field back from the engine at generate
+# time. This ContextVar carries the set of NORMALISED field names the analyst owns on
+# the CURRENT sheet (output_service sets it around each sheet_rows call); _set_owned_col
+# then leaves those columns at their mapped value. None/empty => historic behaviour (the
+# engine owns every field), so a project with no such decision is byte-identical.
+_OWNED_OVERRIDE: "contextvars.ContextVar" = contextvars.ContextVar(
+    "_owned_override", default=None)
+
+# Structural glue that stays engine-owned even when a UI decision names it: hand-editing
+# these breaks referential integrity across the interface sheets. Everything else (the
+# business/display fields) is overridable. Normalised for a case/punct-insensitive match.
+_GLUE_OWNED = frozenset(_norm(f) for f in (
+    "Party Original System Reference",
+    "Party Site Original System Reference",
+    "Party Site Source System Reference",
+    "Location Original System Reference",
+    "Relationship Source System Reference",
+    "Subject Relationship Party Original System Reference",
+    "Object Relationship Party Original System Reference",
+    "Account Contact Role Responsibility Original System Reference",
+    "Party Number",
+    "Party Site Number",
+    "Party Type",
+    "Party Usage Code",
+))
+
+
 def _set_owned_col(sub: "pd.DataFrame", field_name: str, series: "pd.Series") -> None:
     """Write a target field on the reshaped sheet, matching an existing column name
     case/punct-insensitively or creating it under the plain field name (which the
-    per-sheet reindex maps to the template header)."""
+    per-sheet reindex maps to the template header).
+
+    A deliberate UI decision on this field (present in ``_OWNED_OVERRIDE`` for the
+    current sheet) is left untouched, so the analyst's mapped value reaches the file
+    instead of being restamped by the engine."""
+    _ov = _OWNED_OVERRIDE.get()
+    if _ov and _norm(field_name) in _ov:
+        return
     col = _find_col_ci(sub.columns, field_name) or field_name
     sub[col] = list(series.values)
 
