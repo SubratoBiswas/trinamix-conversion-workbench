@@ -15,6 +15,9 @@ from app.domain.rules.library.stateful_ops import (
     ConcatRule, CoalesceRule, BlankIfEqualsRule, ConditionalRule, CaseWhenRule,
     PrefixRule, SuffixRule, SuffixWhenRule,
 )
+from app.domain.rules.library.date_ops import (
+    FormatDateRule, DateFormatRule, ConditionalDateRule, ComputedRule,
+)
 
 
 def standard_rule_engine() -> RuleEngine:
@@ -28,6 +31,7 @@ def standard_rule_engine() -> RuleEngine:
         NumberFormatRule(), ArithmeticRule(),
         ConcatRule(), CoalesceRule(), BlankIfEqualsRule(), ConditionalRule(),
         CaseWhenRule(), PrefixRule(), SuffixRule(), SuffixWhenRule(),
+        FormatDateRule(), DateFormatRule(), ConditionalDateRule(), ComputedRule(),
     ):
         eng.register(strat)
     return eng

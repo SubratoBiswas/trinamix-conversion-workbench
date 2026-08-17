@@ -18,13 +18,8 @@ Adding a rule type
 from __future__ import annotations
 
 import re
-import uuid
-from datetime import datetime
 from typing import Any
 
-from app.domain.dates.fbdi_date import (
-    parse_with_formats, PARSE_FORMATS, PARSE_FORMATS_DAYFIRST, CONDITIONAL_FORMATS,
-)
 from app.domain.text import (
     to_str as _to_str, is_blank as _is_blank,
     to_float as _to_float, TRUEISH as _TRUEISH, FALSEISH as _FALSEISH,
@@ -42,54 +37,12 @@ _RULE_REGISTRY = standard_rule_engine()
 
 # _TRUEISH / _FALSEISH moved to app.domain.text (imported above as aliases); kept so
 # _COMPARISON_OPS' istrue/isfalse still read them.
-
-# The output spelling every date rule defaults to. Analyst, 05-Aug: "all dates
-# should be yyyy/mm/dd format." A rule that names its own output_format still wins;
-# this is the default when none is given, kept in step with
-# output_service.FBDI_DATE_FORMAT.
-_OUT_DATE_FORMAT = "%Y/%m/%d"
-
-
-# Oracle/ISO date TOKENS (as written in FORMAT_DATE's from_format/to_format, e.g.
-# "YYYY-MM-DD HH:MM:SS") translated to Python strftime directives. Longest tokens
-# first so YYYY is consumed before YY and HH24 before HH. Only ever applied to an
-# OUTPUT format, which is date-only in practice, so MM is month (never the minutes
-# spelling some extracts use).
-_ORACLE_DATE_TOKENS = [
-    ("YYYY", "%Y"), ("YY", "%y"), ("MON", "%b"), ("MONTH", "%B"),
-    ("DD", "%d"), ("HH24", "%H"), ("HH", "%H"), ("MI", "%M"), ("SS", "%S"), ("MM", "%m"),
-]
-
-# The input spellings a date value actually arrives in. Tried in order; the first
-# that parses wins. A FORMAT_DATE rule names a from_format, but extracts are not
-# reliably in it (Workday hands "2024-02-12" where the rule says
-# "YYYY-MM-DD HH:MM:SS"), so the value is parsed by probing rather than by trusting
-# the declared format — the same forgiving approach the date column pass uses.
-# Phase 1b: the strptime format lists now live in app.domain.dates.fbdi_date
-# (PARSE_FORMATS / PARSE_FORMATS_DAYFIRST), imported above and relocated verbatim, so all
-# date-format knowledge sits in one module. Behaviour unchanged.
-
-
-def _oracle_date_to_py(fmt: Any) -> str | None:
-    """An Oracle/ISO date format string -> Python strftime, or None if not given."""
-    s = _to_str(fmt).strip()
-    if not s:
-        return None
-    for tok, py in _ORACLE_DATE_TOKENS:
-        s = s.replace(tok, py)
-    return s
-
-
-def _parse_any_date(s: str, dayfirst: bool = False) -> "datetime | None":
-    """Parse a date value written in any of the common spellings, else None.
-
-    ``dayfirst`` prefers day-first readings for the two ambiguous ``xx-xx-YYYY`` /
-    ``xx/xx/YYYY`` spellings (a source whose dates are DD-MM-YYYY). Default False keeps
-    the historic month-first preference for every other source."""
-    s = s.strip()
-    if not s:
-        return None
-    return parse_with_formats(s, PARSE_FORMATS_DAYFIRST if dayfirst else PARSE_FORMATS)
+#
+# Phase 1c (date-ops): the output spelling (_OUT_DATE_FORMAT), the Oracle-token
+# translator (_oracle_date_to_py) and the forgiving parser (_parse_any_date), along
+# with the four date rule types that used them (FORMAT_DATE / DATE_FORMAT /
+# CONDITIONAL_DATE / COMPUTED), now live in app.domain (dates.fbdi_date +
+# rules.library.date_ops). engine no longer owns any date-format knowledge.
 
 
 # ── Phone parsing (PHONE_PART) ────────────────────────────────────────────────
@@ -298,36 +251,6 @@ def _apply_one_rule(
     if rt in _RULE_REGISTRY:
         return _RULE_REGISTRY.apply(rt, cfg, value, row, ctx)
 
-    if rt == "FORMAT_DATE":
-        # Same intent as DATE_FORMAT, but the config is written in Oracle/ISO tokens
-        # (from_format / to_format, e.g. "YYYY-MM-DD HH:MM:SS" -> "YYYY/MM/DD"). This
-        # rule_type existed on Customer/Employee mappings with NO handler, so it was
-        # an unknown rule and passed the value straight through — which is why an
-        # Employee EffectiveStartDate shipped "2024-02-12" (hyphens) instead of the
-        # "YYYY/MM/DD" its own rule asked for. Parse the value forgivingly (extracts
-        # do not honour the declared from_format) and emit the requested output,
-        # defaulting to the standard yyyy/mm/dd.
-        s = _to_str(value).strip()
-        if not s:
-            return s
-        to_fmt = _oracle_date_to_py(cfg.get("to_format")) or _OUT_DATE_FORMAT
-        dt = _parse_any_date(s, dayfirst=bool((ctx or {}).get("dayfirst")))
-        return dt.strftime(to_fmt) if dt else value
-
-    if rt == "DATE_FORMAT":
-        in_fmt = cfg.get("input_format", "%m/%d/%Y")
-        # yyyy/mm/dd is the output spelling every file uses now (analyst, 05-Aug:
-        # "all dates should be yyyy/mm/dd format"). A rule that names its own
-        # output_format still wins — this is only the default when none is given.
-        out_fmt = cfg.get("output_format", _OUT_DATE_FORMAT)
-        s = _to_str(value).strip()
-        if not s:
-            return s
-        try:
-            return datetime.strptime(s, in_fmt).strftime(out_fmt)
-        except ValueError:
-            return value  # leave for validation to flag
-
     if rt == "PHONE_STRIP_AREA":
         # Oracle stores Area Code and Phone Number in SEPARATE columns. When the
         # extract already has the area code in its own column, leaving it on the
@@ -373,76 +296,6 @@ def _apply_one_rule(
             return raw.upper()
         key = "".join(ch for ch in raw.lower() if ch.isalnum())
         return COUNTRY_TO_ISO.get(key, raw)
-
-    if rt == "CONDITIONAL_DATE":
-        # Emit a date when a condition on another column holds, else a blank/other
-        # value. Supports two config schemas seen in the catalog:
-        #   {"condition":"COL = VAL", "value":"SYSDATE"|<col>|literal, "else":"null"|...}
-        #   {"condition":"COL = VAL", "then_value":..., "else_value":...}
-        # A token may be SYSDATE/today/now (-> today, FBDI %Y%m%d), null/None (-> blank),
-        # the name of another column (-> that column's date value, normalised), or a
-        # literal. Reads referenced columns from ``row`` directly. e.g. Inactive Date
-        # <- Inactive: Inactive=Yes -> today's date, else blank.
-        now = ctx.get("now") or datetime.utcnow()
-
-        def _norm_date(s: str) -> str:
-            dt = parse_with_formats(s, CONDITIONAL_FORMATS)
-            return dt.strftime(_OUT_DATE_FORMAT) if dt else s
-
-        def _resolve_date_token(tok: Any) -> str:
-            if tok is None:
-                return ""
-            s = _to_str(tok).strip()
-            low = s.lower()
-            if low in ("null", "none", ""):
-                return ""
-            if low in ("sysdate", "today", "now"):
-                return now.strftime(_OUT_DATE_FORMAT)
-            if row is not None and s in row:  # token is another column's name
-                return _norm_date(_to_str(row.get(s, "")).strip())
-            return _norm_date(s)
-
-        cond = _to_str(cfg.get("condition", "")).strip()
-        matched = False
-        if cond and row is not None:
-            m = re.match(r"^\s*(.+?)\s*(!=|<>|>=|<=|=|>|<)\s*(.*?)\s*$", cond)
-            if m:
-                col_c, op_c, rhs = m.group(1), m.group(2), m.group(3)
-                left = _to_str(row.get(col_c, "")).strip().lower()
-                right = rhs.strip().lower()
-                if op_c == "=":
-                    matched = left == right
-                elif op_c in ("!=", "<>"):
-                    matched = left != right
-                else:
-                    lf, rf = _to_float(left), _to_float(right)
-                    if lf is not None and rf is not None:
-                        matched = {">": lf > rf, "<": lf < rf,
-                                   ">=": lf >= rf, "<=": lf <= rf}[op_c]
-            else:
-                # Bare column name -> truthy when the referenced cell is non-blank.
-                matched = not _is_blank(row.get(cond, ""))
-        val_tok = cfg.get("value")
-        if val_tok is None:
-            val_tok = cfg.get("then_value", "SYSDATE")
-        else_tok = cfg.get("else", cfg.get("else_value", cfg.get("otherwise", "null")))
-        return _resolve_date_token(val_tok if matched else else_tok)
-
-    if rt == "COMPUTED":
-        source = (cfg.get("source") or "today").lower()
-        fmt = cfg.get("format")
-        now = ctx.get("now") or datetime.utcnow()
-        if source == "today":
-            return now.strftime(fmt or _OUT_DATE_FORMAT)
-        if source == "now":
-            return now.strftime(fmt or f"{_OUT_DATE_FORMAT} %H:%M:%S")
-        if source == "row_index":
-            return ctx.get("row_index", 0)
-        if source == "uuid":
-            return str(uuid.uuid4())
-        if source == "current_user":
-            return ctx.get("current_user", "")
-        return value
 
     if rt == "CITY_COUNTRY_KEY":
         # Supplier Site: a 2-character ISO country code, a hyphen, and the city.

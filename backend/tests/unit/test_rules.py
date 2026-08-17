@@ -9,7 +9,7 @@ def test_registry_contains_migrated_types_only():
     for rt in ["TRIM", "UPPERCASE", "LOWERCASE", "TITLE_CASE",
                "REMOVE_HYPHEN", "REMOVE_SPECIAL_CHARS", "REPLACE"]:
         assert rt in eng
-    assert "FORMAT_DATE" not in eng        # not migrated yet -> engine keeps its branch
+    assert "SELF_LOOKUP" not in eng        # not migrated yet -> engine keeps its branch
     assert "case-insensitive" not in eng
 
 
@@ -49,7 +49,7 @@ def test_registry_size_grew_but_stateful_types_not_migrated():
     for rt in ["PAD", "SUBSTRING", "REGEX_REPLACE", "REGEX_EXTRACT",
                "DEFAULT_VALUE", "CONSTANT", "VALUE_MAP"]:
         assert rt in eng
-    for rt in ["FORMAT_DATE", "CONDITIONAL_DATE", "COMPUTED", "SELF_LOOKUP"]:
+    for rt in ["SELF_LOOKUP", "COUNTRY_ISO2", "SEQUENCE", "CROSSWALK_LOOKUP"]:
         assert rt not in eng           # still handled by engine's if/elif
 
 
@@ -70,7 +70,7 @@ def test_third_batch_numeric_and_boolean():
 def test_registry_now_has_eighteen_and_stateful_still_out():
     for rt in ["NUMBER_FORMAT", "ARITHMETIC", "SPLIT", "MAP_BOOLEAN"]:
         assert rt in eng
-    for rt in ["SELF_LOOKUP", "COUNTRY_ISO2", "CONDITIONAL_DATE", "CITY_COUNTRY_KEY"]:
+    for rt in ["SELF_LOOKUP", "COUNTRY_ISO2", "PHONE_PART", "CITY_COUNTRY_KEY"]:
         assert rt not in eng      # still engine branches (need ctx / country table)
 
 
@@ -169,3 +169,63 @@ def test_suffix_when():
     assert eng.apply("SUFFIX_WHEN", {"branches": [{"if_column": "Default Billing",
                                                    "op": "notblank", "suffix": "_b"}]},
                      "key_b", ROW) == "key_b"
+
+
+# ---- Fifth batch (Phase 1c date-ops): FORMAT_DATE / DATE_FORMAT / CONDITIONAL_DATE /
+# COMPUTED, migrated after relocating the date helpers into app.domain.dates. Each
+# assertion mirrors a case verified byte-identical against the old engine branch;
+# COMPUTED/CONDITIONAL_DATE pin ctx['now'] for determinism.
+from datetime import datetime  # noqa: E402
+NOW = datetime(2026, 8, 17, 12, 34, 56)
+DROW = {"Default Billing": "Y", "Inactive": "Yes", "Status": "Active",
+        "Amount": "100", "SomeDate": "2020-03-15"}
+
+
+def test_registry_contains_date_batch():
+    for rt in ["FORMAT_DATE", "DATE_FORMAT", "CONDITIONAL_DATE", "COMPUTED"]:
+        assert rt in eng
+
+
+def test_format_date():
+    # forgiving parse; output defaults to yyyy/mm/dd, Oracle tokens honoured
+    assert eng.apply("FORMAT_DATE", {}, "2024-02-12", None, {}) == "2024/02/12"
+    assert eng.apply("FORMAT_DATE", {"to_format": "MM/DD/YYYY"}, "2024-02-12", None, {}) == "02/12/2024"
+    assert eng.apply("FORMAT_DATE", {"to_format": "DD-MON-YYYY"}, "2024-02-12", None, {}) == "12-Feb-2024"
+    assert eng.apply("FORMAT_DATE", {}, "", None, {}) == ""                 # blank -> ""
+    assert eng.apply("FORMAT_DATE", {}, "not a date", None, {}) == "not a date"  # unparseable -> value
+    assert eng.apply("FORMAT_DATE", {}, "13/02/2024", None, {"dayfirst": True}) == "2024/02/13"
+
+
+def test_date_format():
+    assert eng.apply("DATE_FORMAT", {}, "08/17/2026") == "2026/08/17"       # default %m/%d/%Y in
+    assert eng.apply("DATE_FORMAT", {"input_format": "%Y-%m-%d",
+                                     "output_format": "%d/%m/%Y"}, "2026-08-17") == "17/08/2026"
+    assert eng.apply("DATE_FORMAT", {}, "") == ""                           # blank -> ""
+    assert eng.apply("DATE_FORMAT", {}, "2026-08-17") == "2026-08-17"       # no match -> value
+
+
+def test_conditional_date():
+    ctx = {"now": NOW}
+    assert eng.apply("CONDITIONAL_DATE", {"condition": "Default Billing = Y",
+                                          "value": "SYSDATE", "else": "null"}, "o", DROW, ctx) == "2026/08/17"
+    assert eng.apply("CONDITIONAL_DATE", {"condition": "Default Billing = N",
+                                          "value": "SYSDATE", "else": "null"}, "o", DROW, ctx) == ""
+    # value token names another column -> that column's date, normalised
+    assert eng.apply("CONDITIONAL_DATE", {"condition": "Status = Active",
+                                          "value": "SomeDate", "else": "null"}, "o", DROW, ctx) == "2020/03/15"
+    # numeric comparison in the condition
+    assert eng.apply("CONDITIONAL_DATE", {"condition": "Amount > 50",
+                                          "value": "SYSDATE", "else": "null"}, "o", DROW, ctx) == "2026/08/17"
+
+
+def test_computed():
+    ctx = {"now": NOW}
+    assert eng.apply("COMPUTED", {"source": "today"}, "o", None, ctx) == "2026/08/17"
+    assert eng.apply("COMPUTED", {"source": "now"}, "o", None, ctx) == "2026/08/17 12:34:56"
+    assert eng.apply("COMPUTED", {"source": "today", "format": "%d-%m-%Y"}, "o", None, ctx) == "17-08-2026"
+    assert eng.apply("COMPUTED", {"source": "row_index"}, "o", None, {"row_index": 42}) == 42
+    assert eng.apply("COMPUTED", {"source": "current_user"}, "o", None, {"current_user": "s"}) == "s"
+    assert eng.apply("COMPUTED", {"source": "unknown"}, "passthru", None, ctx) == "passthru"
+    # uuid path is non-deterministic -> assert structure, not value
+    u = eng.apply("COMPUTED", {"source": "uuid"}, "o", None, ctx)
+    assert isinstance(u, str) and len(u) == 36 and u.count("-") == 4
