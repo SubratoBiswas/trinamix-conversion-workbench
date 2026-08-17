@@ -36,6 +36,8 @@ from typing import Optional
 
 import pandas as pd
 
+from app.domain.dates.fbdi_date import fbdi_date as _domain_fbdi_date
+
 # The hidden columns the merge threads through the wide frame. Dropped by the
 # per-sheet reindex before anything is written, so they never reach the file.
 GRAIN_COL = "__grain"
@@ -613,26 +615,19 @@ TITLE_SOURCE_COLS = ("title",)
 
 
 def _fbdi_date(v, dayfirst: bool = False) -> str:
-    """A source date (YYYY-MM-DD / YYYY/MM/DD / DD-MM-YYYY / MM/DD/YYYY) rendered as
-    the FBDI yyyy/mm/dd, or "" for a blank/na value. Used by the owned From Date
-    coalesce stamp so its value matches the format the base date mapping already ships.
+    """The FBDI yyyy/mm/dd rendering of a source date, or "" for a blank/na value.
 
-    ``dayfirst`` (NextPower/NetSuite Customer, analyst 13-Aug): the NetSuite export
-    writes dates DAY-first ("20-08-2018" = 20 Aug), so the two-field-then-year branch
-    must read the FIRST field as the DAY. Default False keeps the historic month-first
-    reading for every other source. A YYYY-first value is unambiguous and handled by
-    the first branch regardless of this flag."""
-    s = str(v or "").strip()
-    if not s or s.lower() in ("nan", "none", "null", "nat", "na", "<na>"):
-        return ""
-    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
-    if m:
-        return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
-    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})", s)
-    if m:
-        _d, _mo = (m.group(1), m.group(2)) if dayfirst else (m.group(2), m.group(1))
-        return f"{m.group(3)}/{int(_mo):02d}/{int(_d):02d}"
-    return s
+    Phase 1a of the clean-architecture migration: the implementation now lives in the
+    pure domain value object ``app.domain.dates.fbdi_date`` — the single home for date
+    handling that is replacing the four historical parsers one at a time. This wrapper
+    is a BYTE-FOR-BYTE delegation, proved identical to the previous regex body across a
+    ~1,400-case differential test (tests/unit/test_fbdi_date.py); callers and behaviour
+    are unchanged.
+
+    ``dayfirst`` (NextPower/NetSuite Customer): the export writes dates DAY-first
+    ("20-08-2018" = 20 Aug); default False keeps the historic month-first reading for
+    every other source. A YYYY-first value is unambiguous regardless."""
+    return _domain_fbdi_date(v, dayfirst)
 
 
 def _dff_value_spec(n: str):
