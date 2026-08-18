@@ -18,6 +18,8 @@ from app.domain.rules.library.stateful_ops import (
 from app.domain.rules.library.date_ops import (
     FormatDateRule, DateFormatRule, ConditionalDateRule, ComputedRule,
 )
+from app.domain.rules.library.geo_ops import CountryIso2Rule, CityCountryKeyRule
+from app.domain.rules.library.phone_ops import PhoneStripAreaRule, PhonePartRule
 
 
 def standard_rule_engine() -> RuleEngine:
@@ -32,6 +34,7 @@ def standard_rule_engine() -> RuleEngine:
         ConcatRule(), CoalesceRule(), BlankIfEqualsRule(), ConditionalRule(),
         CaseWhenRule(), PrefixRule(), SuffixRule(), SuffixWhenRule(),
         FormatDateRule(), DateFormatRule(), ConditionalDateRule(), ComputedRule(),
+        CountryIso2Rule(), CityCountryKeyRule(), PhoneStripAreaRule(), PhonePartRule(),
     ):
         eng.register(strat)
     return eng

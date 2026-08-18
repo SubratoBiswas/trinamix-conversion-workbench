@@ -49,7 +49,7 @@ def test_registry_size_grew_but_stateful_types_not_migrated():
     for rt in ["PAD", "SUBSTRING", "REGEX_REPLACE", "REGEX_EXTRACT",
                "DEFAULT_VALUE", "CONSTANT", "VALUE_MAP"]:
         assert rt in eng
-    for rt in ["SELF_LOOKUP", "COUNTRY_ISO2", "SEQUENCE", "CROSSWALK_LOOKUP"]:
+    for rt in ["SELF_LOOKUP", "GROUP_FIRST_FLAG", "SEQUENCE", "CROSSWALK_LOOKUP"]:
         assert rt not in eng           # still handled by engine's if/elif
 
 
@@ -70,8 +70,8 @@ def test_third_batch_numeric_and_boolean():
 def test_registry_now_has_eighteen_and_stateful_still_out():
     for rt in ["NUMBER_FORMAT", "ARITHMETIC", "SPLIT", "MAP_BOOLEAN"]:
         assert rt in eng
-    for rt in ["SELF_LOOKUP", "COUNTRY_ISO2", "PHONE_PART", "CITY_COUNTRY_KEY"]:
-        assert rt not in eng      # still engine branches (need ctx / country table)
+    for rt in ["SELF_LOOKUP", "CROSS_CONVERSION_LOOKUP", "GROUP_FIRST_FLAG", "SEQUENCE"]:
+        assert rt not in eng      # still engine branches (need per-run ctx indexes)
 
 
 # ---- Fourth batch (Phase 1c): row-aware "stateful" rules migrated onto the
@@ -229,3 +229,62 @@ def test_computed():
     # uuid path is non-deterministic -> assert structure, not value
     u = eng.apply("COMPUTED", {"source": "uuid"}, "o", None, ctx)
     assert isinstance(u, str) and len(u) == 36 and u.count("-") == 4
+
+
+# ---- Batch A (Phase 1c geo/phone): COUNTRY_ISO2 / CITY_COUNTRY_KEY / PHONE_PART /
+# PHONE_STRIP_AREA, migrated after relocating the ISO country table into
+# app.domain.geo.country and the libphonenumber split into app.domain.phone.parse.
+# Each assertion mirrors a case verified byte-identical against the old engine branch.
+def test_registry_contains_geo_phone_batch():
+    for rt in ["COUNTRY_ISO2", "CITY_COUNTRY_KEY", "PHONE_PART", "PHONE_STRIP_AREA"]:
+        assert rt in eng
+
+
+def test_country_iso2():
+    assert eng.apply("COUNTRY_ISO2", {}, "United States") == "US"
+    assert eng.apply("COUNTRY_ISO2", {}, "Italy") == "IT"
+    assert eng.apply("COUNTRY_ISO2", {}, "IT") == "IT"          # already a valid code
+    assert eng.apply("COUNTRY_ISO2", {}, "") == ""
+    assert eng.apply("COUNTRY_ISO2", {}, "Narnia") == "Narnia"  # unresolvable -> as-is
+
+
+def test_city_country_key():
+    assert eng.apply("CITY_COUNTRY_KEY", {"country_column": "CC", "city_column": "City"},
+                     "x", {"CC": "US", "City": "Austin"}) == "US-Austin"
+    # full country name -> ISO code
+    assert eng.apply("CITY_COUNTRY_KEY", {"country_column": "CC", "city_column": "City"},
+                     "x", {"CC": "United States", "City": "Austin"}) == "US-Austin"
+    # fixed prefix, no city -> bare prefix
+    assert eng.apply("CITY_COUNTRY_KEY", {"country_value": "US", "city_column": "City"},
+                     "x", {"CC": "US"}) == "US"
+    # resolve country from the city index in ctx
+    assert eng.apply("CITY_COUNTRY_KEY", {"country_column": "CC", "city_column": "City",
+                                          "resolve_country_from_city": True}, "x",
+                     {"City": "Hyderabad"}, {"city_country": {"hyderabad": "IN"}}) == "IN-Hyderabad"
+    # country_to_iso:false keeps a bespoke code raw
+    assert eng.apply("CITY_COUNTRY_KEY", {"country_column": "CC", "city_column": "City",
+                                          "country_to_iso": False}, "x",
+                     {"CC": "usa", "City": "Austin"}) == "usa-Austin"
+    # neither column present -> incoming value (misconfig stays visible)
+    assert eng.apply("CITY_COUNTRY_KEY", {"country_column": "No", "city_column": "No2"},
+                     "orig", {"CC": "US"}) == "orig"
+
+
+def test_phone_part():
+    row = {"Country": "Brazil"}
+    # bare national string split via libphonenumber + region hint
+    assert eng.apply("PHONE_PART", {"part": "country"}, "5515981205351", row) == "55"
+    assert eng.apply("PHONE_PART", {"part": "area"}, "5515981205351", row) == "15"
+    assert eng.apply("PHONE_PART", {"part": "number"}, "5515981205351", row) == "981205351"
+    assert eng.apply("PHONE_PART", {"part": "extension"}, "5515981205351", row) == ""
+    assert eng.apply("PHONE_PART", {"part": "number"}, "", None) == ""
+
+
+def test_phone_strip_area():
+    assert eng.apply("PHONE_STRIP_AREA", {"area_code_column": "AC"},
+                     "512-555-0134", {"AC": "512"}) == "555-0134"
+    assert eng.apply("PHONE_STRIP_AREA", {"area_code_column": "AC"},
+                     "555-0134", {"AC": "512"}) == "555-0134"      # no prefix -> unchanged
+    assert eng.apply("PHONE_STRIP_AREA", {"area_code_column": "AC"},
+                     "512-555-0134", {"AC": ""}) == "512-555-0134"  # blank area -> unchanged
+    assert eng.apply("PHONE_STRIP_AREA", {"area_code_column": "AC"}, "x", None) == "x"
