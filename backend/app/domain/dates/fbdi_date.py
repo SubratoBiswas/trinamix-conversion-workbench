@@ -152,3 +152,49 @@ def parse_with_formats(s: str, formats) -> "datetime | None":
         except ValueError:
             continue
     return None
+
+
+# ── Phase 1c (date-ops): output spelling + Oracle-token & forgiving parsers ──────
+# Relocated VERBATIM from engine.py so the date-rule strategies (FORMAT_DATE /
+# DATE_FORMAT / CONDITIONAL_DATE / COMPUTED) and any remaining caller share one home
+# for date knowledge. Behaviour unchanged; engine imported these back under their
+# historical underscore names while it still owned the branches.
+from app.domain.text import to_str as _to_str  # noqa: E402  (intra-domain helper)
+
+# The output spelling every date rule defaults to. Analyst, 05-Aug: "all dates
+# should be yyyy/mm/dd format." A rule that names its own output_format still wins;
+# this is the default when none is given, kept in step with
+# output_service.FBDI_DATE_FORMAT.
+OUT_DATE_FORMAT = "%Y/%m/%d"
+
+# Oracle/ISO date TOKENS (as written in FORMAT_DATE's from_format/to_format, e.g.
+# "YYYY-MM-DD HH:MM:SS") translated to Python strftime directives. Longest tokens
+# first so YYYY is consumed before YY and HH24 before HH. Only ever applied to an
+# OUTPUT format, which is date-only in practice, so MM is month (never the minutes
+# spelling some extracts use).
+ORACLE_DATE_TOKENS = [
+    ("YYYY", "%Y"), ("YY", "%y"), ("MON", "%b"), ("MONTH", "%B"),
+    ("DD", "%d"), ("HH24", "%H"), ("HH", "%H"), ("MI", "%M"), ("SS", "%S"), ("MM", "%m"),
+]
+
+
+def oracle_date_to_py(fmt) -> "str | None":
+    """An Oracle/ISO date format string -> Python strftime, or None if not given."""
+    s = _to_str(fmt).strip()
+    if not s:
+        return None
+    for tok, py in ORACLE_DATE_TOKENS:
+        s = s.replace(tok, py)
+    return s
+
+
+def parse_any_date(s: str, dayfirst: bool = False) -> "datetime | None":
+    """Parse a date value written in any of the common spellings, else None.
+
+    ``dayfirst`` prefers day-first readings for the two ambiguous ``xx-xx-YYYY`` /
+    ``xx/xx/YYYY`` spellings (a source whose dates are DD-MM-YYYY). Default False keeps
+    the historic month-first preference for every other source."""
+    s = s.strip()
+    if not s:
+        return None
+    return parse_with_formats(s, PARSE_FORMATS_DAYFIRST if dayfirst else PARSE_FORMATS)
