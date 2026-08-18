@@ -9,7 +9,7 @@ def test_registry_contains_migrated_types_only():
     for rt in ["TRIM", "UPPERCASE", "LOWERCASE", "TITLE_CASE",
                "REMOVE_HYPHEN", "REMOVE_SPECIAL_CHARS", "REPLACE"]:
         assert rt in eng
-    assert "SELF_LOOKUP" not in eng        # not migrated yet -> engine keeps its branch
+    assert "NOT_A_RULE_TYPE" not in eng    # unknown types are not registered
     assert "case-insensitive" not in eng
 
 
@@ -50,7 +50,7 @@ def test_registry_size_grew_but_stateful_types_not_migrated():
                "DEFAULT_VALUE", "CONSTANT", "VALUE_MAP"]:
         assert rt in eng
     for rt in ["SELF_LOOKUP", "GROUP_FIRST_FLAG", "SEQUENCE", "CROSSWALK_LOOKUP"]:
-        assert rt not in eng           # still handled by engine's if/elif
+        assert rt in eng               # Batch B — now migrated too
 
 
 def test_third_batch_numeric_and_boolean():
@@ -71,7 +71,7 @@ def test_registry_now_has_eighteen_and_stateful_still_out():
     for rt in ["NUMBER_FORMAT", "ARITHMETIC", "SPLIT", "MAP_BOOLEAN"]:
         assert rt in eng
     for rt in ["SELF_LOOKUP", "CROSS_CONVERSION_LOOKUP", "GROUP_FIRST_FLAG", "SEQUENCE"]:
-        assert rt not in eng      # still engine branches (need per-run ctx indexes)
+        assert rt in eng          # Batch B — now migrated (engine if/elif chain fully gone)
 
 
 # ---- Fourth batch (Phase 1c): row-aware "stateful" rules migrated onto the
@@ -288,3 +288,74 @@ def test_phone_strip_area():
     assert eng.apply("PHONE_STRIP_AREA", {"area_code_column": "AC"},
                      "512-555-0134", {"AC": ""}) == "512-555-0134"  # blank area -> unchanged
     assert eng.apply("PHONE_STRIP_AREA", {"area_code_column": "AC"}, "x", None) == "x"
+
+
+# ---- Batch B (Phase 1c, final): the index-backed lookup types — SELF_LOOKUP,
+# CROSS_CONVERSION_LOOKUP, GROUP_FIRST_FLAG, SEQUENCE, CROSSWALK_LOOKUP. Each reads a
+# per-generation index handed in via ctx. Assertions mirror cases verified byte-identical
+# against the old engine branches. With these migrated, engine._apply_one_rule is pure
+# registry dispatch — the whole if/elif chain is gone.
+def test_registry_contains_lookup_batch():
+    for rt in ["SELF_LOOKUP", "CROSS_CONVERSION_LOOKUP", "GROUP_FIRST_FLAG",
+               "SEQUENCE", "CROSSWALK_LOOKUP"]:
+        assert rt in eng
+
+
+def test_self_lookup():
+    si = {"self_index": {"Internal Id->Name": {"99": "ACME"}}}
+    cfg = {"key_column": "Parent Vendor Id", "match_column": "Internal Id", "value_column": "Name"}
+    assert eng.apply("SELF_LOOKUP", cfg, "x", {"Parent Vendor Id": "99"}, si) == "ACME"
+    # case/space-insensitive key resolution
+    assert eng.apply("SELF_LOOKUP", {**cfg, "key_column": "parent_vendor_id"},
+                     "x", {"parent_vendor_id": "99"}, si) == "ACME"
+    assert eng.apply("SELF_LOOKUP", cfg, "x", {"Parent Vendor Id": "404"}, si) == ""   # miss
+    assert eng.apply("SELF_LOOKUP", cfg, "x", {"Parent Vendor Id": "99"}, {}) == ""    # no index -> blank
+
+
+def test_cross_conversion_lookup():
+    ci = {"cross_index": {"r1:M->V": {"7": "seven"}}}
+    cfg = {"ref_conversion_id": "r1", "key_column": "K", "match_column": "M", "value_column": "V"}
+    assert eng.apply("CROSS_CONVERSION_LOOKUP", cfg, "x", {"K": "7"}, ci) == "seven"
+    assert eng.apply("CROSS_CONVERSION_LOOKUP", cfg, "x", {"K": "7.0"}, ci) == "seven"   # .0 fallback
+    assert eng.apply("CROSS_CONVERSION_LOOKUP", {**cfg, "default": "D"}, "x", {"K": "404"}, ci) == "D"
+
+
+def test_group_first_flag():
+    gi = {"group_first_index": {"entityid": {"C1": 3}}}
+    assert eng.apply("GROUP_FIRST_FLAG", {"key_column": "entityid", "flag": "Y"},
+                     "x", {"entityid": "C1"}, dict(gi, row_index=3)) == "Y"   # first row
+    assert eng.apply("GROUP_FIRST_FLAG", {"key_column": "entityid", "flag": "Y"},
+                     "x", {"entityid": "C1"}, dict(gi, row_index=5)) == ""    # not first
+    assert eng.apply("GROUP_FIRST_FLAG", {"key_column": "entityid"}, "x", None, gi) == ""  # row None
+
+
+def test_sequence():
+    assert eng.apply("SEQUENCE", {"prefix": "NXT", "width": 6, "start": 1,
+                                  "preserve_source": False}, "", {}, {"row_index": 4}) == "NXT000005"
+    assert eng.apply("SEQUENCE", {"prefix": "NXT", "preserve_source": True},
+                     "SRC", {}, {"row_index": 4}) == "SRC"                    # real key wins
+    # keyed ordinal from the sequence index
+    assert eng.apply("SEQUENCE", {"prefix": "NXT", "width": 6, "start": 1, "preserve_source": False,
+                                  "key_column": "entityid"}, "", {"entityid": "C2"},
+                     {"sequence_index": {"entityid": {"C2": 1}}, "row_index": 99}) == "NXT000002"
+    # PERSON variant suffix
+    assert eng.apply("SEQUENCE", {"prefix": "P", "width": 5, "start": 1, "preserve_source": False,
+                                  "variant": {"if_column": "Party Type", "op": "eq", "value": "PERSON",
+                                              "suffix": "_C{n}", "counter": 1}},
+                     "", {"Party Type": "PERSON"}, {"row_index": 6}) == "P00007_C1"
+
+
+def test_crosswalk_lookup():
+    cw = {"crosswalks": {"cw": {"a": "A"}}}
+    assert eng.apply("CROSSWALK_LOOKUP", {"crosswalk": "cw"}, "a", None, cw) == "A"
+    assert eng.apply("CROSSWALK_LOOKUP", {"crosswalk": "cw"}, "A", None, cw) == "A"   # ci fallback
+    assert eng.apply("CROSSWALK_LOOKUP", {"crosswalk": "cw", "default": "D"}, "z", None, cw) == "D"
+    assert eng.apply("CROSSWALK_LOOKUP", {"crosswalk": "missing"}, "a", None, cw) == "a"  # no table -> value
+
+
+def test_migration_complete_pure_dispatch():
+    # Every catalogued rule type now resolves through the registry; the engine no longer
+    # carries any per-type branch. An unknown type passes the value through unchanged.
+    import app.transformations.engine as _e
+    assert _e._apply_one_rule("NO_SUCH_TYPE", {}, "keep", {"A": "1"}, {}) == "keep"
+    assert len(eng._by_type) >= 39

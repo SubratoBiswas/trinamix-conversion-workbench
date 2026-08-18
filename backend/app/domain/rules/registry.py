@@ -20,6 +20,10 @@ from app.domain.rules.library.date_ops import (
 )
 from app.domain.rules.library.geo_ops import CountryIso2Rule, CityCountryKeyRule
 from app.domain.rules.library.phone_ops import PhoneStripAreaRule, PhonePartRule
+from app.domain.rules.library.lookup_ops import (
+    SelfLookupRule, CrossConversionLookupRule, GroupFirstFlagRule,
+    SequenceRule, CrosswalkLookupRule,
+)
 
 
 def standard_rule_engine() -> RuleEngine:
@@ -35,6 +39,8 @@ def standard_rule_engine() -> RuleEngine:
         CaseWhenRule(), PrefixRule(), SuffixRule(), SuffixWhenRule(),
         FormatDateRule(), DateFormatRule(), ConditionalDateRule(), ComputedRule(),
         CountryIso2Rule(), CityCountryKeyRule(), PhoneStripAreaRule(), PhonePartRule(),
+        SelfLookupRule(), CrossConversionLookupRule(), GroupFirstFlagRule(),
+        SequenceRule(), CrosswalkLookupRule(),
     ):
         eng.register(strat)
     return eng
