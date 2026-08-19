@@ -27,7 +27,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.strategy_overlay import directive_for       # noqa: E402
-from app.transformations.engine import _COMPARISON_OPS, apply_pipeline  # noqa: E402
+from app.transformations.engine import apply_pipeline  # noqa: E402
+# Phase 1c: the comparison-operator table moved from engine into the domain.
+from app.domain.rules.context import _COMPARISON_OPS  # noqa: E402
 
 
 def check(name, cond, detail=""):

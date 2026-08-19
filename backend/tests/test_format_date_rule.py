@@ -58,8 +58,11 @@ def test_date_format_still_works_unchanged():
 
 
 def test_oracle_token_translation():
-    check("YYYY-MM-DD -> %Y-%m-%d", E._oracle_date_to_py("YYYY-MM-DD") == "%Y-%m-%d")
-    check("YYYY/MM/DD -> %Y/%m/%d", E._oracle_date_to_py("YYYY/MM/DD") == "%Y/%m/%d")
+    # Phase 1c: the Oracle-token translator was relocated from engine into the domain
+    # (app.domain.dates.fbdi_date.oracle_date_to_py). Same function, new home.
+    from app.domain.dates.fbdi_date import oracle_date_to_py
+    check("YYYY-MM-DD -> %Y-%m-%d", oracle_date_to_py("YYYY-MM-DD") == "%Y-%m-%d")
+    check("YYYY/MM/DD -> %Y/%m/%d", oracle_date_to_py("YYYY/MM/DD") == "%Y/%m/%d")
 
 
 if __name__ == "__main__":
