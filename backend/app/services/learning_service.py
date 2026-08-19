@@ -1064,7 +1064,7 @@ def _rule_columns_present(lm, src_index: dict) -> set[str]:
     is declared in the config and is checked the same way.
     """
     try:
-        from app.services.output_service import _rule_referenced_columns
+        from app.domain.rules.columns import rule_referenced_columns as _rule_referenced_columns
     except Exception:                                           # noqa: BLE001
         return set()
     cols = _rule_referenced_columns(

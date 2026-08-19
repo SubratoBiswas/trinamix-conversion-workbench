@@ -287,7 +287,7 @@ def referenced_columns(target_object: str | None) -> set[str]:
     both columns are in the extract, and the column shipped empty on all 8,561
     rows because neither reached the row.
     """
-    from app.services.output_service import _rule_referenced_columns
+    from app.domain.rules.columns import rule_referenced_columns as _rule_referenced_columns
     rules = _load().get(_n(target_object), {})
     wild: dict = {}
     for k in _prefix_hits(target_object):
