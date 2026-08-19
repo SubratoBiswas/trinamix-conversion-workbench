@@ -283,8 +283,8 @@ async def merged_preview(conversion_id: str, limit: int = 50, _: User = Depends(
     mapping and merged/de-duplicated into one result (what the merged file will
     contain). If there's only one source, it's just that conversion's preview."""
     c = await _require_conversion(conversion_id)
-    from app.services.output_service import (build_merged_frame_for_object,
-                                             _mask_supplier_emails)
+    from app.services.output_service import build_merged_frame_for_object
+    from app.domain.frames import mask_supplier_emails as _mask_supplier_emails
     merged, carrier, names = await build_merged_frame_for_object(
         c.project_id, c.target_object or "", max_rows=max(limit * 4, 200))
     if merged is None:

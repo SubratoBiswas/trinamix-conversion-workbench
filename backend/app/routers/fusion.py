@@ -179,8 +179,9 @@ async def load_to_fusion_endpoint(conversion_id: str, _: User = Depends(get_curr
 
     # Build the FBDI artifact in memory (same pipeline as Generate Output).
     from app.services.output_service import (
-        build_converted_dataframe, _normalize_columns, _format_date_columns,
+        build_converted_dataframe, _normalize_columns,
     )
+    from app.domain.frames import format_date_columns as _format_date_columns
     from app.models.fbdi import FBDIField, FBDITemplate
     df, _lineage = await build_converted_dataframe(conv)
     tpl = await FBDITemplate.get(conv.template_id)
