@@ -31,6 +31,13 @@ from app.domain.precedence.policy import (
     conversion_rule_wins as _precedence_conversion_rule_wins,
     person_is_newer as _precedence_person_is_newer,
 )
+from app.domain.rules.indexes import (
+    build_self_index as _build_self_index,
+    build_sequence_index as _build_sequence_index,
+    build_group_first_index as _build_group_first_index,
+    build_city_country_index as _build_city_country_index,
+    build_city_case_index as _build_city_case_index,
+)
 from app.parsers import parse_tabular
 from app.services.learning_service import REFERENCE_KEY_FIELDS, source_erp_for_conversion
 from app.transformations import apply_pipeline
@@ -365,53 +372,6 @@ def _sequence_key_configs(pipelines: dict, target_object: str | None) -> list[di
     return out
 
 
-def _build_sequence_index(src: pd.DataFrame, configs: list[dict]) -> dict:
-    """``{normalised key column: {key value: 0-based ordinal}}`` over the WHOLE extract.
-
-    Analyst, 03-Aug: "Party Number: unique sequence — ON THE BASIS OF entityid."
-    SEQUENCE numbered by row index instead, so a customer with five address rows
-    took five different party numbers, and the eighteen Customer sheets that
-    reference the party disagreed with the one that defines it.
-
-    Built once on the full frame for the same reason ``_build_self_index`` is: the
-    other rows carrying a key are usually in a different chunk, and a per-chunk
-    index would restart the numbering every 20,000 rows. Ordinals follow FIRST
-    APPEARANCE, not sort order, so re-running over the same extract produces the
-    same numbers — a party key that renumbers on every regenerate is worse than
-    no key at all.
-    """
-    if src is None or not configs or not len(src.columns):
-        return {}
-    by_norm: dict[str, str] = {}
-    for c in src.columns:
-        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
-
-    index: dict[str, dict[str, int]] = {}
-    for cfg in configs:
-        spec = cfg.get("key_column")
-        names = spec if isinstance(spec, (list, tuple)) else [spec]
-        for name in names:
-            key = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
-            if not key or key in index:
-                continue
-            col = by_norm.get(key)
-            if col is None:
-                continue
-            seen: dict[str, int] = {}
-            for v in src[col].tolist():
-                kv = "" if v is None else str(v).strip()
-                if not kv or kv.lower() in ("nan", "none"):
-                    continue
-                if kv not in seen:
-                    seen[kv] = len(seen)
-                # NetSuite writes an id as "123" in one column and "123.0" in
-                # another once pandas has seen a blank in it, so index both.
-                if kv.endswith(".0"):
-                    seen.setdefault(kv[:-2], seen[kv])
-            index[key] = seen
-    return index
-
-
 def _group_first_key_configs(pipelines: dict, target_object: str | None,
                              mappings: list | None = None) -> list[dict]:
     """Every GROUP_FIRST_FLAG config carrying a ``key_column``, from every rule source.
@@ -443,151 +403,6 @@ def _group_first_key_configs(pipelines: dict, target_object: str | None,
     return out
 
 
-def _build_group_first_index(src: pd.DataFrame, configs: list[dict]) -> dict:
-    """``{normalised key column: {key value: first 0-based row index}}`` over the WHOLE
-    extract.
-
-    The FIRST APPEARANCE of each key, so GROUP_FIRST_FLAG can mark exactly one row per
-    group — the identifying/primary row — and blank the rest. Built once on the full
-    frame for the same reason the sequence index is: a customer's other rows are usually
-    in another chunk, and first-appearance ordering makes the same row win on every
-    regenerate.
-    """
-    if src is None or not configs or not len(src.columns):
-        return {}
-    by_norm: dict[str, str] = {}
-    for c in src.columns:
-        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
-
-    index: dict[str, dict[str, int]] = {}
-    for cfg in configs:
-        spec = cfg.get("key_column")
-        names = spec if isinstance(spec, (list, tuple)) else [spec]
-        for name in names:
-            key = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
-            if not key or key in index:
-                continue
-            col = by_norm.get(key)
-            if col is None:
-                continue
-            first: dict[str, int] = {}
-            for i, v in enumerate(src[col].tolist()):
-                kv = "" if v is None else str(v).strip()
-                if not kv or kv.lower() in ("nan", "none"):
-                    continue
-                if kv not in first:
-                    first[kv] = i
-                    if kv.endswith(".0"):
-                        first.setdefault(kv[:-2], i)
-            index[key] = first
-    return index
-
-
-def _build_city_country_index(src: pd.DataFrame, configs: list[dict]) -> dict:
-    """``{normalised city: ISO2}`` learned from the extract's OWN rows.
-
-    Where a row has no country code, the rest of the file usually knows: 6,196 of
-    the 7,495 NetSuite rows carry both a code and a city. Building the index from
-    the data beats any bundled table, needs no model, and cannot be stale.
-
-    Majority wins on ambiguity, and ambiguity is real — "New York" appears against
-    US 48 times and CN once, "San Jose" against US 109 times and CR once. Taking
-    the majority is right far more often than taking the first row encountered,
-    which is what any incidental ordering would have given.
-    """
-    if src is None or not configs or not len(src.columns):
-        return {}
-    by_norm = {}
-    for c in src.columns:
-        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
-
-    def _col(name):
-        return by_norm.get(re.sub(r"[^a-z0-9]", "", str(name or "").lower()))
-
-    tally: dict[str, dict[str, int]] = {}
-    for cfg in configs:
-        def _pick(spec):
-            for n in (spec if isinstance(spec, (list, tuple)) else [spec]):
-                c = _col(n)
-                if c is not None:
-                    return c
-            return None
-
-        cc_col, city_col = _pick(cfg.get("country_column")), _pick(cfg.get("city_column"))
-        if cc_col is None or city_col is None:
-            continue
-        for cc, city in zip(src[cc_col].tolist(), src[city_col].tolist()):
-            cc = "" if cc is None else str(cc).strip()
-            city = "" if city is None else str(city).strip()
-            if not cc or not city:
-                continue
-            key = re.sub(r"[^a-z]", "", city.lower())
-            if not key:
-                continue
-            tally.setdefault(key, {})
-            tally[key][cc] = tally[key].get(cc, 0) + 1
-    return {k: max(v.items(), key=lambda kv: kv[1])[0] for k, v in tally.items()}
-
-
-def _build_city_case_index(src: pd.DataFrame, configs: list[dict]) -> dict:
-    """``{normalised city: the spelling this extract uses most}``.
-
-    The site key is a REQUIRED UNIQUE key, and the extract spells its cities
-    inconsistently: "Hyderabad" 461 times and "HYDERABAD" 103, "Dubai" 25 and
-    "DUBAI" 3. Loaded as-is, Fusion creates two sites where there is one — 427 keys
-    collided with another key on capitalisation alone.
-
-    Analyst, 30-Jul: "Keep it IN-Hyderabad for now."
-
-    Majority spelling wins rather than a blanket title-case, because title-casing
-    is wrong for real place names — "Rio de Janeiro" would become "Rio De Janeiro"
-    and "McAllen" would become "Mcallen". The file already knows how it normally
-    writes each city; this just makes every row agree with the majority. A city
-    that appears only once has no collision to fix and is left exactly as it is.
-    """
-    if src is None or not configs or not len(src.columns):
-        return {}
-    by_norm = {}
-    for c in src.columns:
-        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
-
-    def _pick(spec):
-        for n in (spec if isinstance(spec, (list, tuple)) else [spec]):
-            c = by_norm.get(re.sub(r"[^a-z0-9]", "", str(n or "").lower()))
-            if c is not None:
-                return c
-        return None
-
-    tally: dict[str, dict[str, int]] = {}
-    for cfg in configs:
-        col = _pick(cfg.get("city_column"))
-        if col is None:
-            continue
-        for v in src[col].tolist():
-            v = "" if v is None else str(v).strip()
-            if not v:
-                continue
-            key = re.sub(r"[^a-z0-9]", "", v.lower())
-            if not key:
-                continue
-            tally.setdefault(key, {})
-            tally[key][v] = tally[key].get(v, 0) + 1
-    # A NON-ALL-CAPS spelling wins outright, ahead of frequency, and only then does
-    # the more common form win. "Keep it IN-Hyderabad" is a statement about style as
-    # well as about duplicates: an all-caps city is an entry accident, not a place
-    # name, and it stays wrong even when it is the majority — ABU DHABI appears 4
-    # times against Abu Dhabi once, RIO DE JANEIRO likewise. Frequency alone would
-    # have kept the shouting.
-    #
-    # Only ever picks a spelling the file actually contains, so no place name is
-    # invented; and str.title() is deliberately NOT used, because it would produce
-    # "Rio De Janeiro", "Ciudad De Mexico" and "Mcallen" — it breaks 8 of the
-    # Spanish and Portuguese names in this extract alone.
-    def _best(counts):
-        return max(counts.items(), key=lambda kv: (not kv[0].isupper(), kv[1]))[0]
-    return {k: _best(v) for k, v in tally.items()}
-
-
 def _city_country_configs(pipelines: dict, target_object: str | None) -> list[dict]:
     out: list[dict] = []
     for _rules in (pipelines or {}).values():
@@ -600,56 +415,6 @@ def _city_country_configs(pipelines: dict, target_object: str | None) -> list[di
     except Exception:                                           # noqa: BLE001
         pass
     return out
-
-
-def _build_self_index(src: pd.DataFrame, configs: list[dict]) -> dict:
-    """``{"Match->Value": {match_value: value_value}}`` over the WHOLE extract.
-
-    SELF_LOOKUP has never once returned a value in production, and this is why:
-    it reads its index from ``ctx["self_index"]``, and NOTHING in the codebase
-    built one. The rule shipped, passed its unit tests against a hand-made index,
-    and returned its default on every row of every real run — which is exactly why
-    Parent Supplier was empty on all 3,872 suppliers.
-
-    Built once on the full frame rather than per chunk, because the parent row a
-    child points at is very often in a different chunk; and built as a dict rather
-    than scanned per row because 7,495 vendors scanned pairwise is 56 million
-    comparisons. Columns are matched case- and space-insensitively: the analyst
-    wrote "Internal Id", the NetSuite extract says "Internal ID", and losing the
-    whole lookup to that is not a failure worth having.
-    """
-    if src is None or not configs or not len(src.columns):
-        return {}
-    by_norm = {}
-    for c in src.columns:
-        by_norm.setdefault(re.sub(r"[^a-z0-9]", "", str(c).lower()), c)
-
-    def _col(name):
-        return by_norm.get(re.sub(r"[^a-z0-9]", "", str(name or "").lower()))
-
-    index: dict[str, dict[str, str]] = {}
-    for cfg in configs:
-        mk, vk = cfg.get("match_column"), cfg.get("value_column")
-        key = f"{mk}->{vk}"
-        if key in index:
-            continue
-        mc, vc = _col(mk), _col(vk)
-        if mc is None or vc is None:
-            continue
-        pairs: dict[str, str] = {}
-        for a, b in zip(src[mc].tolist(), src[vc].tolist()):
-            ka = "" if a is None else str(a).strip()
-            if not ka or ka.lower() in ("nan", "none"):
-                continue
-            # First win: a duplicated key is a data problem, and quietly taking the
-            # last row's value would make the result depend on row order.
-            pairs.setdefault(ka, "" if b is None else str(b).strip())
-            # NetSuite writes ids as "123" in one column and "123.0" in another once
-            # pandas has seen a blank, so index the integral spelling too.
-            if ka.endswith(".0"):
-                pairs.setdefault(ka[:-2], pairs[ka])
-        index[key] = pairs
-    return index
 
 
 class _RowWithTargets:
