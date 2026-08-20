@@ -1,0 +1,44 @@
+===== fix_dateops started 2026-08-17 22:20:24.54 ===== 
+--- staging the complete date-ops slice (adds the 2 missing files) --- 
+warning: in the working copy of 'backend/app/domain/dates/fbdi_date.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/rules/library/date_ops.py', LF will be replaced by CRLF the next time Git touches it
+--- staged status --- 
+ M .gitignore
+M  backend/app/domain/dates/fbdi_date.py
+A  backend/app/domain/rules/library/date_ops.py
+ M backend/app/main.py
+ M backend/app/schemas/mapping.py
+ M backend/app/services/catalog_seed_service.py
+ M backend/tests/test_customer_defaults_31jul.py
+ M backend/tests/test_latest_decision_wins.py
+ M deploy_push.log
+ M frontend/src/App.tsx
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/pages/ApprovalsPage.tsx
+ M frontend/src/pages/ConversionDetailPage.tsx
+ M frontend/src/pages/ConversionsPage.tsx
+ M frontend/src/pages/OutputPreviewPage.tsx
+ M frontend/src/types/index.ts
+?? backend/tests/__init__.py
+?? backend/tests/characterization/__init__.py
+?? backend/tests/unit/__init__.py
+?? fix_dateops.bat
+?? fix_dateops.log
+?? push_dateops.bat
+?? push_stateful.bat
+?? push_stateful.log
+[main 55205a1] fix(rules): add missing date_ops module + relocated date helpers (completes date-ops slice)
+ 2 files changed, 182 insertions(+)
+ create mode 100644 backend/app/domain/rules/library/date_ops.py
+--- HEAD after commit --- 
+55205a1 fix(rules): add missing date_ops module + relocated date helpers (completes date-ops slice)
+25a7448 refactor(rules): migrate 8 stateful rule types to strategy classes
+cf06f36 refactor(rules): migrate 8 stateful rule types to strategy classes
+9014886 Refactor 1c-helpers: relocate shared rule helpers to app/domain/rules/context.py
+--- confirm date_ops.py now tracked at HEAD --- 
+backend/app/domain/rules/library/date_ops.py
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   25a7448..55205a1  HEAD -> main
+EXITCODE=0 
+===== done ===== 

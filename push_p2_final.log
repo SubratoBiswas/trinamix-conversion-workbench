@@ -1,0 +1,60 @@
+===== push_p2_final started 2026-08-20 14:10:14.03 ===== 
+--- staging backend/app + backend/tests + docs (partial-proof) --- 
+warning: in the working copy of 'backend/app/domain/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/frames.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/routers/fusion.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/output_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/unit/test_frames.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/Trinamix_Architecture_Phase2.md', LF will be replaced by CRLF the next time Git touches it
+--- staged files --- 
+ M .gitignore
+M  backend/app/domain/README.md
+M  backend/app/domain/frames.py
+M  backend/app/routers/fusion.py
+M  backend/app/services/output_service.py
+M  backend/tests/unit/test_frames.py
+ M deploy_push.log
+A  docs/Trinamix_Architecture_Phase2.md
+ M frontend/src/App.tsx
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/pages/ApprovalsPage.tsx
+ M frontend/src/pages/ConversionDetailPage.tsx
+ M frontend/src/pages/ConversionsPage.tsx
+ M frontend/src/pages/OutputPreviewPage.tsx
+ M frontend/src/types/index.ts
+?? fix_dateops.bat
+?? fix_dateops.log
+?? fix_lock_and_push_lockin.bat
+?? fix_lock_and_push_lockin.log
+?? fix_p2s2.bat
+?? fix_p2s2.log
+?? push_dateops.bat
+?? push_geo.bat
+?? push_geo.log
+?? push_lookup.bat
+?? push_lookup.log
+?? push_p2_final.bat
+?? push_p2_final.log
+?? push_p2s1.bat
+?? push_p2s1.log
+?? push_p2s2.bat
+?? push_p2s3.bat
+?? push_p2s3.log
+?? push_p2s4.bat
+?? push_p2s4.log
+?? push_phase1_lockin.bat
+?? push_phase1_lockin.log
+?? push_stateful.bat
+?? push_stateful.log
+[main ffe04ca] refactor(services): complete Phase 2 ΓÇö extract last frame/column helpers; services now thin over the domain
+ 6 files changed, 213 insertions(+), 99 deletions(-)
+ create mode 100644 docs/Trinamix_Architecture_Phase2.md
+EXIT_COMMIT=0 
+--- HEAD after commit --- 
+ffe04ca refactor(services): complete Phase 2 ΓÇö extract last frame/column helpers; services now thin over the domain
+a5a64b6 refactor(services): extract per-row context to app/domain/rules/row.py (Phase 2, slice 4)
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   a5a64b6..ffe04ca  HEAD -> main
+EXIT_PUSH=0 
+===== done ===== 

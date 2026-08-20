@@ -1,0 +1,22 @@
+===== fix_lock_and_push_lockin started 2026-08-18 21:01:21.41 ===== 
+--- clearing any stale git lock files --- 
+removed index.lock 
+--- staging the 4 lock-in files --- 
+warning: in the working copy of 'backend/tests/test_boolean_conditions.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_format_date_rule.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/Trinamix_Architecture_AsBuilt_Phase1.md', LF will be replaced by CRLF the next time Git touches it
+EXIT_ADD=0 
+[main 75a4294] docs+test: lock in Phase 1 (rule-engine migration complete)
+ 4 files changed, 229 insertions(+), 3 deletions(-)
+ create mode 100644 backend/app/domain/README.md
+ create mode 100644 docs/Trinamix_Architecture_AsBuilt_Phase1.md
+EXIT_COMMIT=0 
+--- HEAD after commit (should be a NEW hash, not e542830) --- 
+75a4294 docs+test: lock in Phase 1 (rule-engine migration complete)
+e542830 refactor(rules): migrate index-backed lookup types (Batch B) ΓÇö engine is now pure dispatch
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   e542830..75a4294  HEAD -> main
+EXIT_PUSH=0 
+===== done ===== 

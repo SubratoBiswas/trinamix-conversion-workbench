@@ -13,16 +13,26 @@ one is enforced at WRITE time, inside ``_transform_frame``, after mapping.
 So the rules are applied here, at the same point, where nothing downstream can
 undo them: a constant is a constant, a suppression is blank, a transform runs.
 Mapping/learning remains the discovery mechanism; this is the guarantee.
+
+STORE / POLICY SPLIT (Phase 3, slice 1)
+---------------------------------------
+This module is now the *store* half of the overlay: it reads the JSON directive
+files and builds the caches, and it is where the enforcement point lives. The
+pure *decision* — which directive applies to a (object, field, source), and what
+columns/configs a set of directives implies — moved to
+``app.domain.directives.policy``, which takes the caches as arguments and has no
+I/O. The public functions below are thin facades: they ensure the caches are
+loaded, then hand them to the policy. External signatures are unchanged.
 """
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.domain.precedence.policy import wide_directive_wins as _precedence_wide_wins
+from app.domain.directives import policy as _policy
+from app.domain.directives.policy import norm as _n, label as _label
 
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _FILE = _DATA / "supplier_strategy_defaults.json"
@@ -56,36 +66,6 @@ _wild_cache: dict | None = None
 _wild_blank_cache: dict | None = None
 
 
-def _n(s: Any) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
-
-
-def _label(s: Any) -> str:
-    """The control-default key spelling: lower-case, trailing '*' stripped.
-    ``_apply_control_defaults`` keys its suppression set this way, so a directive
-    can only reach it in the same shape."""
-    return str(s or "").strip().lower().rstrip("*").strip()
-
-
-def _src_ok(d: dict, source_erp: str | None) -> bool:
-    """Does a directive apply for this source system?
-
-    A directive carrying no ``source_erp`` is a statement about EVERY source —
-    that is what the whole existing overlay is, so the historical behaviour is
-    unchanged. A directive tagged with a source (e.g. the NextPower Alternate-Name
-    dedup and the Taxpayer-ID country CASE_WHEN, both NetSuite-only) applies ONLY
-    when the conversion's source matches, so an arena_ebos supplier keeps its
-    direct ``name`` / ``tax_id`` mapping instead of the NetSuite rule. When the
-    caller does not know the source (source_erp is None) the directive still
-    applies — refusing to enforce a signed rule just because the source was not
-    threaded in would be the more dangerous default.
-    """
-    want = d.get("source_erp")
-    if not want or source_erp is None:
-        return True
-    return _n(want) == _n(source_erp)
-
-
 # ``applies_to_all_sheets`` was already being written into the corrections file by
 # the analyst — and NOTHING read it. It was dead data, so two rules that say "all
 # sheets" were silently applied to one sheet only:
@@ -105,8 +85,24 @@ def _all_sheets_note() -> str:
     return "applies_to_all_sheets"
 
 
+def _parse_date(v) -> "datetime | None":
+    """YYYY-MM-DD from a rule file, or None when the file does not say."""
+    s = str(v or "").strip()[:10]
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 def _load() -> dict:
-    """{normalised target_object: {normalised field: directive}}"""
+    """{normalised target_object: {normalised field: directive}}
+
+    The store: read the strategy file and the analyst correction overlays, and
+    build the four caches the policy reads — exact / wild (all-sheets) directive
+    maps and their blank-field sets. Cached at module scope; built once.
+    """
     global _cache, _blank_cache, _wild_cache, _wild_blank_cache
     if _cache is not None:
         return _cache
@@ -200,58 +196,18 @@ def _load() -> dict:
     return _cache
 
 
-def _prefix_hits(target_object: str | None) -> list[str]:
-    """Normalised keys of the all-sheets rule sets this object inherits."""
-    o = _n(target_object)
-    if not o:
-        return []
-    return [k for k in (_wild_cache or {}) if o.startswith(k)]
-
-
-def _parse_date(v) -> "datetime | None":
-    """YYYY-MM-DD from a rule file, or None when the file does not say."""
-    s = str(v or "").strip()[:10]
-    if not s:
-        return None
-    try:
-        return datetime.strptime(s, "%Y-%m-%d")
-    except ValueError:
-        return None
-
-
 def directive_for(target_object: str | None, field_name: str | None,
                   source_erp: str | None = None) -> dict | None:
     """The write-time directive for one target field, or None.
 
     ``source_erp`` narrows to source-scoped directives: a NetSuite-only rule is
     invisible to an arena_ebos conversion, which then keeps its own mapping.
+    Precedence between an exact and an all-sheets rule (sheet-specific wins a tie,
+    but not against a newer bundle-wide instruction) lives in the policy.
     """
-    if not target_object or not field_name:
-        return None
-    fld = _n(field_name)
-    exact = _load().get(_n(target_object), {}).get(fld)
-    if exact is not None and not _src_ok(exact, source_erp):
-        exact = None
-    wide = None
-    for k in _prefix_hits(target_object):
-        cand = (_wild_cache or {}).get(k, {}).get(fld)
-        if cand is not None and _src_ok(cand, source_erp):
-            wide = cand
-            break
-    if exact is None:
-        return wide
-    if wide is None or wide is exact:
-        return exact
-    # Both apply. A sheet-specific rule is more precise, so it wins a tie — but
-    # NOT when the bundle-wide rule is NEWER. Analyst, 30-Jul: "whichever is
-    # latest". Delivery Method is exactly this case: the 13-Jul strategy carries a
-    # Supplier Site rule reading "Remittance E-Mail", and the 30-Jul correction
-    # says apply the EMAIL/FAX rule to all sheets. Preferring precision alone let
-    # the older, narrower rule shadow the newer instruction, and the column shipped
-    # empty on all 8,561 site rows.
-    if _precedence_wide_wins(exact.get("as_of"), wide.get("as_of")):
-        return wide
-    return exact
+    _load()
+    return _policy.select_directive(_cache, _wild_cache, target_object,
+                                    field_name, source_erp)
 
 
 def blank_fields(target_object: str | None) -> set[str]:
@@ -270,11 +226,8 @@ def blank_fields(target_object: str | None) -> set[str]:
     skipped there entirely, so nothing downstream can refill it.
     """
     _load()
-    out = set((_blank_cache or {}).get(_n(target_object), set()))
-    # Plus anything the analyst marked "blank on ALL sheets" for this bundle.
-    for k in _prefix_hits(target_object):
-        out |= set((_wild_blank_cache or {}).get(k, set()))
-    return out
+    return _policy.blank_fields_for(_blank_cache, _wild_blank_cache,
+                                    _wild_cache, target_object)
 
 
 def referenced_columns(target_object: str | None) -> set[str]:
@@ -287,51 +240,21 @@ def referenced_columns(target_object: str | None) -> set[str]:
     both columns are in the extract, and the column shipped empty on all 8,561
     rows because neither reached the row.
     """
-    from app.domain.rules.columns import rule_referenced_columns as _rule_referenced_columns
-    rules = _load().get(_n(target_object), {})
-    wild: dict = {}
-    for k in _prefix_hits(target_object):
-        wild.update((_wild_cache or {}).get(k, {}))
-    cols: set[str] = set()
-    for d in list(wild.values()) + list(rules.values()):
-        r = d.get("rule")
-        if r:
-            cols |= _rule_referenced_columns([r])
-        # A frame rule compares against another OUTPUT column, not a source one,
-        # so it deliberately contributes nothing here.
-    return {c for c in cols if str(c or "").strip()}
+    _load()
+    return _policy.referenced_columns_for(_cache, _wild_cache, target_object)
 
 
 def rule_configs_of_type(target_object: str | None, rule_type: str) -> list[dict]:
     """Overlay rule configs of one type for this object — the generator needs them
     to build whatever index that rule reads."""
-    rules = _load().get(_n(target_object), {})
-    merged: dict = {}
-    for k in _prefix_hits(target_object):
-        merged.update((_wild_cache or {}).get(k, {}))
-    merged.update(rules)
-    out = []
-    for d in merged.values():
-        r = d.get("rule") or {}
-        if (r.get("rule_type") or "").upper() == rule_type.upper():
-            out.append(r.get("config") or {})
-    return out
+    _load()
+    return _policy.configs_of_type(_cache, _wild_cache, target_object, rule_type)
 
 
 def self_lookup_configs(target_object: str | None) -> list[dict]:
     """SELF_LOOKUP configs this object's overlay contributes, so the generator can
     build the row index they need. Parent Supplier is the only one today."""
-    rules = _load().get(_n(target_object), {})
-    merged: dict = {}
-    for k in _prefix_hits(target_object):
-        merged.update((_wild_cache or {}).get(k, {}))
-    merged.update(rules)
-    out = []
-    for d in merged.values():
-        r = d.get("rule") or {}
-        if (r.get("rule_type") or "").upper() == "SELF_LOOKUP":
-            out.append(r.get("config") or {})
-    return out
+    return rule_configs_of_type(target_object, "SELF_LOOKUP")
 
 
 def apply_frame_rules(df, target_object: str | None, source_erp: str | None = None):
@@ -349,26 +272,8 @@ def apply_frame_rules(df, target_object: str | None, source_erp: str | None = No
     Alternate Name dedup is NetSuite-only, so an arena_ebos supplier keeps its
     Alternate Name = name.
     """
-    rules = _load().get(_n(target_object), {})
-    if df is None or not len(df.columns) or not rules:
-        return df
-    by_norm = {}
-    for c in df.columns:
-        by_norm.setdefault(_n(c), c)
-    for fld, d in rules.items():
-        r = d.get("rule") or {}
-        if r.get("rule_type") != "BLANK_IF_EQUALS":
-            continue
-        if not _src_ok(d, source_erp):
-            continue
-        tgt = by_norm.get(fld)
-        other = by_norm.get(_n((r.get("config") or {}).get("other_column")))
-        if tgt is None or other is None or tgt == other:
-            continue
-        a = df[tgt].astype(str).str.strip().str.casefold()
-        b = df[other].astype(str).str.strip().str.casefold()
-        df.loc[(a == b) & (a != ""), tgt] = ""
-    return df
+    _load()
+    return _policy.apply_frame_rules(df, _cache, target_object, source_erp)
 
 
 def sheets_to_drop() -> set[str]:
@@ -389,11 +294,10 @@ def sheets_to_drop() -> set[str]:
     `third party pay relationships` and `ThirdPartyPayRelationships` are one
     sheet.
     """
-    import json as _json
     out: set[str] = set()
     for path in _DATA.glob("*_strategy_defaults.json"):
         try:
-            doc = _json.loads(path.read_text(encoding="utf-8"))
+            doc = json.loads(path.read_text(encoding="utf-8"))
         except Exception:                                       # noqa: BLE001
             continue
         for name in ((doc.get("blank_sheets") or {}).get("sheets") or []):

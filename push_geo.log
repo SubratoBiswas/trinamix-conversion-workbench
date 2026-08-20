@@ -1,0 +1,67 @@
+===== push_geo started 2026-08-18 17:52:06.66 ===== 
+--- staging the COMPLETE Batch A slice (all 10 files incl. new package __init__ files) --- 
+warning: in the working copy of 'backend/app/domain/rules/registry.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/deterministic.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/transformations/engine.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/unit/test_rules.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/geo/country.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/phone/parse.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/rules/library/geo_ops.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/rules/library/phone_ops.py', LF will be replaced by CRLF the next time Git touches it
+--- staged files --- 
+ M .gitignore
+A  backend/app/domain/geo/__init__.py
+A  backend/app/domain/geo/country.py
+A  backend/app/domain/phone/__init__.py
+A  backend/app/domain/phone/parse.py
+A  backend/app/domain/rules/library/geo_ops.py
+A  backend/app/domain/rules/library/phone_ops.py
+M  backend/app/domain/rules/registry.py
+ M backend/app/main.py
+ M backend/app/schemas/mapping.py
+ M backend/app/services/catalog_seed_service.py
+M  backend/app/services/deterministic.py
+M  backend/app/transformations/engine.py
+ M backend/tests/test_customer_defaults_31jul.py
+ M backend/tests/test_latest_decision_wins.py
+M  backend/tests/unit/test_rules.py
+ M deploy_push.log
+ M frontend/src/App.tsx
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/pages/ApprovalsPage.tsx
+ M frontend/src/pages/ConversionDetailPage.tsx
+ M frontend/src/pages/ConversionsPage.tsx
+ M frontend/src/pages/OutputPreviewPage.tsx
+ M frontend/src/types/index.ts
+?? backend/tests/__init__.py
+?? backend/tests/characterization/__init__.py
+?? backend/tests/unit/__init__.py
+?? fix_dateops.bat
+?? fix_dateops.log
+?? push_dateops.bat
+?? push_geo.bat
+?? push_geo.log
+?? push_stateful.bat
+?? push_stateful.log
+[main e8841a9] refactor(rules): migrate geo/phone rule types (Batch A) to strategies
+ 10 files changed, 527 insertions(+), 413 deletions(-)
+ create mode 100644 backend/app/domain/geo/__init__.py
+ create mode 100644 backend/app/domain/geo/country.py
+ create mode 100644 backend/app/domain/phone/__init__.py
+ create mode 100644 backend/app/domain/phone/parse.py
+ create mode 100644 backend/app/domain/rules/library/geo_ops.py
+ create mode 100644 backend/app/domain/rules/library/phone_ops.py
+--- HEAD after commit --- 
+e8841a9 refactor(rules): migrate geo/phone rule types (Batch A) to strategies
+55205a1 fix(rules): add missing date_ops module + relocated date helpers (completes date-ops slice)
+25a7448 refactor(rules): migrate 8 stateful rule types to strategy classes
+--- confirm new modules tracked at HEAD --- 
+backend/app/domain/geo/country.py
+backend/app/domain/phone/parse.py
+backend/app/domain/rules/library/geo_ops.py
+backend/app/domain/rules/library/phone_ops.py
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   55205a1..e8841a9  HEAD -> main
+EXITCODE=0 
+===== done ===== 

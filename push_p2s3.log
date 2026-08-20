@@ -1,0 +1,68 @@
+===== push_p2s3 started 2026-08-19 13:41:25.80 ===== 
+--- staging ALL of backend/app + backend/tests (partial-proof) --- 
+warning: in the working copy of 'backend/app/main.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/routers/fusion.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/routers/operations.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/schemas/mapping.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/catalog_seed_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/output_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_customer_defaults_31jul.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_latest_decision_wins.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/frames.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/unit/test_frames.py', LF will be replaced by CRLF the next time Git touches it
+--- staged files --- 
+ M .gitignore
+A  backend/app/domain/frames.py
+M  backend/app/routers/fusion.py
+M  backend/app/routers/operations.py
+M  backend/app/services/output_service.py
+A  backend/tests/__init__.py
+A  backend/tests/characterization/__init__.py
+A  backend/tests/unit/__init__.py
+A  backend/tests/unit/test_frames.py
+ M deploy_push.log
+ M frontend/src/App.tsx
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/pages/ApprovalsPage.tsx
+ M frontend/src/pages/ConversionDetailPage.tsx
+ M frontend/src/pages/ConversionsPage.tsx
+ M frontend/src/pages/OutputPreviewPage.tsx
+ M frontend/src/types/index.ts
+?? fix_dateops.bat
+?? fix_dateops.log
+?? fix_lock_and_push_lockin.bat
+?? fix_lock_and_push_lockin.log
+?? fix_p2s2.bat
+?? fix_p2s2.log
+?? push_dateops.bat
+?? push_geo.bat
+?? push_geo.log
+?? push_lookup.bat
+?? push_lookup.log
+?? push_p2s1.bat
+?? push_p2s1.log
+?? push_p2s2.bat
+?? push_p2s3.bat
+?? push_p2s3.log
+?? push_phase1_lockin.bat
+?? push_phase1_lockin.log
+?? push_stateful.bat
+?? push_stateful.log
+[main 879ed70] refactor(services): extract frame-formatting cluster to app/domain/frames.py (Phase 2, slice 3)
+ 8 files changed, 246 insertions(+), 160 deletions(-)
+ create mode 100644 backend/app/domain/frames.py
+ create mode 100644 backend/tests/__init__.py
+ create mode 100644 backend/tests/characterization/__init__.py
+ create mode 100644 backend/tests/unit/__init__.py
+ create mode 100644 backend/tests/unit/test_frames.py
+EXIT_COMMIT=0 
+--- HEAD after commit --- 
+879ed70 refactor(services): extract frame-formatting cluster to app/domain/frames.py (Phase 2, slice 3)
+b0225aa fix(services): complete Phase 2 slice 2 ΓÇö add missing columns.py + importer changes
+--- confirm frames.py tracked at HEAD --- 
+backend/app/domain/frames.py
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   b0225aa..879ed70  HEAD -> main
+EXIT_PUSH=0 
+===== done ===== 

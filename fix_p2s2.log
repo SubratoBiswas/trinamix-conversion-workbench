@@ -1,0 +1,62 @@
+===== fix_p2s2 started 2026-08-19 10:45:15.23 ===== 
+--- staging the COMPLETE slice 2 (adds the files 107177b was missing) --- 
+warning: in the working copy of 'backend/app/services/learning_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/strategy_overlay.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/domain/rules/columns.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/unit/test_columns.py', LF will be replaced by CRLF the next time Git touches it
+--- staged files --- 
+ M .gitignore
+A  backend/app/domain/rules/columns.py
+ M backend/app/main.py
+ M backend/app/schemas/mapping.py
+ M backend/app/services/catalog_seed_service.py
+M  backend/app/services/learning_service.py
+M  backend/app/services/strategy_overlay.py
+ M backend/tests/test_customer_defaults_31jul.py
+ M backend/tests/test_latest_decision_wins.py
+A  backend/tests/unit/test_columns.py
+ M deploy_push.log
+ M frontend/src/App.tsx
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/pages/ApprovalsPage.tsx
+ M frontend/src/pages/ConversionDetailPage.tsx
+ M frontend/src/pages/ConversionsPage.tsx
+ M frontend/src/pages/OutputPreviewPage.tsx
+ M frontend/src/types/index.ts
+?? backend/tests/__init__.py
+?? backend/tests/characterization/__init__.py
+?? backend/tests/unit/__init__.py
+?? fix_dateops.bat
+?? fix_dateops.log
+?? fix_lock_and_push_lockin.bat
+?? fix_lock_and_push_lockin.log
+?? fix_p2s2.bat
+?? fix_p2s2.log
+?? push_dateops.bat
+?? push_geo.bat
+?? push_geo.log
+?? push_lookup.bat
+?? push_lookup.log
+?? push_p2s1.bat
+?? push_p2s1.log
+?? push_p2s2.bat
+?? push_phase1_lockin.bat
+?? push_phase1_lockin.log
+?? push_stateful.bat
+?? push_stateful.log
+[main b0225aa] fix(services): complete Phase 2 slice 2 ΓÇö add missing columns.py + importer changes
+ 4 files changed, 202 insertions(+), 2 deletions(-)
+ create mode 100644 backend/app/domain/rules/columns.py
+ create mode 100644 backend/tests/unit/test_columns.py
+EXIT_COMMIT=0 
+--- HEAD after commit --- 
+b0225aa fix(services): complete Phase 2 slice 2 ΓÇö add missing columns.py + importer changes
+107177b refactor(services): extract ctx-index builders to app/domain/rules/indexes.py (Phase 2, slice 1)
+5b882ff refactor(services): extract ctx-index builders to app/domain/rules/indexes.py (Phase 2, slice 1)
+--- confirm columns.py now tracked at HEAD --- 
+backend/app/domain/rules/columns.py
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   107177b..b0225aa  HEAD -> main
+EXIT_PUSH=0 
+===== done ===== 

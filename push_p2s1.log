@@ -1,0 +1,52 @@
+===== push_p2s1 started 2026-08-19  9:59:06.84 ===== 
+--- staging Phase 2 slice 1 (3 files) --- 
+warning: in the working copy of 'backend/app/services/output_service.py', LF will be replaced by CRLF the next time Git touches it
+ M .gitignore
+ M backend/app/main.py
+ M backend/app/schemas/mapping.py
+ M backend/app/services/catalog_seed_service.py
+ M backend/app/services/learning_service.py
+M  backend/app/services/output_service.py
+ M backend/app/services/strategy_overlay.py
+ M backend/tests/test_customer_defaults_31jul.py
+ M backend/tests/test_latest_decision_wins.py
+ M deploy_push.log
+ M frontend/src/App.tsx
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/pages/ApprovalsPage.tsx
+ M frontend/src/pages/ConversionDetailPage.tsx
+ M frontend/src/pages/ConversionsPage.tsx
+ M frontend/src/pages/OutputPreviewPage.tsx
+ M frontend/src/types/index.ts
+?? backend/app/domain/rules/columns.py
+?? backend/tests/__init__.py
+?? backend/tests/characterization/__init__.py
+?? backend/tests/unit/__init__.py
+?? backend/tests/unit/test_columns.py
+?? fix_dateops.bat
+?? fix_dateops.log
+?? fix_lock_and_push_lockin.bat
+?? fix_lock_and_push_lockin.log
+?? push_dateops.bat
+?? push_geo.bat
+?? push_geo.log
+?? push_lookup.bat
+?? push_lookup.log
+?? push_p2s1.bat
+?? push_p2s1.log
+?? push_p2s2.bat
+?? push_phase1_lockin.bat
+?? push_phase1_lockin.log
+?? push_stateful.bat
+?? push_stateful.log
+[main 107177b] refactor(services): extract ctx-index builders to app/domain/rules/indexes.py (Phase 2, slice 1)
+ 1 file changed, 6 insertions(+), 129 deletions(-)
+EXIT_COMMIT=0 
+--- HEAD after commit --- 
+107177b refactor(services): extract ctx-index builders to app/domain/rules/indexes.py (Phase 2, slice 1)
+5b882ff refactor(services): extract ctx-index builders to app/domain/rules/indexes.py (Phase 2, slice 1)
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   5b882ff..107177b  HEAD -> main
+EXIT_PUSH=0 
+===== done ===== 

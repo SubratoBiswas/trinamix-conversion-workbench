@@ -1,0 +1,13 @@
+===== push_stateful started 2026-08-17 17:15:14.57 ===== 
+warning: in the working copy of 'backend/app/domain/rules/registry.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/transformations/engine.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/unit/test_rules.py', LF will be replaced by CRLF the next time Git touches it
+[main 25a7448] refactor(rules): migrate 8 stateful rule types to strategy classes
+ 3 files changed, 73 insertions(+), 156 deletions(-)
+--- HEAD after commit --- 
+25a7448 refactor(rules): migrate 8 stateful rule types to strategy classes
+===== pushing HEAD to origin main ===== 
+To https://github.com/SubratoBiswas/trinamix-conversion-workbench.git
+   cf06f36..25a7448  HEAD -> main
+EXITCODE=0 
+===== done ===== 
