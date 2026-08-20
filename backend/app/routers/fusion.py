@@ -178,10 +178,11 @@ async def load_to_fusion_endpoint(conversion_id: str, _: User = Depends(get_curr
         raise HTTPException(400, "Configure the Oracle Fusion connection first (URL, username, password).")
 
     # Build the FBDI artifact in memory (same pipeline as Generate Output).
-    from app.services.output_service import (
-        build_converted_dataframe, _normalize_columns,
+    from app.services.output_service import build_converted_dataframe
+    from app.domain.frames import (
+        format_date_columns as _format_date_columns,
+        normalize_columns as _normalize_columns,
     )
-    from app.domain.frames import format_date_columns as _format_date_columns
     from app.models.fbdi import FBDIField, FBDITemplate
     df, _lineage = await build_converted_dataframe(conv)
     tpl = await FBDITemplate.get(conv.template_id)

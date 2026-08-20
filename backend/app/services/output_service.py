@@ -52,6 +52,9 @@ from app.domain.frames import (
     dedup as _dedup,
     mask_supplier_emails as _mask_supplier_emails,
     safe_sheet_name as _safe_sheet_name,
+    is_attribute_column as _is_attribute_column,
+    normalize_columns as _normalize_columns,
+    header_label as _header_label,
 )
 from app.domain.rules.row import RowWithTargets as _RowWithTargets
 from app.parsers import parse_tabular
@@ -105,20 +108,6 @@ async def _get_reference_standards(target_object: str | None) -> dict:
 # ``records`` context + column caches stay chunk-sized instead of whole-file) and
 # keeps the CPU work in slices we can hand to a worker thread.
 _TRANSFORM_CHUNK_ROWS = 25_000
-
-
-_ATTR_RE = re.compile(r"^(global[_ ]?)?attribute([_ ]?(category|date|number|timestamp|char))?[_ ]?\d*$")
-
-
-def _is_attribute_column(name: str | None) -> bool:
-    """True for any Oracle descriptive-flexfield (DFF) attribute column.
-
-    Covers ATTRIBUTE1..30, ATTRIBUTE_CATEGORY, ATTRIBUTE_DATE/NUMBER/TIMESTAMP/CHAR n
-    and the GLOBAL_ATTRIBUTE* variants, in any spacing/casing the templates use.
-    NextPower does not use DFFs; populating them risks failing DFF validation on load.
-    """
-    n = re.sub(r"[^a-z0-9_ ]", "", str(name or "").strip().lower())
-    return bool(_ATTR_RE.match(n.replace(" ", "_")))
 
 
 def _conversion_rule_wins(rules: list[dict] | None, directive_asof) -> bool:
@@ -1259,12 +1248,6 @@ async def build_sheet_frames(
 from app.services.lov_service import enforce_coded_values  # noqa: E402
 
 
-def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize column headers to UPPER_UNDERSCORE (Oracle FBDI format)."""
-    df.columns = [c.strip().upper().replace(" ", "_").replace("-", "_") for c in df.columns]
-    return df
-
-
 # Input date spellings we accept, in priority order. Ambiguous DD/MM vs MM/DD is
 # resolved US-first (%m/%d/%Y) to match the existing behaviour and the US-sourced
 # extracts in play; a value that only parses as DD/MM still parses on the next pass.
@@ -1457,18 +1440,6 @@ def analyst_keeps_blank(m) -> bool:
     return True
 
 
-def _header_label(f) -> str:
-    """The header text to write for a field. Prefer the raw header captured at
-    parse time (which carries Oracle's exact '*' required markers, e.g.
-    'Import Action *', 'Supplier Name*'); fall back to appending a trailing '*'
-    for required fields when only the cleaned name is stored (older templates)."""
-    raw = (getattr(f, "display_name", None) or "").strip()
-    if "*" in raw:
-        return raw
-    base = (f.field_name or "").strip()
-    if getattr(f, "required", False) and base and "*" not in base:
-        return base + " *"
-    return base or raw
 _SEQ_FIELDS: set[str] = {
     "suppliernumber", "supplierpartynumber",   # supplier
     "partynumber", "customeraccountnumber", "customernumber",  # customer

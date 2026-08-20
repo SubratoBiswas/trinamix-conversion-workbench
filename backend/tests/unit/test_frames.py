@@ -62,3 +62,31 @@ def test_safe_sheet_name():
     assert safe_sheet_name("---") == "---"          # hyphens are allowed, not stripped
     assert safe_sheet_name("***") == "sheet"        # all-illegal collapses to empty -> "sheet"
     assert safe_sheet_name("") == "sheet"
+
+
+# ---- Phase 2 slice 5 (final): column/header helpers ----
+from app.domain.frames import is_attribute_column, normalize_columns, header_label  # noqa: E402
+
+
+def test_is_attribute_column():
+    for n in ["ATTRIBUTE1", "attribute_category", "GLOBAL_ATTRIBUTE5",
+              "Attribute Date 3", "ATTRIBUTE_TIMESTAMP2", "attribute30"]:
+        assert is_attribute_column(n) is True
+    for n in ["Supplier Name", "Party Number", "City", "", None]:
+        assert is_attribute_column(n) is False
+
+
+def test_normalize_columns():
+    df = pd.DataFrame(columns=[" Supplier Name ", "Party-Number", "effective start date", "ALREADY_OK"])
+    assert list(normalize_columns(df).columns) == \
+        ["SUPPLIER_NAME", "PARTY_NUMBER", "EFFECTIVE_START_DATE", "ALREADY_OK"]
+
+
+def test_header_label():
+    class Fld:
+        def __init__(s, dn=None, fn="", req=False):
+            s.display_name, s.field_name, s.required = dn, fn, req
+    assert header_label(Fld("Import Action *", "Import Action", True)) == "Import Action *"  # raw '*' kept
+    assert header_label(Fld(None, "Supplier Name", True)) == "Supplier Name *"               # required -> ' *'
+    assert header_label(Fld(None, "City", False)) == "City"                                  # optional -> base
+    assert header_label(Fld("Party Number*", "Party Number", True)) == "Party Number*"       # raw '*' kept as-is

@@ -167,3 +167,40 @@ def mask_supplier_emails(df: pd.DataFrame, prefix: str = _SUPPLIER_EMAIL_PREFIX)
 
 def safe_sheet_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip()).strip("_") or "sheet"
+
+
+# ── Column / header helpers ──────────────────────────────────────────────────────
+# Oracle descriptive-flexfield (DFF) attribute columns are never populated (NextPower
+# does not use DFFs; a value there risks failing DFF validation on load).
+_ATTR_RE = re.compile(r"^(global[_ ]?)?attribute([_ ]?(category|date|number|timestamp|char))?[_ ]?\d*$")
+
+
+def is_attribute_column(name: str | None) -> bool:
+    """True for any Oracle descriptive-flexfield (DFF) attribute column.
+
+    Covers ATTRIBUTE1..30, ATTRIBUTE_CATEGORY, ATTRIBUTE_DATE/NUMBER/TIMESTAMP/CHAR n
+    and the GLOBAL_ATTRIBUTE* variants, in any spacing/casing the templates use.
+    NextPower does not use DFFs; populating them risks failing DFF validation on load.
+    """
+    n = re.sub(r"[^a-z0-9_ ]", "", str(name or "").strip().lower())
+    return bool(_ATTR_RE.match(n.replace(" ", "_")))
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column headers to UPPER_UNDERSCORE (Oracle FBDI format)."""
+    df.columns = [c.strip().upper().replace(" ", "_").replace("-", "_") for c in df.columns]
+    return df
+
+
+def header_label(f) -> str:
+    """The header text to write for a field. Prefer the raw header captured at
+    parse time (which carries Oracle's exact '*' required markers, e.g.
+    'Import Action *', 'Supplier Name*'); fall back to appending a trailing '*'
+    for required fields when only the cleaned name is stored (older templates)."""
+    raw = (getattr(f, "display_name", None) or "").strip()
+    if "*" in raw:
+        return raw
+    base = (f.field_name or "").strip()
+    if getattr(f, "required", False) and base and "*" not in base:
+        return base + " *"
+    return base or raw
