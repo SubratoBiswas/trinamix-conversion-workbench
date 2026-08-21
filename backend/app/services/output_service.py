@@ -29,7 +29,7 @@ from app.domain.dates.fbdi_date import (
 )
 from app.domain.precedence.policy import (
     conversion_rule_wins as _precedence_conversion_rule_wins,
-    person_is_newer as _precedence_person_is_newer,
+    mapping_outranks_directive as _precedence_mapping_outranks_directive,
 )
 from app.domain.rules.indexes import (
     build_self_index as _build_self_index,
@@ -568,123 +568,25 @@ def _transform_frame(
         # strategy_overlay for the evidence. Enforce the analyst rules here,
         # after mapping, where nothing downstream can undo them.
         _ov = _ov_early          # resolved above, before the discard check
-        # An analyst who APPROVED a source column for this field has overruled the
-        # strategy constant, and overwriting it produced the reported bug: Tax
-        # Organization Type showed CORPORATION on every row despite being mapped
-        # and approved. Same guard as _apply_control_defaults (QA #8), which this
-        # overlay was written after and never inherited.
-        #
-        # "suggested" deliberately does NOT count: auto-map guessing is exactly
-        # what the strategy constants exist to correct, so only a deliberate
-        # approve/override wins.
-        #
-        # ...but "approved" is not proof a PERSON approved it. The learning engine
-        # approves the mappings it applies, under approved_by="learning-engine",
-        # and those rows were passing this guard — so a SEEDED mapping outranked
-        # the analyst's own later correction. That is why three fields the 30-Jul
-        # corrections declare BLANK still shipped values in the file the analyst
-        # sent back: Supplier Name New carried the supplier name on all 3,872 rows,
-        # Procurement BU carried "Nextracker Consolidated" on 5,315, and Liability
-        # Distribution carried an account string on 1,528. Each had a seeded source
-        # column, and each therefore skipped its own blank rule.
-        #
-        # The line is the one the analyst drew on 30-Jul: a person editing and
-        # approving in the UI outranks everything; an engine approval does not
-        # outrank the person who wrote the correction. Same test as
-        # learning_service._eligible, which already had to draw it.
-        _approver = str(getattr(m, "approved_by", "") or "").strip()
-        _by_a_person = bool(_approver) and _approver != "learning-engine"
-        # AUTHORSHIP IS PROVENANCE. THE DATE DECIDES. (05-Aug)
-        #
-        # The paragraph above is still the right instinct and was still the wrong
-        # rule, because it made authorship decisive rather than the date — which is
-        # the opposite of what this architecture says about itself:
-        #
-        #     "Every statement about how a field maps is a dated entry ...
-        #      Newest wins; authorship is provenance only."
-        #
-        # Measured live on NextPower Supplier Test / Supplier Site: ALL SEVEN
-        # strategy constants were overriding the value the screen showed, and three
-        # of them differed — Receipt Routing showed 3 and shipped DIRECT, Invoice
-        # Match Option showed R and shipped Receipt, Match Approval Level showed 3
-        # and shipped 3-Way. Every one of those rows was approved, carried a fixed
-        # value, and was dated 03/04-Aug. The directive that beat them is dated
-        # 13-JUL — three weeks older — and it won purely because the newer statement
-        # was stamped "learning-engine".
-        #
-        # The analyst reported it as "the mappings in the UI do not reach the
-        # output", across supplier, customer, BOM, Item and Employee. It is one
-        # rule, in one place, and this is it.
-        #
-        # WHAT STILL PROTECTS THE CASE THE OLD RULE WAS ADDED FOR. That case was a
-        # SEEDED row re-populating a field a correction had declared blank — and it
-        # is a date question too: the seed carried the date it was seeded, which was
-        # older than the correction, so under this rule it loses on its own merits.
-        # The comparison below is unchanged; only the authorship requirement is
-        # gone. A row still has to carry a real statement, still has to be approved
-        # or overridden, and still has to be NEWER than the directive it beats.
-        #
-        # An undated row cannot be shown to be newer and therefore does not win —
-        # see _person_is_newer, which requires an actual timestamp. That is what
-        # stops an old seeded row with no approval date from resurfacing.
-        _decision_outranks_directive = bool(_approver) or _by_a_person
-        # ...and WHICHEVER IS LATEST. Analyst, 30-Jul, stating the precedence in
-        # full: "1) analyst manually changed or present in mapping file (whichever
-        # is latest) 2) learnings and golden records from database 3) AI".
-        #
-        # So a person's approval does not win forever. It wins until the analyst
-        # issues a newer instruction in a rule file, at which point the file is the
-        # more recent statement of the same person's intent. Each rule file now
-        # carries _effective_date and each directive carries it as `as_of`; a
-        # directive with no date loses to any human approval, which is the previous
-        # behaviour and the safe default for older files.
         _asof = (_ov or {}).get("as_of") if _ov else None
-        _appr_at = getattr(m, "approved_at", None)
-        _person_is_newer = _precedence_person_is_newer(_appr_at, _asof)
-        # A PERSON'S FIXED VALUE COUNTS, not only a person's source column.
-        #
-        # This read `m.source_column` alone, so the only analyst it could see was
-        # one who had bound a COLUMN. Setting a constant — "Receipt Routing = 3",
-        # typed into the Fixed value box and approved — leaves source_column null
-        # by definition, so `_explicit` was False and the strategy constant below
-        # replaced every row with its own value.
-        #
-        # Reported live on NextPower Supplier Test (Supplier Site): Receipt
-        # Routing set to 3, Invoice Match Option to R, Match Approval Level to 3,
-        # all approved and showing "currently 3" on screen — and the file shipped
-        # DIRECT, Receipt and 3-Way, the 13-Jul strategy values. The screen and
-        # the file disagreed and the screen looked right, which is the single most
-        # expensive shape of bug in this tool.
-        #
-        # Typing a constant and approving it is exactly as deliberate as binding a
-        # column, and the analyst's own precedence rule — "analyst manually
-        # changed OR the mapping file, whichever is latest" — draws no distinction
-        # between the two. The date test below is unchanged: their value wins
-        # while it is the later one, and a directive issued after it still wins.
-        _person_set_a_value = bool(str(m.source_column or "").strip()
-                                   or str(m.default_value or "").strip())
-        # AUTHORING A RULE IS SPEAKING TOO.
-        #
-        # _explicit was computed from the MAPPING's status, so a custom rule typed
-        # against a field whose mapping still sat at "suggested" was not protected
-        # — a strategy constant replaced every row and took the rule's output with
-        # it. That is the same complaint as the constants above, one door along:
-        # the analyst did something deliberate and the file did not show it.
-        #
-        # A rule has no status to approve, so requiring one was the bug. It has a
-        # DATE, though, and date is how everything here is ranked — so it is
-        # ranked the same way the rule directive already ranks it: a rule written
-        # after the document wins, one written before it does not.
-        _authored_rule_wins = bool(_authored_rules) and _conversion_rule_wins(
-            _authored_rules, _asof)
-        # `_decision_outranks_directive` replaces the old `_by_a_person` here. The
-        # row must still SAY something, must still be approved or overridden, and
-        # must still be newer than the directive — what it no longer has to be is
-        # signed by a human. See the note beside its definition for why.
-        _explicit = bool(_person_set_a_value
-                         and m.status in ("approved", "overridden")
-                         and _decision_outranks_directive
-                         and _person_is_newer) or _authored_rule_wins
+        # Does the analyst's own statement on THIS mapping outrank the strategy
+        # directive? "Whichever is latest": a person-set value (a bound source column
+        # OR a typed fixed value) that is approved/overridden and dated newer than the
+        # directive wins, and so does an authored rule newer than the directive. A
+        # learning-engine approval is not a person, but a *dated* one still wins on
+        # date. The full field-by-field history — why a typed constant counts, why
+        # authorship is provenance and the date decides, why an undated approval does
+        # not resurrect a seeded row — now lives with the rule, in
+        # domain.precedence.mapping_outranks_directive.
+        _explicit = _precedence_mapping_outranks_directive(
+            status=m.status,
+            approved_by=getattr(m, "approved_by", None),
+            approved_at=getattr(m, "approved_at", None),
+            source_column=m.source_column,
+            default_value=m.default_value,
+            authored_rule_asofs=[r.get("as_of") for r in _authored_rules],
+            directive_asof=_asof,
+        )
         if _ov:
             if _ov.get("blank") and not _explicit:
                 col_values = [""] * n_rows
