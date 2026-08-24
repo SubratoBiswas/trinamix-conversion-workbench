@@ -4,32 +4,95 @@ The same date comparison was re-derived at three sites, each behind essay-length
   * output_service._conversion_rule_wins             -> conversion_rule_wins
   * the output_service _person_is_newer guard        -> person_is_newer
   * strategy_overlay.directive_for exact/wide tiebreak-> wide_directive_wins
+and the write-time overlay's ``_explicit`` decision  -> mapping_outranks_directive
 
-Each caller keeps its own orchestration and delegates only the comparison, so behaviour is
-byte-identical. Pure — no framework, no I/O — and unit-tested. This is the first step of
-the precedence consolidation; a later slice can compose these into a single
-Statement-based resolver once the call sites build Statement lists.
+Phase 3 slice 5 finishes the consolidation the earlier note pointed at: all four now
+delegate to ONE ordering — ``pick_latest`` over a common ``Statement`` — so "whichever
+is latest" is written once and the tie-breaks the four contests used to spell with
+scattered ``>=`` / ``>`` are now explicit, named terms on the Statement. Each caller
+keeps its own orchestration and its own signature, so behaviour is byte-identical
+(verified by a differential against the previous four functions). Pure — no framework,
+no I/O — and unit-tested.
+
+Scope: this unifies the two WRITE-TIME contests — a conversion's mapping/rule/approval
+vs a strategy directive, and a sheet-specific directive vs a bundle-wide one. The
+library-entry store (``app.domain.store.resolver``) keeps its own ordering by design; a
+conversion statement that cannot be placed in time is "left alone" (treated as newest)
+here, which is the OPPOSITE of the store's "undated sorts last", so the two orderings
+are deliberately not merged.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
+# ── Specificity: who wins a SAME-INSTANT tie ─────────────────────────────────
+# Higher wins. A conversion's own statement (a person's approval, an analyst's rule)
+# outranks any directive on a tie — the mapping is the more specific thing the client
+# said about THIS field. Between two directives, the sheet-specific ("exact") one
+# outranks the bundle-wide one for precision. These encode, as data, the ``>=`` the
+# overlay used (conversion wins the tie) and the ``>`` the directive tiebreak used
+# (exact wins the tie unless wide is STRICTLY newer).
+CONVERSION = 2   # a conversion's own approval or authored rule
+EXACT = 1        # a sheet-specific directive
+WIDE = 0         # a bundle-wide directive
+
+
+@dataclass(frozen=True)
+class Statement:
+    """One dated claim in a write-time contest.
+
+    ``as_of`` is the ordering key — newest wins. ``specificity`` breaks a same-instant
+    tie (see the constants above). ``undated_is_newest`` is the one place the contests
+    genuinely disagree about time: an authored conversion RULE that carries no date is
+    "unplaceable, left alone" and treated as the NEWEST thing in its contest, while an
+    undated approval or directive cannot be shown newer than anything and sorts as the
+    OLDEST. That single flag is the whole of divergence (a).
+    """
+    as_of: Optional[datetime]
+    specificity: int
+    undated_is_newest: bool = False
+
+
+def _rank(s: Statement) -> tuple:
+    """Sort key. Larger is later/stronger, so ``max`` is the winner. An undated
+    statement anchors to the end of time when it is the left-alone kind, otherwise to
+    the start of time (it cannot be shown to be later than a dated rival)."""
+    if s.as_of is None:
+        anchor = datetime.max if s.undated_is_newest else datetime.min
+    else:
+        anchor = s.as_of
+    return (anchor, s.specificity)
+
+
+def pick_latest(statements: Sequence[Statement]) -> Optional[Statement]:
+    """The winning statement — newest wins; a same-instant tie goes to the more
+    specific one. Keeps the first statement on an exact key tie, but within a single
+    contest the specificities are always distinct, so the winner is unambiguous.
+    """
+    best = None
+    best_key = None
+    for s in statements:
+        k = _rank(s)
+        if best_key is None or k > best_key:
+            best, best_key = s, k
+    return best
+
+
+# ── The four contests, each a thin query over pick_latest ────────────────────
 
 def conversion_rule_wins(rule_asofs: Iterable[Optional[datetime]], directive_asof) -> bool:
     """Does a conversion's OWN rule outrank the overlay directive?
 
     No rule -> False. An undated directive cannot be shown newer than anything, so a rule
-    beats it -> True. Otherwise any rule that is undated, or dated on/after the directive,
-    wins. Order-preserving: the first qualifying rule short-circuits (matches the loop the
-    caller used)."""
-    asofs = list(rule_asofs)
-    if not asofs:
-        return False
-    if directive_asof is None:
-        return True
-    for when in asofs:
-        if when is None or when >= directive_asof:
+    beats it. Otherwise any rule that is undated (left alone), or dated on/after the
+    directive, wins. Order-preserving: the first qualifying rule short-circuits (matches
+    the loop the caller used)."""
+    directive = Statement(directive_asof, WIDE)
+    for a in rule_asofs:
+        rule = Statement(a, CONVERSION, undated_is_newest=True)
+        if pick_latest((rule, directive)) is rule:
             return True
     return False
 
@@ -37,17 +100,20 @@ def conversion_rule_wins(rule_asofs: Iterable[Optional[datetime]], directive_aso
 def person_is_newer(approved_at, directive_asof) -> bool:
     """Does a person's dated approval outrank the directive?
 
-    An undated directive cannot be placed in time, so the person wins -> True. Otherwise
-    the approval must carry a timestamp and be on/after the directive's date."""
-    if directive_asof is None:
-        return True
-    return bool(approved_at) and approved_at >= directive_asof
+    An undated directive cannot be placed in time, so the approval wins. Otherwise the
+    approval must carry a timestamp and be on/after the directive's date — an undated
+    approval cannot be shown newer and loses."""
+    approval = Statement(approved_at, CONVERSION)          # undated approval -> oldest
+    directive = Statement(directive_asof, WIDE)
+    return pick_latest((approval, directive)) is approval
 
 
 def wide_directive_wins(exact_asof, wide_asof) -> bool:
     """When a sheet-specific ("exact") directive and a bundle-wide one both apply, the
     exact one wins a tie for precision — UNLESS the wide one is strictly newer."""
-    return wide_asof is not None and (exact_asof is None or wide_asof > exact_asof)
+    exact = Statement(exact_asof, EXACT)
+    wide = Statement(wide_asof, WIDE)
+    return pick_latest((exact, wide)) is wide
 
 
 def mapping_outranks_directive(status, approved_by, approved_at, source_column,
@@ -56,39 +122,25 @@ def mapping_outranks_directive(status, approved_by, approved_at, source_column,
     """Does the analyst's own statement on ONE mapping outrank the strategy directive?
 
     This is the ``_explicit`` decision the write-time overlay in ``output_service``
-    consults: when True, a strategy ``blank`` is not applied and a strategy
-    ``constant`` only fills blanks instead of replacing every row. It is the same
-    "whichever is latest" rule the rest of this module encodes, applied to a mapping's
-    provenance. Extracted here so all of precedence lives in one place; the caller
-    keeps its orchestration and passes primitives, so behaviour is byte-identical.
+    consults: when True, a strategy ``blank`` is not applied and a strategy ``constant``
+    only fills blanks instead of replacing every row. The ORDERING now lives in
+    ``pick_latest`` (via ``person_is_newer`` and ``conversion_rule_wins``); the GATES
+    below are qualification, not ordering — they decide whether the mapping is even a
+    statement, not which dated statement is later.
 
     Two independent ways a mapping can be the later, more specific statement:
 
     A PERSON-SET VALUE, approved and newer than the directive.
-      * ``_person_set_a_value`` — a bound source column OR a typed fixed value counts.
-        It read ``source_column`` alone once, so a "Receipt Routing = 3" typed into
-        the Fixed-value box and approved left ``source_column`` null and was ignored,
-        and the 13-Jul strategy constant shipped DIRECT over it. Typing a constant is
-        as deliberate as binding a column.
+      * ``person_set_a_value`` — a bound source column OR a typed fixed value counts.
       * status in ("approved", "overridden") — a deliberate approve/override, never a
-        "suggested" auto-map guess, which is exactly what the strategy constants exist
-        to correct.
+        "suggested" auto-map guess, which is what the strategy constants exist to fix.
       * ``decision_outranks`` — the row must carry a real approval. Authorship is
-        provenance, not the decider: an approval stamped "learning-engine" is not a
-        person, but a *dated* engine approval still wins on its date. Making
-        authorship decisive was the bug where a 13-Jul directive beat 03/04-Aug
-        approvals purely because the newer statement was signed "learning-engine".
+        provenance, not the decider: a *dated* engine approval still wins on its date.
       * ``person_is_newer`` — the approval must be datable and on/after the directive.
-        An undated directive cannot be placed in time, so a human approval beats it;
-        an undated approval cannot be shown newer, so it does not resurrect an old
-        seeded row over a later correction.
 
-    OR AN AUTHORED RULE newer than the directive.
-      A rule the analyst typed is speaking too, and it has no status to approve — so
-      requiring one silenced custom rules on fields still sitting at "suggested". A
-      rule is ranked by date like everything else: written after the document it wins,
-      before it does not. ``authored_rule_asofs`` are the ``as_of`` stamps of the
-      analyst's OWN rules (the engine's suggested_transformation is excluded upstream).
+    OR AN AUTHORED RULE newer than the directive (``conversion_rule_wins``). A rule the
+    analyst typed is speaking too and has no status to approve; it is ranked by date like
+    everything else — and an undated one is left alone (wins), per divergence (a).
 
     ``bool(...) or authored_rule_wins`` mirrors the original expression exactly.
     """
